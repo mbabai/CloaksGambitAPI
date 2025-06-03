@@ -149,6 +149,9 @@ router.post('/', async (req, res) => {
 
     game.moves.push(move);
 
+    // Flip turn to the other player after recording the move
+    game.playerTurn = normalizedColor === 0 ? 1 : 0;
+
     await game.addAction(config.actions.get('MOVE'), normalizedColor, {
       from: { row: fromRow, col: fromCol },
       to: { row: toRow, col: toCol },
