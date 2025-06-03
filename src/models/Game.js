@@ -267,7 +267,7 @@ gameSchema.methods.endGame = function(winner, winReason) {
 };
 
 // Method to make a move
-gameSchema.methods.makeMove = function(from, to, piece) {
+gameSchema.methods.makeMove = function(from, to, declaration) {
     if (!this.isActive) {
         throw new Error('Game is not active');
     }
@@ -276,7 +276,7 @@ gameSchema.methods.makeMove = function(from, to, piece) {
     const move = {
         from,
         to,
-        piece,
+        declaration,
         state: defaultConfig.moveStates.get('PENDING'),
         timestamp: new Date()
     };

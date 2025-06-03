@@ -3,7 +3,7 @@ const router = express.Router();
 
 router.post('/', async (req, res) => {
   try {
-    const { gameId, color, targetPiece } = req.body;
+    const { gameId, color } = req.body;
     // TODO: Implement challenge action
     res.status(501).json({ message: 'Not implemented yet' });
   } catch (err) {
