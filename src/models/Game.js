@@ -228,6 +228,11 @@ const gameSchema = new mongoose.Schema({
             message: 'Daggers must contain exactly two non-negative numbers'
         }
     },
+    movesSinceAction: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
     setupComplete: {
         type: [Boolean],
         default: [false, false],

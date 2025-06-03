@@ -50,6 +50,7 @@ router.post('/', async (req, res) => {
     lastMove.state = config.moveStates.get('RESOLVED');
 
     await game.addAction(config.actions.get('PASS'), normalizedColor, {});
+    game.movesSinceAction = 0;
 
     if (piece.identity === config.identities.get('KING') && game.isActive) {
       await game.endGame(normalizedColor, config.winReasons.get('CAPTURED_KING'));

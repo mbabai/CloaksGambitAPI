@@ -146,6 +146,7 @@ router.post('/', async (req, res) => {
     }
 
     await game.addAction(config.actions.get('CHALLENGE'), normalizedColor, {});
+    game.movesSinceAction = 0;
 
     if (trueKing && game.isActive) {
       await game.endGame(lastMove.player, config.winReasons.get('TRUE_KING'));

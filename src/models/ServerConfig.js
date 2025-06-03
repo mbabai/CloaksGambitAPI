@@ -109,7 +109,8 @@ const serverConfigSchema = new mongoose.Schema({
       DAGGERS: 3,
       TIME_CONTROL: 4,
       DISCONNECT: 5,
-      RESIGN: 6
+      RESIGN: 6,
+      DRAW: 7
     }
   },
   gameActionStates: {
