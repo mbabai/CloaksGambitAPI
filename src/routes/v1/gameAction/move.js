@@ -145,8 +145,23 @@ router.post('/', async (req, res) => {
           }
         }
 
-        prevMove.state = config.moveStates.get('RESOLVED');
+      prevMove.state = config.moveStates.get('RESOLVED');
+
+      if (targetPiece) {
+        game.movesSinceAction = 0;
+      } else {
+        game.movesSinceAction += 1;
+        if (game.movesSinceAction >= 20 && game.isActive) {
+          game.winReason = config.winReasons.get('DRAW');
+          game.endTime = new Date();
+          game.isActive = false;
+        }
       }
+    }
+
+    if (!game.isActive) {
+      await game.save();
+      return res.json({ message: 'Game drawn by inactivity' });
     }
 
     game.moves.push(move);
