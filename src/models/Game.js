@@ -109,9 +109,12 @@ const gameSchema = new mongoose.Schema({
             message: 'Win reason must be specified when game is ended'
         }
     },
-    startTime: {
+    createdAt: {
         type: Date,
         default: Date.now
+    },
+    startTime: {
+        type: Date
     },
     endTime: {
         type: Date,
