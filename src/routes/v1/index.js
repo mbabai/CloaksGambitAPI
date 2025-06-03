@@ -4,14 +4,17 @@ const router = express.Router();
 // User routes
 const userGetList = require('./users/getList');
 const userGetDetails = require('./users/getDetails');
+const userCreate = require('./users/create');
 
 // Match routes
 const matchGetList = require('./matches/getList');
 const matchGetDetails = require('./matches/getDetails');
+const matchCreate = require('./matches/create');
 
 // Game routes
 const gameGetList = require('./games/getList');
 const gameGetDetails = require('./games/getDetails');
+const gameCreate = require('./games/create');
 
 // Game action routes
 const gameActionCheckTimeControl = require('./gameAction/checkTimeControl');
@@ -33,14 +36,17 @@ const lobbyExitRanked = require('./lobby/exitRanked');
 // User routes
 router.use('/users/getList', userGetList);
 router.use('/users/getDetails', userGetDetails);
+router.use('/users/create', userCreate);
 
 // Match routes
 router.use('/matches/getList', matchGetList);
 router.use('/matches/getDetails', matchGetDetails);
+router.use('/matches/create', matchCreate);
 
 // Game routes
 router.use('/games/getList', gameGetList);
 router.use('/games/getDetails', gameGetDetails);
+router.use('/games/create', gameCreate);
 
 // Game action routes
 router.use('/gameAction/checkTimeControl', gameActionCheckTimeControl);
