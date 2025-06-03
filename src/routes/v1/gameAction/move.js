@@ -3,7 +3,7 @@ const router = express.Router();
 
 router.post('/', async (req, res) => {
   try {
-    const { gameId, color, from, to } = req.body;
+    const { gameId, color, from, to, declaration} = req.body;
     // TODO: Implement move action
     res.status(501).json({ message: 'Not implemented yet' });
   } catch (err) {
