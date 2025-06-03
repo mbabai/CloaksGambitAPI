@@ -121,10 +121,36 @@ router.post('/', async (req, res) => {
     };
 
     if (game.moves.length > 0) {
-      game.moves[game.moves.length - 1].state = config.moveStates.get('RESOLVED');
+      const prevMove = game.moves[game.moves.length - 1];
+
+      const { from: pf, to: pt } = prevMove;
+      const movingPiece = game.board[pf.row][pf.col];
+      const targetPiece = game.board[pt.row][pt.col];
+
+      if (targetPiece) {
+        game.captured[targetPiece.color].push(targetPiece);
+      }
+
+      game.board[pt.row][pt.col] = movingPiece;
+      game.board[pf.row][pf.col] = null;
+
+      const kingId = config.identities.get('KING');
+      if (targetPiece && targetPiece.identity === kingId) {
+        await game.endGame(prevMove.player, config.winReasons.get('CAPTURED_KING'));
+      } else if (prevMove.declaration === kingId) {
+        const throneRow = prevMove.player === 0 ? config.boardDimensions.RANKS - 1 : 0;
+        if (pt.row === throneRow) {
+          await game.endGame(prevMove.player, config.winReasons.get('THRONE'));
+        }
+      }
+
+      prevMove.state = config.moveStates.get('RESOLVED');
     }
 
     game.moves.push(move);
+
+    // Flip turn to the other player after recording the move
+    game.playerTurn = normalizedColor === 0 ? 1 : 0;
 
     await game.addAction(config.actions.get('MOVE'), normalizedColor, {
       from: { row: fromRow, col: fromCol },
