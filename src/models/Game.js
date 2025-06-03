@@ -166,7 +166,23 @@ const gameSchema = new mongoose.Schema({
     },
     stashes: {
         type: [[pieceSchema]],
-        default: [[], []],
+        default: function() {
+            const createStash = (color) => [
+                { color, identity: defaultConfig.identities.get('ROOK') },
+                { color, identity: defaultConfig.identities.get('ROOK') },
+                { color, identity: defaultConfig.identities.get('BISHOP') },
+                { color, identity: defaultConfig.identities.get('BISHOP') },
+                { color, identity: defaultConfig.identities.get('KNIGHT') },
+                { color, identity: defaultConfig.identities.get('KNIGHT') },
+                { color, identity: defaultConfig.identities.get('KING') },
+                { color, identity: defaultConfig.identities.get('BOMB') }
+            ];
+            
+            return [
+                createStash(defaultConfig.colors.get('WHITE')),
+                createStash(defaultConfig.colors.get('BLACK'))
+            ];
+        },
         validate: {
             validator: function(v) {
                 return v.length === 2;
