@@ -138,6 +138,11 @@ router.post('/', async (req, res) => {
       }
     );
 
+    // If both players have completed setup, set playerTurn to white (0)
+    if (game.setupComplete[0] && game.setupComplete[1]) {
+      game.playerTurn = 0;
+    }
+
     await game.save();
     res.json({ message: 'Setup completed successfully' });
   } catch (err) {
