@@ -84,6 +84,21 @@ const gameSchema = new mongoose.Schema({
         },
         required: true
     },
+    match: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Match',
+        required: true
+    },
+    playersReady: {
+        type: [Boolean],
+        default: [false, false],
+        validate: {
+            validator: function(v) {
+                return v.length === 2;
+            },
+            message: 'Players ready must contain exactly two boolean values'
+        }
+    },
     playerTurn: {
         type: Number,
         enum: [null, 0, 1],

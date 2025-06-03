@@ -55,6 +55,7 @@ npm start
 - POST /api/v1/gameAction/onDeck - Move a piece on deck
 - POST /api/v1/gameAction/pass - Pass the turn
 - POST /api/v1/gameAction/resign - Resign from the game
+- POST /api/v1/gameAction/ready - Mark a player as ready
 
 ### Lobby
 - POST /api/v1/lobby/get - Retrieve the current lobby queues
