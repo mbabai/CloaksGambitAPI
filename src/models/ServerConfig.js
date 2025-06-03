@@ -41,7 +41,8 @@ const serverConfigSchema = new mongoose.Schema({
       BOMB: 3,
       PASS: 4,
       ON_DECK: 5,
-      RESIGN: 6
+      RESIGN: 6,
+      READY: 7
     }
   },
   moveStates: {

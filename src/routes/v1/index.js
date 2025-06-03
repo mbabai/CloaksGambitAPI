@@ -25,6 +25,7 @@ const gameActionBomb = require('./gameAction/bomb');
 const gameActionOnDeck = require('./gameAction/onDeck');
 const gameActionPass = require('./gameAction/pass');
 const gameActionResign = require('./gameAction/resign');
+const gameActionReady = require('./gameAction/ready');
 
 // Lobby routes
 const lobbyGet = require('./lobby/get');
@@ -57,6 +58,7 @@ router.use('/gameAction/bomb', gameActionBomb);
 router.use('/gameAction/onDeck', gameActionOnDeck);
 router.use('/gameAction/pass', gameActionPass);
 router.use('/gameAction/resign', gameActionResign);
+router.use('/gameAction/ready', gameActionReady);
 
 // Lobby routes
 router.use('/lobby/get', lobbyGet);
