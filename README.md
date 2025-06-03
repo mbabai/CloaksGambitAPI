@@ -39,6 +39,9 @@ npm start
 - GET /api/users - Get all users
 - POST /api/users - Create a new user
 
+### Lobby
+- POST /api/v1/lobby/get - Retrieve the current lobby queues
+
 ## Project Structure
 
 ```
