@@ -32,12 +32,29 @@ Production mode:
 ```bash
 npm start
 ```
-
 ## API Endpoints
 
 ### Users
-- GET /api/users - Get all users
-- POST /api/users - Create a new user
+- POST /api/v1/users/getList - Retrieve users with optional filters
+- POST /api/v1/users/getDetails - Get details for a specific user
+
+### Matches
+- POST /api/v1/matches/getList - Get a list of matches
+- POST /api/v1/matches/getDetails - Get details for a specific match
+
+### Games
+- POST /api/v1/games/getList - Get a list of games
+- POST /api/v1/games/getDetails - Get details for a specific game
+
+### Game Actions
+- POST /api/v1/gameAction/checkTimeControl - Check the current player's clock
+- POST /api/v1/gameAction/setup - Set up a game board
+- POST /api/v1/gameAction/move - Submit a piece move
+- POST /api/v1/gameAction/challenge - Challenge an opponent's move
+- POST /api/v1/gameAction/bomb - Bomb the last move
+- POST /api/v1/gameAction/onDeck - Move a piece on deck
+- POST /api/v1/gameAction/pass - Pass the turn
+- POST /api/v1/gameAction/resign - Resign from the game
 
 ### Lobby
 - POST /api/v1/lobby/get - Retrieve the current lobby queues
@@ -52,7 +69,5 @@ npm start
 src/
 ├── models/         # MongoDB models
 ├── routes/         # API routes
-├── controllers/    # Route controllers
-├── middleware/     # Custom middleware
 └── server.js       # Application entry point
 ```
