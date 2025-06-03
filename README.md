@@ -1,2 +1,51 @@
-# CloaksGambitAPI
-An API for playing the game "Cloaks' Gambit"
+# Cloaks Gambit API
+
+A REST API application built with Node.js and MongoDB.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- MongoDB (local installation or MongoDB Atlas account)
+
+## Setup
+
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Create a `.env` file in the root directory with the following variables:
+   ```
+   PORT=3000
+   MONGODB_URI=mongodb://localhost:27017/cloaks-gambit
+   NODE_ENV=development
+   ```
+
+## Running the Application
+
+Development mode:
+```bash
+npm run dev
+```
+
+Production mode:
+```bash
+npm start
+```
+
+## API Endpoints
+
+### Users
+- GET /api/users - Get all users
+- POST /api/users - Create a new user
+
+## Project Structure
+
+```
+src/
+├── models/         # MongoDB models
+├── routes/         # API routes
+├── controllers/    # Route controllers
+├── middleware/     # Custom middleware
+└── server.js       # Application entry point
+```
