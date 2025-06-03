@@ -7,6 +7,8 @@ require('dotenv').config();
 
 const app = express();
 
+const gameRoutes = require('./routes/gameRoutes');
+
 // Middleware
 app.use(cors());
 app.use(helmet());
@@ -23,6 +25,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-ga
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Cloaks Gambit API' });
 });
+
+app.use('/api/games', gameRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
