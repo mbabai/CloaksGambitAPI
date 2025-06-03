@@ -41,6 +41,10 @@ npm start
 
 ### Lobby
 - POST /api/v1/lobby/get - Retrieve the current lobby queues
+- POST /api/v1/lobby/enterQuickplay - Join the quickplay queue
+- POST /api/v1/lobby/exitQuickplay - Leave the quickplay queue
+- POST /api/v1/lobby/enterRanked - Join the ranked queue
+- POST /api/v1/lobby/exitRanked - Leave the ranked queue
 
 ## Project Structure
 

@@ -25,6 +25,10 @@ const gameActionResign = require('./gameAction/resign');
 
 // Lobby routes
 const lobbyGet = require('./lobby/get');
+const lobbyEnterQuickplay = require('./lobby/enterQuickplay');
+const lobbyExitQuickplay = require('./lobby/exitQuickplay');
+const lobbyEnterRanked = require('./lobby/enterRanked');
+const lobbyExitRanked = require('./lobby/exitRanked');
 
 // User routes
 router.use('/users/getList', userGetList);
@@ -50,5 +54,9 @@ router.use('/gameAction/resign', gameActionResign);
 
 // Lobby routes
 router.use('/lobby/get', lobbyGet);
+router.use('/lobby/enterQuickplay', lobbyEnterQuickplay);
+router.use('/lobby/exitQuickplay', lobbyExitQuickplay);
+router.use('/lobby/enterRanked', lobbyEnterRanked);
+router.use('/lobby/exitRanked', lobbyExitRanked);
 
 module.exports = router; 
