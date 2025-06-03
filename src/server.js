@@ -7,7 +7,7 @@ require('dotenv').config();
 
 const app = express();
 
-const gameRoutes = require('./routes/gameRoutes');
+const routes = require('./routes');
 
 // Middleware
 app.use(cors());
@@ -26,7 +26,7 @@ app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Cloaks Gambit API' });
 });
 
-app.use('/api/games', gameRoutes);
+app.use('/api', routes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
