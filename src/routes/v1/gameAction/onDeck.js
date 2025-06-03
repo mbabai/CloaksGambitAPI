@@ -61,6 +61,7 @@ router.post('/', async (req, res) => {
       details: { identity },
       timestamp: new Date(),
     });
+    // On deck placement does not affect the inactivity counter
 
     await game.save();
 

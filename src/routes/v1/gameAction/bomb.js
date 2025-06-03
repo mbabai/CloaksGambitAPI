@@ -47,6 +47,7 @@ router.post('/', async (req, res) => {
     }
 
     await game.addAction(config.actions.get('BOMB'), normalizedColor, {});
+    // Bomb does not alter the inactivity counter
 
     // Flip the turn to the other player
     game.playerTurn = normalizedColor === 0 ? 1 : 0;
