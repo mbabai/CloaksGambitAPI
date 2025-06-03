@@ -14,6 +14,11 @@ const userSchema = new mongoose.Schema({
     trim: true,
     lowercase: true
   },
+  elo: {
+    type: Number,
+    default: 1200,
+    min: 0
+  },
   createdAt: {
     type: Date,
     default: Date.now
