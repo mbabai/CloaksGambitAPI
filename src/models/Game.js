@@ -268,14 +268,53 @@ const gameSchema = new mongoose.Schema({
     }
 });
 
+const Match = require('./Match');
+
+// Helper to handle match logic when a game ends
+async function handleMatchUpdate(game) {
+    const match = await Match.findById(game.match);
+    if (!match) return;
+
+    // Update score when there is a winner
+    if (game.winner === 0) {
+        match.player1Score += 1;
+    } else if (game.winner === 1) {
+        match.player2Score += 1;
+    }
+
+    const config = new ServerConfig();
+    const winScore = config.gameModeSettings[match.type]?.WIN_SCORE;
+
+    // If a player reached the win score, end the match
+    if (
+        (match.player1Score >= winScore) ||
+        (match.player2Score >= winScore)
+    ) {
+        const winnerId =
+            match.player1Score >= winScore ? match.player1 : match.player2;
+        await match.endMatch(winnerId);
+    } else {
+        // Otherwise start a new game with players swapped
+        const Game = mongoose.model('Game');
+        const newGame = await Game.create({
+            players: [game.players[1], game.players[0]],
+            match: match._id,
+            timeControlStart: game.timeControlStart,
+            increment: game.increment
+        });
+        match.games.push(newGame._id);
+        await match.save();
+    }
+}
+
 // Method to end the game
-gameSchema.methods.endGame = function(winner, winReason) {
+gameSchema.methods.endGame = async function(winner, winReason) {
     if (!this.isActive) {
         throw new Error('Game is already ended');
     }
-    
-    if (winner !== 0 && winner !== 1) {
-        throw new Error('Winner must be 0 (white) or 1 (black)');
+
+    if (winner !== null && winner !== 0 && winner !== 1) {
+        throw new Error('Winner must be 0 (white), 1 (black) or null for draw');
     }
 
     if (!defaultConfig.winReasons.has(winReason)) {
@@ -286,7 +325,11 @@ gameSchema.methods.endGame = function(winner, winReason) {
     this.winReason = winReason;
     this.endTime = new Date();
     this.isActive = false;
-    return this.save();
+    await this.save();
+
+    await handleMatchUpdate(this);
+
+    return this;
 };
 
 // Method to make a move
