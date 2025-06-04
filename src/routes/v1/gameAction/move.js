@@ -66,6 +66,11 @@ router.post('/', async (req, res) => {
     const absDr = Math.abs(dr);
     const absDc = Math.abs(dc);
 
+    // Prevent moves where the piece stays in the same square
+    if (dr === 0 && dc === 0) {
+      return res.status(400).json({ message: 'Piece must move to a different square' });
+    }
+
     const idents = config.identities;
     let legal = false;
 
@@ -77,10 +82,13 @@ router.post('/', async (req, res) => {
         legal = absDr <= 1 && absDc <= 1 && (absDr !== 0 || absDc !== 0);
         break;
       case idents.get('BISHOP'):
+        // Bishop moves diagonally up to 3 squares
         if (absDr === absDc && absDr > 0 && absDr <= 3) {
           legal = true;
+          // Calculate step direction for checking path
           const stepR = dr > 0 ? 1 : -1;
           const stepC = dc > 0 ? 1 : -1;
+          // Check each square along the path for blocking pieces
           for (let i = 1; i < absDr; i++) {
             if (game.board[fromRow + i * stepR][fromCol + i * stepC]) {
               legal = false;
@@ -90,11 +98,15 @@ router.post('/', async (req, res) => {
         }
         break;
       case idents.get('ROOK'):
+        // Rook moves horizontally or vertically up to 3 squares
         if ((dr === 0 || dc === 0) && (absDr + absDc > 0) && absDr <= 3 && absDc <= 3) {
           legal = true;
+          // Calculate step direction for checking path
           const stepR = dr === 0 ? 0 : dr > 0 ? 1 : -1;
           const stepC = dc === 0 ? 0 : dc > 0 ? 1 : -1;
+          // Get the maximum distance to check
           const distance = Math.max(absDr, absDc);
+          // Check each square along the path for blocking pieces
           for (let i = 1; i < distance; i++) {
             if (game.board[fromRow + i * stepR][fromCol + i * stepC]) {
               legal = false;
