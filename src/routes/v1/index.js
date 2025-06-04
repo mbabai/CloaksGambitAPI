@@ -15,6 +15,7 @@ const matchCreate = require('./matches/create');
 const gameGetList = require('./games/getList');
 const gameGetDetails = require('./games/getDetails');
 const gameCreate = require('./games/create');
+const gamesListenForMove = require('./games/listenForMove');
 
 // Game action routes
 const gameActionCheckTimeControl = require('./gameAction/checkTimeControl');
@@ -48,6 +49,7 @@ router.use('/matches/create', matchCreate);
 router.use('/games/getList', gameGetList);
 router.use('/games/getDetails', gameGetDetails);
 router.use('/games/create', gameCreate);
+router.use('/games/listenForMove', gamesListenForMove);
 
 // Game action routes
 router.use('/gameAction/checkTimeControl', gameActionCheckTimeControl);

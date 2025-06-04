@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
-const ServerConfig = require('../../../models/ServerConfig');
+const maskGameForColor = require('../../../utils/gameView');
 
 router.post('/', async (req, res) => {
   try {
@@ -29,31 +29,8 @@ router.post('/', async (req, res) => {
       return res.json(game);
     }
 
-    const config = new ServerConfig();
-    const unknown = config.identities.get('UNKNOWN');
-
-    const maskPiece = (piece) => {
-      if (!piece) return piece;
-      if (isSpectator) {
-        return { ...piece, identity: unknown };
-      }
-      if (piece.color !== viewColor) {
-        return { ...piece, identity: unknown };
-      }
-      return piece;
-    };
-
-    if (Array.isArray(game.board)) {
-      game.board = game.board.map((row) => row.map(maskPiece));
-    }
-    if (Array.isArray(game.stashes)) {
-      game.stashes = game.stashes.map((stash) => stash.map(maskPiece));
-    }
-    if (Array.isArray(game.onDecks)) {
-      game.onDecks = game.onDecks.map(maskPiece);
-    }
-
-    res.json(game);
+    const masked = maskGameForColor(game, normalized);
+    res.json(masked);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
