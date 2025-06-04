@@ -27,7 +27,7 @@ PIECE_SYMBOLS = {
 
 # --- Utility HTTP helpers -------------------------------------------------
 
-def api_post(endpoint: str, data: dict, retries: int = 3) -> tuple[bool, Optional[dict]]:
+def api_post(endpoint: str, data: dict, retries: int = 3) -> Tuple[bool, Optional[dict]]:
     """POST to the API endpoint with basic retry handling.
 
     Returns a tuple ``(success, payload)``. ``success`` is ``True`` if the
@@ -107,6 +107,11 @@ def print_game_state(game_id: str) -> None:
 # --- Game setup logic ------------------------------------------------------
 
 def create_user(username: str, email: str) -> str:
+    # Try to fetch existing user by email
+    user = api_post("users/getList", {"email": email})[1]
+    if user and isinstance(user, list) and len(user) > 0:
+        return user[0]["_id"]
+    # Otherwise, create a new user
     ok, user = api_post("users/create", {"username": username, "email": email})
     if not ok or not user:
         raise RuntimeError("Failed to create user")

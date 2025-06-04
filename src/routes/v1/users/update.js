@@ -5,7 +5,7 @@ const User = require('../../../models/User');
 // PATCH /v1/users/update
 router.patch('/', async (req, res) => {
   try {
-    const { userId, username, email, googleId } = req.body;
+    const { userId, username, email } = req.body;
     if (!userId) {
       return res.status(400).json({ message: 'userId is required' });
     }
@@ -13,7 +13,6 @@ router.patch('/', async (req, res) => {
     const update = {};
     if (username) update.username = username;
     if (email) update.email = email;
-    if (googleId) update.googleId = googleId;
 
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ message: 'No fields to update' });

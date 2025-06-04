@@ -9,8 +9,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-ga
     process.exit(1);
   });
 
-async function createOrUpdateUser({ username, email, googleId }) {
-  const update = { email, googleId };
+async function createOrUpdateUser({ username, email }) {
+  const update = { email };
   const options = { upsert: true, new: true, setDefaultsOnInsert: true };
   const user = await User.findOneAndUpdate(
     { username },
@@ -25,16 +25,14 @@ async function createTestUsers() {
     // Upsert first test user
     const user1 = await createOrUpdateUser({
       username: 'testUser1',
-      email: 'test1@example.com',
-      googleId: 'test_google_id_1'
+      email: 'test1@example.com'
     });
     console.log('Upserted test user 1:', user1);
 
     // Upsert second test user
     const user2 = await createOrUpdateUser({
       username: 'testUser2',
-      email: 'test2@example.com',
-      googleId: 'test_google_id_2'
+      email: 'test2@example.com'
     });
     console.log('Upserted test user 2:', user2);
 
