@@ -5,6 +5,7 @@ const router = express.Router();
 const userGetList = require('./users/getList');
 const userGetDetails = require('./users/getDetails');
 const userCreate = require('./users/create');
+const userUpdate = require('./users/update');
 
 // Match routes
 const matchGetList = require('./matches/getList');
@@ -39,6 +40,7 @@ const lobbyExitRanked = require('./lobby/exitRanked');
 router.use('/users/getList', userGetList);
 router.use('/users/getDetails', userGetDetails);
 router.use('/users/create', userCreate);
+router.use('/users/update', userUpdate);
 
 // Match routes
 router.use('/matches/getList', matchGetList);

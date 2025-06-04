@@ -22,6 +22,11 @@ const userSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  googleId: {
+    type: String,
+    unique: true,
+    sparse: true // allow multiple docs with null/undefined
   }
 });
 
