@@ -14,9 +14,11 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'User ID required' });
     }
 
-  const start = Date.now();
-  while (Date.now() - start < TIMEOUT) {
+    const start = Date.now();
+    while (Date.now() - start < TIMEOUT) {
+      // Check for matches first
       await checkAndCreateMatches();
+      
       const lobby = await Lobby.findOne().lean();
       if (!lobby) {
         return res.status(404).json({ message: 'Lobby not found' });
@@ -30,15 +32,29 @@ router.post('/', async (req, res) => {
             { player1: userId },
             { player2: userId }
           ]
-        }).sort({ createdAt: -1 }).lean();
+        }).sort({ createdAt: -1 }).populate('games').lean();
 
         if (match) {
-          return res.json({
-            status: 'matched',
-            matchId: match._id,
-            gameId: match.games[match.games.length - 1],
-            type: match.type
-          });
+          // Refetch the match to ensure games array is up-to-date
+          const freshMatch = await Match.findById(match._id).populate('games').lean();
+          const lastGameId = freshMatch.games && freshMatch.games.length > 0
+            ? (freshMatch.games[freshMatch.games.length - 1]._id || freshMatch.games[freshMatch.games.length - 1])
+            : null;
+          if (lastGameId) {
+            return res.json({
+              status: 'matched',
+              matchId: freshMatch._id,
+              gameId: lastGameId,
+              type: freshMatch.type
+            });
+          } else {
+            // No game yet, tell client to keep polling
+            return res.json({
+              status: 'waiting_for_game',
+              matchId: freshMatch._id,
+              type: freshMatch.type
+            });
+          }
         }
       }
 
@@ -57,9 +73,11 @@ router.post('/', async (req, res) => {
         });
       }
 
-      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+      // If user is not in any queue or game, they need to re-enter queue
+      return res.status(400).json({ message: 'User not in queue' });
     }
 
+    // If we timeout, return 204 to indicate no change
     return res.status(204).end();
   } catch (err) {
     res.status(500).json({ message: err.message });

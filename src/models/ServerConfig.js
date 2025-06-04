@@ -68,7 +68,7 @@ const serverConfigSchema = new mongoose.Schema({
     RANKED: {
       TIME_CONTROL: {
         type: Number,
-        default: 125000
+        default: 120000
       },
       WIN_SCORE: {
         type: Number,
@@ -78,7 +78,7 @@ const serverConfigSchema = new mongoose.Schema({
     QUICKPLAY: {
       TIME_CONTROL: {
         type: Number,
-        default: 305000
+        default: 300000
       },
       WIN_SCORE: {
         type: Number,
@@ -124,11 +124,23 @@ const serverConfigSchema = new mongoose.Schema({
       CAN_RESIGN: 3
     }
   }
-}, { _id: false });
+}, { 
+  timestamps: true,
+  collection: 'serverconfig'
+});
 
 // Static method to get default configuration
 serverConfigSchema.statics.getDefaultConfig = function() {
   return new this();
+};
+
+// Ensure only one config document exists
+serverConfigSchema.statics.getSingleton = async function() {
+  let config = await this.findOne();
+  if (!config) {
+    config = await this.create({});
+  }
+  return config;
 };
 
 module.exports = mongoose.model('ServerConfig', serverConfigSchema); 

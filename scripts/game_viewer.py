@@ -51,23 +51,45 @@ def api_post(endpoint: str, data: dict, retries: int = 3) -> Tuple[bool, Optiona
                 time.sleep(1)
                 continue
             return False, err
+        except requests.exceptions.ConnectionError as exc:
+            print(f"Connection error to {endpoint}: Server may not be running. Please ensure the server is running on {BASE_URL}")
+            if attempt < retries - 1:
+                print("Retrying in 1 second...")
+                time.sleep(1)
+                continue
+            return False, {"message": "Server connection failed"}
         except Exception as exc:
             print(f"Request error to {endpoint}: {exc}")
-            time.sleep(1)
+            if attempt < retries - 1:
+                print("Retrying in 1 second...")
+                time.sleep(1)
+                continue
+            return False, {"message": "request failed"}
     return False, {"message": "request failed"}
 
 
 def api_get(endpoint: str, retries: int = 3) -> Optional[dict]:
     url = f"{BASE_URL}/{endpoint}"
-    for _ in range(retries):
+    for attempt in range(retries):
         try:
             res = requests.get(url, timeout=5)
             if res.status_code == 200:
                 return res.json()
             print(f"GET {endpoint} -> {res.status_code}: {res.text}")
+        except requests.exceptions.ConnectionError as exc:
+            print(f"Connection error to {endpoint}: Server may not be running. Please ensure the server is running on {BASE_URL}")
+            if attempt < retries - 1:
+                print("Retrying in 1 second...")
+                time.sleep(1)
+                continue
+            return None
         except Exception as exc:
             print(f"GET error {endpoint}: {exc}")
-        time.sleep(1)
+            if attempt < retries - 1:
+                print("Retrying in 1 second...")
+                time.sleep(1)
+                continue
+            return None
     return None
 
 
@@ -125,8 +147,25 @@ def enter_quickplay(user_id: str) -> None:
 def listen_for_match(user_id: str) -> str:
     while True:
         success, result = api_post("lobby/listenForMatch", {"userId": user_id})
-        if success and result and result.get("status") == "matched":
-            return result["gameId"]
+        print("listenForMatch response:", result)  # Debug print
+        if success and result:
+            if result.get("status") == "matched":
+                if "gameId" in result:
+                    return result["gameId"]
+                else:
+                    print("Matched, but no gameId in response! Full response:", result)
+                    match_id = result.get("matchId")
+                    if match_id:
+                        ok, match = api_post("matches/getDetails", {"matchId": match_id})
+                        if ok and match and match.get("games"):
+                            return match["games"][-1]
+                        else:
+                            print("Could not fetch match details or no games found.")
+            elif result.get("status") == "queued":
+                print(f"Waiting in queue... Queue length: {result.get('queueLength', 'unknown')}")
+            elif result.get("message") == "User not in queue":
+                print("Not in queue, re-entering...")
+                enter_quickplay(user_id)
         time.sleep(1)
 
 
