@@ -45,6 +45,7 @@ npm start
 ### Games
 - POST /api/v1/games/getList - Get a list of games
 - POST /api/v1/games/getDetails - Get details for a specific game
+- POST /api/v1/games/listenForMove - Poll for the opponent's next action
 
 ### Game Actions
 - POST /api/v1/gameAction/checkTimeControl - Check the current player's clock
