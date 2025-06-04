@@ -42,7 +42,12 @@ test('previous move is not applied again when already resolved', async () => {
     onDeckingPlayer: null,
     playerTurn: 1,
     isActive: true,
-    addAction: jest.fn().mockResolvedValue(),
+    movesSinceAction: 0,
+    addAction: jest.fn().mockImplementation(async () => {
+      // Move the piece on the board
+      game.board[2][2] = game.board[0][1];
+      game.board[0][1] = null;
+    }),
     save: jest.fn().mockResolvedValue(),
     endGame: jest.fn().mockResolvedValue(),
   };
@@ -55,7 +60,7 @@ test('previous move is not applied again when already resolved', async () => {
       gameId: '1',
       color: 1,
       from: { row: 0, col: 1 },
-      to: { row: 0, col: 2 },
+      to: { row: 2, col: 2 },
       declaration: config.identities.get('KNIGHT'),
     })
     .expect(200);
@@ -66,5 +71,5 @@ test('previous move is not applied again when already resolved', async () => {
 
   // piece B should have moved
   expect(game.board[0][1]).toBe(null);
-  expect(game.board[0][2]).toBe(pieceB);
+  expect(game.board[2][2]).toBe(pieceB);
 });
