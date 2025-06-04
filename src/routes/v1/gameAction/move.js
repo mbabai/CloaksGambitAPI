@@ -152,16 +152,13 @@ router.post('/', async (req, res) => {
         } else {
           game.movesSinceAction += 1;
           if (game.movesSinceAction >= 20 && game.isActive) {
-            game.winReason = config.winReasons.get('DRAW');
-            game.endTime = new Date();
-            game.isActive = false;
+            await game.endGame(null, config.winReasons.get('DRAW'));
           }
         }
       }
     }
 
     if (!game.isActive) {
-      await game.save();
       return res.json({ message: 'Game drawn by inactivity' });
     }
 
