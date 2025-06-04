@@ -4,6 +4,7 @@ import json
 # Constants for piece representation
 PIECE_SYMBOLS = {
     0: {  # White pieces
+        0: '👻',  # Unknown/Cloaked
         1: '♔',  # King
         2: '💣',  # Bomb
         3: '♗',  # Bishop
@@ -11,6 +12,7 @@ PIECE_SYMBOLS = {
         5: '♘',  # Knight
     },
     1: {  # Black pieces
+        0: '👻',  # Unknown/Cloaked
         1: '♚',  # King
         2: '💣',  # Bomb
         3: '♝',  # Bishop
