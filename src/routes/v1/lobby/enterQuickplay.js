@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const Lobby = require('../../../models/Lobby');
+const Match = require('../../../models/Match');
+const { checkAndCreateMatches } = require('./matchmaking');
 
 router.post('/', async (req, res) => {
   try {
@@ -31,7 +33,26 @@ router.post('/', async (req, res) => {
     lobby.quickplayQueue.push(userId);
     await lobby.save();
 
-    res.json({ message: 'Entered quickplay queue' });
+    await checkAndCreateMatches();
+    const updated = await Lobby.findOne().lean();
+
+    if (updated.inGame.some(id => id.toString() === userId)) {
+      const match = await Match.findOne({
+        $or: [
+          { player1: userId },
+          { player2: userId }
+        ]
+      }).sort({ createdAt: -1 }).lean();
+
+      return res.json({
+        status: 'matched',
+        matchId: match._id,
+        gameId: match.games[match.games.length - 1],
+        type: match.type
+      });
+    }
+
+    res.json({ status: 'queued' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

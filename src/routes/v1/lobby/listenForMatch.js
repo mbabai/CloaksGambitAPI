@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Lobby = require('../../../models/Lobby');
 const Match = require('../../../models/Match');
+const { checkAndCreateMatches } = require('./matchmaking');
 
 const POLL_INTERVAL = 1000; // 1 second
 const TIMEOUT = 30000; // 30 seconds
@@ -13,8 +14,9 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'User ID required' });
     }
 
-    const start = Date.now();
-    while (Date.now() - start < TIMEOUT) {
+  const start = Date.now();
+  while (Date.now() - start < TIMEOUT) {
+      await checkAndCreateMatches();
       const lobby = await Lobby.findOne().lean();
       if (!lobby) {
         return res.status(404).json({ message: 'Lobby not found' });
