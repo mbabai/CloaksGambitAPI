@@ -273,9 +273,11 @@ def random_move(game_id: str, color: int) -> None:
 def main() -> None:
     user1 = create_user("py_user1", "py1@example.com")
     user2 = create_user("py_user2", "py2@example.com")
+    print("Users Created Successfully")
 
     enter_quickplay(user1)
     enter_quickplay(user2)
+    print("Users endered quickplay queue Successfully")
 
     print("Waiting for matchmaking...")
     game_id = listen_for_match(user1)
