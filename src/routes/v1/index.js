@@ -35,7 +35,7 @@ const lobbyEnterQuickplay = require('./lobby/enterQuickplay');
 const lobbyExitQuickplay = require('./lobby/exitQuickplay');
 const lobbyEnterRanked = require('./lobby/enterRanked');
 const lobbyExitRanked = require('./lobby/exitRanked');
-const lobbyMatchmaking = require('./lobby/matchmaking');
+const { router: lobbyMatchmaking, checkAndCreateMatches } = require('./lobby/matchmaking');
 const lobbyListenForMatch = require('./lobby/listenForMatch');
 
 // User routes

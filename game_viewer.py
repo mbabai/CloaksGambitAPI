@@ -122,16 +122,11 @@ def enter_quickplay(user_id: str) -> None:
     api_post("lobby/enterQuickplay", {"userId": user_id})
 
 
-def matchmaking_check() -> None:
-    api_post("lobby/matchmaking/check", {})
-
-
 def listen_for_match(user_id: str) -> str:
     while True:
         success, result = api_post("lobby/listenForMatch", {"userId": user_id})
         if success and result and result.get("status") == "matched":
             return result["gameId"]
-        matchmaking_check()
         time.sleep(1)
 
 
