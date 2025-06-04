@@ -11,7 +11,12 @@ router.post('/', async (req, res) => {
 
     let lobby = await Lobby.findOne();
     if (!lobby) {
-      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [] });
+      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [], inGame: [] });
+    }
+
+    // Check if user is already in a game
+    if (lobby.inGame.some(id => id.toString() === userId)) {
+      return res.status(400).json({ message: 'User is already in a game' });
     }
 
     if (lobby.quickplayQueue.some(id => id.toString() === userId)) {

@@ -35,6 +35,8 @@ const lobbyEnterQuickplay = require('./lobby/enterQuickplay');
 const lobbyExitQuickplay = require('./lobby/exitQuickplay');
 const lobbyEnterRanked = require('./lobby/enterRanked');
 const lobbyExitRanked = require('./lobby/exitRanked');
+const lobbyMatchmaking = require('./lobby/matchmaking');
+const lobbyListenForMatch = require('./lobby/listenForMatch');
 
 // User routes
 router.use('/users/getList', userGetList);
@@ -70,5 +72,7 @@ router.use('/lobby/enterQuickplay', lobbyEnterQuickplay);
 router.use('/lobby/exitQuickplay', lobbyExitQuickplay);
 router.use('/lobby/enterRanked', lobbyEnterRanked);
 router.use('/lobby/exitRanked', lobbyExitRanked);
+router.use('/lobby/matchmaking', lobbyMatchmaking);
+router.use('/lobby/listenForMatch', lobbyListenForMatch);
 
 module.exports = router; 

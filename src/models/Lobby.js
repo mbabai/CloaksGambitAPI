@@ -8,6 +8,10 @@ const lobbySchema = new mongoose.Schema({
   rankedQueue: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  }],
+  inGame: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }]
 }, { timestamps: true });
 
