@@ -64,20 +64,21 @@ const matchSchema = new mongoose.Schema({
     winner: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
+        default: null,
         validate: {
             validator: function(v) {
-                return v.toString() === this.player1.toString() || 
+                if (!v) return true;
+                return v.toString() === this.player1.toString() ||
                        v.toString() === this.player2.toString();
             },
             message: 'Winner must be either Player 1 or Player 2'
         }
     },
-    games: [{
-        type: mongoose.Schema.Types.ObjectId,
+    games: {
+        type: [mongoose.Schema.Types.ObjectId],
         ref: 'Game',
-        required: true
-    }],
+        default: []
+    },
     startTime: {
         type: Date,
         default: Date.now
