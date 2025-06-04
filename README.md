@@ -73,3 +73,34 @@ src/
 ├── routes/         # API routes
 └── server.js       # Application entry point
 ```
+
+## Listening for Moves
+
+Use the `/api/v1/games/listenForMove` endpoint after each action to stay
+synchronized with your opponent. Send a POST request with `gameId`, `color`
+and the `lastAction` index or timestamp you have processed. If a new
+opponent action occurs before the 30 second timeout, the route returns the
+updated game state with HTTP `200`. Otherwise it returns `204` and you should
+immediately issue another poll.
+
+Example client logic (using `fetch`):
+
+```javascript
+async function listenLoop(gameId, color, lastAction) {
+  const body = JSON.stringify({ gameId, color, lastAction });
+  const res = await fetch('/api/v1/games/listenForMove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
+
+  if (res.status === 200) {
+    const game = await res.json();
+    // handle updated game state here
+    return game;
+  }
+
+  // status 204 indicates no action; call again
+  return listenLoop(gameId, color, lastAction);
+}
+```
