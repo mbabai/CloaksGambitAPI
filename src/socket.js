@@ -1,4 +1,7 @@
 const { Server } = require('socket.io');
+const Lobby = require('./models/Lobby');
+const Game = require('./models/Game');
+const maskGameForColor = require('./utils/gameView');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -8,10 +11,28 @@ function initSocket(httpServer) {
   });
   const clients = new Map();
 
-  io.on('connection', (socket) => {
+  io.on('connection', async (socket) => {
     const { userId } = socket.handshake.auth;
     clients.set(userId, socket);
     console.log('Client connected', socket.id);
+
+    try {
+      const lobby = await Lobby.findOne().lean();
+      const queued = {
+        quickplay: lobby?.quickplayQueue?.some(id => id.toString() === userId) || false,
+        ranked: lobby?.rankedQueue?.some(id => id.toString() === userId) || false,
+      };
+
+      const games = await Game.find({ players: userId, isActive: true }).lean();
+      const maskedGames = games.map((game) => {
+        const color = game.players.findIndex(p => p.toString() === userId);
+        return maskGameForColor(game, color);
+      });
+
+      socket.emit('initialState', { queued, games: maskedGames });
+    } catch (err) {
+      console.error('Error fetching initial state:', err);
+    }
 
     socket.on('disconnect', () => {
       console.log('Client disconnected', socket.id);
