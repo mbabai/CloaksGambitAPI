@@ -2,6 +2,7 @@ const { Server } = require('socket.io');
 const Lobby = require('./models/Lobby');
 const Game = require('./models/Game');
 const maskGameForColor = require('./utils/gameView');
+const eventBus = require('./eventBus');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -10,6 +11,25 @@ function initSocket(httpServer) {
     },
   });
   const clients = new Map();
+
+  // Setup change streams to broadcast high-level events
+  try {
+    const lobbyChangeStream = Lobby.watch();
+    lobbyChangeStream.on('change', (change) => {
+      eventBus.emit('queueChanged', change);
+    });
+  } catch (err) {
+    console.error('Error watching Lobby:', err);
+  }
+
+  try {
+    const gameChangeStream = Game.watch();
+    gameChangeStream.on('change', (change) => {
+      eventBus.emit('gameChanged', change);
+    });
+  } catch (err) {
+    console.error('Error watching Game:', err);
+  }
 
   io.on('connection', async (socket) => {
     const { userId } = socket.handshake.auth;
