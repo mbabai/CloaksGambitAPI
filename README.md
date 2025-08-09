@@ -1,6 +1,7 @@
 # Cloaks Gambit API
 
-A REST API application built with Node.js and MongoDB.
+A REST API application built with Node.js and MongoDB. Real-time match and move
+updates are delivered through WebSocket events.
 
 ## Prerequisites
 
