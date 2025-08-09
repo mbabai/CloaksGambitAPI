@@ -4,6 +4,7 @@ const Lobby = require('../../../models/Lobby');
 const Match = require('../../../models/Match');
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
+const eventBus = require('../../../eventBus');
 
 // Function to check and create matches
 async function checkAndCreateMatches() {
@@ -63,6 +64,11 @@ async function checkAndCreateMatches() {
 
         console.log('Game created:', game._id);
 
+        eventBus.emit('gameChanged', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: [player1.toString(), player2.toString()],
+        });
+
         // Update match with game
         match.games.push(game._id);
         await match.save();
@@ -82,6 +88,13 @@ async function checkAndCreateMatches() {
         if (updateResult.modifiedCount === 0) {
           console.error('Failed to update lobby - no documents modified');
         }
+
+        const updatedLobby = await Lobby.findById(lobby._id).lean();
+        eventBus.emit('queueChanged', {
+          quickplayQueue: updatedLobby.quickplayQueue.map(id => id.toString()),
+          rankedQueue: updatedLobby.rankedQueue.map(id => id.toString()),
+          affectedUsers: [player1.toString(), player2.toString()],
+        });
 
         console.log('Quickplay match created successfully');
       } catch (matchErr) {
@@ -124,6 +137,11 @@ async function checkAndCreateMatches() {
 
         console.log('Game created:', game._id);
 
+        eventBus.emit('gameChanged', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: [player1.toString(), player2.toString()],
+        });
+
         // Update match with game
         match.games.push(game._id);
         await match.save();
@@ -143,6 +161,13 @@ async function checkAndCreateMatches() {
         if (updateResult.modifiedCount === 0) {
           console.error('Failed to update lobby - no documents modified');
         }
+
+        const updatedLobby = await Lobby.findById(lobby._id).lean();
+        eventBus.emit('queueChanged', {
+          quickplayQueue: updatedLobby.quickplayQueue.map(id => id.toString()),
+          rankedQueue: updatedLobby.rankedQueue.map(id => id.toString()),
+          affectedUsers: [player1.toString(), player2.toString()],
+        });
 
         console.log('Ranked match created successfully');
       } catch (matchErr) {
