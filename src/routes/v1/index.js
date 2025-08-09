@@ -16,7 +16,6 @@ const matchCreate = require('./matches/create');
 const gameGetList = require('./games/getList');
 const gameGetDetails = require('./games/getDetails');
 const gameCreate = require('./games/create');
-const gamesListenForMove = require('./games/listenForMove');
 
 // Game action routes
 const gameActionCheckTimeControl = require('./gameAction/checkTimeControl');
@@ -35,8 +34,7 @@ const lobbyEnterQuickplay = require('./lobby/enterQuickplay');
 const lobbyExitQuickplay = require('./lobby/exitQuickplay');
 const lobbyEnterRanked = require('./lobby/enterRanked');
 const lobbyExitRanked = require('./lobby/exitRanked');
-const { router: lobbyMatchmaking, checkAndCreateMatches } = require('./lobby/matchmaking');
-const lobbyListenForMatch = require('./lobby/listenForMatch');
+const { router: lobbyMatchmaking } = require('./lobby/matchmaking');
 
 // User routes
 router.use('/users/getList', userGetList);
@@ -53,7 +51,6 @@ router.use('/matches/create', matchCreate);
 router.use('/games/getList', gameGetList);
 router.use('/games/getDetails', gameGetDetails);
 router.use('/games/create', gameCreate);
-router.use('/games/listenForMove', gamesListenForMove);
 
 // Game action routes
 router.use('/gameAction/checkTimeControl', gameActionCheckTimeControl);
@@ -73,6 +70,5 @@ router.use('/lobby/exitQuickplay', lobbyExitQuickplay);
 router.use('/lobby/enterRanked', lobbyEnterRanked);
 router.use('/lobby/exitRanked', lobbyExitRanked);
 router.use('/lobby/matchmaking', lobbyMatchmaking);
-router.use('/lobby/listenForMatch', lobbyListenForMatch);
 
-module.exports = router; 
+module.exports = router;
