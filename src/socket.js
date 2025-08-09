@@ -52,6 +52,35 @@ function initSocket(httpServer) {
     lobbyState.rankedQueue = newRanked;
   });
 
+  eventBus.on('gameChanged', async (change) => {
+    const gameId = change?.documentKey?._id;
+    if (!gameId) return;
+
+    let game;
+    try {
+      game = await Game.findById(gameId).lean();
+    } catch (err) {
+      console.error('Error fetching game for update:', err);
+      return;
+    }
+    if (!game) return;
+
+    const matchId = game.match?.toString();
+    const gameIdStr = game._id.toString();
+
+    game.players.forEach((playerId, idx) => {
+      const socket = clients.get(playerId.toString());
+      if (!socket) return;
+      const masked = maskGameForColor(JSON.parse(JSON.stringify(game)), idx);
+      socket.emit('game:update', {
+        matchId,
+        gameId: gameIdStr,
+        board: masked.board,
+        actions: masked.actions,
+      });
+    });
+  });
+
   // Setup change streams to broadcast high-level events
   try {
     const lobbyChangeStream = Lobby.watch([], { fullDocument: 'updateLookup' });
