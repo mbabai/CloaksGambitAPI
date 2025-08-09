@@ -12,9 +12,49 @@ function initSocket(httpServer) {
   });
   const clients = new Map();
 
+  const lobbyState = { quickplayQueue: [], rankedQueue: [] };
+  Lobby.findOne().lean().then(lobby => {
+    if (lobby) {
+      lobbyState.quickplayQueue = lobby.quickplayQueue.map(id => id.toString());
+      lobbyState.rankedQueue = lobby.rankedQueue.map(id => id.toString());
+    }
+  }).catch(err => {
+    console.error('Error initializing lobby state:', err);
+  });
+
+  eventBus.on('queueChanged', (change) => {
+    if (!change.fullDocument) return;
+
+    const { quickplayQueue = [], rankedQueue = [] } = change.fullDocument;
+    const newQuick = quickplayQueue.map(id => id.toString());
+    const newRanked = rankedQueue.map(id => id.toString());
+
+    const added = new Set();
+    const removed = new Set();
+
+    newQuick.forEach(id => { if (!lobbyState.quickplayQueue.includes(id)) added.add(id); });
+    lobbyState.quickplayQueue.forEach(id => { if (!newQuick.includes(id)) removed.add(id); });
+    newRanked.forEach(id => { if (!lobbyState.rankedQueue.includes(id)) added.add(id); });
+    lobbyState.rankedQueue.forEach(id => { if (!newRanked.includes(id)) removed.add(id); });
+
+    const affected = new Set([...added, ...removed]);
+    affected.forEach((id) => {
+      const socket = clients.get(id);
+      if (socket) {
+        socket.emit('queue:update', {
+          quickplay: newQuick.includes(id),
+          ranked: newRanked.includes(id),
+        });
+      }
+    });
+
+    lobbyState.quickplayQueue = newQuick;
+    lobbyState.rankedQueue = newRanked;
+  });
+
   // Setup change streams to broadcast high-level events
   try {
-    const lobbyChangeStream = Lobby.watch();
+    const lobbyChangeStream = Lobby.watch([], { fullDocument: 'updateLookup' });
     lobbyChangeStream.on('change', (change) => {
       eventBus.emit('queueChanged', change);
     });
