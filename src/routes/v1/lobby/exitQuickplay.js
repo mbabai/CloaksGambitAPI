@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Lobby = require('../../../models/Lobby');
+const eventBus = require('../../../eventBus');
 
 router.post('/', async (req, res) => {
   try {
@@ -18,6 +19,12 @@ router.post('/', async (req, res) => {
       (id) => id.toString() !== userId
     );
     await lobby.save();
+
+    eventBus.emit('queueChanged', {
+      quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
+      rankedQueue: lobby.rankedQueue.map(id => id.toString()),
+      affectedUsers: [userId.toString()],
+    });
 
     res.json({ message: 'Exited quickplay queue' });
   } catch (err) {

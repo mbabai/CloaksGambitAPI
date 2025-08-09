@@ -3,6 +3,7 @@ const router = express.Router();
 const Lobby = require('../../../models/Lobby');
 const Match = require('../../../models/Match');
 const { checkAndCreateMatches } = require('./matchmaking');
+const eventBus = require('../../../eventBus');
 
 router.post('/', async (req, res) => {
   try {
@@ -32,6 +33,12 @@ router.post('/', async (req, res) => {
 
     lobby.quickplayQueue.push(userId);
     await lobby.save();
+
+    eventBus.emit('queueChanged', {
+      quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
+      rankedQueue: lobby.rankedQueue.map(id => id.toString()),
+      affectedUsers: [userId.toString()],
+    });
 
     await checkAndCreateMatches();
     const updated = await Lobby.findOne().lean();

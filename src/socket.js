@@ -22,22 +22,31 @@ function initSocket(httpServer) {
     console.error('Error initializing lobby state:', err);
   });
 
-  eventBus.on('queueChanged', (change) => {
-    if (!change.fullDocument) return;
+  eventBus.on('queueChanged', (payload) => {
+    let newQuick = [];
+    let newRanked = [];
+    const affected = new Set();
 
-    const { quickplayQueue = [], rankedQueue = [] } = change.fullDocument;
-    const newQuick = quickplayQueue.map(id => id.toString());
-    const newRanked = rankedQueue.map(id => id.toString());
+    if (payload.fullDocument) {
+      const { quickplayQueue = [], rankedQueue = [] } = payload.fullDocument;
+      newQuick = quickplayQueue.map(id => id.toString());
+      newRanked = rankedQueue.map(id => id.toString());
 
-    const added = new Set();
-    const removed = new Set();
+      const added = new Set();
+      const removed = new Set();
 
-    newQuick.forEach(id => { if (!lobbyState.quickplayQueue.includes(id)) added.add(id); });
-    lobbyState.quickplayQueue.forEach(id => { if (!newQuick.includes(id)) removed.add(id); });
-    newRanked.forEach(id => { if (!lobbyState.rankedQueue.includes(id)) added.add(id); });
-    lobbyState.rankedQueue.forEach(id => { if (!newRanked.includes(id)) removed.add(id); });
+      newQuick.forEach(id => { if (!lobbyState.quickplayQueue.includes(id)) added.add(id); });
+      lobbyState.quickplayQueue.forEach(id => { if (!newQuick.includes(id)) removed.add(id); });
+      newRanked.forEach(id => { if (!lobbyState.rankedQueue.includes(id)) added.add(id); });
+      lobbyState.rankedQueue.forEach(id => { if (!newRanked.includes(id)) removed.add(id); });
 
-    const affected = new Set([...added, ...removed]);
+      [...added, ...removed].forEach(id => affected.add(id));
+    } else {
+      newQuick = (payload.quickplayQueue || []).map(id => id.toString());
+      newRanked = (payload.rankedQueue || []).map(id => id.toString());
+      (payload.affectedUsers || []).forEach(id => affected.add(id.toString()));
+    }
+
     affected.forEach((id) => {
       const socket = clients.get(id);
       if (socket) {
@@ -52,25 +61,33 @@ function initSocket(httpServer) {
     lobbyState.rankedQueue = newRanked;
   });
 
-  eventBus.on('gameChanged', async (change) => {
-    const gameId = change?.documentKey?._id;
-    if (!gameId) return;
-
+  eventBus.on('gameChanged', async (payload) => {
     let game;
-    try {
-      game = await Game.findById(gameId).lean();
-    } catch (err) {
-      console.error('Error fetching game for update:', err);
-      return;
+    if (payload.game) {
+      game = typeof payload.game.toObject === 'function'
+        ? payload.game.toObject()
+        : payload.game;
+    } else {
+      const gameId = payload?.documentKey?._id || payload?.gameId;
+      if (!gameId) return;
+      try {
+        game = await Game.findById(gameId).lean();
+      } catch (err) {
+        console.error('Error fetching game for update:', err);
+        return;
+      }
     }
+
     if (!game) return;
 
     const matchId = game.match?.toString();
     const gameIdStr = game._id.toString();
+    const players = (payload.affectedUsers || game.players || []).map(id => id.toString());
 
-    game.players.forEach((playerId, idx) => {
-      const socket = clients.get(playerId.toString());
+    players.forEach((playerId) => {
+      const socket = clients.get(playerId);
       if (!socket) return;
+      const idx = game.players.findIndex(p => p.toString() === playerId);
       const masked = maskGameForColor(JSON.parse(JSON.stringify(game)), idx);
       socket.emit('game:update', {
         matchId,

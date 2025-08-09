@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
 const ServerConfig = require('../../../models/ServerConfig');
+const eventBus = require('../../../eventBus');
 
 router.post('/', async (req, res) => {
   try {
@@ -53,6 +54,11 @@ router.post('/', async (req, res) => {
     game.playerTurn = normalizedColor === 0 ? 1 : 0;
 
     await game.save();
+
+    eventBus.emit('gameChanged', {
+      game: typeof game.toObject === 'function' ? game.toObject() : game,
+      affectedUsers: (game.players || []).map(p => p.toString()),
+    });
 
     res.json({ message: 'Bomb action recorded' });
   } catch (err) {

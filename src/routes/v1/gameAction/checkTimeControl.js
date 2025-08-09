@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
 const ServerConfig = require('../../../models/ServerConfig');
+const eventBus = require('../../../eventBus');
 
 router.post('/', async (req, res) => {
   try {
@@ -30,11 +31,19 @@ router.post('/', async (req, res) => {
       if (elapsed > timeControl) {
         if (!setup0 && !setup1) {
           await game.endGame(null, config.winReasons.get('TIME_CONTROL'));
+          eventBus.emit('gameChanged', {
+            game: typeof game.toObject === 'function' ? game.toObject() : game,
+            affectedUsers: (game.players || []).map(p => p.toString()),
+          });
           return res.json({ gameOver: true, draw: true });
         }
 
         const winnerColor = setup0 ? 0 : 1;
         await game.endGame(winnerColor, config.winReasons.get('TIME_CONTROL'));
+        eventBus.emit('gameChanged', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: (game.players || []).map(p => p.toString()),
+        });
         return res.json({ gameOver: true, winner: winnerColor });
       }
 
@@ -47,6 +56,10 @@ router.post('/', async (req, res) => {
     if (elapsed + actionsCount * increment > timeControl) {
       const winnerColor = turnPlayer === 0 ? 1 : 0;
       await game.endGame(winnerColor, config.winReasons.get('TIME_CONTROL'));
+      eventBus.emit('gameChanged', {
+        game: typeof game.toObject === 'function' ? game.toObject() : game,
+        affectedUsers: (game.players || []).map(p => p.toString()),
+      });
       return res.json({ gameOver: true, winner: winnerColor });
     }
 
