@@ -1,4 +1,5 @@
 const express = require('express');
+const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -8,6 +9,7 @@ require('dotenv').config();
 const app = express();
 
 const routes = require('./routes');
+const initSocket = require('./socket');
 
 // Middleware
 app.use(cors());
@@ -35,6 +37,10 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+initSocket(server);
+
+server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-}); 
+});
