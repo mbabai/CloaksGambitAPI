@@ -3,6 +3,7 @@ const Lobby = require('./models/Lobby');
 const Game = require('./models/Game');
 const maskGameForColor = require('./utils/gameView');
 const eventBus = require('./eventBus');
+const ChangeStreamToken = require('./models/ChangeStreamToken');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -98,24 +99,68 @@ function initSocket(httpServer) {
     });
   });
 
-  // Setup change streams to broadcast high-level events
-  try {
-    const lobbyChangeStream = Lobby.watch([], { fullDocument: 'updateLookup' });
-    lobbyChangeStream.on('change', (change) => {
-      eventBus.emit('queueChanged', change);
-    });
-  } catch (err) {
-    console.error('Error watching Lobby:', err);
+  async function setupChangeStream(Model, streamName, pipeline, options, handler) {
+    let resumeToken = await ChangeStreamToken.getToken(streamName);
+
+    const start = () => {
+      const watchOptions = { ...options };
+      if (resumeToken) {
+        watchOptions.resumeAfter = resumeToken;
+      }
+
+      let stream;
+      try {
+        stream = Model.watch(pipeline, watchOptions);
+      } catch (err) {
+        console.error(`Error watching ${streamName}:`, err);
+        return;
+      }
+
+      stream.on('change', async (change) => {
+        try {
+          handler(change);
+        } finally {
+          resumeToken = change._id;
+          try {
+            await ChangeStreamToken.saveToken(streamName, resumeToken);
+          } catch (err) {
+            console.error(`Error saving resume token for ${streamName}:`, err);
+          }
+        }
+      });
+
+      const restart = () => {
+        console.warn(`${streamName} change stream restarting.`);
+        start();
+      };
+
+      stream.on('error', (err) => {
+        console.error(`Error in ${streamName} change stream:`, err);
+        restart();
+      });
+
+      stream.on('close', restart);
+    };
+
+    start();
   }
 
-  try {
-    const gameChangeStream = Game.watch();
-    gameChangeStream.on('change', (change) => {
-      eventBus.emit('gameChanged', change);
-    });
-  } catch (err) {
-    console.error('Error watching Game:', err);
-  }
+  // Setup change streams to broadcast high-level events with resume tokens
+  setupChangeStream(
+    Lobby,
+    'Lobby',
+    [],
+    { fullDocument: 'updateLookup' },
+    (change) => eventBus.emit('queueChanged', change)
+  );
+
+  setupChangeStream(
+    Game,
+    'Game',
+    [],
+    {},
+    (change) => eventBus.emit('gameChanged', change)
+  );
 
   io.on('connection', async (socket) => {
     const { userId } = socket.handshake.auth;
