@@ -33,3 +33,30 @@ time match and move data is streamed to clients via WebSocket events.
 - `POST /api/v1/lobby/enterRanked` – Join the ranked queue
 - `POST /api/v1/lobby/exitRanked` – Leave the ranked queue
 
+## WebSocket Connection
+
+Real-time features use a Socket.IO connection. Clients should connect with
+their user ID to receive personalized events:
+
+```javascript
+import { io } from "socket.io-client";
+
+const socket = io("http://localhost:3000", {
+  auth: { userId: "<USER_ID>" }
+});
+```
+
+### Events
+
+- `initialState` – Emitted once after connecting and contains queue membership
+  and any active games for the player.
+- `queue:update` – Notifies the client when their queue status changes.
+- `match:found` – Sent when matchmaking creates a new match for the player.
+- `game:update` – Provides real-time game state updates.
+
+### Reconnection
+
+Socket.IO will automatically try to reconnect if the connection drops. Listen
+for `disconnect` and `reconnect` events and refresh any needed state after the
+client rejoins.
+
