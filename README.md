@@ -33,6 +33,41 @@ Production mode:
 ```bash
 npm start
 ```
+
+## WebSocket Connection
+
+Real-time updates are delivered over a Socket.IO connection. Clients should
+connect with their user ID to receive personalized events:
+
+```javascript
+import { io } from "socket.io-client";
+
+const socket = io("http://localhost:3000", {
+  auth: { userId: "<USER_ID>" }
+});
+
+socket.on("initialState", ({ queued, games }) => {
+  // queued: { quickplay: boolean, ranked: boolean }
+  // games: array of active games masked for the player
+});
+
+socket.on("queue:update", (status) => {
+  // status: { quickplay: boolean, ranked: boolean }
+});
+
+socket.on("match:found", (match) => {
+  // match: { matchId, gameId, type }
+});
+
+socket.on("game:update", (game) => {
+  // game: { matchId, gameId, board, actions }
+});
+```
+
+Socket.IO automatically attempts to reconnect when the connection drops.
+For best results, listen for `disconnect` and `reconnect` events and refresh
+any application state after reconnecting.
+
 ## API Endpoints
 
 ### Users
