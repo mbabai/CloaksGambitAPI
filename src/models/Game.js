@@ -369,7 +369,7 @@ gameSchema.methods.addAction = function(type, player, details) {
     };
 
     this.actions.push(action);
-    return this.save();
+    return this;
 };
 
 module.exports = mongoose.model('Game', gameSchema); 
