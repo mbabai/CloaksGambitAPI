@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cloaks Gambit Test Client</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    body { font-family: sans-serif; }
+    button { margin-right: 8px; }
+    #log { border: 1px solid #ccc; padding: 8px; height: 300px; overflow-y: auto; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Cloaks Gambit Test Client</h1>
+  <div>
+    <button id="connect">1. Connect</button>
+    <button id="queue" disabled>2. Join Queue</button>
+    <button id="setup" disabled>3. Setup & Ready</button>
+    <button id="play" disabled>4. Play Sequence</button>
+  </div>
+  <pre id="log"></pre>
+  <script src="app.js"></script>
+</body>
+</html>
