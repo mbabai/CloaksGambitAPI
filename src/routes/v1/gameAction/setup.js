@@ -43,11 +43,26 @@ router.post('/', async (req, res) => {
     // Check for king and validate piece positions
     let hasKing = false;
     const pieceCounts = new Map();
-    
+    const usedColumns = new Set();
+
     for (const piece of pieces) {
       if (!piece || !piece.identity || piece.color !== normalizedColor) {
         return res.status(400).json({ message: 'Invalid piece data' });
       }
+
+      // Ensure piece is within board boundaries and columns are unique
+      if (typeof piece.col !== 'number' || piece.col < 0 || piece.col >= expectedFiles) {
+        return res.status(400).json({
+          message: `Piece column must be between 0 and ${expectedFiles - 1}`
+        });
+      }
+
+      if (usedColumns.has(piece.col)) {
+        return res.status(400).json({
+          message: 'Each column may only contain one piece during setup'
+        });
+      }
+      usedColumns.add(piece.col);
 
       // Count pieces for stash validation
       const identityKey = piece.identity;
@@ -60,8 +75,8 @@ router.post('/', async (req, res) => {
 
       // Validate position
       if (piece.row !== expectedRank) {
-        return res.status(400).json({ 
-          message: `All pieces must be placed on rank ${expectedRank}` 
+        return res.status(400).json({
+          message: `All pieces must be placed on rank ${expectedRank}`
         });
       }
     }
