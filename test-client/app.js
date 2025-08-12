@@ -34,6 +34,7 @@ let currentTurn = 0;
 let gamePhase = 'Not Started';
 let actionSequence = [];
 let currentActionIndex = 0;
+let setupCompletionChecked = false; // Flag to prevent multiple setup completion checks
 
 // Logging functions for each player
 function log(player, msg) {
@@ -138,37 +139,57 @@ async function establishSocketConnection(player) {
        updateQueueButton(players.player2, false);
      });
     
-         socket.on('game:update', (u) => {
-       // Log server message
-       logServerMessage(player, 'Game update received');
-       
-       // Determine player color from the game data
-       if (player.color === null) {
-         // Find which player this is based on the game data
-         if (u.players && u.players.length === 2) {
-           // This is a simplified way to determine color - in a real game you'd get this from the server
-           if (player.name === 'Player 1') {
-             player.color = 0; // Usually Player 1 is white
-           } else {
-             player.color = 1; // Usually Player 2 is black
-           }
-         }
-       }
-       
-       // Update action history (shared between both players)
-       updateActionHistory(u.actions);
-       
-       // Update game state for this player
-       updateGameState(player, u.board, u.stashes, u.onDecks);
-       
-       // Update game state
-       gameId = u.gameId;
-       matchId = u.matchId;
-       updateGameStatus();
-       
-       // Check if both players have completed setup
-       checkSetupCompletion();
-     });
+                   socket.on('game:update', (u) => {
+            // Log server message
+            logServerMessage(player, 'Game update received');
+            
+            // Determine player color from the game data
+            if (player.color === null) {
+              // Find which player this is based on the game data
+              if (u.players && u.players.length === 2) {
+                // This is a simplified way to determine color - in a real game you'd get this from the server
+                if (player.name === 'Player 1') {
+                  player.color = 0; // Usually Player 1 is white
+                } else {
+                  player.color = 1; // Usually Player 2 is black
+                }
+              }
+            }
+            
+            // Update action history (shared between both players)
+            updateActionHistory(u.actions);
+            
+            // Update game state for this player
+            updateGameState(player, u.board, u.stashes, u.onDecks);
+            
+            // Update game state
+            gameId = u.gameId;
+            matchId = u.matchId;
+            
+            // Debug: Log the current state before setup completion check
+            console.log('Before setup completion check:', {
+              gamePhase,
+              setup1Disabled: document.getElementById('setup1').disabled,
+              setup2Disabled: document.getElementById('setup2').disabled,
+              setup1Element: document.getElementById('setup1'),
+              setup2Element: document.getElementById('setup2')
+            });
+            
+            // Check if both players have completed setup
+            checkSetupCompletion();
+            
+            // Update game status after setup completion check
+            updateGameStatus();
+            
+            // Debug: Log the current state after all updates
+            console.log('After game update:', {
+              gamePhase,
+              setup1Disabled: document.getElementById('setup1').disabled,
+              setup2Disabled: document.getElementById('setup2').disabled,
+              playAction1Disabled: document.getElementById('playAction1').disabled,
+              playAction2Disabled: document.getElementById('playAction2').disabled
+            });
+          });
   }
 }
 
@@ -384,6 +405,9 @@ function resetReadyState() {
   players.player1.isMoving = false;
   players.player2.isMoving = false;
   
+  // Reset setup completion flag for new games
+  setupCompletionChecked = false;
+  
   // Disable ready and setup buttons
   document.getElementById('ready1').disabled = true;
   document.getElementById('ready2').disabled = true;
@@ -417,21 +441,37 @@ function enableReadyButtonsForGame() {
 function checkSetupCompletion() {
   // Only check setup completion if we haven't already completed it
   if (gamePhase === 'Setup Complete') {
+    console.log('Setup already complete, skipping check');
     return; // Already completed, don't check again
   }
   
-  // This function will be called after each game update
-  // We'll check if both players have completed setup by looking at the game state
-  // For now, we'll assume setup is complete when both setup buttons are disabled
-  // In a real implementation, you'd check the game.setupComplete array
+  // Prevent multiple calls to this function
+  if (setupCompletionChecked) {
+    console.log('Setup completion already checked, skipping');
+    return;
+  }
   
+  // Check if both setup buttons are disabled (indicating both players completed setup)
   const setup1Disabled = document.getElementById('setup1').disabled;
   const setup2Disabled = document.getElementById('setup2').disabled;
   
+  console.log('Checking setup completion:', { 
+    setup1Disabled, 
+    setup2Disabled, 
+    currentGamePhase: gamePhase,
+    setup1Element: document.getElementById('setup1'),
+    setup2Element: document.getElementById('setup2'),
+    setupCompletionChecked
+  });
+  
   if (setup1Disabled && setup2Disabled) {
+    console.log('Both setup buttons disabled - marking setup complete');
+    
+    // Mark that we've checked setup completion
+    setupCompletionChecked = true;
+    
     // Both players have completed setup
     gamePhase = 'Setup Complete';
-    updateGameStatus();
     
     // Enable play action buttons
     document.getElementById('playAction1').disabled = false;
@@ -444,15 +484,22 @@ function checkSetupCompletion() {
     actionSequence = [];
     currentActionIndex = 0;
     
-           // Log completion to both players
-       if (players.player1.serverLogEl) {
-         logServerMessage(players.player1, '🎉 Both players have completed setup! Game is ready to play!');
-         logServerMessage(players.player1, '🎯 White goes first (Player 1). Click "Play Action" to make a move!');
-       }
-       if (players.player2.serverLogEl) {
-         logServerMessage(players.player2, '🎉 Both players have completed setup! Game is ready to play!');
-         logServerMessage(players.player2, '🎯 White goes first. Wait for Player 1 to make a move.');
-       }
+    // Log completion to both players
+    if (players.player1.serverLogEl) {
+      logServerMessage(players.player1, '🎉 Both players have completed setup! Game is ready to play!');
+      logServerMessage(players.player1, '🎯 White goes first (Player 1). Click "Play Action" to make a move!');
+    }
+    if (players.player2.serverLogEl) {
+      logServerMessage(players.player2, '🎉 Both players have completed setup! Game is ready to play!');
+      logServerMessage(players.player2, '🎯 White goes first. Wait for Player 1 to make a move.');
+    }
+    
+    // Update game status after all changes
+    updateGameStatus();
+    
+    console.log('Setup completion marked - gamePhase now:', gamePhase);
+  } else {
+    console.log('Setup not complete yet - waiting for both players');
   }
 }
 
@@ -526,16 +573,35 @@ async function setupGame(player) {
      // Check if both players have completed setup
      logServerMessage(player, 'Your setup is complete! Waiting for opponent...');
      
-     // Disable this player's setup button to prevent double-clicking
-     if (player.name === 'Player 1') {
-       document.getElementById('setup1').disabled = true;
-     } else {
-       document.getElementById('setup2').disabled = true;
-     }
-     
-     // Check if both players have completed setup
-     // We'll need to wait for a game update to see the current state
-     // The setup buttons will be disabled when both players complete setup
+           // Disable this player's setup button to prevent double-clicking
+      if (player.name === 'Player 1') {
+        document.getElementById('setup1').disabled = true;
+        console.log('Player 1 setup button disabled');
+      } else {
+        document.getElementById('setup2').disabled = true;
+        console.log('Player 2 setup button disabled');
+      }
+      
+      // Check if both players have completed setup
+      // We'll need to wait for a game update to see the current state
+      // The setup buttons will be disabled when both players complete setup
+      
+      // Debug: Log the current state after disabling setup button
+      console.log('After disabling setup button:', {
+        gamePhase,
+        setup1Disabled: document.getElementById('setup1').disabled,
+        setup2Disabled: document.getElementById('setup2').disabled
+      });
+      
+      // Force a check after a short delay to ensure DOM is updated
+      setTimeout(() => {
+        console.log('Delayed setup completion check:', {
+          gamePhase,
+          setup1Disabled: document.getElementById('setup1').disabled,
+          setup2Disabled: document.getElementById('setup2').disabled
+        });
+        checkSetupCompletion();
+      }, 100);
      
    } catch (err) {
      logServerMessage(player, `Setup error: ${err.message}`);
@@ -547,10 +613,19 @@ async function setupGame(player) {
 
 // Play a simple move action
 async function playAction(player) {
-     if (gamePhase !== 'Setup Complete') {
-     logServerMessage(player, 'Error: Game not ready for moves yet');
-     return;
-   }
+  console.log('playAction called:', { 
+    playerName: player.name, 
+    gamePhase, 
+    setup1Disabled: document.getElementById('setup1').disabled,
+    setup2Disabled: document.getElementById('setup2').disabled,
+    playAction1Disabled: document.getElementById('playAction1').disabled,
+    playAction2Disabled: document.getElementById('playAction2').disabled
+  });
+  
+  if (gamePhase !== 'Setup Complete') {
+    logServerMessage(player, `Error: Game not ready for moves yet. Current phase: ${gamePhase}`);
+    return;
+  }
    
    // Prevent multiple rapid clicks
    if (player.isMoving) {
@@ -665,6 +740,28 @@ document.getElementById('setup1').onclick = () => setupGame(players.player1);
 document.getElementById('setup2').onclick = () => setupGame(players.player2);
 document.getElementById('playAction1').onclick = () => playAction(players.player1);
 document.getElementById('playAction2').onclick = () => playAction(players.player2);
+
+// Debug event listeners
+document.getElementById('debugCheck1').onclick = () => {
+  console.log('Manual debug check triggered by Player 1');
+  console.log('Current state:', {
+    gamePhase,
+    setup1Disabled: document.getElementById('setup1').disabled,
+    setup2Disabled: document.getElementById('setup2').disabled,
+    setupCompletionChecked
+  });
+  checkSetupCompletion();
+};
+document.getElementById('debugCheck2').onclick = () => {
+  console.log('Manual debug check triggered by Player 2');
+  console.log('Current state:', {
+    gamePhase,
+    setup1Disabled: document.getElementById('setup1').disabled,
+    setup2Disabled: document.getElementById('setup2').disabled,
+    setupCompletionChecked
+  });
+  checkSetupCompletion();
+};
 
 // Initialize queue buttons with correct text
 updateQueueButton(players.player1, false);
