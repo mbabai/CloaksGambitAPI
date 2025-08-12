@@ -5,7 +5,9 @@ const players = {
   player1: {
     id: null,
     socket: null,
-    logEl: document.getElementById('log1'),
+    serverLogEl: document.getElementById('serverLog1'),
+    actionHistoryEl: document.getElementById('actionHistory1'),
+    gameStateEl: document.getElementById('gameState1'),
     color: null, // Will be determined by the game
     name: 'Player 1',
     isReady: false,
@@ -15,7 +17,9 @@ const players = {
   player2: {
     id: null,
     socket: null,
-    logEl: document.getElementById('log2'),
+    serverLogEl: document.getElementById('serverLog2'),
+    actionHistoryEl: document.getElementById('actionHistory2'),
+    gameStateEl: document.getElementById('gameState2'),
     color: null, // Will be determined by the game
     name: 'Player 2',
     isReady: false,
@@ -31,23 +35,42 @@ let gamePhase = 'Not Started';
 let actionSequence = [];
 let currentActionIndex = 0;
 
-// Logging function for each player
+// Logging functions for each player
 function log(player, msg) {
   console.log(`[${player.name}] ${msg}`);
-  const logEl = player.logEl;
-  
-  // Handle newlines properly in the display
-  if (typeof msg === 'string' && msg.includes('\n')) {
-    const lines = msg.split('\n');
-    lines.forEach(line => {
-      if (line.trim()) {
-        logEl.textContent += `\n${line}`;
-      }
-    });
-  } else {
-    logEl.textContent += `\n${msg}`;
-  }
+}
+
+// Log server messages to the server log
+function logServerMessage(player, msg) {
+  const logEl = player.serverLogEl;
+  logEl.textContent += `\n${new Date().toLocaleTimeString()}: ${msg}`;
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Update action history (shared between both players)
+function updateActionHistory(actions) {
+  const actionHistory = formatActions(actions);
+  players.player1.actionHistoryEl.textContent = actionHistory;
+  players.player2.actionHistoryEl.textContent = actionHistory;
+}
+
+// Update game state for a specific player
+function updateGameState(player, board, stashes, onDecks) {
+  const gameStateEl = player.gameStateEl;
+  
+  let stateText = '--- BOARD ---\n';
+  stateText += formatBoard(board, player.color);
+  stateText += '\n--- MY STASH ---\n';
+  stateText += formatStash(stashes, player.color, true);
+  stateText += '\n--- OPPONENT STASH ---\n';
+  stateText += formatStash(stashes, 1 - player.color, false);
+  stateText += '\n--- MY ON DECK ---\n';
+  stateText += formatOnDeck(onDecks, player.color, true);
+  stateText += '\n--- OPPONENT ON DECK ---\n';
+  stateText += formatOnDeck(onDecks, 1 - player.color, false);
+  
+  gameStateEl.textContent = stateText;
+  gameStateEl.scrollTop = gameStateEl.scrollHeight;
 }
 
 // Update global game status display
@@ -76,10 +99,10 @@ async function createUser(player) {
       email: `${player.name.toLowerCase()}_${timestamp}@example.com` 
     })
   });
-  const data = await res.json();
-  player.id = data._id;
-  log(player, `Created user: ${data._id}`);
-  return data;
+     const data = await res.json();
+   player.id = data._id;
+   logServerMessage(player, `User created: ${data._id}`);
+   return data;
 }
 
 // Establish socket connection for a player
@@ -87,80 +110,65 @@ async function establishSocketConnection(player) {
   if (player.id) {
     const socket = io('http://localhost:3000', { auth: { userId: player.id } });
     
-    socket.on('connect', () => {
-      log(player, `Socket connected`);
-      player.socket = socket;
-    });
+         socket.on('connect', () => {
+       logServerMessage(player, 'Socket connected');
+       player.socket = socket;
+     });
     
-    socket.on('match:found', (m) => {
-      log(player, `Matched: game ${m.gameId}`);
-      gameId = m.gameId;
-      matchId = m.matchId;
-      updateGameStatus();
-      
-      // Both players are now in a game, so they're not in queue anymore
-      players.player1.inQueue = false;
-      players.player2.inQueue = false;
-      
-      log(player, 'Both players removed from queue - game started (socket event)');
-      
-      // Reset ready state for new game
-      resetReadyState();
-      
-      // Enable ready buttons for both players when game starts
-      enableReadyButtonsForGame();
-      
-      // Both players are no longer in queue, so show "Join Queue" buttons
-      updateQueueButton(players.player1, false);
-      updateQueueButton(players.player2, false);
-    });
+         socket.on('match:found', (m) => {
+       logServerMessage(player, `Match found: game ${m.gameId}`);
+       gameId = m.gameId;
+       matchId = m.matchId;
+       updateGameStatus();
+       
+       // Both players are now in a game, so they're not in queue anymore
+       players.player1.inQueue = false;
+       players.player2.inQueue = false;
+       
+       logServerMessage(player, 'Both players removed from queue - game started');
+       
+       // Reset ready state for new game
+       resetReadyState();
+       
+       // Enable ready buttons for both players when game starts
+       enableReadyButtonsForGame();
+       
+       // Both players are no longer in queue, so show "Join Queue" buttons
+       updateQueueButton(players.player1, false);
+       updateQueueButton(players.player2, false);
+     });
     
-    socket.on('game:update', (u) => {
-  // Debug: Log the raw data structure
-  log(player, `\n=== RAW GAME UPDATE DATA ===`);
-  log(player, `Stashes: ${JSON.stringify(u.stashes)}`);
-  log(player, `OnDecks: ${JSON.stringify(u.onDecks)}`);
-  log(player, `Players: ${JSON.stringify(u.players)}`);
-  
-  // Determine player color from the game data
-  if (player.color === null) {
-    // Find which player this is based on the game data
-    if (u.players && u.players.length === 2) {
-      // This is a simplified way to determine color - in a real game you'd get this from the server
-      if (player.name === 'Player 1') {
-        player.color = 0; // Usually Player 1 is white
-      } else {
-        player.color = 1; // Usually Player 2 is black
-      }
-    }
-  }
-  
-  log(player, `\n=== GAME UPDATE ===`);
-  log(player, `Match ID: ${u.matchId}`);
-  log(player, `Game ID: ${u.gameId}`);
-  log(player, `Player Color: ${player.color === 0 ? 'White' : player.color === 1 ? 'Black' : 'Unknown'}`);
-  log(player, `\n--- BOARD ---`);
-  log(player, formatBoard(u.board, player.color));
-  log(player, `\n--- ACTIONS ---`);
-  log(player, formatActions(u.actions));
-  log(player, `\n--- MY STASH ---`);
-  log(player, formatStash(u.stashes, player.color, true));
-  log(player, `\n--- OPPONENT STASH ---`);
-  log(player, formatStash(u.stashes, 1 - player.color, false));
-  log(player, `\n--- MY ON DECK ---`);
-  log(player, formatOnDeck(u.onDecks, player.color, true));
-  log(player, `\n--- OPPONENT ON DECK ---`);
-  log(player, formatOnDeck(u.onDecks, 1 - player.color, false));
-  log(player, `================\n`);
-  
-  // Update game state
-  gameId = u.gameId;
-  matchId = u.matchId;
-  updateGameStatus();
-  
-  // Check if both players have completed setup
-  checkSetupCompletion();
-});
+         socket.on('game:update', (u) => {
+       // Log server message
+       logServerMessage(player, 'Game update received');
+       
+       // Determine player color from the game data
+       if (player.color === null) {
+         // Find which player this is based on the game data
+         if (u.players && u.players.length === 2) {
+           // This is a simplified way to determine color - in a real game you'd get this from the server
+           if (player.name === 'Player 1') {
+             player.color = 0; // Usually Player 1 is white
+           } else {
+             player.color = 1; // Usually Player 2 is black
+           }
+         }
+       }
+       
+       // Update action history (shared between both players)
+       updateActionHistory(u.actions);
+       
+       // Update game state for this player
+       updateGameState(player, u.board, u.stashes, u.onDecks);
+       
+       // Update game state
+       gameId = u.gameId;
+       matchId = u.matchId;
+       updateGameStatus();
+       
+       // Check if both players have completed setup
+       checkSetupCompletion();
+     });
   }
 }
 
@@ -168,109 +176,109 @@ async function establishSocketConnection(player) {
 async function connectPlayer(playerKey) {
   const player = players[playerKey];
   
-  if (player.id) {
-    log(player, 'Already connected!');
-    return;
-  }
-  
-  log(player, 'Connecting...');
-  
-  await createUser(player);
-  await establishSocketConnection(player);
-  
-  // Enable queue button for this player only
-  if (playerKey === 'player1') {
-    document.getElementById('queue1').disabled = false;
-  } else {
-    document.getElementById('queue2').disabled = false;
-  }
-  
-  log(player, 'Ready to join queue');
+     if (player.id) {
+     logServerMessage(player, 'Already connected!');
+     return;
+   }
+   
+   logServerMessage(player, 'Connecting...');
+   
+   await createUser(player);
+   await establishSocketConnection(player);
+   
+   // Enable queue button for this player only
+   if (playerKey === 'player1') {
+     document.getElementById('queue1').disabled = false;
+   } else {
+     document.getElementById('queue2').disabled = false;
+   }
+   
+   logServerMessage(player, 'Ready to join queue');
 }
 
 // Join queue for a specific player
 async function joinQueue(player) {
-  if (!player.id) {
-    log(player, 'Error: Not connected');
-    return;
-  }
-  
-  if (player.inQueue) {
-    log(player, 'Already in queue!');
-    return;
-  }
-  
-  log(player, 'Joining quickplay queue...');
-  const res = await fetch(`${API}/api/v1/lobby/enterQuickplay`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId: player.id })
-  });
-  
-  const data = await res.json();
-  log(player, `Queue response: ${JSON.stringify(data)}`);
-  
-  if (data.gameId) {
-    // Match found immediately
-    gameId = data.gameId;
-    matchId = data.matchId;
-    updateGameStatus();
-    log(player, 'Successfully joined game!');
-    
-    // Both players are now in a game, so they're not in queue anymore
-    players.player1.inQueue = false;
-    players.player2.inQueue = false;
-    
-    log(player, 'Both players removed from queue - game started');
-    
-    // Reset ready state for new game
-    resetReadyState();
-    
-    // Enable ready buttons for both players when game starts
-    enableReadyButtonsForGame();
-    
-    // Both players are no longer in queue, so show "Join Queue" buttons
-    updateQueueButton(players.player1, false);
-    updateQueueButton(players.player2, false);
-  } else if (data.status === 'queued') {
-    // Added to queue, waiting for match
-    player.inQueue = true;
-    log(player, 'Added to queue, waiting for match...');
-    
-    // Change button to "Leave Queue"
-    updateQueueButton(player, true);
-  }
+     if (!player.id) {
+     logServerMessage(player, 'Error: Not connected');
+     return;
+   }
+   
+   if (player.inQueue) {
+     logServerMessage(player, 'Already in queue!');
+     return;
+   }
+   
+   logServerMessage(player, 'Joining quickplay queue...');
+   const res = await fetch(`${API}/api/v1/lobby/enterQuickplay`, {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ userId: player.id })
+   });
+   
+   const data = await res.json();
+   logServerMessage(player, `Queue response: ${JSON.stringify(data)}`);
+   
+   if (data.gameId) {
+     // Match found immediately
+     gameId = data.gameId;
+     matchId = data.matchId;
+     updateGameStatus();
+     logServerMessage(player, 'Successfully joined game!');
+     
+     // Both players are now in a game, so they're not in queue anymore
+     players.player1.inQueue = false;
+     players.player2.inQueue = false;
+     
+     logServerMessage(player, 'Both players removed from queue - game started');
+     
+     // Reset ready state for new game
+     resetReadyState();
+     
+     // Enable ready buttons for both players when game starts
+     enableReadyButtonsForGame();
+     
+     // Both players are no longer in queue, so show "Join Queue" buttons
+     updateQueueButton(players.player1, false);
+     updateQueueButton(players.player2, false);
+   } else if (data.status === 'queued') {
+     // Added to queue, waiting for match
+     player.inQueue = true;
+     logServerMessage(player, 'Added to queue, waiting for match...');
+     
+     // Change button to "Leave Queue"
+     updateQueueButton(player, true);
+   }
 }
 
 // Leave queue for a specific player
 async function leaveQueue(player) {
-  if (!player.id || !player.inQueue) {
-    log(player, 'Not in queue!');
-    return;
-  }
-  
-  log(player, 'Leaving queue...');
-  
-  try {
-    const res = await fetch(`${API}/api/v1/lobby/exitQuickplay`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: player.id })
-    });
-    
-    if (res.ok) {
-      player.inQueue = false;
-      log(player, 'Successfully left queue');
-      
-      // Change button back to "Join Queue"
-      updateQueueButton(player, false);
-    } else {
-      const error = await res.json();
-      log(player, `Failed to leave queue: ${error.message}`);
-    }
-  } catch (err) {
-    log(player, `Error leaving queue: ${err.message}`);
-  }
+     if (!player.id || !player.inQueue) {
+     logServerMessage(player, 'Not in queue!');
+     return;
+   }
+   
+   logServerMessage(player, 'Leaving queue...');
+   
+   try {
+     const res = await fetch(`${API}/api/v1/lobby/exitQuickplay`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ userId: player.id })
+     });
+     
+     if (res.ok) {
+       player.inQueue = false;
+       logServerMessage(player, 'Successfully left queue');
+       
+       // Change button back to "Join Queue"
+       updateQueueButton(player, false);
+     } else {
+       const error = await res.json();
+       logServerMessage(player, `Failed to leave queue: ${error.message}`);
+     }
+   } catch (err) {
+     logServerMessage(player, `Error leaving queue: ${err.message}`);
+   }
 }
 
 // Update queue button text and functionality
@@ -300,62 +308,62 @@ function updateQueueButton(player, inQueue) {
 
 // Mark a player as ready
 async function markPlayerReady(player) {
-  if (!gameId) {
-    log(player, 'Error: No game ID');
-    return;
-  }
-  
-  if (player.isReady) {
-    log(player, 'Already marked as ready!');
-    return;
-  }
-  
-  log(player, 'Marking player as ready...');
-  log(player, `Sending ready request: gameId=${gameId}, color=${player.color}`);
-  
-  try {
-    const res = await fetch(`${API}/api/v1/gameAction/ready`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        gameId, 
-        color: player.color 
-      })
-    });
-    
-    if (res.ok) {
-      const responseData = await res.json();
-      log(player, `Ready response: ${JSON.stringify(responseData)}`);
-      
-      player.isReady = true;
-      log(player, 'Successfully marked as ready!');
-      
-      // Update button text to show ready status
-      if (player.name === 'Player 1') {
-        document.getElementById('ready1').textContent = '3. Ready ✓';
-        document.getElementById('ready1').classList.add('ready');
-      } else {
-        document.getElementById('ready2').textContent = '3. Ready ✓';
-        document.getElementById('ready2').classList.add('ready');
-      }
-      
-      // Check if both players are ready
-      checkBothPlayersReady();
-    } else {
-      const error = await res.json();
-      log(player, `Failed to mark as ready: ${error.message}`);
-      log(player, `Response status: ${res.status}`);
-    }
-  } catch (err) {
-    log(player, `Error marking as ready: ${err.message}`);
-  }
+     if (!gameId) {
+     logServerMessage(player, 'Error: No game ID');
+     return;
+   }
+   
+   if (player.isReady) {
+     logServerMessage(player, 'Already marked as ready!');
+     return;
+   }
+   
+   logServerMessage(player, 'Marking player as ready...');
+   logServerMessage(player, `Sending ready request: gameId=${gameId}, color=${player.color}`);
+   
+   try {
+     const res = await fetch(`${API}/api/v1/gameAction/ready`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ 
+         gameId, 
+         color: player.color 
+       })
+     });
+     
+     if (res.ok) {
+       const responseData = await res.json();
+       logServerMessage(player, `Ready response: ${JSON.stringify(responseData)}`);
+       
+       player.isReady = true;
+       logServerMessage(player, 'Successfully marked as ready!');
+       
+       // Update button text to show ready status
+       if (player.name === 'Player 1') {
+         document.getElementById('ready1').textContent = '3. Ready ✓';
+         document.getElementById('ready1').classList.add('ready');
+       } else {
+         document.getElementById('ready2').textContent = '3. Ready ✓';
+         document.getElementById('ready2').classList.add('ready');
+       }
+       
+       // Check if both players are ready
+       checkBothPlayersReady();
+     } else {
+       const error = await res.json();
+       logServerMessage(player, `Failed to mark as ready: ${error.message}`);
+       logServerMessage(player, `Response status: ${res.status}`);
+     }
+   } catch (err) {
+     logServerMessage(player, `Error marking as ready: ${err.message}`);
+   }
 }
 
 // Check if both players are ready and enable setup
 function checkBothPlayersReady() {
   if (players.player1.isReady && players.player2.isReady) {
-    log(players.player1, 'Both players are ready! Setup is now available.');
-    log(players.player2, 'Both players are ready! Setup is now available.');
+    logServerMessage(players.player1, 'Both players are ready! Setup is now available.');
+    logServerMessage(players.player2, 'Both players are ready! Setup is now available.');
     
     // Enable setup buttons for both players
     document.getElementById('setup1').disabled = false;
@@ -436,45 +444,45 @@ function checkSetupCompletion() {
     actionSequence = [];
     currentActionIndex = 0;
     
-    // Log completion to both players
-    if (players.player1.logEl) {
-      log(players.player1, '🎉 Both players have completed setup! Game is ready to play!');
-      log(players.player1, '🎯 White goes first (Player 1). Click "Play Action" to make a move!');
-    }
-    if (players.player2.logEl) {
-      log(players.player2, '🎉 Both players have completed setup! Game is ready to play!');
-      log(players.player2, '🎯 White goes first. Wait for Player 1 to make a move.');
-    }
+           // Log completion to both players
+       if (players.player1.serverLogEl) {
+         logServerMessage(players.player1, '🎉 Both players have completed setup! Game is ready to play!');
+         logServerMessage(players.player1, '🎯 White goes first (Player 1). Click "Play Action" to make a move!');
+       }
+       if (players.player2.serverLogEl) {
+         logServerMessage(players.player2, '🎉 Both players have completed setup! Game is ready to play!');
+         logServerMessage(players.player2, '🎯 White goes first. Wait for Player 1 to make a move.');
+       }
   }
 }
 
 // Setup game with proper initial stash
 async function setupGame(player) {
-  if (!gameId) {
-    log(player, 'Error: No game ID');
-    return;
-  }
-  
-  // Only allow one player to do the setup
-  if (gamePhase === 'Setup Complete') {
-    log(player, 'Setup already completed!');
-    return;
-  }
-  
-  // Prevent multiple setup attempts
-  if (document.getElementById('setup1').disabled && document.getElementById('setup2').disabled) {
-    log(player, 'Setup already in progress!');
-    return;
-  }
-  
-  // Determine which color this player is setting up
-  if (player.color === null) {
-    log(player, 'Error: Player color not determined yet. Please wait for game update.');
-    return;
-  }
-  
-  log(player, `Setting up ${player.color === 0 ? 'white' : 'black'} pieces...`);
-  log(player, `Game ID: ${gameId}`);
+     if (!gameId) {
+     logServerMessage(player, 'Error: No game ID');
+     return;
+   }
+   
+   // Only allow one player to do the setup
+   if (gamePhase === 'Setup Complete') {
+     logServerMessage(player, 'Setup already completed!');
+     return;
+   }
+   
+   // Prevent multiple setup attempts
+   if (document.getElementById('setup1').disabled && document.getElementById('setup2').disabled) {
+     logServerMessage(player, 'Setup already in progress!');
+     return;
+   }
+   
+   // Determine which color this player is setting up
+   if (player.color === null) {
+     logServerMessage(player, 'Error: Player color not determined yet. Please wait for game update.');
+     return;
+   }
+   
+   logServerMessage(player, `Setting up ${player.color === 0 ? 'white' : 'black'} pieces...`);
+   logServerMessage(player, `Game ID: ${gameId}`);
   
   // Initialize with proper Cloaks Gambit rules
   // Each player starts with: 2 rooks, 2 bishops, 2 knights, 1 king, 1 bomb
@@ -488,109 +496,109 @@ async function setupGame(player) {
   ];
   
   try {
-    // Setup this player's pieces
-    log(player, `Setting up ${player.color === 0 ? 'white' : 'black'} pieces...`);
-    log(player, `Pieces: ${JSON.stringify(pieces)}`);
-    
-    const setupRes = await fetch(`${API}/api/v1/gameAction/setup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        gameId, 
-        color: player.color, 
-        pieces: pieces, 
-        onDeck: { color: player.color, identity: 4 } // Start with a rook (identity 4)
-      })
-    });
-    
-    if (!setupRes.ok) {
-      const error = await setupRes.json();
-      log(player, `${player.color === 0 ? 'White' : 'Black'} setup failed: ${error.message}`);
-      log(player, `Status: ${setupRes.status}`);
-      // Re-enable setup buttons on failure
-      document.getElementById('setup1').disabled = false;
-      document.getElementById('setup2').disabled = false;
-      return;
-    }
-    
-    log(player, `${player.color === 0 ? 'White' : 'Black'} setup successful!`);
-    
-    // Check if both players have completed setup
-    log(player, 'Your setup is complete! Waiting for opponent...');
-    
-    // Disable this player's setup button to prevent double-clicking
-    if (player.name === 'Player 1') {
-      document.getElementById('setup1').disabled = true;
-    } else {
-      document.getElementById('setup2').disabled = true;
-    }
-    
-    // Check if both players have completed setup
-    // We'll need to wait for a game update to see the current state
-    // The setup buttons will be disabled when both players complete setup
-    
-  } catch (err) {
-    log(player, `Setup error: ${err.message}`);
-    // Re-enable setup buttons on error
-    document.getElementById('setup1').disabled = false;
-    document.getElementById('setup2').disabled = false;
-  }
+         // Setup this player's pieces
+     logServerMessage(player, `Setting up ${player.color === 0 ? 'white' : 'black'} pieces...`);
+     logServerMessage(player, `Pieces: ${JSON.stringify(pieces)}`);
+     
+     const setupRes = await fetch(`${API}/api/v1/gameAction/setup`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ 
+         gameId, 
+         color: player.color, 
+         pieces: pieces, 
+         onDeck: { color: player.color, identity: 4 } // Start with a rook (identity 4)
+       })
+     });
+     
+     if (!setupRes.ok) {
+       const error = await setupRes.json();
+       logServerMessage(player, `${player.color === 0 ? 'White' : 'Black'} setup failed: ${error.message}`);
+       logServerMessage(player, `Status: ${setupRes.status}`);
+       // Re-enable setup buttons on failure
+       document.getElementById('setup1').disabled = false;
+       document.getElementById('setup2').disabled = false;
+       return;
+     }
+     
+     logServerMessage(player, `${player.color === 0 ? 'White' : 'Black'} setup successful!`);
+     
+     // Check if both players have completed setup
+     logServerMessage(player, 'Your setup is complete! Waiting for opponent...');
+     
+     // Disable this player's setup button to prevent double-clicking
+     if (player.name === 'Player 1') {
+       document.getElementById('setup1').disabled = true;
+     } else {
+       document.getElementById('setup2').disabled = true;
+     }
+     
+     // Check if both players have completed setup
+     // We'll need to wait for a game update to see the current state
+     // The setup buttons will be disabled when both players complete setup
+     
+   } catch (err) {
+     logServerMessage(player, `Setup error: ${err.message}`);
+     // Re-enable setup buttons on error
+     document.getElementById('setup1').disabled = false;
+     document.getElementById('setup2').disabled = false;
+   }
 }
 
 // Play a simple move action
 async function playAction(player) {
-  if (gamePhase !== 'Setup Complete') {
-    log(player, 'Error: Game not ready for moves yet');
-    return;
-  }
-  
-  // Prevent multiple rapid clicks
-  if (player.isMoving) {
-    log(player, '💡 Tip: Please wait for your move to complete');
-    return;
-  }
-  
-  // For now, let's make a simple move from the starting position
-  // White moves first, then Black, alternating turns
-  const currentTurn = currentActionIndex % 2; // 0 = White, 1 = Black
-  
-  if (player.color !== currentTurn) {
-    log(player, `💡 Tip: It's ${currentTurn === 0 ? 'White' : 'Black'}'s turn, but you are ${player.color === 0 ? 'White' : 'Black'}. Wait for your turn.`);
-    return;
-  }
-  
-  // Create a simple move based on whose turn it is
-  let moveAction;
-  if (currentTurn === 0) {
-    // White's turn - move rook from (0,0) to (2,0)
-    moveAction = {
-      name: 'White moves rook',
-      action: 'move',
-      params: { 
-        color: 0, 
-        from: { row: 0, col: 0 }, 
-        to: { row: 2, col: 0 }, 
-        declaration: 4 // Rook
-      }
-    };
-  } else {
-    // Black's turn - move rook from (5,0) to (3,0)
-    moveAction = {
-      name: 'Black moves rook',
-      action: 'move',
-      params: { 
-        color: 1, 
-        from: { row: 5, col: 0 }, 
-        to: { row: 3, col: 0 }, 
-        declaration: 4 // Rook
-      }
-    };
-  }
-  
-  log(player, `Playing: ${moveAction.name}`);
-  
-  // Set moving flag to prevent multiple clicks
-  player.isMoving = true;
+     if (gamePhase !== 'Setup Complete') {
+     logServerMessage(player, 'Error: Game not ready for moves yet');
+     return;
+   }
+   
+   // Prevent multiple rapid clicks
+   if (player.isMoving) {
+     logServerMessage(player, '💡 Tip: Please wait for your move to complete');
+     return;
+   }
+   
+   // For now, let's make a simple move from the starting position
+   // White moves first, then Black, alternating turns
+   const currentTurn = currentActionIndex % 2; // 0 = White, 1 = Black
+   
+   if (player.color !== currentTurn) {
+     logServerMessage(player, `💡 Tip: It's ${currentTurn === 0 ? 'White' : 'Black'}'s turn, but you are ${player.color === 0 ? 'White' : 'Black'}. Wait for your turn.`);
+     return;
+   }
+   
+   // Create a simple move based on whose turn it is
+   let moveAction;
+   if (currentTurn === 0) {
+     // White's turn - move rook from (0,0) to (2,0)
+     moveAction = {
+       name: 'White moves rook',
+       action: 'move',
+       params: { 
+         color: 0, 
+         from: { row: 0, col: 0 }, 
+         to: { row: 2, col: 0 }, 
+         declaration: 4 // Rook
+       }
+     };
+   } else {
+     // Black's turn - move rook from (5,0) to (3,0)
+     moveAction = {
+       name: 'Black moves rook',
+       action: 'move',
+       params: { 
+         color: 1, 
+         from: { row: 5, col: 0 }, 
+         to: { row: 3, col: 0 }, 
+         declaration: 4 // Rook
+       }
+     };
+   }
+   
+   logServerMessage(player, `Playing: ${moveAction.name}`);
+   
+   // Set moving flag to prevent multiple clicks
+   player.isMoving = true;
   
   try {
     const res = await fetch(`${API}/api/v1/gameAction/${moveAction.action}`, {
@@ -600,7 +608,7 @@ async function playAction(player) {
     });
     
          if (res.ok) {
-       log(player, `Action successful: ${moveAction.name}`);
+       logServerMessage(player, `Action successful: ${moveAction.name}`);
        currentActionIndex++;
        
        // Update turn display for next action
@@ -610,38 +618,36 @@ async function playAction(player) {
        // Log whose turn is next
        const nextTurn = currentActionIndex % 2;
        if (nextTurn === 0) {
-         log(players.player1, '🎯 White\'s turn next!');
-         log(players.player2, '🎯 White\'s turn next!');
+         logServerMessage(players.player1, '🎯 White\'s turn next!');
+         logServerMessage(players.player2, '🎯 White\'s turn next!');
        } else {
-         log(players.player1, '🎯 Black\'s turn next!');
-         log(players.player2, '🎯 Black\'s turn next!');
+         logServerMessage(players.player1, '🎯 Black\'s turn next!');
+         logServerMessage(players.player2, '🎯 Black\'s turn next!');
        }
        
        // Force a game update to redraw the board for both players
        // This will trigger the game:update event and redraw the board
-       log(player, '🔄 Board updated - refreshing view...');
-       
        // Log the current board state for debugging
-       log(player, '📊 Current board state after move:');
+       logServerMessage(player, '📊 Current board state after move:');
        // The board should be updated in the next game:update event
      } else {
       const error = await res.json();
-      log(player, `Action failed: ${error.message}`);
+      logServerMessage(player, `Action failed: ${error.message}`);
       
       // Provide more user-friendly error messages
       if (error.message.includes('Setup not complete')) {
-        log(player, '💡 Tip: Both players must complete setup before making moves');
-      } else if (error.message.includes('Illegal move')) {
-        log(player, '💡 Tip: This move violates the game rules');
-      } else if (error.message.includes('Invalid declaration')) {
-        log(player, '💡 Tip: The piece declaration does not match the actual piece type');
-        log(player, `💡 Debug: Action params: ${JSON.stringify(moveAction.params)}`);
-      } else if (error.message.includes('Not this player\'s turn')) {
-        log(player, '💡 Tip: Wait for your turn to make a move');
-      }
+        logServerMessage(player, '💡 Tip: Both players must complete setup before making moves');
+              } else if (error.message.includes('Illegal move')) {
+          logServerMessage(player, '💡 Tip: This move violates the game rules');
+        } else if (error.message.includes('Invalid declaration')) {
+          logServerMessage(player, '💡 Tip: The piece declaration does not match the actual piece type');
+          logServerMessage(player, `💡 Debug: Action params: ${JSON.stringify(moveAction.params)}`);
+        } else if (error.message.includes('Not this player\'s turn')) {
+          logServerMessage(player, '💡 Tip: Wait for your turn to make a move');
+        }
     }
   } catch (err) {
-    log(player, `Error executing action: ${err.message}`);
+    logServerMessage(player, `Error executing action: ${err.message}`);
   } finally {
     // Always reset the moving flag
     player.isMoving = false;
