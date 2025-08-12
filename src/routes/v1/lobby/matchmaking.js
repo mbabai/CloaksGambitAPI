@@ -34,6 +34,12 @@ async function checkAndCreateMatches() {
     if (lobby.quickplayQueue.length >= 2) {
       const player1 = lobby.quickplayQueue[0];
       const player2 = lobby.quickplayQueue[1];
+      
+      // Additional safety check - ensure we have exactly 2 valid players
+      if (!player1 || !player2) {
+        console.error('Invalid players in queue:', { player1, player2 });
+        return;
+      }
 
       console.log('Creating quickplay match for players:', {
         player1: player1.toString(),
@@ -58,8 +64,7 @@ async function checkAndCreateMatches() {
           players: [player1, player2],
           match: match._id,
           timeControlStart: config.gameModeSettings.QUICKPLAY.TIME_CONTROL,
-          increment: config.gameModeSettings.INCREMENT,
-          onDecks: [null, null]
+          increment: config.gameModeSettings.INCREMENT
         });
 
         console.log('Game created:', game._id);
@@ -87,6 +92,13 @@ async function checkAndCreateMatches() {
 
         if (updateResult.modifiedCount === 0) {
           console.error('Failed to update lobby - no documents modified');
+          return;
+        }
+        
+        // Verify the queue was properly updated
+        const verifyLobby = await Lobby.findById(lobby._id).lean();
+        if (verifyLobby.quickplayQueue.length > 0) {
+          console.log('Queue after match creation:', verifyLobby.quickplayQueue.length, 'players remaining');
         }
 
         const updatedLobby = await Lobby.findById(lobby._id).lean();
@@ -131,8 +143,7 @@ async function checkAndCreateMatches() {
           players: [player1, player2],
           match: match._id,
           timeControlStart: config.gameModeSettings.RANKED.TIME_CONTROL,
-          increment: config.gameModeSettings.INCREMENT,
-          onDecks: [null, null]
+          increment: config.gameModeSettings.INCREMENT
         });
 
         console.log('Game created:', game._id);

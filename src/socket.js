@@ -95,6 +95,9 @@ function initSocket(httpServer) {
         gameId: gameIdStr,
         board: masked.board,
         actions: masked.actions,
+        stashes: masked.stashes,
+        onDecks: masked.onDecks,
+        players: masked.players
       });
     });
   });
@@ -146,21 +149,26 @@ function initSocket(httpServer) {
   }
 
   // Setup change streams to broadcast high-level events with resume tokens
-  setupChangeStream(
-    Lobby,
-    'Lobby',
-    [],
-    { fullDocument: 'updateLookup' },
-    (change) => eventBus.emit('queueChanged', change)
-  );
+  // Only enable change streams in production (replica sets)
+  if (process.env.NODE_ENV === 'production') {
+    setupChangeStream(
+      Lobby,
+      'Lobby',
+      [],
+      { fullDocument: 'updateLookup' },
+      (change) => eventBus.emit('queueChanged', change)
+    );
 
-  setupChangeStream(
-    Game,
-    'Game',
-    [],
-    {},
-    (change) => eventBus.emit('gameChanged', change)
-  );
+    setupChangeStream(
+      Game,
+      'Game',
+      [],
+      {},
+      (change) => eventBus.emit('gameChanged', change)
+    );
+  } else {
+    console.log('Change streams disabled in development mode (requires replica set)');
+  }
 
   io.on('connection', async (socket) => {
     const { userId } = socket.handshake.auth;

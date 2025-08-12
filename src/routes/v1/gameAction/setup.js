@@ -91,7 +91,22 @@ router.post('/', async (req, res) => {
     }
 
     // Validate against stash
+    console.log('Setup - Game stashes:', JSON.stringify(game.stashes));
+    console.log('Setup - Normalized color:', normalizedColor);
+    
+    if (!game.stashes || !Array.isArray(game.stashes) || game.stashes.length !== 2) {
+      console.log('Setup - Stash validation failed: stashes not properly initialized');
+      return res.status(500).json({ message: 'Game stash not properly initialized' });
+    }
+    
     const stash = game.stashes[normalizedColor];
+    console.log('Setup - Selected stash:', JSON.stringify(stash));
+    
+    if (!stash || !Array.isArray(stash)) {
+      console.log('Setup - Stash validation failed: selected stash not properly initialized');
+      return res.status(500).json({ message: `Stash for color ${normalizedColor} not properly initialized` });
+    }
+    
     const stashCounts = new Map();
     
     for (const piece of stash) {
@@ -128,6 +143,11 @@ router.post('/', async (req, res) => {
       newStash.splice(onDeckIndex, 1);
     }
 
+    // Ensure the stash array maintains its structure
+    if (newStash.length === 0) {
+      newStash.push({ color: normalizedColor, identity: 0 }); // Add a placeholder piece to maintain array structure
+    }
+
     // Update game state
     game.stashes[normalizedColor] = newStash;
     game.setupComplete[normalizedColor] = true;
@@ -139,27 +159,61 @@ router.post('/', async (req, res) => {
     }
 
     // Add setup action
-    await game.addAction(
-      config.actions.get('SETUP'),
-      normalizedColor,
-      {
-        pieces: pieces.map(p => ({ 
-          identity: p.identity,
-          row: p.row,
-          col: p.col 
-        })),
-        onDeck: {
-          identity: onDeck.identity
+    console.log('Setup - Adding action...');
+    try {
+      game.addAction(
+        config.actions.get('SETUP'),
+        normalizedColor,
+        {
+          pieces: pieces.map(p => ({ 
+            identity: p.identity,
+            row: p.row,
+            col: p.col 
+          })),
+          onDeck: {
+            identity: onDeck.identity
+          }
         }
-      }
-    );
+      );
+      console.log('Setup - Action added successfully');
+    } catch (actionError) {
+      console.error('Setup - Action error:', actionError);
+      throw actionError;
+    }
 
     // If both players have completed setup, set playerTurn to white (0)
     if (game.setupComplete[0] && game.setupComplete[1]) {
       game.playerTurn = 0;
     }
 
-    await game.save();
+    // Log the final game state before saving
+    console.log('Setup - Final game state before save:');
+    console.log('  - Stashes:', JSON.stringify(game.stashes));
+    console.log('  - Setup complete:', JSON.stringify(game.setupComplete));
+    console.log('  - On decks:', JSON.stringify(game.onDecks));
+    console.log('  - Board:', JSON.stringify(game.board));
+    console.log('  - Player turn:', game.playerTurn);
+
+    try {
+      // Validate the game before saving
+      console.log('Setup - Validating game before save...');
+      const validationError = game.validateSync();
+      if (validationError) {
+        console.error('Setup - Validation error:', validationError);
+        console.error('Setup - Validation error details:', validationError.errors);
+        return res.status(400).json({ 
+          message: 'Game validation failed', 
+          details: validationError.message 
+        });
+      }
+      
+      await game.save();
+      console.log('Setup - Game saved successfully');
+    } catch (saveError) {
+      console.error('Setup - Save error:', saveError);
+      console.error('Setup - Save error details:', saveError.errors);
+      throw saveError;
+    }
 
     eventBus.emit('gameChanged', {
       game: typeof game.toObject === 'function' ? game.toObject() : game,

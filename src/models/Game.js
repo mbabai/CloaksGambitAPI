@@ -36,7 +36,8 @@ const actionSchema = new mongoose.Schema({
     },
     details: {
         type: mongoose.Schema.Types.Mixed,
-        required: true
+        required: true,
+        default: {}
     }
 }, { _id: false });
 
@@ -101,8 +102,13 @@ const gameSchema = new mongoose.Schema({
     },
     playerTurn: {
         type: Number,
-        enum: [null, 0, 1],
-        default: null
+        default: null,
+        validate: {
+            validator: function(v) {
+                return v === null || v === 0 || v === 1;
+            },
+            message: 'Player turn must be null, 0 (white), or 1 (black)'
+        }
     },
     winner: {
         type: Number,
@@ -209,7 +215,7 @@ const gameSchema = new mongoose.Schema({
         }
     },
     onDecks: {
-        type: [pieceSchema],
+        type: [mongoose.Schema.Types.Mixed],
         default: [null, null],
         validate: {
             validator: function(v) {
@@ -357,17 +363,22 @@ gameSchema.methods.addAction = function(type, player, details) {
         throw new Error('Game is not active');
     }
 
-    if (!defaultConfig.actions.has(type)) {
+    // Validate action type (0-7 are valid action types)
+    if (typeof type !== 'number' || type < 0 || type > 7) {
         throw new Error('Invalid action type');
     }
+
+    // Ensure details is always an object
+    const actionDetails = details || {};
 
     const action = {
         type,
         player,
-        details,
+        details: actionDetails,
         timestamp: new Date()
     };
 
+    console.log('Creating action:', action);
     this.actions.push(action);
     return this;
 };

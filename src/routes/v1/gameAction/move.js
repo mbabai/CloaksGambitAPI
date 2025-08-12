@@ -24,7 +24,7 @@ router.post('/', async (req, res) => {
     }
 
     if (!game.setupComplete[0] || !game.setupComplete[1]) {
-      return res.status(400).json({ message: 'Setup not complete for both players' });
+      return res.status(400).json({ message: 'Illegal move: Setup not complete for both players' });
     }
 
     const fromRow = parseInt(from?.row, 10);

@@ -33,6 +33,8 @@ router.post('/', async (req, res) => {
 
     lobby.quickplayQueue.push(userId);
     await lobby.save();
+    
+    console.log(`User ${userId} added to quickplay queue. Queue length: ${lobby.quickplayQueue.length}`);
 
     eventBus.emit('queueChanged', {
       quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
@@ -42,6 +44,8 @@ router.post('/', async (req, res) => {
 
     await checkAndCreateMatches();
     const updated = await Lobby.findOne().lean();
+    
+    console.log(`After matchmaking check - Queue length: ${updated.quickplayQueue.length}, In game: ${updated.inGame.length}`);
 
     if (updated.inGame.some(id => id.toString() === userId)) {
       const match = await Match.findOne({

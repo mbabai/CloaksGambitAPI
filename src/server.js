@@ -10,6 +10,7 @@ const app = express();
 
 const routes = require('./routes');
 const initSocket = require('./socket');
+const Lobby = require('./models/Lobby');
 
 // Middleware
 app.use(cors());
@@ -20,7 +21,31 @@ app.use(express.urlencoded({ extended: true }));
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit')
-  .then(() => console.log('Connected to MongoDB'))
+  .then(async () => {
+    console.log('Connected to MongoDB');
+    
+    // Clear any stale queues from previous server runs
+    try {
+      const lobby = await Lobby.findOne();
+      if (lobby) {
+        lobby.quickplayQueue = [];
+        lobby.rankedQueue = [];
+        lobby.inGame = [];
+        await lobby.save();
+        console.log('Cleared stale queues from previous server run');
+      } else {
+        // Create a new lobby if none exists
+        await Lobby.create({
+          quickplayQueue: [],
+          rankedQueue: [],
+          inGame: []
+        });
+        console.log('Created new lobby');
+      }
+    } catch (err) {
+      console.error('Error clearing queues:', err);
+    }
+  })
   .catch((err) => console.error('MongoDB connection error:', err));
 
 // Routes

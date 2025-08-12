@@ -4,21 +4,76 @@
   <meta charset="UTF-8" />
   <title>Cloaks Gambit Test Client</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <style>
-    body { font-family: sans-serif; }
-    button { margin-right: 8px; }
-    #log { border: 1px solid #ccc; padding: 8px; height: 300px; overflow-y: auto; white-space: pre-wrap; }
-  </style>
+     <style>
+     body { font-family: monospace; font-size: 12px; }
+     button { margin-right: 8px; margin-bottom: 8px; padding: 8px 16px; }
+     button:disabled { opacity: 0.5; cursor: not-allowed; }
+     button.ready { background-color: #90EE90; }
+     button.ready:disabled { background-color: #90EE90; opacity: 0.7; }
+     #log { 
+       border: 1px solid #ccc; 
+       padding: 12px; 
+       height: 500px; 
+       overflow-y: auto; 
+       white-space: pre-wrap; 
+       background-color: #f9f9f9;
+       font-family: 'Courier New', monospace;
+       line-height: 1.4;
+     }
+     .section-header { 
+       color: #2c5aa0; 
+       font-weight: bold; 
+       margin-top: 8px; 
+     }
+     .game-update { 
+       background-color: #e8f4f8; 
+       border-left: 4px solid #2c5aa0; 
+       padding: 8px; 
+       margin: 8px 0; 
+     }
+   </style>
 </head>
 <body>
-  <h1>Cloaks Gambit Test Client</h1>
-  <div>
-    <button id="connect">1. Connect</button>
-    <button id="queue" disabled>2. Join Queue</button>
-    <button id="setup" disabled>3. Setup & Ready</button>
-    <button id="play" disabled>4. Play Sequence</button>
+  <h1>Cloaks Gambit Test Client - Two Player View</h1>
+  
+  <div style="display: flex; gap: 20px;">
+         <!-- Player 1 Controls -->
+     <div style="flex: 1; border: 2px solid #ccc; padding: 15px; background-color: #f0f0f0;">
+       <h2 style="color: #2c5aa0; margin-top: 0;">Player 1</h2>
+               <div>
+          <button id="connect1">1. Connect</button>
+          <button id="queue1" disabled>2. Join Queue</button>
+          <button id="ready1" disabled>3. Ready</button>
+          <button id="setup1" disabled>4. Setup</button>
+          <button id="playAction1" disabled>5. Play Action</button>
+        </div>
+       <h3>Game View (Player 1's Perspective)</h3>
+       <pre id="log1" style="height: 300px; font-size: 10px; overflow-y: auto; overflow-x: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.4; padding: 8px; border: 1px solid #ccc;"></pre>
+     </div>
+
+     <!-- Player 2 Controls -->
+     <div style="flex: 1; border: 2px solid #ccc; padding: 15px; background-color: #f0f0f0;">
+       <h2 style="color: #2c5aa0; margin-top: 0;">Player 2</h2>
+               <div>
+          <button id="connect2">1. Connect</button>
+          <button id="queue2" disabled>2. Join Queue</button>
+          <button id="ready2" disabled>3. Ready</button>
+          <button id="setup2" disabled>4. Setup</button>
+          <button id="playAction2" disabled>5. Play Action</button>
+        </div>
+       <h3>Game View (Player 2's Perspective)</h3>
+       <pre id="log2" style="height: 300px; font-size: 10px; overflow-y: auto; overflow-x: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.4; padding: 8px; border: 1px solid #ccc;"></pre>
+     </div>
   </div>
-  <pre id="log"></pre>
+
+  <!-- Global Game Status -->
+  <div style="margin-top: 20px; border: 2px solid #2c5aa0; padding: 15px; background-color: #e8f4f8;">
+    <h3>Global Game Status</h3>
+    <div>Game ID: <span id="gameIdDisplay">None</span></div>
+    <div>Match ID: <span id="matchIdDisplay">None</span></div>
+    <div>Current Turn: <span id="turnDisplay">None</span></div>
+    <div>Game Phase: <span id="phaseDisplay">Not Started</span></div>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>
