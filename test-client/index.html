@@ -38,44 +38,45 @@
   <h1>Cloaks Gambit Test Client - Two Player View</h1>
   
   <div style="display: flex; gap: 20px;">
-         <!-- Player 1 Controls -->
-     <div style="flex: 1; border: 2px solid #ccc; padding: 15px; background-color: #f0f0f0;">
-       <h2 style="color: #2c5aa0; margin-top: 0;">Player 1</h2>
-               <div>
-          <button id="connect1">1. Connect</button>
-          <button id="queue1" disabled>2. Join Queue</button>
-          <button id="ready1" disabled>3. Ready</button>
-          <button id="setup1" disabled>4. Setup</button>
-        </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px;">
-          <!-- Server Messages -->
-          <div>
-            <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Server Messages</h4>
-            <pre id="serverLog1" style="height: 150px; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0;"></pre>
-          </div>
+    <!-- Player 1 Controls -->
+    <div style="flex: 1; border: 2px solid #2c5aa0; padding: 15px; background-color: #e8f4f8;">
+      <h2 style="color: #2c5aa0; margin-top: 0;">Player 1</h2>
+      <div>
+        <button id="connect1">1. Connect</button>
+        <button id="queue1" disabled>2. Join Queue</button>
+        <button id="ready1" disabled>3. Ready</button>
+        <button id="setup1" disabled>4. Setup</button>
+      </div>
+      
+      <div style="display: flex; gap: 15px; margin-top: 15px;">
+                 <!-- Left Column: Server Messages & Game State -->
+         <div style="flex: 1; min-width: 0; max-width: 50%;">
+           <div style="margin-bottom: 15px;">
+             <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Server Messages</h4>
+             <pre id="serverLog1" style="height: 120px; width: 100%; box-sizing: border-box; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0; word-wrap: break-word; overflow-wrap: break-word; resize: none;"></pre>
+           </div>
+           <div>
+             <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Game State</h4>
+             <pre id="gameState1" style="height: 200px; width: 100%; box-sizing: border-box; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0; word-wrap: break-word; overflow-wrap: break-word; resize: none;"></pre>
+           </div>
+         </div>
+         
+         <!-- Right Column: Action History & Action Controls -->
+         <div style="flex: 1; min-width: 0; max-width: 50%;">
+           <div style="margin-bottom: 15px;">
+             <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Action History</h4>
+             <pre id="actionHistory1" style="height: 120px; width: 100%; box-sizing: border-box; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0; word-wrap: break-word; overflow-wrap: break-word; resize: none;"></pre>
+           </div>
           
-          <!-- Action History -->
           <div>
-            <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Action History</h4>
-            <pre id="actionHistory1" style="height: 150px; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0;"></pre>
-          </div>
-        </div>
-        
-        <!-- Current Game State -->
-        <div style="margin-top: 15px;">
-          <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Current Game State</h4>
-          <pre id="gameState1" style="height: 300px; font-size: 10px; overflow-y: auto; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0;"></pre>
-          <div style="margin-top: 10px; padding: 10px; border: 1px solid #ddd; background-color: #f5f5f5; border-radius: 4px;">
-            <h5 style="margin: 0 0 8px 0; color: #2c5aa0;">Action Controls</h5>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-              <div>
-                <label style="font-size: 11px; display: block; margin-bottom: 2px;">From (e.g., A1):</label>
-                <input type="text" id="from1" placeholder="A1" style="width: 100%; padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px;">
-              </div>
-              <div>
-                <label style="font-size: 11px; display: block; margin-bottom: 2px;">To (e.g., B3):</label>
-                <input type="text" id="to1" placeholder="B3" style="width: 100%; padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px;">
-              </div>
+            <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Actions</h4>
+            <div style="margin-bottom: 8px;">
+              <label style="font-size: 11px; display: block; margin-bottom: 2px;">From:</label>
+              <input id="from1" type="text" style="width: 100%; padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px;">
+            </div>
+            <div style="margin-bottom: 8px;">
+              <label style="font-size: 11px; display: block; margin-bottom: 2px;">To:</label>
+              <input id="to1" type="text" style="width: 100%; padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px;">
             </div>
             <div style="margin-bottom: 8px;">
               <label style="font-size: 11px; display: block; margin-bottom: 2px;">Declaration:</label>
@@ -86,24 +87,27 @@
                 <option value="1">King</option>
               </select>
             </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px;">
+            
+            <!-- Action Buttons - Vertical Stack -->
+            <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;">
               <button id="move1" style="padding: 4px 8px; font-size: 10px; background-color: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer;">Move</button>
               <button id="pass1" style="padding: 4px 8px; font-size: 10px; background-color: #FF9800; color: white; border: none; border-radius: 3px; cursor: pointer;">Pass</button>
               <button id="challenge1" style="padding: 4px 8px; font-size: 10px; background-color: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer;">Challenge</button>
               <button id="bomb1" style="padding: 4px 8px; font-size: 10px; background-color: #F44336; color: white; border: none; border-radius: 3px; cursor: pointer;">Bomb</button>
             </div>
-            <div id="onDeckArea1" style="margin-top: 8px; padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; border-radius: 3px;">
-              <label style="font-size: 11px; display: block; margin-bottom: 4px; color: #666;">On Deck:</label>
-              <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                <button id="onDeckKing1" data-identity="1" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">King</button>
-                <button id="onDeckBomb1" data-identity="2" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">Bomb</button>
-                <button id="onDeckBishop1" data-identity="3" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">Bishop</button>
-                <button id="onDeckRook1" data-identity="4" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">Rook</button>
-                <button id="onDeckKnight1" data-identity="5" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">Knight</button>
-              </div>
+            
+            <!-- On-Deck Buttons - Larger and More Readable -->
+            <div style="display: flex; gap: 4px;">
+              <button id="onDeckKing1" data-identity="1" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">King</button>
+              <button id="onDeckBomb1" data-identity="2" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">Bomb</button>
+              <button id="onDeckBishop1" data-identity="3" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">Bishop</button>
+              <button id="onDeckRook1" data-identity="4" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">Rook</button>
+              <button id="onDeckKnight1" data-identity="5" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">Knight</button>
             </div>
           </div>
         </div>
+      </div>
+    </div>
 
      <!-- Player 2 Controls -->
      <div style="flex: 1; border: 2px solid #ccc; padding: 15px; background-color: #f0f0f0;">
@@ -114,35 +118,35 @@
           <button id="ready2" disabled>3. Ready</button>
           <button id="setup2" disabled>4. Setup</button>
         </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px;">
-          <!-- Server Messages -->
-          <div>
-            <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Server Messages</h4>
-            <pre id="serverLog2" style="height: 150px; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0;"></pre>
+             <div style="display: flex; gap: 15px; margin-top: 15px;">
+                   <!-- Left Column: Server Messages & Game State -->
+          <div style="flex: 1; min-width: 0; max-width: 50%;">
+            <div style="margin-bottom: 15px;">
+              <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Server Messages</h4>
+              <pre id="serverLog2" style="height: 120px; width: 100%; box-sizing: border-box; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0; word-wrap: break-word; overflow-wrap: break-word; resize: none;"></pre>
+            </div>
+            <div>
+              <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Game State</h4>
+              <pre id="gameState2" style="height: 200px; width: 100%; box-sizing: border-box; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0; word-wrap: break-word; overflow-wrap: break-word; resize: none;"></pre>
+            </div>
           </div>
           
-          <!-- Action History -->
+          <!-- Right Column: Action History & Action Controls -->
+          <div style="flex: 1; min-width: 0; max-width: 50%;">
+            <div style="margin-bottom: 15px;">
+              <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Action History</h4>
+              <pre id="actionHistory2" style="height: 120px; width: 100%; box-sizing: border-box; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0; word-wrap: break-word; overflow-wrap: break-word; resize: none;"></pre>
+            </div>
+          
           <div>
-            <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Action History</h4>
-            <pre id="actionHistory2" style="height: 150px; font-size: 10px; overflow-y: auto; white-space: pre-wrap; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0;"></pre>
-          </div>
-        </div>
-        
-        <!-- Current Game State -->
-        <div style="margin-top: 15px;">
-          <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Current Game State</h4>
-          <pre id="gameState2" style="height: 300px; font-size: 10px; overflow-y: auto; background-color: #f9f9f9; font-family: 'Courier New', monospace; line-height: 1.2; padding: 8px; border: 1px solid #ccc; margin: 0;"></pre>
-          <div style="margin-top: 10px; padding: 10px; border: 1px solid #ddd; background-color: #f5f5f5; border-radius: 4px;">
-            <h5 style="margin: 0 0 8px 0; color: #2c5aa0;">Action Controls</h5>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-              <div>
-                <label style="font-size: 11px; display: block; margin-bottom: 2px;">From (e.g., A1):</label>
-                <input type="text" id="from2" placeholder="A1" style="width: 100%; padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px;">
-              </div>
-              <div>
-                <label style="font-size: 11px; display: block; margin-bottom: 2px;">To (e.g., B3):</label>
-                <input type="text" id="to2" placeholder="B3" style="width: 100%; padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px;">
-              </div>
+            <h4 style="margin: 0 0 10px 0; color: #2c5aa0;">Actions</h4>
+            <div style="margin-bottom: 8px;">
+              <label style="font-size: 11px; display: block; margin-bottom: 2px;">From:</label>
+              <input id="from2" type="text" style="width: 100%; padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px;">
+            </div>
+            <div style="margin-bottom: 8px;">
+              <label style="font-size: 11px; display: block; margin-bottom: 2px;">To:</label>
+              <input id="to2" type="text" style="width: 100%; padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px;">
             </div>
             <div style="margin-bottom: 8px;">
               <label style="font-size: 11px; display: block; margin-bottom: 2px;">Declaration:</label>
@@ -153,35 +157,29 @@
                 <option value="1">King</option>
               </select>
             </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px;">
+            
+            <!-- Action Buttons - Vertical Stack -->
+            <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px;">
               <button id="move2" style="padding: 4px 8px; font-size: 10px; background-color: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer;">Move</button>
               <button id="pass2" style="padding: 4px 8px; font-size: 10px; background-color: #FF9800; color: white; border: none; border-radius: 3px; cursor: pointer;">Pass</button>
               <button id="challenge2" style="padding: 4px 8px; font-size: 10px; background-color: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer;">Challenge</button>
               <button id="bomb2" style="padding: 4px 8px; font-size: 10px; background-color: #F44336; color: white; border: none; border-radius: 3px; cursor: pointer;">Bomb</button>
             </div>
-            <div id="onDeckArea2" style="margin-top: 8px; padding: 8px; border: 1px solid #ddd; background-color: #f9f9f9; border-radius: 3px;">
-              <label style="font-size: 11px; display: block; margin-bottom: 4px; color: #666;">On Deck:</label>
-              <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                <button id="onDeckKing2" data-identity="1" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">King</button>
-                <button id="onDeckBomb2" data-identity="2" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">Bomb</button>
-                <button id="onDeckBishop2" data-identity="3" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">Bishop</button>
-                <button id="onDeckRook2" data-identity="4" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">Rook</button>
-                <button id="onDeckKnight2" data-identity="5" style="padding: 3px 6px; font-size: 9px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer; opacity: 0.3;">Knight</button>
-              </div>
+            
+            <!-- On-Deck Buttons - Larger and More Readable -->
+            <div style="display: flex; gap: 4px;">
+              <button id="onDeckKing2" data-identity="1" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">King</button>
+              <button id="onDeckBomb2" data-identity="2" style="padding: 4px 4px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">Bomb</button>
+              <button id="onDeckBishop2" data-identity="3" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">Bishop</button>
+              <button id="onDeckRook2" data-identity="4" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">Rook</button>
+              <button id="onDeckKnight2" data-identity="5" style="padding: 4px 8px; font-size: 11px; background-color: #9C27B0; color: white; border: none; border-radius: 3px; cursor: pointer;">Knight</button>
             </div>
           </div>
         </div>
+      </div>
      </div>
   </div>
 
-  <!-- Global Game Status -->
-  <div style="margin-top: 20px; border: 2px solid #2c5aa0; padding: 15px; background-color: #e8f4f8;">
-    <h3>Global Game Status</h3>
-    <div>Game ID: <span id="gameIdDisplay">None</span></div>
-    <div>Match ID: <span id="matchIdDisplay">None</span></div>
-    <div>Current Turn: <span id="turnDisplay">None</span></div>
-    <div>Game Phase: <span id="phaseDisplay">Not Started</span></div>
-  </div>
   <script src="app.js"></script>
 </body>
 </html>

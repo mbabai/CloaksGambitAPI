@@ -99,14 +99,12 @@ function updateGameState(player, board, stashes, onDecks, daggers, moves, captur
   gameStateEl.scrollTop = gameStateEl.scrollHeight;
 }
 
-// Update global game status display
+// Update global game status display (elements removed from HTML)
 function updateGameStatus() {
-  document.getElementById('gameIdDisplay').textContent = gameId || 'None';
-  document.getElementById('matchIdDisplay').textContent = matchId || 'None';
-  document.getElementById('turnDisplay').textContent = currentTurn === 0 ? 'White' : 'Black';
-  document.getElementById('phaseDisplay').textContent = gamePhase;
+  // Global status elements removed - no longer updating display
+  // gameId, matchId, currentTurn, and gamePhase are still tracked internally
   
-  // Update turn display based on current turn
+  // Update turn display based on current turn (for internal use only)
   if (gamePhase === 'Setup Complete') {
     const currentPlayerName = currentTurn === 0 ? 'White' : 'Black';
     // Also show which UI player has the turn
@@ -116,7 +114,8 @@ function updateGameStatus() {
     } else if (players.player2.color === currentTurn) {
       playerWithTurn = 'Player 2';
     }
-    document.getElementById('turnDisplay').textContent = `${currentPlayerName} (${playerWithTurn}'s Turn)`;
+    // No longer updating DOM elements that were removed
+    console.log(`Turn: ${currentPlayerName} (${playerWithTurn}'s Turn)`);
   }
 }
 
@@ -1636,67 +1635,11 @@ function updateActionControlsWrapper() {
   }
 }
 
-// Update action controls based on whose turn it is and game state
+// Update action controls - enable ALL buttons all the time for testing
 function updateActionControls(currentTurn) {
-  // Determine which player should be active based on their color, not their player number
-  const isPlayer1Turn = players.player1.color === currentTurn;
-  const isPlayer2Turn = players.player2.color === currentTurn;
+  // Enable ALL action buttons for both players all the time
+  // Let the server handle validation and return errors if needed
   
-  // Get current player and opponent
-  const currentPlayer = isPlayer1Turn ? players.player1 : players.player2;
-  const opponent = isPlayer1Turn ? players.player2 : players.player1;
-  
-  // Determine what actions are available based on game state
-  let availableActions = [];
-  
-  if (gameState.turnState === 'normal') {
-    // In Cloaks Gambit, after a move, the opponent can challenge/bomb before the turn changes
-    if (lastActionType === 'move' && lastActionPlayer !== null) {
-      // The player who made the move can only move again or go on-deck
-      if (players.player1.color === lastActionPlayer) {
-      availableActions = ['move1', 'onDeck1'];
-        // The opponent (Player 2) can challenge, bomb, or make their own move
-        availableActions.push('move2', 'challenge2', 'bomb2', 'onDeck2');
-      } else {
-        availableActions = ['move2', 'onDeck2'];
-        // The opponent (Player 1) can challenge, bomb, or make their own move
-        availableActions.push('move1', 'challenge1', 'bomb1', 'onDeck1');
-      }
-    } else {
-      // Normal turn - current player can move
-      if (isPlayer1Turn) {
-        availableActions = ['move1', 'onDeck1'];
-    } else {
-      availableActions = ['move2', 'onDeck2'];
-      }
-    }
-  } else if (gameState.turnState === 'challenge') {
-    // After successful challenge - challenger can only move
-    if (isPlayer1Turn) {
-      availableActions = ['move1'];
-    } else {
-      availableActions = ['move2'];
-    }
-  } else if (gameState.turnState === 'bomb') {
-    // After bomb - opponent can pass or challenge
-    if (isPlayer1Turn) {
-      availableActions = ['pass1', 'challenge1'];
-    } else {
-      availableActions = ['pass2', 'challenge2'];
-    }
-  } else if (gameState.turnState === 'onDeck') {
-    // After failed challenge - original mover must go on-deck
-    const moverColor = (typeof pendingOnDeck?.mover === 'number') ? pendingOnDeck.mover : (typeof window?.lastServerOnDeckingPlayer === 'number' ? window.lastServerOnDeckingPlayer : null);
-    if (moverColor !== null) {
-      if (players.player1.color === moverColor) {
-        availableActions = ['onDeck1'];
-      } else if (players.player2.color === moverColor) {
-        availableActions = ['onDeck2'];
-      }
-    }
-  }
-  
-  // Enable/disable all controls based on availability
   const allControls = [
     'move1', 'pass1', 'challenge1', 'bomb1', 'onDeck1',
     'move2', 'pass2', 'challenge2', 'bomb2', 'onDeck2'
@@ -1705,32 +1648,20 @@ function updateActionControls(currentTurn) {
   allControls.forEach(controlId => {
     const control = document.getElementById(controlId);
     if (control) {
-      const isAvailable = availableActions.includes(controlId);
-      control.disabled = !isAvailable;
-      control.style.opacity = isAvailable ? '1' : '0.5';
+      control.disabled = false;
+      control.style.opacity = '1';
     }
   });
   
-  // Enable/disable coordinate inputs based on whose turn it is
-  const player1Inputs = ['from1', 'to1', 'declaration1'];
-  player1Inputs.forEach(inputId => {
+  // Enable ALL coordinate inputs for both players
+  const allInputs = ['from1', 'to1', 'declaration1', 'from2', 'to2', 'declaration2'];
+  allInputs.forEach(inputId => {
     const input = document.getElementById(inputId);
     if (input) {
-      input.disabled = !isPlayer1Turn;
-      input.style.opacity = isPlayer1Turn ? '1' : '0.5';
+      input.disabled = false;
+      input.style.opacity = '1';
     }
   });
-  
-  const player2Inputs = ['from2', 'to2', 'declaration2'];
-  player2Inputs.forEach(inputId => {
-    const input = document.getElementById(inputId);
-    if (input) {
-      input.disabled = !isPlayer2Turn;
-      input.style.opacity = isPlayer2Turn ? '1' : '0.5';
-    }
-  });
-  
-  // On-deck buttons are now handled by updateOnDeckButtons function
 }
 
 // Update on-deck button states - always enable all buttons, let server handle validation
