@@ -116,7 +116,7 @@ router.post('/', async (req, res) => {
           typeof to.row !== 'number' || typeof to.col !== 'number' ||
           from.row < 0 || from.row >= game.board.length ||
           from.col < 0 || from.col >= game.board[0].length ||
-          to.row < 0 || to.row >= game.board[0].length ||
+          to.row < 0 || to.row >= game.board.length ||
           to.col < 0 || to.col >= game.board[0].length) {
         console.log('Invalid coordinates:', { from, to, boardLength: game.board.length, boardWidth: game.board[0]?.length });
         return res.status(400).json({ message: 'Invalid move coordinates' });
@@ -184,7 +184,7 @@ router.post('/', async (req, res) => {
           typeof to.row !== 'number' || typeof to.col !== 'number' ||
           from.row < 0 || from.row >= game.board.length ||
           from.col < 0 || from.col >= game.board[0].length ||
-          to.row < 0 || to.row >= game.board[0].length ||
+          to.row < 0 || to.row >= game.board.length ||
           to.col < 0 || to.col >= game.board[0].length) {
         return res.status(400).json({ message: 'Invalid bomb coordinates' });
       }

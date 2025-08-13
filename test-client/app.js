@@ -213,6 +213,36 @@ async function establishSocketConnection(player) {
               console.log('Updated currentTurn from server:', currentTurn);
             }
             
+            // Update last action tracking from server actions
+            if (u.actions && u.actions.length > 0) {
+              const lastAction = u.actions[u.actions.length - 1];
+              lastActionPlayer = lastAction.player;
+              
+              // Map server action types to our local tracking
+              switch (lastAction.type) {
+                case 1: // MOVE
+                  lastActionType = 'move';
+                  break;
+                case 2: // CHALLENGE
+                  lastActionType = 'challenge';
+                  break;
+                case 3: // BOMB
+                  lastActionType = 'bomb';
+                  break;
+                case 4: // PASS
+                  lastActionType = 'pass';
+                  break;
+                case 5: // ON_DECK
+                  lastActionType = 'onDeck';
+                  break;
+                default:
+                  // For setup, ready, etc., don't change the last action type
+                  break;
+              }
+              
+              console.log('Updated lastActionType from server:', lastActionType, 'lastActionPlayer:', lastActionPlayer);
+            }
+            
             // Debug: Log the current state before setup completion check
             console.log('Before setup completion check:', {
               gamePhase,
@@ -1560,18 +1590,24 @@ function updateActionControls(currentTurn) {
   let availableActions = [];
   
   if (gameState.turnState === 'normal') {
-    // Normal turn - player can move, opponent can challenge/bomb
-    if (isPlayer1Turn) {
-      availableActions = ['move1', 'onDeck1'];
-      // Opponent can challenge/bomb
-      if (lastActionType === 'move') {
-        availableActions.push('challenge2', 'bomb2');
+    // In Cloaks Gambit, after a move, the opponent can challenge/bomb before the turn changes
+    if (lastActionType === 'move' && lastActionPlayer !== null) {
+      // The player who made the move can only move again or go on-deck
+      if (players.player1.color === lastActionPlayer) {
+        availableActions = ['move1', 'onDeck1'];
+        // The opponent (Player 2) can challenge, bomb, or make their own move
+        availableActions.push('move2', 'challenge2', 'bomb2', 'onDeck2');
+      } else {
+        availableActions = ['move2', 'onDeck2'];
+        // The opponent (Player 1) can challenge, bomb, or make their own move
+        availableActions.push('move1', 'challenge1', 'bomb1', 'onDeck1');
       }
     } else {
-      availableActions = ['move2', 'onDeck2'];
-      // Opponent can challenge/bomb
-      if (lastActionType === 'move') {
-        availableActions.push('challenge1', 'bomb1');
+      // Normal turn - current player can move
+      if (isPlayer1Turn) {
+        availableActions = ['move1', 'onDeck1'];
+      } else {
+        availableActions = ['move2', 'onDeck2'];
       }
     }
   } else if (gameState.turnState === 'challenge') {

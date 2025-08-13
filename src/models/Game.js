@@ -269,8 +269,13 @@ const gameSchema = new mongoose.Schema({
     },
     onDeckingPlayer: {
         type: Number,
-        enum: [null, 0, 1],
-        default: null
+        default: null,
+        validate: {
+            validator: function(v) {
+                return v === null || v === 0 || v === 1;
+            },
+            message: 'onDeckingPlayer must be null, 0, or 1'
+        }
     }
 });
 
