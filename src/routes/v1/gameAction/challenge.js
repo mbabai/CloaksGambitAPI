@@ -7,6 +7,8 @@ const eventBus = require('../../../eventBus');
 router.post('/', async (req, res) => {
   try {
     const { gameId, color } = req.body;
+    
+    console.log('Challenge request:', { gameId, color });
 
     const game = await Game.findById(gameId);
     if (!game) {
@@ -32,18 +34,59 @@ router.post('/', async (req, res) => {
     if (!lastAction) {
       return res.status(400).json({ message: 'No previous action to challenge' });
     }
+    
+    console.log('Last action:', lastAction);
+    console.log('Game moves:', game.moves);
+    console.log('Game actions:', game.actions);
+    console.log('Game board:', game.board);
+    console.log('Game stashes:', game.stashes);
+    console.log('Game onDecks:', game.onDecks);
+    console.log('Game captured:', game.captured);
+    console.log('Game daggers:', game.daggers);
 
     const moveType = config.actions.get('MOVE');
     const bombType = config.actions.get('BOMB');
 
-    const lastMove = game.moves[game.moves.length - 1];
+    const lastMove = game.moves && game.moves.length > 0 ? game.moves[game.moves.length - 1] : null;
 
     if (lastAction.type === moveType) {
-      if (!lastMove || lastMove.state !== config.moveStates.get('PENDING')) {
+      if (!lastMove) {
+        return res.status(400).json({ message: 'No move found to challenge' });
+      }
+      if (lastMove.state !== config.moveStates.get('PENDING')) {
         return res.status(400).json({ message: 'No pending move to challenge' });
       }
-    } else if (lastAction.type !== bombType) {
+    } else if (lastAction.type === bombType) {
+      if (!lastMove) {
+        return res.status(400).json({ message: 'No move found to challenge bomb' });
+      }
+    } else {
       return res.status(400).json({ message: 'Last action cannot be challenged' });
+    }
+
+    // Ensure game state arrays exist
+    if (!game.captured || !Array.isArray(game.captured) || game.captured.length !== 2) {
+      return res.status(500).json({ message: 'Invalid game state: captured array missing' });
+    }
+    
+    if (!game.daggers || !Array.isArray(game.daggers) || game.daggers.length !== 2) {
+      return res.status(500).json({ message: 'Invalid game state: daggers array missing' });
+    }
+    
+    if (!game.stashes || !Array.isArray(game.stashes) || game.stashes.length !== 2) {
+      return res.status(500).json({ message: 'Invalid game state: stashes array missing' });
+    }
+    
+    if (!game.onDecks || !Array.isArray(game.onDecks) || game.onDecks.length !== 2) {
+      return res.status(500).json({ message: 'Invalid game state: onDecks array missing' });
+    }
+    
+    if (!game.board || !Array.isArray(game.board) || game.board.length === 0) {
+      return res.status(500).json({ message: 'Invalid game state: board missing or empty' });
+    }
+    
+    if (!game.board[0] || !Array.isArray(game.board[0]) || game.board[0].length === 0) {
+      return res.status(500).json({ message: 'Invalid game state: board dimensions invalid' });
     }
 
     if (game.onDeckingPlayer === normalizedColor) {
@@ -55,10 +98,34 @@ router.post('/', async (req, res) => {
     let trueKing = false;
 
     if (lastAction.type === moveType) {
+      console.log('Processing move challenge, lastMove:', lastMove);
+      
+      // Ensure lastMove has a player property
+      if (typeof lastMove.player !== 'number' || (lastMove.player !== 0 && lastMove.player !== 1)) {
+        return res.status(400).json({ message: 'Invalid move player information' });
+      }
+      
       const from = lastMove.from;
       const to = lastMove.to;
+      
+      console.log('Move coordinates:', { from, to });
+      
+      // Validate board coordinates
+      if (!from || !to || 
+          typeof from.row !== 'number' || typeof from.col !== 'number' ||
+          typeof to.row !== 'number' || typeof to.col !== 'number' ||
+          from.row < 0 || from.row >= game.board.length ||
+          from.col < 0 || from.col >= game.board[0].length ||
+          to.row < 0 || to.row >= game.board[0].length ||
+          to.col < 0 || to.col >= game.board[0].length) {
+        console.log('Invalid coordinates:', { from, to, boardLength: game.board.length, boardWidth: game.board[0]?.length });
+        return res.status(400).json({ message: 'Invalid move coordinates' });
+      }
+      
       const pieceFrom = game.board[from.row][from.col];
       const pieceTo = game.board[to.row][to.col];
+      
+      console.log('Board pieces:', { pieceFrom, pieceTo });
 
       if (!pieceFrom) {
         return res.status(400).json({ message: 'Invalid move state' });
@@ -97,9 +164,31 @@ router.post('/', async (req, res) => {
         game.onDeckingPlayer = lastMove.player;
         game.playerTurn = lastMove.player;
       }
-    } else {
+    } else if (lastAction.type === bombType) {
+      // For bomb actions, we need a valid lastMove
+      if (!lastMove) {
+        return res.status(400).json({ message: 'No move found to challenge bomb' });
+      }
+      
+      // Ensure lastMove has a player property
+      if (typeof lastMove.player !== 'number' || (lastMove.player !== 0 && lastMove.player !== 1)) {
+        return res.status(400).json({ message: 'Invalid move player information' });
+      }
+      
       const from = lastMove.from;
       const to = lastMove.to;
+      
+      // Validate board coordinates
+      if (!from || !to || 
+          typeof from.row !== 'number' || typeof from.col !== 'number' ||
+          typeof to.row !== 'number' || typeof to.col !== 'number' ||
+          from.row < 0 || from.row >= game.board.length ||
+          from.col < 0 || from.col >= game.board[0].length ||
+          to.row < 0 || to.row >= game.board[0].length ||
+          to.col < 0 || to.col >= game.board[0].length) {
+        return res.status(400).json({ message: 'Invalid bomb coordinates' });
+      }
+      
       const pieceFrom = game.board[from.row][from.col];
       const pieceTo = game.board[to.row][to.col];
 
@@ -138,11 +227,13 @@ router.post('/', async (req, res) => {
         game.daggers[lastMove.player] += 1;
         lastMove.state = config.moveStates.get('COMPLETED');
       }
+    } else {
+      return res.status(400).json({ message: 'Last action type cannot be challenged' });
     }
 
     // If no player currently needs to place an on-deck piece, set the turn to
     // the opponent of the player who made the last move
-    if (game.onDeckingPlayer === null) {
+    if (game.onDeckingPlayer === null && lastMove) {
       game.playerTurn = lastMove.player === 0 ? 1 : 0;
     }
 
@@ -173,7 +264,13 @@ router.post('/', async (req, res) => {
       affectedUsers: (game.players || []).map(p => p.toString()),
     });
 
-    res.json({ message: 'Challenge processed successfully' });
+    res.json({ 
+      success: true, 
+      message: 'Challenge processed successfully',
+      capturedPiece,
+      captureBy,
+      trueKing
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

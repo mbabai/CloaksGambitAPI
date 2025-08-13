@@ -35,6 +35,15 @@ let gamePhase = 'Not Started';
 let actionSequence = [];
 let currentActionIndex = 0;
 let setupCompletionChecked = false; // Flag to prevent multiple setup completion checks
+let incompleteMove = null; // Track incomplete move: { from: {row, col}, to: {row, col}, color: 0/1 }
+let lastActionType = null; // Track the last action type: 'move', 'challenge', 'bomb', 'pass', 'onDeck'
+let lastActionPlayer = null; // Track who made the last action
+let pendingOnDeck = null; // Track if a player needs to go on-deck after a failed challenge
+let gameState = {
+  lastMove: null, // Store the last move for persistence
+  lastAction: null, // Store the last action for persistence
+  turnState: 'normal' // 'normal', 'challenge', 'bomb', 'onDeck'
+};
 
 // Logging functions for each player
 function log(player, msg) {
@@ -56,19 +65,33 @@ function updateActionHistory(actions) {
 }
 
 // Update game state for a specific player
-function updateGameState(player, board, stashes, onDecks) {
+function updateGameState(player, board, stashes, onDecks, daggers) {
   const gameStateEl = player.gameStateEl;
   
-  let stateText = '--- BOARD ---\n';
+  // Store the last game state for refreshing displays
+  player.lastBoard = board;
+  player.lastStashes = stashes;
+  player.lastOnDecks = onDecks;
+  player.lastDaggers = daggers; // Store daggers
+  
+  // Store the incomplete move state persistently
+  if (incompleteMove) {
+    gameState.lastMove = incompleteMove;
+  }
+  
+  // Populate on-deck dropdowns with current stash contents
+  populateOnDeckDropdowns(stashes);
+  
+  let stateText = '--- DAGGERS ---\n';
+  stateText += `My Daggers: ${countDaggers(daggers, player.color)} | Opponent Daggers: ${countDaggers(daggers, 1 - player.color)}\n`;
+  stateText += '\n--- BOARD ---\n';
   stateText += formatBoard(board, player.color);
   stateText += '\n--- MY STASH ---\n';
   stateText += formatStash(stashes, player.color, true);
-  stateText += '\n--- OPPONENT STASH ---\n';
-  stateText += formatStash(stashes, 1 - player.color, false);
   stateText += '\n--- MY ON DECK ---\n';
   stateText += formatOnDeck(onDecks, player.color, true);
-  stateText += '\n--- OPPONENT ON DECK ---\n';
-  stateText += formatOnDeck(onDecks, 1 - player.color, false);
+  stateText += '\n--- CAPTURED PIECES ---\n';
+  stateText += formatCapturedPieces(stashes, onDecks);
   
   gameStateEl.textContent = stateText;
   gameStateEl.scrollTop = gameStateEl.scrollHeight;
@@ -143,15 +166,26 @@ async function establishSocketConnection(player) {
             // Log server message
             logServerMessage(player, 'Game update received');
             
+            // Clear any incomplete move since we got a new game state
+            incompleteMove = null;
+            
             // Determine player color from the game data
             if (player.color === null) {
               // Find which player this is based on the game data
               if (u.players && u.players.length === 2) {
-                // This is a simplified way to determine color - in a real game you'd get this from the server
-                if (player.name === 'Player 1') {
-                  player.color = 0; // Usually Player 1 is white
+                // Try to find the player by their user ID in the game data
+                const playerIndex = u.players.findIndex(p => p.toString() === player.id);
+                if (playerIndex !== -1) {
+                  player.color = playerIndex; // Player 0 is white, Player 1 is black
+                  console.log(`Player ${player.name} color set to ${player.color} (${player.color === 0 ? 'white' : 'black'})`);
                 } else {
-                  player.color = 1; // Usually Player 2 is black
+                  // Fallback: use player name as before
+                  if (player.name === 'Player 1') {
+                    player.color = 0; // Usually Player 1 is white
+                  } else {
+                    player.color = 1; // Usually Player 2 is black
+                  }
+                  console.log(`Player ${player.name} color set to ${player.color} (${player.color === 0 ? 'white' : 'black'}) by name fallback`);
                 }
               }
             }
@@ -160,7 +194,7 @@ async function establishSocketConnection(player) {
             updateActionHistory(u.actions);
             
             // Update game state for this player
-            updateGameState(player, u.board, u.stashes, u.onDecks);
+            updateGameState(player, u.board, u.stashes, u.onDecks, u.daggers);
             
             // Update game state
             gameId = u.gameId;
@@ -185,9 +219,7 @@ async function establishSocketConnection(player) {
             console.log('After game update:', {
               gamePhase,
               setup1Disabled: document.getElementById('setup1').disabled,
-              setup2Disabled: document.getElementById('setup2').disabled,
-              playAction1Disabled: document.getElementById('playAction1').disabled,
-              playAction2Disabled: document.getElementById('playAction2').disabled
+              setup2Disabled: document.getElementById('setup2').disabled
             });
           });
   }
@@ -408,6 +440,19 @@ function resetReadyState() {
   // Reset setup completion flag for new games
   setupCompletionChecked = false;
   
+  // Clear any incomplete move
+  incompleteMove = null;
+  
+  // Reset game state variables
+  lastActionType = null;
+  lastActionPlayer = null;
+  pendingOnDeck = null;
+  gameState = {
+    lastMove: null,
+    lastAction: null,
+    turnState: 'normal'
+  };
+  
   // Disable ready and setup buttons
   document.getElementById('ready1').disabled = true;
   document.getElementById('ready2').disabled = true;
@@ -423,6 +468,48 @@ function resetReadyState() {
   // Reset queue buttons
   updateQueueButton(players.player1, false);
   updateQueueButton(players.player2, false);
+  
+  // Disable all action controls
+  disableAllActionControls();
+}
+
+// Disable all action controls
+function disableAllActionControls() {
+  const allControls = [
+    'move1', 'pass1', 'challenge1', 'bomb1', 'onDeck1',
+    'move2', 'pass2', 'challenge2', 'bomb2', 'onDeck2'
+  ];
+  
+  allControls.forEach(controlId => {
+    const control = document.getElementById(controlId);
+    if (control) {
+      control.disabled = true;
+      control.style.opacity = '0.5';
+    }
+  });
+  
+  const allInputs = [
+    'from1', 'to1', 'declaration1',
+    'from2', 'to2', 'declaration2'
+  ];
+  
+  allInputs.forEach(inputId => {
+    const input = document.getElementById(inputId);
+    if (input) {
+      input.disabled = true;
+      input.style.opacity = '0.5';
+    }
+  });
+  
+  // Also disable on-deck dropdowns
+  const onDeckDropdowns = ['onDeckPiece1', 'onDeckPiece2'];
+  onDeckDropdowns.forEach(dropdownId => {
+    const dropdown = document.getElementById(dropdownId);
+    if (dropdown) {
+      dropdown.disabled = true;
+      dropdown.style.opacity = '0.5';
+    }
+  });
 }
 
 // Enable ready buttons for both players when a game starts
@@ -473,12 +560,21 @@ function checkSetupCompletion() {
     // Both players have completed setup
     gamePhase = 'Setup Complete';
     
-    // Enable play action buttons
-    document.getElementById('playAction1').disabled = false;
-    document.getElementById('playAction2').disabled = false;
+    // Clear any incomplete move
+    incompleteMove = null;
     
-    // Update button text to show whose turn it is
-    updatePlayActionButtons();
+    // Reset game state for new game
+    lastActionType = null;
+    lastActionPlayer = null;
+    pendingOnDeck = null;
+    gameState = {
+      lastMove: null,
+      lastAction: null,
+      turnState: 'normal'
+    };
+    
+    // Update action controls based on whose turn it is
+    updateActionControlsWrapper();
     
     // Initialize simple turn-based system (no hardcoded actions)
     actionSequence = [];
@@ -487,7 +583,7 @@ function checkSetupCompletion() {
     // Log completion to both players
     if (players.player1.serverLogEl) {
       logServerMessage(players.player1, '🎉 Both players have completed setup! Game is ready to play!');
-      logServerMessage(players.player1, '🎯 White goes first (Player 1). Click "Play Action" to make a move!');
+      logServerMessage(players.player1, '🎯 White goes first (Player 1). Use the action controls below to make a move!');
     }
     if (players.player2.serverLogEl) {
       logServerMessage(players.player2, '🎉 Both players have completed setup! Game is ready to play!');
@@ -611,15 +707,14 @@ async function setupGame(player) {
    }
 }
 
-// Play a simple move action
+// Play a simple move action - REMOVED
+/*
 async function playAction(player) {
   console.log('playAction called:', { 
     playerName: player.name, 
     gamePhase, 
     setup1Disabled: document.getElementById('setup1').disabled,
-    setup2Disabled: document.getElementById('setup2').disabled,
-    playAction1Disabled: document.getElementById('playAction1').disabled,
-    playAction2Disabled: document.getElementById('playAction2').disabled
+    setup2Disabled: document.getElementById('setup2').disabled
   });
   
   if (gamePhase !== 'Setup Complete') {
@@ -688,7 +783,7 @@ async function playAction(player) {
        
        // Update turn display for next action
        updateGameStatus();
-       updatePlayActionButtons();
+       updateActionControlsWrapper();
        
        // Log whose turn is next
        const nextTurn = currentActionIndex % 2;
@@ -728,6 +823,7 @@ async function playAction(player) {
     player.isMoving = false;
   }
 }
+*/
 
 // Event listeners
 document.getElementById('connect1').onclick = () => connectPlayer('player1');
@@ -738,30 +834,354 @@ document.getElementById('ready1').onclick = () => markPlayerReady(players.player
 document.getElementById('ready2').onclick = () => markPlayerReady(players.player2);
 document.getElementById('setup1').onclick = () => setupGame(players.player1);
 document.getElementById('setup2').onclick = () => setupGame(players.player2);
-document.getElementById('playAction1').onclick = () => playAction(players.player1);
-document.getElementById('playAction2').onclick = () => playAction(players.player2);
 
-// Debug event listeners
-document.getElementById('debugCheck1').onclick = () => {
-  console.log('Manual debug check triggered by Player 1');
-  console.log('Current state:', {
-    gamePhase,
-    setup1Disabled: document.getElementById('setup1').disabled,
-    setup2Disabled: document.getElementById('setup2').disabled,
-    setupCompletionChecked
-  });
-  checkSetupCompletion();
+// Action button event listeners for Player 1
+document.getElementById('move1').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executeMove(players.player1, 
+      document.getElementById('from1'), 
+      document.getElementById('to1'), 
+      document.getElementById('declaration1')
+    );
+  } else {
+    logServerMessage(players.player1, 'Game not ready for moves yet');
+  }
 };
-document.getElementById('debugCheck2').onclick = () => {
-  console.log('Manual debug check triggered by Player 2');
-  console.log('Current state:', {
-    gamePhase,
-    setup1Disabled: document.getElementById('setup1').disabled,
-    setup2Disabled: document.getElementById('setup2').disabled,
-    setupCompletionChecked
-  });
-  checkSetupCompletion();
+document.getElementById('pass1').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executePass(players.player1);
+  } else {
+    logServerMessage(players.player1, 'Game not ready for actions yet');
+  }
 };
+document.getElementById('challenge1').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executeChallenge(players.player1);
+  } else {
+    logServerMessage(players.player1, 'Game not ready for actions yet');
+  }
+};
+document.getElementById('bomb1').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executeBomb(players.player1);
+  } else {
+    logServerMessage(players.player1, 'Game not ready for actions yet');
+  }
+};
+
+// Action button event listeners for Player 2
+document.getElementById('move2').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executeMove(players.player2, 
+      document.getElementById('from2'), 
+      document.getElementById('to2'), 
+      document.getElementById('declaration2')
+    );
+  } else {
+    logServerMessage(players.player2, 'Game not ready for moves yet');
+  }
+};
+document.getElementById('pass2').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executePass(players.player2);
+  } else {
+    logServerMessage(players.player2, 'Game not ready for actions yet');
+  }
+};
+document.getElementById('challenge2').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executeChallenge(players.player2);
+  } else {
+    logServerMessage(players.player2, 'Game not ready for actions yet');
+  }
+};
+document.getElementById('bomb2').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executeBomb(players.player2);
+  } else {
+    logServerMessage(players.player2, 'Game not ready for actions yet');
+  }
+};
+
+// On-deck button event listeners
+document.getElementById('onDeck1').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executeOnDeck(players.player1);
+  } else {
+    logServerMessage(players.player1, 'Game not ready for on-deck yet');
+  }
+};
+
+document.getElementById('onDeck2').onclick = () => {
+  if (gamePhase === 'Setup Complete') {
+    executeOnDeck(players.player2);
+  } else {
+    logServerMessage(players.player2, 'Game not ready for on-deck yet');
+  }
+};
+
+// Coordinate conversion functions
+function chessToCoordinates(chessNotation) {
+  if (!chessNotation || chessNotation.length !== 2) {
+    throw new Error('Invalid chess notation. Use format like A1, B3, etc.');
+  }
+  
+  const file = chessNotation.charAt(0).toUpperCase();
+  const rank = chessNotation.charAt(1);
+  
+  if (file < 'A' || file > 'E') {
+    throw new Error('File must be A-E');
+  }
+  
+  if (rank < '1' || rank > '6') {
+    throw new Error('Rank must be 1-6');
+  }
+  
+  const col = file.charCodeAt(0) - 'A'.charCodeAt(0);
+  const row = parseInt(rank) - 1;
+  
+  return { row, col };
+}
+
+function coordinatesToChess(row, col) {
+  const file = String.fromCharCode('A'.charCodeAt(0) + col);
+  const rank = row + 1;
+  return file + rank;
+}
+
+// Action execution functions
+async function executeMove(player, fromInput, toInput, declarationSelect) {
+  try {
+    const from = chessToCoordinates(fromInput.value);
+    const to = chessToCoordinates(toInput.value);
+    const declaration = parseInt(declarationSelect.value);
+    
+    logServerMessage(player, `Executing move: ${fromInput.value}→${toInput.value} (${getPieceName(declaration)})`);
+    
+    // Set incomplete move to show X on board
+    incompleteMove = { from, to, color: player.color };
+    
+    // Update the board display to show the X immediately
+    if (players.player1.gameStateEl) {
+      updateGameState(players.player1, players.player1.lastBoard || [], players.player1.lastStashes || [], players.player1.lastOnDecks || [], players.player1.lastDaggers || []);
+    }
+    if (players.player2.gameStateEl) {
+      updateGameState(players.player2, players.player2.lastBoard || [], players.player2.lastStashes || [], players.player2.lastOnDecks || [], players.player2.lastDaggers || []);
+    }
+    
+    const res = await fetch(`${API}/api/v1/gameAction/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        gameId,
+        color: player.color,
+        from,
+        to,
+        declaration
+      })
+    });
+    
+    if (res.ok) {
+      logServerMessage(player, 'Move successful!');
+      // Store the move state
+      lastActionType = 'move';
+      lastActionPlayer = player.color;
+      gameState.turnState = 'normal';
+      
+      // In Cloaks Gambit, moves don't immediately change turn
+      // The opponent can now challenge, bomb, or make a move
+      // Don't increment currentActionIndex yet
+      
+      // Clear incomplete move since it's now complete
+      incompleteMove = null;
+      gameState.lastMove = null;
+      
+      updateGameStatus();
+      updateActionControlsWrapper();
+    } else {
+      const error = await res.json();
+      logServerMessage(player, `Move failed: ${error.message}`);
+      // Clear incomplete move since it failed
+      incompleteMove = null;
+    }
+  } catch (err) {
+    logServerMessage(player, `Move error: ${err.message}`);
+    // Clear incomplete move on error
+    incompleteMove = null;
+  }
+}
+
+async function executePass(player) {
+  try {
+    logServerMessage(player, 'Executing pass action');
+    
+    // Clear any incomplete move
+    incompleteMove = null;
+    
+    const res = await fetch(`${API}/api/v1/gameAction/pass`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gameId, color: player.color })
+    });
+    
+    if (res.ok) {
+      logServerMessage(player, 'Pass successful!');
+      lastActionType = 'pass';
+      lastActionPlayer = player.color;
+      
+      // If this was after a bomb, turn goes back to the bomber
+      if (gameState.turnState === 'bomb' && lastActionPlayer !== player.color) {
+        logServerMessage(player, 'Turn returns to the player who declared bomb.');
+        currentActionIndex = lastActionPlayer;
+        gameState.turnState = 'normal';
+      } else {
+        // Normal pass - increment turn
+        currentActionIndex++;
+      }
+      
+      updateGameStatus();
+      updateActionControlsWrapper();
+    } else {
+      const error = await res.json();
+      logServerMessage(player, `Pass failed: ${error.message}`);
+    }
+  } catch (err) {
+    logServerMessage(player, `Pass error: ${err.message}`);
+  }
+}
+
+async function executeChallenge(player) {
+  try {
+    logServerMessage(player, 'Executing challenge action');
+    
+    // Clear any incomplete move
+    incompleteMove = null;
+    
+    const res = await fetch(`${API}/api/v1/gameAction/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gameId, color: player.color })
+    });
+    
+    if (res.ok) {
+      const responseData = await res.json();
+      logServerMessage(player, `Challenge response: ${JSON.stringify(responseData)}`);
+      
+      lastActionType = 'challenge';
+      lastActionPlayer = player.color;
+      
+      // Check if challenge was successful
+      if (responseData.success) {
+        logServerMessage(player, 'Challenge successful! Turn now goes to challenger.');
+        gameState.turnState = 'challenge';
+        // Turn goes to challenger (current player)
+        currentActionIndex = player.color;
+        pendingOnDeck = null;
+      } else {
+        logServerMessage(player, 'Challenge failed! Original mover must go on-deck.');
+        gameState.turnState = 'onDeck';
+        // Original mover must go on-deck
+        pendingOnDeck = {
+          mover: lastActionPlayer,
+          challenger: player.color
+        };
+        // Turn stays with challenger until on-deck is resolved
+        currentActionIndex = player.color;
+      }
+      
+      updateGameStatus();
+      updateActionControlsWrapper();
+    } else {
+      const error = await res.json();
+      logServerMessage(player, `Challenge failed: ${error.message}`);
+    }
+  } catch (err) {
+    logServerMessage(player, `Challenge error: ${err.message}`);
+  }
+}
+
+async function executeBomb(player) {
+  try {
+    logServerMessage(player, 'Executing bomb action');
+    
+    // Clear any incomplete move
+    incompleteMove = null;
+    
+    const res = await fetch(`${API}/api/v1/gameAction/bomb`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gameId, color: player.color })
+    });
+    
+    if (res.ok) {
+      logServerMessage(player, 'Bomb successful!');
+      // Bomb action changes turn to opponent
+      lastActionType = 'bomb';
+      lastActionPlayer = player.color;
+      gameState.turnState = 'bomb';
+      // Don't increment currentActionIndex - turn goes to opponent
+      updateGameStatus();
+      updateActionControlsWrapper();
+    } else {
+      const error = await res.json();
+      logServerMessage(player, `Bomb failed: ${error.message}`);
+    }
+  } catch (err) {
+    logServerMessage(player, `Bomb error: ${err.message}`);
+  }
+}
+
+async function executeOnDeck(player) {
+  try {
+    const onDeckSelect = document.getElementById(`onDeckPiece${player.name === 'Player 1' ? '1' : '2'}`);
+    const pieceIdentity = parseInt(onDeckSelect.value);
+    
+    if (!pieceIdentity) {
+      logServerMessage(player, 'Please select a piece to place on deck');
+      return;
+    }
+    
+    logServerMessage(player, `Placing ${getPieceName(pieceIdentity)} on deck`);
+    
+    // Clear any incomplete move
+    incompleteMove = null;
+    
+    const res = await fetch(`${API}/api/v1/gameAction/onDeck`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        gameId, 
+        color: player.color,
+        piece: { color: player.color, identity: pieceIdentity }
+      })
+    });
+    
+    if (res.ok) {
+      logServerMessage(player, 'On-deck successful!');
+      lastActionType = 'onDeck';
+      lastActionPlayer = player.color;
+      gameState.turnState = 'normal';
+      
+      // After on-deck, turn goes to the challenger (if there was a challenge)
+      if (pendingOnDeck && pendingOnDeck.challenger !== player.color) {
+        // Turn goes to challenger
+        currentActionIndex = pendingOnDeck.challenger;
+        pendingOnDeck = null;
+      } else {
+        // Normal turn progression
+        currentActionIndex++;
+      }
+      
+      updateGameStatus();
+      updateActionControlsWrapper();
+    } else {
+      const error = await res.json();
+      logServerMessage(player, `On-deck failed: ${error.message}`);
+    }
+  } catch (err) {
+    logServerMessage(player, `On-deck error: ${err.message}`);
+  }
+}
 
 // Initialize queue buttons with correct text
 updateQueueButton(players.player1, false);
@@ -771,13 +1191,27 @@ updateQueueButton(players.player2, false);
 function formatBoard(board, playerColor) {
   if (!board || !Array.isArray(board)) return 'No board data';
   
+  console.log('formatBoard called with playerColor:', playerColor);
+  console.log('Board data:', board);
+  
   const colorSymbols = ['⚪', '⚫']; // White circle, Black circle
   
   // If player color is not determined yet, show all pieces as unknown
   if (playerColor === null) {
+    console.log('Player color is null, showing all pieces as unknown');
     let boardStr = '';
-    for (let row = 0; row < board.length; row++) {
-      boardStr += `${row}: `;
+    // Add file labels at the top
+    boardStr += '    ';
+    for (let col = 0; col < board[0].length; col++) {
+      const file = String.fromCharCode('A'.charCodeAt(0) + col);
+      boardStr += ` ${file}  `;
+    }
+    boardStr += '\n';
+    
+    for (let row = board.length - 1; row >= 0; row--) {
+      // Add rank label on the left
+      const rank = row + 1;
+      boardStr += `${rank}: `;
       for (let col = 0; col < board[row].length; col++) {
         const piece = board[row][col];
         if (piece) {
@@ -788,37 +1222,86 @@ function formatBoard(board, playerColor) {
       }
       boardStr += '\n';
     }
+    
+    // Add file labels at the bottom
+    boardStr += '    ';
+    for (let col = 0; col < board[0].length; col++) {
+      const file = String.fromCharCode('A'.charCodeAt(0) + col);
+      boardStr += ` ${file}  `;
+    }
+    boardStr += '\n';
+    
     return boardStr;
   }
   
   let boardStr = '';
-  for (let row = 0; row < board.length; row++) {
-    boardStr += `${row}: `;
-    for (let col = 0; col < board[row].length; col++) {
-      const piece = board[row][col];
-      if (piece) {
-        // Show piece identity only if it's the player's piece
-        if (piece.color === playerColor) {
-          // Use ? for unknown pieces, actual symbols for known pieces
-          const symbol = piece.identity === 0 ? '?' : 
-                        piece.identity === 1 ? '♔' : // King
-                        piece.identity === 2 ? '💣' : // Bomb
-                        piece.identity === 3 ? '♗' : // Bishop
-                        piece.identity === 4 ? '♖' : // Rook
-                        piece.identity === 5 ? '♘' : // Knight
-                        '?';
-          boardStr += `[${colorSymbols[piece.color]}${symbol}] `;
-        } else {
-          // Opponent's piece - show as unknown
-          boardStr += `[${colorSymbols[piece.color]}?] `;
-        }
-      } else {
-        boardStr += '[ ] ';
-      }
-    }
-    boardStr += '\n';
+  
+  // Add file labels at the top
+  boardStr += '    ';
+  for (let col = 0; col < board[0].length; col++) {
+    const file = String.fromCharCode('A'.charCodeAt(0) + col);
+    boardStr += ` ${file}  `;
   }
+  boardStr += '\n';
+  
+      for (let row = board.length - 1; row >= 0; row--) {
+        // Add rank label on the left
+        const rank = row + 1;
+        boardStr += `${rank}: `;
+        for (let col = 0; col < board[row].length; col++) {
+          const piece = board[row][col];
+          if (piece) {
+            console.log(`Piece at [${row},${col}]:`, piece, 'playerColor:', playerColor, 'piece.color === playerColor:', piece.color === playerColor);
+            // Show piece identity only if it's the player's piece
+            if (piece.color === playerColor) {
+              // Use actual piece symbols for known pieces
+              const symbol = piece.identity === 1 ? '♔' : // King
+                            piece.identity === 2 ? '💣' : // Bomb
+                            piece.identity === 3 ? '♗' : // Bishop
+                            piece.identity === 4 ? '♖' : // Rook
+                            piece.identity === 5 ? '♘' : // Knight
+                            '?';
+              boardStr += `[${colorSymbols[piece.color]}${symbol}] `;
+            } else {
+              // Opponent's piece - show as unknown
+              boardStr += `[${colorSymbols[piece.color]}?] `;
+            }
+          } else {
+            // Check if this is the target of an incomplete move
+            if (isIncompleteMoveTarget(row, col)) {
+              boardStr += '[X] ';
+            } else {
+              boardStr += '[ ] ';
+            }
+          }
+        }
+        boardStr += '\n';
+      }
+  
+  // Add file labels at the bottom
+  boardStr += '    ';
+  for (let col = 0; col < board[0].length; col++) {
+    const file = String.fromCharCode('A'.charCodeAt(0) + col);
+    boardStr += ` ${file}  `;
+  }
+  boardStr += '\n';
+  
   return boardStr;
+}
+
+// Check if a position is the target of an incomplete move
+function isIncompleteMoveTarget(row, col) {
+  // Check current incomplete move first
+  if (incompleteMove && incompleteMove.to.row === row && incompleteMove.to.col === col) {
+    return true;
+  }
+  
+  // Check persistent incomplete move state
+  if (gameState.lastMove && gameState.lastMove.to.row === row && gameState.lastMove.to.col === col) {
+    return true;
+  }
+  
+  return false;
 }
 
 function formatActions(actions) {
@@ -874,62 +1357,72 @@ function getPieceName(identity) {
 }
 
 function formatStash(stashes, playerColor, isOwnStash) {
+  console.log('formatStash called with:', { stashes, playerColor, isOwnStash });
+  
   if (!stashes || !Array.isArray(stashes) || stashes.length !== 2) return 'No stash data';
   
   // If player color is not determined yet, show all pieces as unknown
   if (playerColor === null) {
+    console.log('Player color is null in formatStash');
     return 'Player color not determined yet';
   }
   
   const stash = stashes[playerColor];
+  console.log('Stash for player color', playerColor, ':', stash);
+  
   if (!stash || stash.length === 0) return 'Stash is empty';
   
   const colorSymbols = ['⚪', '⚫']; // White circle, Black circle
   
-  // Format as a 2x4 grid for better readability
+  // Only show actual pieces, not empty slots
   let result = '';
-  for (let row = 0; row < 2; row++) {
-    result += `${row}: `;
-    for (let col = 0; col < 4; col++) {
-      const index = row * 4 + col;
-      if (index < stash.length) {
-        const piece = stash[index];
-        const colorSymbol = colorSymbols[piece.color] || '?';
-        
-        if (isOwnStash) {
-          // Show actual piece identity
-          const symbol = piece.identity === 0 ? '?' : 
-                        piece.identity === 1 ? '♔' : // King
-                        piece.identity === 2 ? '💣' : // Bomb
-                        piece.identity === 3 ? '♗' : // Bishop
-                        piece.identity === 4 ? '♖' : // Rook
-                        piece.identity === 5 ? '♘' : // Knight
-                        '?';
-          result += `[${colorSymbol}${symbol}] `;
-        } else {
-          // Show as unknown
-          result += `[${colorSymbol}?] `;
-        }
+  let pieceCount = 0;
+  
+  for (let i = 0; i < stash.length; i++) {
+    const piece = stash[i];
+    console.log(`Stash piece ${i}:`, piece);
+    if (piece && piece.identity !== 0) { // Only show pieces with actual identities
+      pieceCount++;
+      const colorSymbol = colorSymbols[piece.color] || '?';
+      
+      if (isOwnStash) {
+        // Show actual piece identity
+        const symbol = piece.identity === 1 ? '♔' : // King
+                      piece.identity === 2 ? '💣' : // Bomb
+                      piece.identity === 3 ? '♗' : // Bishop
+                      piece.identity === 4 ? '♖' : // Rook
+                      piece.identity === 5 ? '♘' : // Knight
+                      '?';
+        result += `${pieceCount}. [${colorSymbol}${symbol}] `;
       } else {
-        result += '[ ] ';
+        // Show as unknown for opponent
+        result += `${pieceCount}. [${colorSymbol}?] `;
       }
     }
-    result += '\n';
+  }
+  
+  if (pieceCount === 0) {
+    return 'Stash is empty';
   }
   
   return result;
 }
 
 function formatOnDeck(onDecks, playerColor, isOwnOnDeck) {
+  console.log('formatOnDeck called with:', { onDecks, playerColor, isOwnOnDeck });
+  
   if (!onDecks || !Array.isArray(onDecks) || onDecks.length !== 2) return 'No on-deck piece';
   
   // If player color is not determined yet, show all pieces as unknown
   if (playerColor === null) {
+    console.log('Player color is null in formatOnDeck');
     return 'Player color not determined yet';
   }
   
   const onDeck = onDecks[playerColor];
-  if (!onDeck) return 'No on-deck piece';
+  console.log('On-deck for player color', playerColor, ':', onDeck);
+  
+  if (!onDeck || onDeck.identity === 0) return 'No on-deck piece';
   
   const colorSymbols = ['⚪', '⚫']; // White circle, Black circle
   
@@ -938,37 +1431,187 @@ function formatOnDeck(onDecks, playerColor, isOwnOnDeck) {
   
   if (isOwnOnDeck) {
     // Show actual piece identity for own on-deck piece
-    const symbol = onDeck.identity === 0 ? '?' : 
-                  onDeck.identity === 1 ? '♔' : // King
+    const symbol = onDeck.identity === 1 ? '♔' : // King
                   onDeck.identity === 2 ? '💣' : // Bomb
                   onDeck.identity === 3 ? '♗' : // Bishop
                   onDeck.identity === 4 ? '♖' : // Rook
                   onDeck.identity === 5 ? '♘' : // Knight
                   '?';
-    return `0: [${colorSymbol}${symbol}]`;
+    return `[${colorSymbol}${symbol}]`;
   } else {
     // Show as unknown for opponent's on-deck piece
-    return `0: [${colorSymbol}?]`;
+    return `[${colorSymbol}?]`;
   }
 }
 
-// Update play action buttons to show whose turn it is
-function updatePlayActionButtons() {
+// Count daggers for a specific player
+function countDaggers(daggers, playerColor) {
+  if (!daggers || !Array.isArray(daggers) || daggers.length !== 2) return 0;
+  return daggers[playerColor] || 0;
+}
+
+function formatCapturedPieces(stashes, onDecks) {
+  if (!stashes || !Array.isArray(stashes) || stashes.length !== 2) return 'No captured pieces data';
+  
+  let result = '';
+  let capturedPieces = [];
+  
+  // For now, we'll show a simple message since we need to track actual captures
+  // In a real implementation, you'd have a separate captured pieces array
+  // or track which pieces were actually captured during gameplay
+  
+  // This is a placeholder - in a real game you'd track actual captures
+  // For now, just show that no pieces have been captured yet
+  return 'No pieces captured yet.';
+}
+
+// Update action controls based on whose turn it is
+function updateActionControlsWrapper() {
   if (gamePhase === 'Setup Complete') {
     const currentTurn = currentActionIndex % 2; // 0 = White, 1 = Black
-    
-    if (currentTurn === 0) {
-      // White's turn
-      document.getElementById('playAction1').textContent = '5. Play Action (Your Turn!)';
-      document.getElementById('playAction2').textContent = '5. Play Action (Wait for White)';
+    updateActionControls(currentTurn);
+  }
+}
+
+// Update action controls based on whose turn it is and game state
+function updateActionControls(currentTurn) {
+  const isPlayer1Turn = currentTurn === 0;
+  const isPlayer2Turn = currentTurn === 1;
+  
+  // Get current player and opponent
+  const currentPlayer = isPlayer1Turn ? players.player1 : players.player2;
+  const opponent = isPlayer1Turn ? players.player2 : players.player1;
+  
+  // Determine what actions are available based on game state
+  let availableActions = [];
+  
+  if (gameState.turnState === 'normal') {
+    // Normal turn - player can move, opponent can challenge/bomb
+    if (isPlayer1Turn) {
+      availableActions = ['move1', 'onDeck1'];
+      // Opponent can challenge/bomb
+      if (lastActionType === 'move') {
+        availableActions.push('challenge2', 'bomb2');
+      }
     } else {
-      // Black's turn
-      document.getElementById('playAction1').textContent = '5. Play Action (Wait for Black)';
-      document.getElementById('playAction2').textContent = '5. Play Action (Your Turn!)';
+      availableActions = ['move2', 'onDeck2'];
+      // Opponent can challenge/bomb
+      if (lastActionType === 'move') {
+        availableActions.push('challenge1', 'bomb1');
+      }
+    }
+  } else if (gameState.turnState === 'challenge') {
+    // After successful challenge - challenger can only move
+    if (isPlayer1Turn) {
+      availableActions = ['move1'];
+    } else {
+      availableActions = ['move2'];
+    }
+  } else if (gameState.turnState === 'bomb') {
+    // After bomb - opponent can pass or challenge
+    if (isPlayer1Turn) {
+      availableActions = ['pass1', 'challenge1'];
+    } else {
+      availableActions = ['pass2', 'challenge2'];
+    }
+  } else if (gameState.turnState === 'onDeck') {
+    // After failed challenge - original mover must go on-deck
+    if (pendingOnDeck && pendingOnDeck.mover === currentTurn) {
+      if (isPlayer1Turn) {
+        availableActions = ['onDeck1'];
+      } else {
+        availableActions = ['onDeck2'];
+      }
+    }
+  }
+  
+  // Enable/disable all controls based on availability
+  const allControls = [
+    'move1', 'pass1', 'challenge1', 'bomb1', 'onDeck1',
+    'move2', 'pass2', 'challenge2', 'bomb2', 'onDeck2'
+  ];
+  
+  allControls.forEach(controlId => {
+    const control = document.getElementById(controlId);
+    if (control) {
+      const isAvailable = availableActions.includes(controlId);
+      control.disabled = !isAvailable;
+      control.style.opacity = isAvailable ? '1' : '0.5';
+    }
+  });
+  
+  // Enable/disable coordinate inputs based on whose turn it is
+  const player1Inputs = ['from1', 'to1', 'declaration1'];
+  player1Inputs.forEach(inputId => {
+    const input = document.getElementById(inputId);
+    if (input) {
+      input.disabled = !isPlayer1Turn;
+      input.style.opacity = isPlayer1Turn ? '1' : '0.5';
+    }
+  });
+  
+  const player2Inputs = ['from2', 'to2', 'declaration2'];
+  player2Inputs.forEach(inputId => {
+    const input = document.getElementById(inputId);
+    if (input) {
+      input.disabled = !isPlayer2Turn;
+      input.style.opacity = isPlayer2Turn ? '1' : '0.5';
+    }
+  });
+  
+  // Enable/disable on-deck dropdowns
+  const onDeckDropdowns = ['onDeckPiece1', 'onDeckPiece2'];
+  onDeckDropdowns.forEach(dropdownId => {
+    const dropdown = document.getElementById(dropdownId);
+    if (dropdown) {
+      const isPlayer1Dropdown = dropdownId === 'onDeckPiece1';
+      const isAvailable = (isPlayer1Dropdown && isPlayer1Turn) || (!isPlayer1Dropdown && isPlayer2Turn);
+      dropdown.disabled = !isAvailable;
+      dropdown.style.opacity = isAvailable ? '1' : '0.5';
+    }
+  });
+}
+
+// Populate on-deck piece dropdowns based on stash contents
+function populateOnDeckDropdowns(stashes) {
+  if (!stashes || !Array.isArray(stashes) || stashes.length !== 2) return;
+  
+  // Populate Player 1 dropdown
+  const dropdown1 = document.getElementById('onDeckPiece1');
+  if (dropdown1) {
+    dropdown1.innerHTML = '<option value="">Select piece from stash...</option>';
+    const stash1 = stashes[0]; // Player 1 stash
+    if (stash1 && Array.isArray(stash1)) {
+      stash1.forEach((piece, index) => {
+        if (piece && piece.identity !== 0) {
+          const pieceName = getPieceName(piece.identity);
+          const option = document.createElement('option');
+          option.value = piece.identity;
+          option.textContent = `${pieceName} (${piece.identity})`;
+          dropdown1.appendChild(option);
+        }
+      });
+    }
+  }
+  
+  // Populate Player 2 dropdown
+  const dropdown2 = document.getElementById('onDeckPiece2');
+  if (dropdown2) {
+    dropdown2.innerHTML = '<option value="">Select piece from stash...</option>';
+    const stash2 = stashes[1]; // Player 2 stash
+    if (stash2 && Array.isArray(stash2)) {
+      stash2.forEach((piece, index) => {
+        if (piece && piece.identity !== 0) {
+          const pieceName = getPieceName(piece.identity);
+          const option = document.createElement('option');
+          option.value = piece.identity;
+          option.textContent = `${pieceName} (${piece.identity})`;
+          dropdown2.appendChild(option);
+        }
+      });
     }
   }
 }
-
 
 
 // Initialize the interface
