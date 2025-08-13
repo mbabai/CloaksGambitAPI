@@ -1733,83 +1733,26 @@ function updateActionControls(currentTurn) {
   // On-deck buttons are now handled by updateOnDeckButtons function
 }
 
-// Update on-deck button states based on stash contents and game state
+// Update on-deck button states - always enable all buttons, let server handle validation
 function updateOnDeckButtons(stashes, player) {
-  console.log('=== updateOnDeckButtons DEBUG ===');
-  console.log('stashes:', stashes);
-  console.log('player:', player);
-  console.log('gameState.turnState:', gameState.turnState);
-  console.log('window.lastServerOnDeckingPlayer:', window.lastServerOnDeckingPlayer);
-  console.log('pendingOnDeck:', pendingOnDeck);
+  // Enable all on-deck buttons for all players all the time
+  // Let the server handle validation and return errors if needed
   
-  if (!stashes || !Array.isArray(stashes) || stashes.length !== 2) {
-    console.log('Invalid stashes, returning');
-    return;
-  }
-  
-  // Determine who can on-deck
-  let onlyForColor = (typeof window?.lastServerOnDeckingPlayer === 'number') ? window.lastServerOnDeckingPlayer : null;
-  if (onlyForColor === null && gameState.turnState === 'onDeck' && pendingOnDeck && typeof pendingOnDeck.mover === 'number') {
-    onlyForColor = pendingOnDeck.mover;
-  }
-  
-  console.log('Determined onlyForColor:', onlyForColor);
-  
-  // Update buttons for both players
   [0, 1].forEach(color => {
     const playerNum = color + 1;
-    const stash = stashes[color] || [];
     
-    console.log(`Processing color ${color} (player ${playerNum}), stash:`, stash);
-    
-    // Get available identities in this player's stash
-    const availableIdentities = new Set();
-    
-    // CRITICAL: Only process stash identities when:
-    // 1. This color is the one that should on-deck, AND
-    // 2. The current viewer is that same color (so stash isn't masked)
-    if (onlyForColor === color && player && player.color === color) {
-      stash.forEach(piece => {
-        if (piece && piece.identity > 0) {
-          availableIdentities.add(piece.identity);
-        }
-      });
-      console.log(`Color ${color} can on-deck and viewer matches - found identities:`, Array.from(availableIdentities));
-    } else if (onlyForColor === color) {
-      console.log(`Color ${color} should on-deck but viewer (${player?.color}) doesn't match - stash will be masked`);
-    } else {
-      console.log(`Color ${color} is not the on-decking player`);
-    }
-    
-    console.log(`Available identities for color ${color}:`, Array.from(availableIdentities));
-    
-    // Update each button
+    // Update each button for this player
     [1, 2, 3, 4, 5].forEach(identity => {
       const buttonId = `onDeck${getPieceName(identity)}${playerNum}`;
       const button = document.getElementById(buttonId);
       if (button) {
-        const canOnDeck = (onlyForColor === color);
-        const viewerMatchesColor = player && player.color === color;
-        const hasInStash = viewerMatchesColor ? availableIdentities.has(identity) : false;
-        const isEnabled = canOnDeck && hasInStash;
-        
-        console.log(`Button ${buttonId}: canOnDeck=${canOnDeck}, hasInStash=${hasInStash}, isEnabled=${isEnabled}`);
-        
-        button.disabled = !isEnabled;
-        button.style.opacity = isEnabled ? '1' : '0.3';
-        button.style.cursor = isEnabled ? 'pointer' : 'default';
-      } else {
-        console.log(`Button ${buttonId} not found!`);
+        // Always enable all buttons
+        button.disabled = false;
+        button.style.opacity = '1';
+        button.style.cursor = 'pointer';
       }
     });
   });
-  
-  // Summary log
-  console.log('=== ON-DECK BUTTON UPDATE SUMMARY ===');
-  console.log('onDeckingPlayer from server:', window.lastServerOnDeckingPlayer);
-  console.log('Current viewer color:', player?.color);
-  console.log('Buttons should enable for color:', onlyForColor);
-  console.log('Viewer matches on-decking color:', player && player.color === onlyForColor);
 }
 
 function executeOnDeckIdentity(color, identity) {
