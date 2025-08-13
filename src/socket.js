@@ -96,11 +96,13 @@ function initSocket(httpServer) {
         board: masked.board,
         actions: masked.actions,
         moves: masked.moves,
+        captured: masked.captured,
         stashes: masked.stashes,
         onDecks: masked.onDecks,
         players: masked.players,
         daggers: masked.daggers,
-        playerTurn: masked.playerTurn
+        playerTurn: masked.playerTurn,
+        onDeckingPlayer: masked.onDeckingPlayer
       });
     });
   });

@@ -96,6 +96,7 @@ router.post('/', async (req, res) => {
     let capturedPiece = null;
     let captureBy = null;
     let trueKing = false;
+    let wasSuccessful = false; // Whether the challenger succeeded
 
     if (lastAction.type === moveType) {
       console.log('Processing move challenge, lastMove:', lastMove);
@@ -137,9 +138,11 @@ router.post('/', async (req, res) => {
         game.captured[normalizedColor].push(pieceFrom);
         game.board[from.row][from.col] = null;
         lastMove.state = config.moveStates.get('RESOLVED');
+        wasSuccessful = true; // Challenger proved a lie
       } else {
         lastMove.state = config.moveStates.get('COMPLETED');
         game.daggers[normalizedColor] += 1;
+        wasSuccessful = false; // Challenger failed
 
         if (
           lastMove.declaration === config.identities.get('KING') &&
@@ -209,13 +212,16 @@ router.post('/', async (req, res) => {
         game.board[to.row][to.col] = pieceFrom;
         game.board[from.row][from.col] = null;
         lastMove.state = config.moveStates.get('RESOLVED');
+        wasSuccessful = true;
       } else {
         game.stashes[pieceTo.color].push(pieceTo);
         const deckPiece = game.onDecks[pieceTo.color];
         game.board[to.row][to.col] = deckPiece;
         game.onDecks[pieceTo.color] = null;
-        game.onDeckingPlayer = pieceTo.color;
-        game.playerTurn = pieceTo.color;
+        
+        // The mover (who moved to the bomb) needs to on-deck, not the bomb owner
+        game.onDeckingPlayer = lastMove.player;
+        game.playerTurn = lastMove.player;
 
         if (pieceFrom) {
           capturedPiece = pieceFrom;
@@ -226,6 +232,7 @@ router.post('/', async (req, res) => {
 
         game.daggers[lastMove.player] += 1;
         lastMove.state = config.moveStates.get('COMPLETED');
+        wasSuccessful = false;
       }
     } else {
       return res.status(400).json({ message: 'Last action type cannot be challenged' });
@@ -237,7 +244,13 @@ router.post('/', async (req, res) => {
       game.playerTurn = lastMove.player === 0 ? 1 : 0;
     }
 
-    await game.addAction(config.actions.get('CHALLENGE'), normalizedColor, {});
+    await game.addAction(
+      config.actions.get('CHALLENGE'),
+      normalizedColor,
+      {
+        outcome: wasSuccessful ? 'SUCCESS' : 'FAIL'
+      }
+    );
     game.movesSinceAction = 0;
 
     if (trueKing && game.isActive) {
@@ -265,7 +278,7 @@ router.post('/', async (req, res) => {
     });
 
     res.json({ 
-      success: true, 
+      success: wasSuccessful, 
       message: 'Challenge processed successfully',
       capturedPiece,
       captureBy,

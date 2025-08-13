@@ -65,7 +65,7 @@ function updateActionHistory(actions) {
 }
 
 // Update game state for a specific player
-function updateGameState(player, board, stashes, onDecks, daggers, moves) {
+function updateGameState(player, board, stashes, onDecks, daggers, moves, captured) {
   const gameStateEl = player.gameStateEl;
   
   // Store the last game state for refreshing displays
@@ -74,14 +74,15 @@ function updateGameState(player, board, stashes, onDecks, daggers, moves) {
   player.lastOnDecks = onDecks;
   player.lastDaggers = daggers; // Store daggers
   player.lastMoves = moves; // Store moves
+  player.lastCaptured = captured; // Store captured pieces
   
   // Store the incomplete move state persistently
   if (incompleteMove) {
     gameState.lastMove = incompleteMove;
   }
   
-  // Populate on-deck dropdowns with current stash contents
-  populateOnDeckDropdowns(stashes);
+  // Update on-deck button states for all players
+  updateOnDeckButtons(stashes, player);
   
   let stateText = '--- DAGGERS ---\n';
   stateText += `My Daggers: ${countDaggers(daggers, player.color)} | Opponent Daggers: ${countDaggers(daggers, 1 - player.color)}\n`;
@@ -92,7 +93,7 @@ function updateGameState(player, board, stashes, onDecks, daggers, moves) {
   stateText += '\n--- MY ON DECK ---\n';
   stateText += formatOnDeck(onDecks, player.color, true);
   stateText += '\n--- CAPTURED PIECES ---\n';
-  stateText += formatCapturedPieces(stashes, onDecks);
+  stateText += formatCapturedPieces(captured, player.color);
   
   gameStateEl.innerHTML = stateText;
   gameStateEl.scrollTop = gameStateEl.scrollHeight;
@@ -172,6 +173,7 @@ async function establishSocketConnection(player) {
                    socket.on('game:update', (u) => {
             // Log server message
             logServerMessage(player, 'Game update received');
+
             
             // Clear any incomplete move since we got a new game state
             incompleteMove = null;
@@ -197,21 +199,37 @@ async function establishSocketConnection(player) {
               }
             }
             
-            // Update action history (shared between both players)
-            updateActionHistory(u.actions);
-            
-            // Update game state for this player
-            updateGameState(player, u.board, u.stashes, u.onDecks, u.daggers, u.moves);
-            
-            // Update game state
+            // Update game state ids
             gameId = u.gameId;
             matchId = u.matchId;
-            
-            // Update current turn from server
+
+            // Apply server turn info first
             if (u.playerTurn !== undefined && u.playerTurn !== null) {
               currentTurn = u.playerTurn;
               console.log('Updated currentTurn from server:', currentTurn);
             }
+            // Apply on-decking player state before rendering UI
+            if (u.onDeckingPlayer !== undefined) {
+              console.log('=== SERVER DATA DEBUG ===');
+              console.log('Received onDeckingPlayer:', u.onDeckingPlayer);
+              console.log('Received stashes:', u.stashes);
+              console.log('Current player color:', player.color);
+              
+              window.lastServerOnDeckingPlayer = u.onDeckingPlayer;
+              if (u.onDeckingPlayer !== null) {
+                gameState.turnState = 'onDeck';
+                console.log('Set gameState.turnState to onDeck');
+              } else if (gameState.turnState === 'onDeck') {
+                gameState.turnState = 'normal';
+                console.log('Reset gameState.turnState to normal');
+              }
+            }
+            
+            // Update action history (shared between both players)
+            updateActionHistory(u.actions);
+            
+            // Update game state for this player (includes captured)
+            updateGameState(player, u.board, u.stashes, u.onDecks, u.daggers, u.moves, u.captured);
             
             // Update last action tracking from server actions
             if (u.actions && u.actions.length > 0) {
@@ -223,9 +241,36 @@ async function establishSocketConnection(player) {
                 case 1: // MOVE
                   lastActionType = 'move';
                   break;
-                case 2: // CHALLENGE
-                  lastActionType = 'challenge';
-                  break;
+                                   case 2: // CHALLENGE
+                     lastActionType = 'challenge';
+                     // If challenge failed, set on-deck state locally
+                     if (lastAction.details && lastAction.details.outcome === 'FAIL' && u.onDeckingPlayer !== undefined && u.onDeckingPlayer !== null) {
+                       gameState.turnState = 'onDeck';
+                       pendingOnDeck = { mover: u.onDeckingPlayer, challenger: lastAction.player };
+                       // Detailed debug dump for failed challenge - show for ALL players
+                       try {
+                         console.log('=== FAILED CHALLENGE GAME UPDATE ===');
+                         console.log('Viewer:', player.name, '(Color:', player.color, ')');
+                         console.log('Server Data:', {
+                           onDeckingPlayer: u.onDeckingPlayer,
+                           playerTurn: u.playerTurn,
+                           lastAction,
+                           lastMove: Array.isArray(u.moves) && u.moves.length ? u.moves[u.moves.length - 1] : null,
+                           stashes: u.stashes,
+                           onDecks: u.onDecks,
+                           captured: u.captured,
+                           daggers: u.daggers
+                         });
+                         console.log('Client State:', {
+                           gameStateTurnState: gameState.turnState,
+                           pendingOnDeck,
+                           lastServerOnDeckingPlayer: window.lastServerOnDeckingPlayer
+                         });
+                       } catch (e) {
+                         console.log('Failed to log failed-challenge payload', e);
+                       }
+                     }
+                     break;
                 case 3: // BOMB
                   lastActionType = 'bomb';
                   break;
@@ -242,6 +287,9 @@ async function establishSocketConnection(player) {
               
               console.log('Updated lastActionType from server:', lastActionType, 'lastActionPlayer:', lastActionPlayer);
             }
+            
+            // Recalculate enabled/disabled controls after processing update
+            updateActionControlsWrapper();
             
             // Debug: Log the current state before setup completion check
             console.log('Before setup completion check:', {
@@ -544,13 +592,16 @@ function disableAllActionControls() {
     }
   });
   
-  // Also disable on-deck dropdowns
-  const onDeckDropdowns = ['onDeckPiece1', 'onDeckPiece2'];
-  onDeckDropdowns.forEach(dropdownId => {
-    const dropdown = document.getElementById(dropdownId);
-    if (dropdown) {
-      dropdown.disabled = true;
-      dropdown.style.opacity = '0.5';
+  // Disable all on-deck buttons
+  const onDeckButtons = [
+    'onDeckKing1', 'onDeckBomb1', 'onDeckBishop1', 'onDeckRook1', 'onDeckKnight1',
+    'onDeckKing2', 'onDeckBomb2', 'onDeckBishop2', 'onDeckRook2', 'onDeckKnight2'
+  ];
+  onDeckButtons.forEach(buttonId => {
+    const button = document.getElementById(buttonId);
+    if (button) {
+      button.disabled = true;
+      button.style.opacity = '0.3';
     }
   });
 }
@@ -956,22 +1007,18 @@ document.getElementById('bomb2').onclick = () => {
   }
 };
 
-// On-deck button event listeners
-document.getElementById('onDeck1').onclick = () => {
-  if (gamePhase === 'Setup Complete') {
-    executeOnDeck(players.player1);
-  } else {
-    logServerMessage(players.player1, 'Game not ready for on-deck yet');
-  }
-};
+// On-deck button handlers
+document.getElementById('onDeckKing1').onclick = () => executeOnDeckIdentity(0, 1);
+document.getElementById('onDeckBomb1').onclick = () => executeOnDeckIdentity(0, 2);
+document.getElementById('onDeckBishop1').onclick = () => executeOnDeckIdentity(0, 3);
+document.getElementById('onDeckRook1').onclick = () => executeOnDeckIdentity(0, 4);
+document.getElementById('onDeckKnight1').onclick = () => executeOnDeckIdentity(0, 5);
 
-document.getElementById('onDeck2').onclick = () => {
-  if (gamePhase === 'Setup Complete') {
-    executeOnDeck(players.player2);
-  } else {
-    logServerMessage(players.player2, 'Game not ready for on-deck yet');
-  }
-};
+document.getElementById('onDeckKing2').onclick = () => executeOnDeckIdentity(1, 1);
+document.getElementById('onDeckBomb2').onclick = () => executeOnDeckIdentity(1, 2);
+document.getElementById('onDeckBishop2').onclick = () => executeOnDeckIdentity(1, 3);
+document.getElementById('onDeckRook2').onclick = () => executeOnDeckIdentity(1, 4);
+document.getElementById('onDeckKnight2').onclick = () => executeOnDeckIdentity(1, 5);
 
 // Coordinate conversion functions
 function chessToCoordinates(chessNotation) {
@@ -1133,9 +1180,9 @@ async function executeChallenge(player) {
       } else {
         logServerMessage(player, 'Challenge failed! Original mover must go on-deck.');
         gameState.turnState = 'onDeck';
-        // Original mover must go on-deck
+        // Original mover (the opponent of the challenger) must go on-deck
         pendingOnDeck = {
-          mover: lastActionPlayer,
+          mover: (player.color === 0 ? 1 : 0),
           challenger: player.color
         };
         // Turn stays with challenger until on-deck is resolved
@@ -1324,7 +1371,7 @@ function formatBoard(board, playerColor, moves) {
                 // Red brackets for 'to' position
                 boardStr += `<span style="color: red; font-weight: bold;">[</span>${colorSymbols[piece.color]}${symbol}<span style="color: red; font-weight: bold;">]</span> `;
               } else {
-                boardStr += `[${colorSymbols[piece.color]}${symbol}] `;
+              boardStr += `[${colorSymbols[piece.color]}${symbol}] `;
               }
             } else {
               // Opponent's piece - show as unknown
@@ -1335,7 +1382,7 @@ function formatBoard(board, playerColor, moves) {
                 // Red brackets for 'to' position
                 boardStr += `<span style="color: red; font-weight: bold;">[</span>${colorSymbols[piece.color]}?<span style="color: red; font-weight: bold;">]</span> `;
               } else {
-                boardStr += `[${colorSymbols[piece.color]}?] `;
+              boardStr += `[${colorSymbols[piece.color]}?] `;
               }
             }
           } else {
@@ -1426,6 +1473,9 @@ function formatActions(actions) {
         }
         return `${index + 1}. ${player}: Move`;
       case 2: // CHALLENGE
+        if (action.details && action.details.outcome) {
+          return `${index + 1}. ${player}: Challenge (${action.details.outcome})`;
+        }
         return `${index + 1}. ${player}: Challenge`;
       case 3: // BOMB
         return `${index + 1}. ${player}: Bomb`;
@@ -1553,19 +1603,29 @@ function countDaggers(daggers, playerColor) {
   return daggers[playerColor] || 0;
 }
 
-function formatCapturedPieces(stashes, onDecks) {
-  if (!stashes || !Array.isArray(stashes) || stashes.length !== 2) return 'No captured pieces data';
+function formatCapturedPieces(captured, playerColor) {
+  if (!captured || !Array.isArray(captured) || captured.length !== 2) return 'No captured pieces data';
+  const colorSymbols = ['⚪', '⚫'];
+  const myCaptured = captured[playerColor] || [];
+  const oppCaptured = captured[1 - playerColor] || [];
+  
+  const renderList = (list) => {
+    if (!list || list.length === 0) return 'None';
+    return list.map((p) => {
+      if (!p) return '';
+      const symbol = p.identity === 1 ? '♔' :
+                     p.identity === 2 ? '💣' :
+                     p.identity === 3 ? '♗' :
+                     p.identity === 4 ? '♖' :
+                     p.identity === 5 ? '♘' : '?';
+      return `[${colorSymbols[p.color]}${symbol}]`;
+    }).join(' ');
+  };
   
   let result = '';
-  let capturedPieces = [];
-  
-  // For now, we'll show a simple message since we need to track actual captures
-  // In a real implementation, you'd have a separate captured pieces array
-  // or track which pieces were actually captured during gameplay
-  
-  // This is a placeholder - in a real game you'd track actual captures
-  // For now, just show that no pieces have been captured yet
-  return 'No pieces captured yet.';
+  result += `My captures: ${renderList(myCaptured)}\n`;
+  result += `Opponent captures: ${renderList(oppCaptured)}\n`;
+  return result;
 }
 
 // Update action controls based on whose turn it is
@@ -1594,7 +1654,7 @@ function updateActionControls(currentTurn) {
     if (lastActionType === 'move' && lastActionPlayer !== null) {
       // The player who made the move can only move again or go on-deck
       if (players.player1.color === lastActionPlayer) {
-        availableActions = ['move1', 'onDeck1'];
+      availableActions = ['move1', 'onDeck1'];
         // The opponent (Player 2) can challenge, bomb, or make their own move
         availableActions.push('move2', 'challenge2', 'bomb2', 'onDeck2');
       } else {
@@ -1606,8 +1666,8 @@ function updateActionControls(currentTurn) {
       // Normal turn - current player can move
       if (isPlayer1Turn) {
         availableActions = ['move1', 'onDeck1'];
-      } else {
-        availableActions = ['move2', 'onDeck2'];
+    } else {
+      availableActions = ['move2', 'onDeck2'];
       }
     }
   } else if (gameState.turnState === 'challenge') {
@@ -1626,10 +1686,11 @@ function updateActionControls(currentTurn) {
     }
   } else if (gameState.turnState === 'onDeck') {
     // After failed challenge - original mover must go on-deck
-    if (pendingOnDeck && pendingOnDeck.mover === currentTurn) {
-      if (isPlayer1Turn) {
+    const moverColor = (typeof pendingOnDeck?.mover === 'number') ? pendingOnDeck.mover : (typeof window?.lastServerOnDeckingPlayer === 'number' ? window.lastServerOnDeckingPlayer : null);
+    if (moverColor !== null) {
+      if (players.player1.color === moverColor) {
         availableActions = ['onDeck1'];
-      } else {
+      } else if (players.player2.color === moverColor) {
         availableActions = ['onDeck2'];
       }
     }
@@ -1669,58 +1730,119 @@ function updateActionControls(currentTurn) {
     }
   });
   
-  // Enable/disable on-deck dropdowns
-  const onDeckDropdowns = ['onDeckPiece1', 'onDeckPiece2'];
-  onDeckDropdowns.forEach(dropdownId => {
-    const dropdown = document.getElementById(dropdownId);
-    if (dropdown) {
-      const isPlayer1Dropdown = dropdownId === 'onDeckPiece1';
-      const isAvailable = (isPlayer1Dropdown && isPlayer1Turn) || (!isPlayer1Dropdown && isPlayer2Turn);
-      dropdown.disabled = !isAvailable;
-      dropdown.style.opacity = isAvailable ? '1' : '0.5';
-    }
-  });
+  // On-deck buttons are now handled by updateOnDeckButtons function
 }
 
-// Populate on-deck piece dropdowns based on stash contents
-function populateOnDeckDropdowns(stashes) {
-  if (!stashes || !Array.isArray(stashes) || stashes.length !== 2) return;
+// Update on-deck button states based on stash contents and game state
+function updateOnDeckButtons(stashes, player) {
+  console.log('=== updateOnDeckButtons DEBUG ===');
+  console.log('stashes:', stashes);
+  console.log('player:', player);
+  console.log('gameState.turnState:', gameState.turnState);
+  console.log('window.lastServerOnDeckingPlayer:', window.lastServerOnDeckingPlayer);
+  console.log('pendingOnDeck:', pendingOnDeck);
   
-  // Populate Player 1 dropdown
-  const dropdown1 = document.getElementById('onDeckPiece1');
-  if (dropdown1) {
-    dropdown1.innerHTML = '<option value="">Select piece from stash...</option>';
-    const stash1 = stashes[0]; // Player 1 stash
-    if (stash1 && Array.isArray(stash1)) {
-      stash1.forEach((piece, index) => {
-        if (piece && piece.identity !== 0) {
-          const pieceName = getPieceName(piece.identity);
-          const option = document.createElement('option');
-          option.value = piece.identity;
-          option.textContent = `${pieceName} (${piece.identity})`;
-          dropdown1.appendChild(option);
-        }
-      });
-    }
+  if (!stashes || !Array.isArray(stashes) || stashes.length !== 2) {
+    console.log('Invalid stashes, returning');
+    return;
   }
   
-  // Populate Player 2 dropdown
-  const dropdown2 = document.getElementById('onDeckPiece2');
-  if (dropdown2) {
-    dropdown2.innerHTML = '<option value="">Select piece from stash...</option>';
-    const stash2 = stashes[1]; // Player 2 stash
-    if (stash2 && Array.isArray(stash2)) {
-      stash2.forEach((piece, index) => {
-        if (piece && piece.identity !== 0) {
-          const pieceName = getPieceName(piece.identity);
-          const option = document.createElement('option');
-          option.value = piece.identity;
-          option.textContent = `${pieceName} (${piece.identity})`;
-          dropdown2.appendChild(option);
+  // Determine who can on-deck
+  let onlyForColor = (typeof window?.lastServerOnDeckingPlayer === 'number') ? window.lastServerOnDeckingPlayer : null;
+  if (onlyForColor === null && gameState.turnState === 'onDeck' && pendingOnDeck && typeof pendingOnDeck.mover === 'number') {
+    onlyForColor = pendingOnDeck.mover;
+  }
+  
+  console.log('Determined onlyForColor:', onlyForColor);
+  
+  // Update buttons for both players
+  [0, 1].forEach(color => {
+    const playerNum = color + 1;
+    const stash = stashes[color] || [];
+    
+    console.log(`Processing color ${color} (player ${playerNum}), stash:`, stash);
+    
+    // Get available identities in this player's stash
+    const availableIdentities = new Set();
+    
+    // CRITICAL: Only process stash identities when:
+    // 1. This color is the one that should on-deck, AND
+    // 2. The current viewer is that same color (so stash isn't masked)
+    if (onlyForColor === color && player && player.color === color) {
+      stash.forEach(piece => {
+        if (piece && piece.identity > 0) {
+          availableIdentities.add(piece.identity);
         }
       });
+      console.log(`Color ${color} can on-deck and viewer matches - found identities:`, Array.from(availableIdentities));
+    } else if (onlyForColor === color) {
+      console.log(`Color ${color} should on-deck but viewer (${player?.color}) doesn't match - stash will be masked`);
+    } else {
+      console.log(`Color ${color} is not the on-decking player`);
     }
+    
+    console.log(`Available identities for color ${color}:`, Array.from(availableIdentities));
+    
+    // Update each button
+    [1, 2, 3, 4, 5].forEach(identity => {
+      const buttonId = `onDeck${getPieceName(identity)}${playerNum}`;
+      const button = document.getElementById(buttonId);
+      if (button) {
+        const canOnDeck = (onlyForColor === color);
+        const viewerMatchesColor = player && player.color === color;
+        const hasInStash = viewerMatchesColor ? availableIdentities.has(identity) : false;
+        const isEnabled = canOnDeck && hasInStash;
+        
+        console.log(`Button ${buttonId}: canOnDeck=${canOnDeck}, hasInStash=${hasInStash}, isEnabled=${isEnabled}`);
+        
+        button.disabled = !isEnabled;
+        button.style.opacity = isEnabled ? '1' : '0.3';
+        button.style.cursor = isEnabled ? 'pointer' : 'default';
+      } else {
+        console.log(`Button ${buttonId} not found!`);
+      }
+    });
+  });
+  
+  // Summary log
+  console.log('=== ON-DECK BUTTON UPDATE SUMMARY ===');
+  console.log('onDeckingPlayer from server:', window.lastServerOnDeckingPlayer);
+  console.log('Current viewer color:', player?.color);
+  console.log('Buttons should enable for color:', onlyForColor);
+  console.log('Viewer matches on-decking color:', player && player.color === onlyForColor);
+}
+
+function executeOnDeckIdentity(color, identity) {
+  const player = color === 0 ? players.player1 : players.player2;
+  if (gamePhase !== 'Setup Complete') {
+    logServerMessage(player, 'Game not ready for on-deck yet');
+    return;
   }
+  // Clear any incomplete move
+  incompleteMove = null;
+  fetch(`${API}/api/v1/gameAction/onDeck`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      gameId, 
+      color,
+      piece: { color, identity }
+    })
+  }).then(async (res) => {
+    if (res.ok) {
+      logServerMessage(player, 'On-deck successful!');
+      lastActionType = 'onDeck';
+      lastActionPlayer = color;
+      gameState.turnState = 'normal';
+      updateGameStatus();
+      updateActionControlsWrapper();
+    } else {
+      const error = await res.json();
+      logServerMessage(player, `On-deck failed: ${error.message}`);
+    }
+  }).catch(err => {
+    logServerMessage(player, `On-deck error: ${err.message}`);
+  });
 }
 
 
