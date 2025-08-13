@@ -95,9 +95,12 @@ function initSocket(httpServer) {
         gameId: gameIdStr,
         board: masked.board,
         actions: masked.actions,
+        moves: masked.moves,
         stashes: masked.stashes,
         onDecks: masked.onDecks,
-        players: masked.players
+        players: masked.players,
+        daggers: masked.daggers,
+        playerTurn: masked.playerTurn
       });
     });
   });

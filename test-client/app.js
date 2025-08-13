@@ -30,7 +30,7 @@ const players = {
 
 let gameId = null;
 let matchId = null;
-let currentTurn = 0;
+let currentTurn = 0; // This will be updated from server playerTurn
 let gamePhase = 'Not Started';
 let actionSequence = [];
 let currentActionIndex = 0;
@@ -60,12 +60,12 @@ function logServerMessage(player, msg) {
 // Update action history (shared between both players)
 function updateActionHistory(actions) {
   const actionHistory = formatActions(actions);
-  players.player1.actionHistoryEl.textContent = actionHistory;
-  players.player2.actionHistoryEl.textContent = actionHistory;
+  players.player1.actionHistoryEl.innerHTML = actionHistory;
+  players.player2.actionHistoryEl.innerHTML = actionHistory;
 }
 
 // Update game state for a specific player
-function updateGameState(player, board, stashes, onDecks, daggers) {
+function updateGameState(player, board, stashes, onDecks, daggers, moves) {
   const gameStateEl = player.gameStateEl;
   
   // Store the last game state for refreshing displays
@@ -73,6 +73,7 @@ function updateGameState(player, board, stashes, onDecks, daggers) {
   player.lastStashes = stashes;
   player.lastOnDecks = onDecks;
   player.lastDaggers = daggers; // Store daggers
+  player.lastMoves = moves; // Store moves
   
   // Store the incomplete move state persistently
   if (incompleteMove) {
@@ -85,7 +86,7 @@ function updateGameState(player, board, stashes, onDecks, daggers) {
   let stateText = '--- DAGGERS ---\n';
   stateText += `My Daggers: ${countDaggers(daggers, player.color)} | Opponent Daggers: ${countDaggers(daggers, 1 - player.color)}\n`;
   stateText += '\n--- BOARD ---\n';
-  stateText += formatBoard(board, player.color);
+  stateText += formatBoard(board, player.color, moves);
   stateText += '\n--- MY STASH ---\n';
   stateText += formatStash(stashes, player.color, true);
   stateText += '\n--- MY ON DECK ---\n';
@@ -93,7 +94,7 @@ function updateGameState(player, board, stashes, onDecks, daggers) {
   stateText += '\n--- CAPTURED PIECES ---\n';
   stateText += formatCapturedPieces(stashes, onDecks);
   
-  gameStateEl.textContent = stateText;
+  gameStateEl.innerHTML = stateText;
   gameStateEl.scrollTop = gameStateEl.scrollHeight;
 }
 
@@ -106,9 +107,15 @@ function updateGameStatus() {
   
   // Update turn display based on current turn
   if (gamePhase === 'Setup Complete') {
-    const currentTurn = currentActionIndex % 2; // 0 = White, 1 = Black
     const currentPlayerName = currentTurn === 0 ? 'White' : 'Black';
-    document.getElementById('turnDisplay').textContent = `${currentPlayerName} (Current Turn)`;
+    // Also show which UI player has the turn
+    let playerWithTurn = 'Unknown';
+    if (players.player1.color === currentTurn) {
+      playerWithTurn = 'Player 1';
+    } else if (players.player2.color === currentTurn) {
+      playerWithTurn = 'Player 2';
+    }
+    document.getElementById('turnDisplay').textContent = `${currentPlayerName} (${playerWithTurn}'s Turn)`;
   }
 }
 
@@ -194,11 +201,17 @@ async function establishSocketConnection(player) {
             updateActionHistory(u.actions);
             
             // Update game state for this player
-            updateGameState(player, u.board, u.stashes, u.onDecks, u.daggers);
+            updateGameState(player, u.board, u.stashes, u.onDecks, u.daggers, u.moves);
             
             // Update game state
             gameId = u.gameId;
             matchId = u.matchId;
+            
+            // Update current turn from server
+            if (u.playerTurn !== undefined && u.playerTurn !== null) {
+              currentTurn = u.playerTurn;
+              console.log('Updated currentTurn from server:', currentTurn);
+            }
             
             // Debug: Log the current state before setup completion check
             console.log('Before setup completion check:', {
@@ -583,11 +596,21 @@ function checkSetupCompletion() {
     // Log completion to both players
     if (players.player1.serverLogEl) {
       logServerMessage(players.player1, '🎉 Both players have completed setup! Game is ready to play!');
-      logServerMessage(players.player1, '🎯 White goes first (Player 1). Use the action controls below to make a move!');
+      const player1IsWhite = players.player1.color === 0;
+      if (player1IsWhite) {
+        logServerMessage(players.player1, '🎯 White goes first. You have the first move!');
+      } else {
+        logServerMessage(players.player1, '🎯 White goes first. Wait for your opponent to move.');
+      }
     }
     if (players.player2.serverLogEl) {
       logServerMessage(players.player2, '🎉 Both players have completed setup! Game is ready to play!');
-      logServerMessage(players.player2, '🎯 White goes first. Wait for Player 1 to make a move.');
+      const player2IsWhite = players.player2.color === 0;
+      if (player2IsWhite) {
+        logServerMessage(players.player2, '🎯 White goes first. You have the first move!');
+      } else {
+        logServerMessage(players.player2, '🎯 White goes first. Wait for your opponent to move.');
+      }
     }
     
     // Update game status after all changes
@@ -963,10 +986,10 @@ async function executeMove(player, fromInput, toInput, declarationSelect) {
     
     // Update the board display to show the X immediately
     if (players.player1.gameStateEl) {
-      updateGameState(players.player1, players.player1.lastBoard || [], players.player1.lastStashes || [], players.player1.lastOnDecks || [], players.player1.lastDaggers || []);
+      updateGameState(players.player1, players.player1.lastBoard || [], players.player1.lastStashes || [], players.player1.lastOnDecks || [], players.player1.lastDaggers || [], players.player1.lastMoves || []);
     }
     if (players.player2.gameStateEl) {
-      updateGameState(players.player2, players.player2.lastBoard || [], players.player2.lastStashes || [], players.player2.lastOnDecks || [], players.player2.lastDaggers || []);
+      updateGameState(players.player2, players.player2.lastBoard || [], players.player2.lastStashes || [], players.player2.lastOnDecks || [], players.player2.lastDaggers || [], players.player2.lastMoves || []);
     }
     
     const res = await fetch(`${API}/api/v1/gameAction/move`, {
@@ -1188,11 +1211,12 @@ updateQueueButton(players.player1, false);
 updateQueueButton(players.player2, false);
 
 // Formatting functions for better readability
-function formatBoard(board, playerColor) {
+function formatBoard(board, playerColor, moves) {
   if (!board || !Array.isArray(board)) return 'No board data';
   
   console.log('formatBoard called with playerColor:', playerColor);
   console.log('Board data:', board);
+  console.log('Moves data:', moves);
   
   const colorSymbols = ['⚪', '⚫']; // White circle, Black circle
   
@@ -1261,14 +1285,39 @@ function formatBoard(board, playerColor) {
                             piece.identity === 4 ? '♖' : // Rook
                             piece.identity === 5 ? '♘' : // Knight
                             '?';
-              boardStr += `[${colorSymbols[piece.color]}${symbol}] `;
+              
+              // Check if this is part of the last move
+              if (isLastMoveFrom(row, col, moves)) {
+                // Blue brackets for 'from' position
+                boardStr += `<span style="color: blue; font-weight: bold;">[</span>${colorSymbols[piece.color]}${symbol}<span style="color: blue; font-weight: bold;">]</span> `;
+              } else if (isLastMoveTo(row, col, moves)) {
+                // Red brackets for 'to' position
+                boardStr += `<span style="color: red; font-weight: bold;">[</span>${colorSymbols[piece.color]}${symbol}<span style="color: red; font-weight: bold;">]</span> `;
+              } else {
+                boardStr += `[${colorSymbols[piece.color]}${symbol}] `;
+              }
             } else {
               // Opponent's piece - show as unknown
-              boardStr += `[${colorSymbols[piece.color]}?] `;
+              if (isLastMoveFrom(row, col, moves)) {
+                // Blue brackets for 'from' position
+                boardStr += `<span style="color: blue; font-weight: bold;">[</span>${colorSymbols[piece.color]}?<span style="color: blue; font-weight: bold;">]</span> `;
+              } else if (isLastMoveTo(row, col, moves)) {
+                // Red brackets for 'to' position
+                boardStr += `<span style="color: red; font-weight: bold;">[</span>${colorSymbols[piece.color]}?<span style="color: red; font-weight: bold;">]</span> `;
+              } else {
+                boardStr += `[${colorSymbols[piece.color]}?] `;
+              }
             }
           } else {
-            // Check if this is the target of an incomplete move
-            if (isIncompleteMoveTarget(row, col)) {
+            // Check if this is part of the last move first, then fall back to incomplete move
+            if (isLastMoveFrom(row, col, moves)) {
+              // Blue brackets for 'from' position (empty square where piece moved from)
+              boardStr += `<span style="color: blue; font-weight: bold;">[</span> <span style="color: blue; font-weight: bold;">]</span> `;
+            } else if (isLastMoveTo(row, col, moves)) {
+              // Red brackets for 'to' position (empty square where piece moved to, shouldn't happen if piece is there)
+              boardStr += `<span style="color: red; font-weight: bold;">[</span> <span style="color: red; font-weight: bold;">]</span> `;
+            } else if (isIncompleteMoveTarget(row, col, moves)) {
+              // Show X only if it's not part of the last move (for pending moves)
               boardStr += '[X] ';
             } else {
               boardStr += '[ ] ';
@@ -1290,7 +1339,17 @@ function formatBoard(board, playerColor) {
 }
 
 // Check if a position is the target of an incomplete move
-function isIncompleteMoveTarget(row, col) {
+function isIncompleteMoveTarget(row, col, moves) {
+  // Don't show incomplete move if we already have moves data covering this position
+  if (moves && moves.length > 0) {
+    const lastMove = moves[moves.length - 1];
+    if (lastMove && 
+        ((lastMove.from && lastMove.from.row === row && lastMove.from.col === col) ||
+         (lastMove.to && lastMove.to.row === row && lastMove.to.col === col))) {
+      return false; // Don't show X if this position is covered by the last move
+    }
+  }
+  
   // Check current incomplete move first
   if (incompleteMove && incompleteMove.to.row === row && incompleteMove.to.col === col) {
     return true;
@@ -1302,6 +1361,20 @@ function isIncompleteMoveTarget(row, col) {
   }
   
   return false;
+}
+
+// Check if a position is the 'from' location of the last move
+function isLastMoveFrom(row, col, moves) {
+  if (!moves || !Array.isArray(moves) || moves.length === 0) return false;
+  const lastMove = moves[moves.length - 1];
+  return lastMove && lastMove.from && lastMove.from.row === row && lastMove.from.col === col;
+}
+
+// Check if a position is the 'to' location of the last move
+function isLastMoveTo(row, col, moves) {
+  if (!moves || !Array.isArray(moves) || moves.length === 0) return false;
+  const lastMove = moves[moves.length - 1];
+  return lastMove && lastMove.to && lastMove.to.row === row && lastMove.to.col === col;
 }
 
 function formatActions(actions) {
@@ -1468,15 +1541,16 @@ function formatCapturedPieces(stashes, onDecks) {
 // Update action controls based on whose turn it is
 function updateActionControlsWrapper() {
   if (gamePhase === 'Setup Complete') {
-    const currentTurn = currentActionIndex % 2; // 0 = White, 1 = Black
+    // Use the server's playerTurn instead of local calculation
     updateActionControls(currentTurn);
   }
 }
 
 // Update action controls based on whose turn it is and game state
 function updateActionControls(currentTurn) {
-  const isPlayer1Turn = currentTurn === 0;
-  const isPlayer2Turn = currentTurn === 1;
+  // Determine which player should be active based on their color, not their player number
+  const isPlayer1Turn = players.player1.color === currentTurn;
+  const isPlayer2Turn = players.player2.color === currentTurn;
   
   // Get current player and opponent
   const currentPlayer = isPlayer1Turn ? players.player1 : players.player2;
