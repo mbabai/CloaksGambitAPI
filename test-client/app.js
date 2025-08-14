@@ -1315,9 +1315,9 @@ function formatBoard(board, playerColor, moves) {
       for (let col = 0; col < board[row].length; col++) {
         const piece = board[row][col];
         if (piece) {
-          boardStr += `[${colorSymbols[piece.color]}?] `;
+          boardStr += `[${colorSymbols[piece.color]}? ] `;
         } else {
-          boardStr += '[ ] ';
+          boardStr += '[    ] ';
         }
       }
       boardStr += '\n';
@@ -1376,27 +1376,27 @@ function formatBoard(board, playerColor, moves) {
               // Opponent's piece - show as unknown
               if (isLastMoveFrom(row, col, moves)) {
                 // Blue brackets for 'from' position
-                boardStr += `<span style="color: blue; font-weight: bold;">[</span>${colorSymbols[piece.color]}?<span style="color: blue; font-weight: bold;">]</span> `;
+                boardStr += `<span style="color: blue; font-weight: bold;">[</span>${colorSymbols[piece.color]}? <span style="color: blue; font-weight: bold;">]</span> `;
               } else if (isLastMoveTo(row, col, moves)) {
                 // Red brackets for 'to' position
-                boardStr += `<span style="color: red; font-weight: bold;">[</span>${colorSymbols[piece.color]}?<span style="color: red; font-weight: bold;">]</span> `;
+                boardStr += `<span style="color: red; font-weight: bold;">[</span>${colorSymbols[piece.color]}? <span style="color: red; font-weight: bold;">]</span> `;
               } else {
-              boardStr += `[${colorSymbols[piece.color]}?] `;
+              boardStr += `[${colorSymbols[piece.color]}? ] `;
               }
             }
           } else {
             // Check if this is part of the last move first, then fall back to incomplete move
             if (isLastMoveFrom(row, col, moves)) {
               // Blue brackets for 'from' position (empty square where piece moved from)
-              boardStr += `<span style="color: blue; font-weight: bold;">[</span> <span style="color: blue; font-weight: bold;">]</span> `;
+              boardStr += `<span style="color: blue; font-weight: bold;">[</span>    <span style="color: blue; font-weight: bold;">]</span> `;
             } else if (isLastMoveTo(row, col, moves)) {
               // Red brackets for 'to' position (empty square where piece moved to, shouldn't happen if piece is there)
-              boardStr += `<span style="color: red; font-weight: bold;">[</span> <span style="color: red; font-weight: bold;">]</span> `;
+              boardStr += `<span style="color: red; font-weight: bold;">[</span>    <span style="color: red; font-weight: bold;">]</span> `;
             } else if (isIncompleteMoveTarget(row, col, moves)) {
               // Show X only if it's not part of the last move (for pending moves)
-              boardStr += '[X] ';
+              boardStr += '[X   ] ';
             } else {
-              boardStr += '[ ] ';
+              boardStr += '[    ] ';
             }
           }
         }
