@@ -168,16 +168,16 @@ function renderBoard(boardEl, board, playerColor, moves, player) {
                    '?';
         }
         square.textContent = symbol;
-        
-        // Add outline for last move
-        if (isLastMoveFrom(row, col, moves)) {
-          square.classList.add('from-move');
-        } else if (isLastMoveTo(row, col, moves)) {
-          square.classList.add('to-move');
-        }
       } else {
         // Empty square - use grey background
         square.classList.add('empty');
+      }
+      
+      // Add outline for last move (regardless of piece presence)
+      if (isLastMoveFrom(row, col, moves)) {
+        square.classList.add('from-move');
+      } else if (isLastMoveTo(row, col, moves)) {
+        square.classList.add('to-move');
       }
       
       // Add click handler for move selection
