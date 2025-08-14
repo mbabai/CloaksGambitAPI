@@ -4,6 +4,49 @@ const Game = require('../../../models/Game');
 const ServerConfig = require('../../../models/ServerConfig');
 const eventBus = require('../../../eventBus');
 
+// Helper function to resolve a move
+async function resolveMove(game, move, config) {
+  const { from: pf, to: pt } = move;
+  const movingPiece = game.board[pf.row][pf.col];
+  const targetPiece = game.board[pt.row][pt.col];
+  
+  if (targetPiece) {
+    game.captured[move.player].push(targetPiece);
+  }
+  
+  game.board[pt.row][pt.col] = movingPiece;
+  game.board[pf.row][pf.col] = null;
+  
+  // Mark the move as resolved
+  move.state = config.moveStates.get('RESOLVED');
+  
+  // Check for win conditions from the resolved move
+  const kingId = config.identities.get('KING');
+  if (targetPiece && targetPiece.identity === kingId) {
+    await game.endGame(move.player, config.winReasons.get('CAPTURED_KING'));
+    return true; // Game ended
+  } else if (move.declaration === kingId) {
+    const throneRow = move.player === 0 ? config.boardDimensions.RANKS - 1 : 0;
+    if (pt.row === throneRow) {
+      await game.endGame(move.player, config.winReasons.get('THRONE'));
+      return true; // Game ended
+    }
+  }
+  
+  // Update moves since action
+  if (targetPiece) {
+    game.movesSinceAction = 0;
+  } else {
+    game.movesSinceAction += 1;
+    if (game.movesSinceAction >= 20 && game.isActive) {
+      await game.endGame(null, config.winReasons.get('DRAW'));
+      return true; // Game ended
+    }
+  }
+  
+  return false; // Game continues
+}
+
 router.post('/', async (req, res) => {
   try {
     const { gameId, color, from, to, declaration } = req.body;
@@ -55,6 +98,28 @@ router.post('/', async (req, res) => {
 
     if (game.onDeckingPlayer === normalizedColor) {
       return res.status(400).json({ message: 'Player must place on-deck piece before moving' });
+    }
+
+    // Check if there's a pending move that would clear the destination square (recapture scenario)
+    let earlyResolved = false;
+    if (game.moves.length > 0) {
+      const prevMove = game.moves[game.moves.length - 1];
+      
+      if (prevMove.state === config.moveStates.get('PENDING')) {
+        const { from: pf, to: pt } = prevMove;
+        
+        // If the pending move is going to the same square we're trying to move to,
+        // and it's an opponent's move, resolve it first
+        if (pt.row === toRow && pt.col === toCol && prevMove.player !== normalizedColor) {
+          earlyResolved = true;
+          const gameEnded = await resolveMove(game, prevMove, config);
+          if (gameEnded) {
+            return res.json({ message: 'Game ended during move resolution' });
+          }
+          // Save the game state after resolving the move
+          await game.save();
+        }
+      }
     }
 
     const target = game.board[toRow][toCol];
@@ -133,66 +198,24 @@ router.post('/', async (req, res) => {
       timestamp: new Date()
     };
 
-    if (game.moves.length > 0) {
-      const prevMove = game.moves[game.moves.length - 1];
-
-      if (prevMove.state === config.moveStates.get('PENDING')) {
-        const { from: pf, to: pt } = prevMove;
-        const movingPiece = game.board[pf.row][pf.col];
-        const targetPiece = game.board[pt.row][pt.col];
-
-        if (targetPiece) {
-          game.captured[prevMove.player].push(targetPiece);
-        }
-
-        game.board[pt.row][pt.col] = movingPiece;
-        game.board[pf.row][pf.col] = null;
-
-        // Mark the move as resolved first
-        prevMove.state = config.moveStates.get('RESOLVED');
-
-        // Save the game state after resolving the move
-        await game.save();
-
-        const kingId = config.identities.get('KING');
-        if (targetPiece && targetPiece.identity === kingId) {
-          await game.endGame(prevMove.player, config.winReasons.get('CAPTURED_KING'));
-          // Check if game ended and return early
-          if (!game.isActive) {
-            return res.json({ message: 'Game ended: King captured' });
-          }
-        } else if (prevMove.declaration === kingId) {
-          const throneRow = prevMove.player === 0 ? config.boardDimensions.RANKS - 1 : 0;
-          if (pt.row === throneRow) {
-            await game.endGame(prevMove.player, config.winReasons.get('THRONE'));
-            // Check if game ended and return early
-            if (!game.isActive) {
-              return res.json({ message: 'Game ended: King reached throne' });
-            }
-          }
-        }
-
-        if (targetPiece) {
-          game.movesSinceAction = 0;
-        } else {
-          game.movesSinceAction += 1;
-          if (game.movesSinceAction >= 20 && game.isActive) {
-            await game.endGame(null, config.winReasons.get('DRAW'));
-            // Check if game ended and return early
-            if (!game.isActive) {
-              return res.json({ message: 'Game ended: Draw by inactivity' });
-            }
-          }
-        }
-      }
-    }
-
     // Final check to ensure game is still active before proceeding
     if (!game.isActive) {
       return res.status(400).json({ message: 'Game is not active' });
     }
 
     game.moves.push(move);
+
+    // Normal move resolution (skip if we already resolved a move for recapture)
+    if (!earlyResolved && game.moves.length > 1) {
+      const prevMove = game.moves[game.moves.length - 2];
+      
+      if (prevMove.state === config.moveStates.get('PENDING')) {
+        const gameEnded = await resolveMove(game, prevMove, config);
+        if (gameEnded) {
+          return res.json({ message: 'Game ended during move resolution' });
+        }
+      }
+    }
 
     // Flip turn to the other player after recording the move
     game.playerTurn = normalizedColor === 0 ? 1 : 0;
