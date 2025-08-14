@@ -1,0 +1,306 @@
+:root {
+    /* CSS custom properties for font sizes - will be updated by JavaScript */
+    --font-size-player-name: 24px;
+    --font-size-player-clock: 30px;
+    --font-size-dagger-token: 14px;
+    --font-size-captured-piece: 18px;
+    --font-size-board-square: 12px;
+    --font-size-board-piece: 14px;
+    --font-size-stash-slot: 12px;
+    --font-size-stash-piece: 12px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Arial', sans-serif;
+    background: linear-gradient(135deg, #2d4a3e 0%, #1a2f1f 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    margin: 0;
+    padding: 0; /* Remove padding to extend to edges */
+    box-sizing: border-box;
+}
+
+/* Background decorative elements */
+.background-sword {
+    position: fixed;
+    left: -50px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 200px;
+    height: 400px;
+    background: linear-gradient(45deg, #8a9a8b, #6b7a6c);
+    clip-path: polygon(20% 0%, 80% 0%, 100% 100%, 0% 100%);
+    z-index: 1;
+}
+
+.background-potion {
+    position: fixed;
+    right: -50px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 150px;
+    height: 200px;
+    background: linear-gradient(45deg, #8b5cf6, #a855f7);
+    border-radius: 50%;
+    z-index: 1;
+}
+
+.background-potion::after {
+    content: '';
+    position: absolute;
+    top: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 8px;
+    height: 30px;
+    background: linear-gradient(45deg, #92400e, #a16207);
+    border-radius: 4px;
+}
+
+.background-potion::before {
+    content: '';
+    position: absolute;
+    top: -25px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 20px;
+    height: 20px;
+    background: radial-gradient(circle, #ec4899, #be185d);
+    border-radius: 50%;
+    animation: glow 2s ease-in-out infinite alternate;
+}
+
+@keyframes glow {
+    from { opacity: 0.7; }
+    to { opacity: 1; }
+}
+
+/* Main Play Area Container - This will be dynamically sized */
+.play-area {
+    position: relative;
+    border-radius: 10px;
+    z-index: 10;
+    /* Aspect ratio will be maintained via JavaScript */
+    /* Ensure it's centered on the page */
+    margin: 0 auto;
+}
+
+/* Game State Section - Positioned above the board */
+.game-state {
+     position: absolute;
+     left: 0;
+     right: 0;
+     display: flex;
+     justify-content: space-between;
+     /* Height and positioning will be set dynamically */
+ }
+
+.player-state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    /* Width and positioning will be set dynamically */
+}
+
+.player-state.right {
+    align-items: flex-end;
+}
+
+.player-name {
+    /* Height and positioning will be set dynamically */
+    display: flex;
+    align-items: center;
+    font-size: var(--font-size-player-name);
+    font-weight: normal; /* Changed from bold to normal */
+    color: #ffffff;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    /* justify-content will be set dynamically for left/right alignment */
+}
+
+/* Ensure right player name is right-aligned */
+.player-state.right .player-name {
+    justify-content: flex-end;
+    text-align: right;
+}
+
+.player-clock {
+    /* Height, width, and positioning will be set dynamically */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-player-clock);
+    font-weight: bold;
+    font-family: 'Courier New', monospace;
+    border: 2px solid #8b5cf6; /* Purple border */
+    margin: 2px 0;
+}
+
+.player-clock.white {
+    background: #ffffff;
+    color: #000;
+}
+
+.player-clock.black {
+    background: #1f2937;
+    color: #fff;
+}
+
+.dagger-space {
+    /* Height, width, and positioning will be set dynamically */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent; /* For testing - remove later */
+    gap: 8px; /* Increased space between dagger tokens */
+}
+
+.dagger-token {
+    height: 100%; /* Use full height of container */
+    aspect-ratio: 1;
+    background: #dc2626;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: var(--font-size-dagger-token);
+    font-weight: bold;
+    flex-shrink: 0; /* Prevent shrinking */
+}
+
+.captures-area {
+    /* Height, width, and positioning will be set dynamically */
+    display: flex;
+    gap: 3px;
+    background: transparent;
+    border: 1px solid transparent; /* For testing - remove later */
+}
+
+.captures-area.right {
+    justify-content: flex-end;
+}
+
+.captured-piece {
+    width: 100%; /* Use full height of container */
+    height: 100%; /* Use full height of container */
+    background: #ffffff;
+    border: 1px solid #000;
+    border-radius: 0px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-captured-piece);
+    color: #000;
+}
+
+.captured-piece.black {
+    background: #000;
+    color: #fff;
+}
+
+/* Board Section - The center of everything */
+.board {
+    position: absolute;
+    /* Positioning will be set dynamically */
+    display: grid;
+    gap: 0px;
+    background: transparent;
+}
+
+.board-square {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-board-square);
+    font-weight: bold;
+    border: 1px solid #747474;
+    position: relative;
+}
+
+.board-square.light {
+    background: #f3f4f6;
+}
+
+.board-square.dark {
+    background: #424242;
+}
+
+.board-piece {
+    width: 80%;
+    height: 80%;
+    background: #ffffff;
+    border: none;
+    border-radius: 0px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-board-piece);
+    font-weight: bold;
+    color: #000;
+}
+
+.board-piece.black {
+    background: #000;
+    color: #fff;
+}
+
+/* Stash Section - Below the board */
+.stash {
+    position: absolute;
+    /* Positioning will be set dynamically */
+    display: grid;
+    gap: 0px;
+    background: transparent;
+}
+
+.stash-slot {
+    background: transparent;
+    border-radius: 0px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-stash-slot);
+    font-weight: bold;
+    color: #fff;
+    position: relative;
+}
+
+.stash-slot.on-deck {
+    background: #8b5cf6; /* Purple background */
+    border: none; /* No border for on-deck */
+}
+
+.stash-piece {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+    height: 80%;
+    background: #ffffff;
+    border: none;
+    border-radius: 0px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-stash-piece);
+    font-weight: bold;
+    color: #000;
+}
+
+.stash-piece.black {
+    background: #000;
+    color: #fff;
+}
