@@ -152,19 +152,21 @@
             justify-content: center;
             background: transparent;
             border: 1px solid transparent; /* For testing - remove later */
+            gap: 8px; /* Increased space between dagger tokens */
         }
 
         .dagger-token {
-            width: 100%;
-            height: 100%;
+            width: 100%; /* Use full height of container */
+            height: 100%; /* Use full height of container */
             background: #dc2626;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 12px;
+            font-size: 14px; /* Slightly larger font */
             font-weight: bold;
+            flex-shrink: 0; /* Prevent shrinking */
         }
 
         .captures-area {
@@ -306,7 +308,7 @@
             <div class="player-state left" id="leftPlayerState">
                 <div class="player-name" id="leftPlayerName">My Name</div>
                 <div class="dagger-space" id="leftDaggerSpace">
-                    <div class="dagger-token">⚔1</div>
+                    <!-- Dagger tokens will be generated here -->
                 </div>
                 <div class="player-clock white" id="leftClock">5:00</div>
                 <div class="captures-area" id="leftCaptures">
@@ -318,7 +320,7 @@
             <div class="player-state right" id="rightPlayerState">
                 <div class="player-name" id="rightPlayerName">Opponent Name</div>
                 <div class="dagger-space" id="rightDaggerSpace">
-                    <div class="dagger-token">⚔1</div>
+                    <!-- Dagger tokens will be generated here -->
                 </div>
                 <div class="player-clock black" id="rightClock">5:00</div>
                 <div class="captures-area right" id="rightCaptures">
@@ -386,7 +388,7 @@
                     { color: 1, identity: 4 }, { color: 1, identity: 4 }, { color: 1, identity: 3 }, { color: 1, identity: 3 }, { color: 1, identity: 2 }
                 ]
             ],
-            daggers: [1, 1], // White and black dagger counts
+            daggers: [2, 2], // White and black dagger counts
             captured: [
                 [{ color: 0, identity: 3 }], // White captured pieces
                 [{ color: 1, identity: 0 }, { color: 1, identity: 0 }] // Black captured pieces
@@ -552,17 +554,23 @@
             const daggerHeight = squareSize * 0.66; // Same height as clocks
             const daggerWidth = daggerHeight; // Perfect 1:1 aspect ratio
             
+            // Calculate total width needed for dagger space (including multiple tokens)
+            const leftDaggerCount = sampleGameState.daggers[0];
+            const rightDaggerCount = sampleGameState.daggers[1];
+            const leftDaggerSpaceWidth = (daggerWidth * leftDaggerCount) + (8 * (leftDaggerCount - 1)); // Width + increased gaps
+            const rightDaggerSpaceWidth = (daggerWidth * rightDaggerCount) + (8 * (rightDaggerCount - 1)); // Width + increased gaps
+            
             const leftDaggerSpace = document.getElementById('leftDaggerSpace');
             leftDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
-            leftDaggerSpace.style.left = `${clockWidth + 5}px`; // 5px to the right of clock
-            leftDaggerSpace.style.width = `${daggerWidth}px`;
+            leftDaggerSpace.style.left = `${clockWidth + 2}px`; // 2px to the right of clock (closer)
+            leftDaggerSpace.style.width = `${leftDaggerSpaceWidth}px`;
             leftDaggerSpace.style.height = `${daggerHeight}px`;
             leftDaggerSpace.style.position = 'absolute';
             
             const rightDaggerSpace = document.getElementById('rightDaggerSpace');
             rightDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
-            rightDaggerSpace.style.right = `${clockWidth + 5}px`; // 5px to the left of clock
-            rightDaggerSpace.style.width = `${daggerWidth}px`;
+            rightDaggerSpace.style.right = `${clockWidth + 2}px`; // 2px to the left of clock (closer)
+            rightDaggerSpace.style.width = `${rightDaggerSpaceWidth}px`;
             rightDaggerSpace.style.height = `${daggerHeight}px`;
             rightDaggerSpace.style.position = 'absolute';
             
@@ -677,11 +685,28 @@
 
         // Update dagger counts
         function updateDaggers() {
-            const leftDagger = document.querySelector('#leftDaggerSpace .dagger-token');
-            const rightDagger = document.querySelector('#rightDaggerSpace .dagger-token');
+            const leftDaggerSpace = document.getElementById('leftDaggerSpace');
+            const rightDaggerSpace = document.getElementById('rightDaggerSpace');
             
-            leftDagger.textContent = `⚔${sampleGameState.daggers[0]}`;
-            rightDagger.textContent = `⚔${sampleGameState.daggers[1]}`;
+            // Clear existing dagger tokens
+            leftDaggerSpace.innerHTML = '';
+            rightDaggerSpace.innerHTML = '';
+            
+            // Create dagger tokens for left player (white)
+            for (let i = 0; i < sampleGameState.daggers[0]; i++) {
+                const daggerToken = document.createElement('div');
+                daggerToken.className = 'dagger-token';
+                daggerToken.textContent = '⚔';
+                leftDaggerSpace.appendChild(daggerToken);
+            }
+            
+            // Create dagger tokens for right player (black)
+            for (let i = 0; i < sampleGameState.daggers[1]; i++) {
+                const daggerToken = document.createElement('div');
+                daggerToken.className = 'dagger-token';
+                daggerToken.textContent = '⚔';
+                rightDaggerSpace.appendChild(daggerToken);
+            }
         }
 
         // Main initialization function
