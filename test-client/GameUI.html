@@ -91,13 +91,13 @@
 
         /* Game State Section - Positioned above the board */
         .game-state {
-            position: absolute;
-            left: 0;
-            right: 0;
-            display: flex;
-            justify-content: space-between;
-            /* Height and positioning will be set dynamically */
-        }
+             position: absolute;
+             left: 0;
+             right: 0;
+             display: flex;
+             justify-content: space-between;
+             /* Height and positioning will be set dynamically */
+         }
 
         .player-state {
             display: flex;
@@ -156,8 +156,8 @@
         }
 
         .dagger-token {
-            width: 40px; /* Fixed width to match clock height */
-            height: 40px; /* Fixed height to match clock height */
+            height: 100%; /* Use full height of container */
+            aspect-ratio: 1;
             background: #dc2626;
             border-radius: 50%;
             display: flex;
@@ -395,56 +395,54 @@
             ]
         };
 
-        // Calculate the optimal play area size based on page dimensions
-        function calculatePlayAreaSize() {
-            const pageWidth = window.innerWidth;
-            const pageHeight = window.innerHeight;
-            
-            // Calculate how much space we can use while maintaining aspect ratio
-            // Use 100% of page dimensions to extend to edges
-            const maxWidth = pageWidth * 1.0; // Use 100% of page width
-            const maxHeight = pageHeight * 1.0; // Use 100% of page height
-            
-            let finalWidth, finalHeight;
-            
-            // Target aspect ratio is 17:10 (width:height)
-            // This means width should be larger than height
-            // So if we have a certain width, the height should be width * (10/17)
-            // If we have a certain height, the width should be height * (17/10)
-            
-            // Check if we can fit the full height
-            const widthForFullHeight = maxHeight * (10 / 17);
-            if (widthForFullHeight <= maxWidth) {
-                // We can fit the full height - fill the height
-                finalHeight = maxHeight;
-                finalWidth = widthForFullHeight;
-            } else {
-                // Width is the limiting factor - fill the width
-                finalWidth = maxWidth;
-                finalHeight = maxWidth * (10 / 17);
-            }
-            
-            return { width: finalWidth, height: finalHeight };
-        }
+                 // Calculate the optimal play area size based on page dimensions
+         function calculatePlayAreaSize() {
+             const pageWidth = window.innerWidth;
+             const pageHeight = window.innerHeight;
 
-        // Calculate square size based on board dimensions
-        function calculateSquareSize() {
-            // Square size = play area width / (F + 1) where F is files (columns)
-            // This ensures half-side length on both sides
-            let calculatedSize = playAreaWidth / (BOARD_COLS + 1);
+             const pageRatio = pageHeight/pageWidth
+             const idealRatio = 1.7
+             
+             // Target aspect ratio is 17:10 (width:height)
+             // Always maintain this exact ratio and scale uniformly
+             // Leave margins around the play area instead of filling the entire page
+             
+             let finalWidth, finalHeight;
             
-            // Safety check: ensure the board fits within the play area
-            const maxBoardWidth = playAreaWidth * 0.8; // Board should use max 80% of play area width
-            const maxBoardHeight = playAreaHeight * 0.6; // Board should use max 60% of play area height
-            
-            const maxSquareSizeByWidth = maxBoardWidth / BOARD_COLS;
-            const maxSquareSizeByHeight = maxBoardHeight / BOARD_ROWS;
-            
-            // Use the smaller of the calculated size or the maximum allowed size
-            calculatedSize = Math.min(calculatedSize, maxSquareSizeByWidth, maxSquareSizeByHeight);
-            
-            return calculatedSize;
-        }
+             
+             // Use whichever approach gives us the smaller size (fits better)
+             if (pageRatio >= idealRatio) {
+                 // Width is the limiting factor - fit to width
+                 finalWidth = pageWidth;
+                 finalHeight = pageWidth*idealRatio;
+             } else {
+                 // Height is the limiting factor - fit to height
+                 finalHeight = pageHeight;
+                 finalWidth = pageHeight/idealRatio;
+             }
+             
+             return { width: finalWidth, height: finalHeight };
+         }
+
+                 // Calculate square size based on board dimensions
+         function calculateSquareSize() {
+             // Square size = play area width / (F + 1) where F is files (columns)
+             // This ensures half-side length on both sides
+             let calculatedSize = playAreaWidth / (BOARD_COLS + 1);
+             
+             // Safety check: ensure the board fits within the play area
+             // Since we're maintaining aspect ratio, we can be more generous with board sizing
+             const maxBoardWidth = playAreaWidth * 0.9; // Board can use up to 90% of play area width
+             const maxBoardHeight = playAreaHeight * 0.7; // Board can use up to 70% of play area height
+             
+             const maxSquareSizeByWidth = maxBoardWidth / BOARD_COLS;
+             const maxSquareSizeByHeight = maxBoardHeight / BOARD_ROWS;
+             
+             // Use the smaller of the calculated size or the maximum allowed size
+             calculatedSize = Math.min(calculatedSize, maxSquareSizeByWidth, maxSquareSizeByHeight);
+             
+             return calculatedSize;
+         }
 
         // Position all elements based on calculated sizes
         function positionElements() {
@@ -490,23 +488,23 @@
             gameState.style.top = `${gameStateTop}px`;
             gameState.style.height = `${gameStateHeight}px`;
             
-            // Position left player state - ensure it doesn't go off the left edge
-            const leftStateLeft = Math.max(squareSize * 0.25, 10); // At least 10px from left edge
-            const leftStateWidth = Math.min(squareSize * 4, (playAreaWidth - leftStateLeft - 10) / 2); // Ensure it fits
-            
-            const leftPlayerState = document.getElementById('leftPlayerState');
-            leftPlayerState.style.left = `${leftStateLeft}px`;
-            leftPlayerState.style.width = `${leftStateWidth}px`;
-            leftPlayerState.style.height = `${gameStateHeight}px`;
-            
-            // Position right player state - ensure it doesn't go off the right edge
-            const rightStateRight = Math.max(squareSize * 0.25, 10); // At least 10px from right edge
-            const rightStateWidth = Math.min(squareSize * 4, (playAreaWidth - rightStateRight - 10) / 2); // Ensure it fits
-            
-            const rightPlayerState = document.getElementById('rightPlayerState');
-            rightPlayerState.style.right = `${rightStateRight}px`;
-            rightPlayerState.style.width = `${rightStateWidth}px`;
-            rightPlayerState.style.height = `${gameStateHeight}px`;
+                         // Position left player state - ensure it doesn't go off the left edge
+             const leftStateLeft = Math.max(squareSize * 0.25, 10); // At least 10px from left edge
+             const leftStateWidth = (playAreaWidth - leftStateLeft - 10) / 2; // Use half of remaining space
+             
+             const leftPlayerState = document.getElementById('leftPlayerState');
+             leftPlayerState.style.left = `${leftStateLeft}px`;
+             leftPlayerState.style.width = `${leftStateWidth}px`;
+             leftPlayerState.style.height = `${gameStateHeight}px`;
+             
+             // Position right player state - ensure it doesn't go off the right edge
+             const rightStateRight = Math.max(squareSize * 0.25, 10); // At least 10px from right edge
+             const rightStateWidth = (playAreaWidth - rightStateRight - 10) / 2; // Use half of remaining space
+             
+             const rightPlayerState = document.getElementById('rightPlayerState');
+             rightPlayerState.style.right = `${rightStateRight}px`;
+             rightPlayerState.style.width = `${rightStateWidth}px`;
+             rightPlayerState.style.height = `${gameStateHeight}px`;
             
                     // Position player names (top of game state)
         // 4E: Names should be same height as clocks, aligned to outside of states div
@@ -555,12 +553,11 @@
         // Position dagger spaces (next to clocks)
         // 4D: Same height as clocks, split into equal aspect ratio = 1 halves
         const daggerHeight = squareSize * 0.66; // Same height as clocks
-        const daggerWidth = squareSize * 1; // Fixed width: 1 square (for the container)
         
                  // Calculate total width needed for dagger space (including multiple tokens)
          const leftDaggerCount = sampleGameState.daggers[0];
          const rightDaggerCount = sampleGameState.daggers[1];
-         const tokenSize = 40; // Fixed token size
+         const tokenSize = squareSize * 0.66; // Token size should scale with square size (same as clock height)
          const leftDaggerSpaceWidth = (tokenSize * leftDaggerCount) + (8 * (leftDaggerCount - 1)); // Width + gaps
          const rightDaggerSpaceWidth = (tokenSize * rightDaggerCount) + (8 * (rightDaggerCount - 1)); // Width + gaps
         
