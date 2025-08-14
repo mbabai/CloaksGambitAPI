@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloaks Gambit GUI Test</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background-color: #f5f5f5;
+        }
+        
+        h1 { 
+            text-align: center; 
+            color: #2c5aa0; 
+            margin-bottom: 30px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .board-section {
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .side-state {
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        /* Board styling */
+        .board-container {
+            display: inline-block;
+            border: 2px solid #333;
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .board-square {
+            width: 40px;
+            height: 40px;
+            border: 1px solid #333;
+            margin: 0;
+            padding: 0;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            position: relative;
+            transition: all 0.2s ease;
+        }
+        
+        .board-square:hover {
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        
+        .board-square.empty {
+            background-color: #cccccc;
+            color: #666666;
+        }
+        
+        .board-square.white {
+            background-color: #ffffff;
+            color: #000000;
+        }
+        
+        .board-square.black {
+            background-color: #000000;
+            color: #ffffff;
+        }
+        
+        .board-square.from-move {
+            outline: 3px solid blue;
+            outline-offset: -3px;
+        }
+        
+        .board-square.to-move {
+            outline: 3px solid red;
+            outline-offset: -3px;
+        }
+        
+        .file-label {
+            display: inline-block;
+            width: 40px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+            margin: 0 2px;
+        }
+        
+        .rank-label {
+            width: 20px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+            margin: 0 5px;
+        }
+        
+        .move-inputs {
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .move-inputs input {
+            margin: 0 10px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        
+        .move-inputs label {
+            font-weight: bold;
+            color: #2c5aa0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Cloaks Gambit GUI Test</h1>
+        
+        <div class="board-section">
+            <h2>Interactive Game Board</h2>
+            <p>Click on squares to select move positions. The board shows:</p>
+            <ul style="text-align: left; max-width: 400px; margin: 0 auto;">
+                <li><strong>White squares:</strong> White pieces (with symbols for known pieces)</li>
+                <li><strong>Black squares:</strong> Black pieces (with symbols for known pieces)</li>
+                <li><strong>Grey squares:</strong> Empty positions</li>
+                <li><strong>Blue outline:</strong> Last move "from" position</li>
+                <li><strong>Red outline:</strong> Last move "to" position</li>
+            </ul>
+            
+            <div id="board" class="board-container"></div>
+            
+            <div class="move-inputs">
+                <label for="from">From:</label>
+                <input type="text" id="from" placeholder="e.g., A1" readonly>
+                <label for="to">To:</label>
+                <input type="text" id="to" placeholder="e.g., B2" readonly>
+            </div>
+        </div>
+        
+        <div class="side-state">
+            <h3>Side State Information</h3>
+            <p>This area shows:</p>
+            <ul>
+                <li><strong>Daggers:</strong> Current dagger counts for both players</li>
+                <li><strong>My Stash:</strong> Pieces available for placement</li>
+                <li><strong>My On Deck:</strong> Piece currently on deck</li>
+                <li><strong>Captured Pieces:</strong> Pieces taken by opponent</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Sample board data for testing
+        const sampleBoard = [
+            [null, null, null, null, null],
+            [null, null, null, null, null],
+            [null, null, null, null, null],
+            [null, null, null, null, null],
+            [null, null, null, null, null],
+            [
+                {color: 1, identity: 4}, // Black Rook
+                {color: 1, identity: 3}, // Black Bishop
+                {color: 1, identity: 1}, // Black King
+                {color: 1, identity: 5}, // Black Knight
+                {color: 1, identity: 2}  // Black Bomb
+            ]
+        ];
+        
+        const sampleMoves = [
+            {from: {row: 5, col: 0}, to: {row: 4, col: 0}}
+        ];
+        
+        // Render the board
+        function renderBoard() {
+            const boardEl = document.getElementById('board');
+            const playerColor = 0; // White player for demo
+            
+            // Clear the board
+            boardEl.innerHTML = '';
+            
+            // Create file labels at the top
+            const fileLabelsTop = document.createElement('div');
+            fileLabelsTop.style.textAlign = 'center';
+            fileLabelsTop.style.marginBottom = '5px';
+            for (let col = 0; col < sampleBoard[0].length; col++) {
+                const file = String.fromCharCode('A'.charCodeAt(0) + col);
+                const fileLabel = document.createElement('span');
+                fileLabel.textContent = file;
+                fileLabel.className = 'file-label';
+                fileLabelsTop.appendChild(fileLabel);
+            }
+            boardEl.appendChild(fileLabelsTop);
+            
+            // Create the board grid
+            const boardGrid = document.createElement('div');
+            boardGrid.className = 'board-container';
+            
+            for (let row = sampleBoard.length - 1; row >= 0; row--) {
+                const rowDiv = document.createElement('div');
+                rowDiv.style.display = 'flex';
+                rowDiv.style.alignItems = 'center';
+                
+                // Add rank label on the left
+                const rankLabel = document.createElement('span');
+                rankLabel.textContent = row + 1;
+                rankLabel.className = 'rank-label';
+                rowDiv.appendChild(rankLabel);
+                
+                for (let col = 0; col < sampleBoard[row].length; col++) {
+                    const piece = sampleBoard[row][col];
+                    const square = document.createElement('button');
+                    square.className = 'board-square';
+                    
+                    // Set background color based on piece presence
+                    if (piece) {
+                        // Piece present - use black/white background
+                        if (piece.color === 0) {
+                            square.classList.add('white');
+                        } else {
+                            square.classList.add('black');
+                        }
+                        
+                        // Set piece symbol
+                        let symbol = '?';
+                        if (piece.color === playerColor) {
+                            // Known piece - show actual identity
+                            symbol = piece.identity === 1 ? '♔' : // King
+                                     piece.identity === 2 ? '💣' : // Bomb
+                                     piece.identity === 3 ? '♗' : // Bishop
+                                     piece.identity === 4 ? '♖' : // Rook
+                                     piece.identity === 5 ? '♘' : // Knight
+                                     '?';
+                        }
+                        square.textContent = symbol;
+                        
+                        // Add outline for last move
+                        if (isLastMoveFrom(row, col, sampleMoves)) {
+                            square.classList.add('from-move');
+                        } else if (isLastMoveTo(row, col, sampleMoves)) {
+                            square.classList.add('to-move');
+                        }
+                    } else {
+                        // Empty square - use grey background
+                        square.classList.add('empty');
+                    }
+                    
+                    // Add click handler for move selection
+                    square.addEventListener('click', () => {
+                        handleSquareClick(row, col);
+                    });
+                    
+                    rowDiv.appendChild(square);
+                }
+                
+                // Add rank label on the right
+                const rankLabelRight = document.createElement('span');
+                rankLabelRight.textContent = row + 1;
+                rankLabelRight.className = 'rank-label';
+                rowDiv.appendChild(rankLabelRight);
+                
+                boardGrid.appendChild(rowDiv);
+            }
+            
+            boardEl.appendChild(boardGrid);
+            
+            // Create file labels at the bottom
+            const fileLabelsBottom = document.createElement('div');
+            fileLabelsBottom.style.textAlign = 'center';
+            fileLabelsBottom.style.marginTop = '5px';
+            for (let col = 0; col < sampleBoard[0].length; col++) {
+                const file = String.fromCharCode('A'.charCodeAt(0) + col);
+                const fileLabel = document.createElement('span');
+                fileLabel.textContent = file;
+                fileLabel.className = 'file-label';
+                fileLabelsBottom.appendChild(fileLabel);
+            }
+            boardEl.appendChild(fileLabelsBottom);
+        }
+        
+        // Check if a position is the last move "from" position
+        function isLastMoveFrom(row, col, moves) {
+            if (!moves || moves.length === 0) return false;
+            const lastMove = moves[moves.length - 1];
+            return lastMove.from.row === row && lastMove.from.col === col;
+        }
+        
+        // Check if a position is the last move "to" position
+        function isLastMoveTo(row, col, moves) {
+            if (!moves || moves.length === 0) return false;
+            const lastMove = moves[moves.length - 1];
+            return lastMove.to.row === row && lastMove.to.col === col;
+        }
+        
+        // Handle square clicks for move selection
+        function handleSquareClick(row, col) {
+            const fromInput = document.getElementById('from');
+            const toInput = document.getElementById('to');
+            
+            // Convert row/col to chess notation (e.g., "A1", "B2")
+            const file = String.fromCharCode('A'.charCodeAt(0) + col);
+            const rank = row + 1;
+            const position = file + rank;
+            
+            if (!fromInput.value) {
+                // First click - set "from" position
+                fromInput.value = position;
+            } else if (!toInput.value) {
+                // Second click - set "to" position
+                toInput.value = position;
+            } else {
+                // Both filled - clear and start over
+                fromInput.value = position;
+                toInput.value = '';
+            }
+        }
+        
+        // Initialize the board when page loads
+        document.addEventListener('DOMContentLoaded', renderBoard);
+    </script>
+</body>
+</html>

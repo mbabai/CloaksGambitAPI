@@ -7,7 +7,8 @@ const players = {
     socket: null,
     serverLogEl: document.getElementById('serverLog1'),
     actionHistoryEl: document.getElementById('actionHistory1'),
-    gameStateEl: document.getElementById('gameState1'),
+    sideStateEl: document.getElementById('sideState1'),
+    boardEl: document.getElementById('board1'),
     color: null, // Will be determined by the game
     name: 'Player 1',
     isReady: false,
@@ -19,7 +20,8 @@ const players = {
     socket: null,
     serverLogEl: document.getElementById('serverLog2'),
     actionHistoryEl: document.getElementById('actionHistory2'),
-    gameStateEl: document.getElementById('gameState2'),
+    sideStateEl: document.getElementById('sideState2'),
+    boardEl: document.getElementById('board2'),
     color: null, // Will be determined by the game
     name: 'Player 2',
     isReady: false,
@@ -66,7 +68,8 @@ function updateActionHistory(actions) {
 
 // Update game state for a specific player
 function updateGameState(player, board, stashes, onDecks, daggers, moves, captured) {
-  const gameStateEl = player.gameStateEl;
+  const sideStateEl = player.sideStateEl;
+  const boardEl = player.boardEl;
   
   // Store the last game state for refreshing displays
   player.lastBoard = board;
@@ -84,19 +87,153 @@ function updateGameState(player, board, stashes, onDecks, daggers, moves, captur
   // Update on-deck button states for all players
   updateOnDeckButtons(stashes, player);
   
-  let stateText = '--- DAGGERS ---\n';
-  stateText += `My Daggers: ${countDaggers(daggers, player.color)} | Opponent Daggers: ${countDaggers(daggers, 1 - player.color)}\n`;
-  stateText += '\n--- BOARD ---\n';
-  stateText += formatBoard(board, player.color, moves);
-  stateText += '\n--- MY STASH ---\n';
-  stateText += formatStash(stashes, player.color, true);
-  stateText += '\n--- MY ON DECK ---\n';
-  stateText += formatOnDeck(onDecks, player.color, true);
-  stateText += '\n--- CAPTURED PIECES ---\n';
-  stateText += formatCapturedPieces(captured, player.color);
+  // Create side state text
+  let sideStateText = '--- DAGGERS ---\n';
+  sideStateText += `My Daggers: ${countDaggers(daggers, player.color)} | Opponent Daggers: ${countDaggers(daggers, 1 - player.color)}\n`;
+  sideStateText += '\n--- MY STASH ---\n';
+  sideStateText += formatStash(stashes, player.color, true);
+  sideStateText += '\n--- MY ON DECK ---\n';
+  sideStateText += formatOnDeck(onDecks, player.color, true);
+  sideStateText += '\n--- CAPTURED PIECES ---\n';
+  sideStateText += formatCapturedPieces(captured, player.color);
   
-  gameStateEl.innerHTML = stateText;
-  gameStateEl.scrollTop = gameStateEl.scrollHeight;
+  sideStateEl.innerHTML = sideStateText;
+  sideStateEl.scrollTop = sideStateEl.scrollHeight;
+  
+  // Render the interactive board
+  renderBoard(boardEl, board, player.color, moves, player);
+}
+
+// Render the interactive board with clickable squares
+function renderBoard(boardEl, board, playerColor, moves, player) {
+  if (!board || !Array.isArray(board)) {
+    boardEl.innerHTML = '<p>No board data</p>';
+    return;
+  }
+  
+  // Clear the board
+  boardEl.innerHTML = '';
+  
+  // Create file labels at the top
+  const fileLabelsTop = document.createElement('div');
+  fileLabelsTop.style.textAlign = 'center';
+  fileLabelsTop.style.marginBottom = '5px';
+  for (let col = 0; col < board[0].length; col++) {
+    const file = String.fromCharCode('A'.charCodeAt(0) + col);
+    const fileLabel = document.createElement('span');
+    fileLabel.textContent = file;
+    fileLabel.className = 'file-label';
+    fileLabelsTop.appendChild(fileLabel);
+  }
+  boardEl.appendChild(fileLabelsTop);
+  
+  // Create the board grid
+  const boardGrid = document.createElement('div');
+  boardGrid.className = 'board-container';
+  
+  for (let row = board.length - 1; row >= 0; row--) {
+    const rowDiv = document.createElement('div');
+    rowDiv.style.display = 'flex';
+    rowDiv.style.alignItems = 'center';
+    
+    // Add rank label on the left
+    const rankLabel = document.createElement('span');
+    rankLabel.textContent = row + 1;
+    rankLabel.className = 'rank-label';
+    rowDiv.appendChild(rankLabel);
+    
+    for (let col = 0; col < board[row].length; col++) {
+      const piece = board[row][col];
+      const square = document.createElement('button');
+      square.className = 'board-square';
+      
+      // Set background color based on piece presence
+      if (piece) {
+        // Piece present - use black/white background
+        if (piece.color === 0) {
+          square.classList.add('white');
+        } else {
+          square.classList.add('black');
+        }
+        
+        // Set piece symbol
+        let symbol = '?';
+        if (piece.color === playerColor) {
+          // Known piece - show actual identity
+          symbol = piece.identity === 1 ? '♔' : // King
+                   piece.identity === 2 ? '💣' : // Bomb
+                   piece.identity === 3 ? '♗' : // Bishop
+                   piece.identity === 4 ? '♖' : // Rook
+                   piece.identity === 5 ? '♘' : // Knight
+                   '?';
+        }
+        square.textContent = symbol;
+        
+        // Add outline for last move
+        if (isLastMoveFrom(row, col, moves)) {
+          square.classList.add('from-move');
+        } else if (isLastMoveTo(row, col, moves)) {
+          square.classList.add('to-move');
+        }
+      } else {
+        // Empty square - use grey background
+        square.classList.add('empty');
+      }
+      
+      // Add click handler for move selection
+      square.addEventListener('click', () => {
+        handleSquareClick(row, col, player);
+      });
+      
+      rowDiv.appendChild(square);
+    }
+    
+    // Add rank label on the right
+    const rankLabelRight = document.createElement('span');
+    rankLabelRight.textContent = row + 1;
+    rankLabelRight.className = 'rank-label';
+    rowDiv.appendChild(rankLabelRight);
+    
+    boardGrid.appendChild(rowDiv);
+  }
+  
+  boardEl.appendChild(boardGrid);
+  
+  // Create file labels at the bottom
+  const fileLabelsBottom = document.createElement('div');
+  fileLabelsBottom.style.textAlign = 'center';
+  fileLabelsBottom.style.marginTop = '5px';
+  for (let col = 0; col < board[0].length; col++) {
+    const file = String.fromCharCode('A'.charCodeAt(0) + col);
+    const fileLabel = document.createElement('span');
+    fileLabel.textContent = file;
+    fileLabel.className = 'file-label';
+    fileLabelsBottom.appendChild(fileLabel);
+  }
+  boardEl.appendChild(fileLabelsBottom);
+}
+
+// Handle square clicks for move selection
+function handleSquareClick(row, col, player) {
+  const fromInput = document.getElementById(`from${player === players.player1 ? '1' : '2'}`);
+  const toInput = document.getElementById(`to${player === players.player1 ? '1' : '2'}`);
+  
+  // Convert row/col to chess notation (e.g., "A1", "B2")
+  const file = String.fromCharCode('A'.charCodeAt(0) + col);
+  const rank = row + 1;
+  const position = file + rank;
+  
+  if (!fromInput.value) {
+    // First click - set "from" position
+    fromInput.value = position;
+  } else if (!toInput.value) {
+    // Second click - set "to" position
+    toInput.value = position;
+  } else {
+    // Both filled - clear and start over
+    fromInput.value = position;
+    toInput.value = '';
+  }
 }
 
 // Update global game status display (elements removed from HTML)
@@ -1061,11 +1198,11 @@ async function executeMove(player, fromInput, toInput, declarationSelect) {
     incompleteMove = { from, to, color: player.color };
     
     // Update the board display to show the X immediately
-    if (players.player1.gameStateEl) {
-      updateGameState(players.player1, players.player1.lastBoard || [], players.player1.lastStashes || [], players.player1.lastOnDecks || [], players.player1.lastDaggers || [], players.player1.lastMoves || []);
+    if (players.player1.sideStateEl) { // Changed from player.gameStateEl
+      updateGameState(players.player1, players.player1.lastBoard || [], players.player1.lastStashes || [], players.player1.lastOnDecks || [], players.player1.lastDaggers || [], players.player1.lastMoves || [], players.player1.lastCaptured || []);
     }
-    if (players.player2.gameStateEl) {
-      updateGameState(players.player2, players.player2.lastBoard || [], players.player2.lastStashes || [], players.player2.lastOnDecks || [], players.player2.lastDaggers || [], players.player2.lastMoves || []);
+    if (players.player2.sideStateEl) { // Changed from player.gameStateEl
+      updateGameState(players.player2, players.player2.lastBoard || [], players.player2.lastStashes || [], players.player2.lastOnDecks || [], players.player2.lastDaggers || [], players.player2.lastMoves || [], players.player2.lastCaptured || []);
     }
     
     const res = await fetch(`${API}/api/v1/gameAction/move`, {
