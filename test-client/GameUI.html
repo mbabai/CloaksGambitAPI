@@ -5,6 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cloaks Gambit - Game UI</title>
     <style>
+        :root {
+            /* CSS custom properties for font sizes - will be updated by JavaScript */
+            --font-size-player-name: 24px;
+            --font-size-player-clock: 30px;
+            --font-size-dagger-token: 14px;
+            --font-size-captured-piece: 18px;
+            --font-size-board-square: 12px;
+            --font-size-board-piece: 14px;
+            --font-size-stash-slot: 12px;
+            --font-size-stash-piece: 12px;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -114,13 +126,19 @@
             /* Height and positioning will be set dynamically */
             display: flex;
             align-items: center;
-            justify-content: center;
-            font-size: 24px; /* Increased from 16px */
+            font-size: var(--font-size-player-name);
             font-weight: normal; /* Changed from bold to normal */
             color: #ffffff;
             background: transparent;
             padding: 0;
             margin: 0;
+            /* justify-content will be set dynamically for left/right alignment */
+        }
+
+        /* Ensure right player name is right-aligned */
+        .player-state.right .player-name {
+            justify-content: flex-end;
+            text-align: right;
         }
 
         .player-clock {
@@ -128,7 +146,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 30px;
+            font-size: var(--font-size-player-clock);
             font-weight: bold;
             font-family: 'Courier New', monospace;
             border: 2px solid #8b5cf6; /* Purple border */
@@ -164,7 +182,7 @@
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 14px; /* Slightly larger font */
+            font-size: var(--font-size-dagger-token);
             font-weight: bold;
             flex-shrink: 0; /* Prevent shrinking */
         }
@@ -190,7 +208,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 18px; /* Doubled from 9px to maintain proportion */
+            font-size: var(--font-size-captured-piece);
             color: #000;
         }
 
@@ -212,9 +230,9 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 12px;
+            font-size: var(--font-size-board-square);
             font-weight: bold;
-            border: 1px solid #969696;
+            border: 1px solid #747474;
             position: relative;
         }
 
@@ -223,7 +241,7 @@
         }
 
         .board-square.dark {
-            background: #6b7280;
+            background: #424242;
         }
 
         .board-piece {
@@ -235,7 +253,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 14px;
+            font-size: var(--font-size-board-piece);
             font-weight: bold;
             color: #000;
         }
@@ -260,7 +278,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 12px;
+            font-size: var(--font-size-stash-slot);
             font-weight: bold;
             color: #fff;
             position: relative;
@@ -284,7 +302,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 12px;
+            font-size: var(--font-size-stash-piece);
             font-weight: bold;
             color: #000;
         }
@@ -395,6 +413,35 @@
             ]
         };
 
+        // Function to update CSS custom properties for font sizes
+        function updateFontSizes() {
+            const root = document.documentElement;
+            
+            // Base font size calculation - use the smaller of width or height to ensure readability
+            const baseSize = Math.min(playAreaWidth, playAreaHeight);
+            
+            // Calculate font sizes as percentages of the base size
+            // These ratios maintain the current visual proportions - DOUBLED for larger starting sizes
+            const playerNameRatio = 0.056; // 48px / 850px (doubled from 0.028)
+            const playerClockRatio = 0.070; // 60px / 850px (doubled from 0.035)
+            const daggerTokenRatio = 0.032; // 28px / 850px (doubled from 0.016)
+            const capturedPieceRatio = 0.042; // 36px / 850px (doubled from 0.021)
+            const boardSquareRatio = 0.028; // 24px / 850px (doubled from 0.014)
+            const boardPieceRatio = 0.032; // 28px / 850px (doubled from 0.016)
+            const stashSlotRatio = 0.028; // 24px / 850px (doubled from 0.014)
+            const stashPieceRatio = 0.028; // 24px / 850px (doubled from 0.014)
+            
+            // Update CSS custom properties
+            root.style.setProperty('--font-size-player-name', `${baseSize * playerNameRatio}px`);
+            root.style.setProperty('--font-size-player-clock', `${baseSize * playerClockRatio}px`);
+            root.style.setProperty('--font-size-dagger-token', `${baseSize * daggerTokenRatio}px`);
+            root.style.setProperty('--font-size-captured-piece', `${baseSize * capturedPieceRatio}px`);
+            root.style.setProperty('--font-size-board-square', `${baseSize * boardSquareRatio}px`);
+            root.style.setProperty('--font-size-board-piece', `${baseSize * boardPieceRatio}px`);
+            root.style.setProperty('--font-size-stash-slot', `${baseSize * stashSlotRatio}px`);
+            root.style.setProperty('--font-size-stash-piece', `${baseSize * stashPieceRatio}px`);
+        }
+
                  // Calculate the optimal play area size based on page dimensions
          function calculatePlayAreaSize() {
              const pageWidth = window.innerWidth;
@@ -482,7 +529,7 @@
             stash.style.gridTemplateRows = `repeat(${STASH_ROWS}, ${squareSize}px)`;
             
             // Position game state above board
-            const gameStateHeight = squareSize * 2; // Reduced from 2.2 to 1.8 for minimal spacing
+            const gameStateHeight = squareSize * 1.9; // Reduced from 2.0 to 1.6 for more compact spacing
             const gameStateTop = boardTop - gameStateHeight - 5; // 5px gap above board
             
             gameState.style.top = `${gameStateTop}px`;
@@ -509,10 +556,10 @@
                     // Position player names (top of game state)
         // 4E: Names should be same height as clocks, aligned to outside of states div
         const nameHeight = squareSize * 0.66; // Same height as clocks
-        const nameWidth = squareSize * 2; // Fixed width: 2 squares
+        const nameWidth = squareSize * 3; // Increased width: 3 squares for more space
         
         const leftPlayerName = document.getElementById('leftPlayerName');
-        leftPlayerName.style.top = '0px';
+        leftPlayerName.style.top = `${nameHeight * 0.15}px`; // Move down by 1/4 of name height to halve the gap
         leftPlayerName.style.left = '0px'; // Left aligned with no margin
         leftPlayerName.style.width = `${nameWidth}px`;
         leftPlayerName.style.height = `${nameHeight}px`;
@@ -522,7 +569,7 @@
         leftPlayerName.style.justifyContent = 'flex-start'; // Left align text within the name box
         
         const rightPlayerName = document.getElementById('rightPlayerName');
-        rightPlayerName.style.top = '0px';
+        rightPlayerName.style.top = `${nameHeight * 0.15}px`; // Move down by 1/4 of name height to halve the gap
         rightPlayerName.style.right = '0px'; // Right aligned with no margin
         rightPlayerName.style.width = `${nameWidth}px`;
         rightPlayerName.style.height = `${nameHeight}px`;
@@ -530,21 +577,27 @@
         rightPlayerName.style.margin = '0px';
         rightPlayerName.style.position = 'absolute';
         rightPlayerName.style.justifyContent = 'flex-end'; // Right align text within the name box
+        rightPlayerName.style.textAlign = 'right'; // Additional right alignment for text
+        
+        // Add spacing between the name boxes to prevent overlap
+        const nameGap = squareSize * 0.5; // Half a square width as gap
+        leftPlayerName.style.width = `${nameWidth - nameGap/2}px`; // Reduce left name width slightly
+        rightPlayerName.style.width = `${nameWidth - nameGap/2}px`; // Reduce right name width slightly
         
                  // Position clocks (below names)
          // 4C: Height 0.66 of square, width 1.4 squares (30% narrower), aligned to outside
          const clockHeight = squareSize * 0.66;
          const clockWidth = squareSize * 1.4; // Fixed width: 1.4 squares (30% narrower)
         
-        const leftClock = document.getElementById('leftClock');
-        leftClock.style.top = `${nameHeight + 2}px`; // 2px margin from name
+                const leftClock = document.getElementById('leftClock');
+        leftClock.style.top = `${nameHeight + 0.5}px`; // Reduced from 1px to 0.5px margin from name
         leftClock.style.left = '0px';
         leftClock.style.width = `${clockWidth}px`;
         leftClock.style.height = `${clockHeight}px`;
         leftClock.style.position = 'absolute';
         
         const rightClock = document.getElementById('rightClock');
-        rightClock.style.top = `${nameHeight + 2}px`; // 2px margin from name
+        rightClock.style.top = `${nameHeight + 0.5}px`; // Reduced from 1px to 0.5px margin from name
         rightClock.style.right = '0px';
         rightClock.style.width = `${clockWidth}px`;
         rightClock.style.height = `${clockHeight}px`;
@@ -555,21 +608,21 @@
         const daggerHeight = squareSize * 0.66; // Same height as clocks
         
                  // Calculate total width needed for dagger space (including multiple tokens)
-         const leftDaggerCount = sampleGameState.daggers[0];
-         const rightDaggerCount = sampleGameState.daggers[1];
-         const tokenSize = squareSize * 0.66; // Token size should scale with square size (same as clock height)
-         const leftDaggerSpaceWidth = (tokenSize * leftDaggerCount) + (8 * (leftDaggerCount - 1)); // Width + gaps
-         const rightDaggerSpaceWidth = (tokenSize * rightDaggerCount) + (8 * (rightDaggerCount - 1)); // Width + gaps
+          const leftDaggerCount = sampleGameState.daggers[0];
+          const rightDaggerCount = sampleGameState.daggers[1];
+          const tokenSize = squareSize * 0.66; // Token size should scale with square size (same as clock height)
+          const leftDaggerSpaceWidth = (tokenSize * leftDaggerCount) + (8 * (leftDaggerCount - 1)); // Width + gaps
+          const rightDaggerSpaceWidth = (tokenSize * rightDaggerCount) + (8 * (rightDaggerCount - 1)); // Width + gaps
         
         const leftDaggerSpace = document.getElementById('leftDaggerSpace');
-        leftDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
+        leftDaggerSpace.style.top = `${nameHeight + 0.5}px`; // Same level as clocks (reduced margin)
         leftDaggerSpace.style.left = `${clockWidth + 2}px`; // 2px to the right of clock
         leftDaggerSpace.style.width = `${leftDaggerSpaceWidth}px`;
         leftDaggerSpace.style.height = `${daggerHeight}px`;
         leftDaggerSpace.style.position = 'absolute';
         
         const rightDaggerSpace = document.getElementById('rightDaggerSpace');
-        rightDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
+        rightDaggerSpace.style.top = `${nameHeight + 0.5}px`; // Same level as clocks (reduced margin)
         rightDaggerSpace.style.right = `${clockWidth + 2}px`; // 2px to the left of clock
         rightDaggerSpace.style.width = `${rightDaggerSpaceWidth}px`;
         rightDaggerSpace.style.height = `${daggerHeight}px`;
@@ -586,19 +639,19 @@
          const leftCapturesWidth = (pieceSize * leftCapturesCount) + (3 * Math.max(0, leftCapturesCount - 1)); // Width + gaps
          const rightCapturesWidth = (pieceSize * rightCapturesCount) + (3 * Math.max(0, rightCapturesCount - 1)); // Width + gaps
         
-                 const leftCaptures = document.getElementById('leftCaptures');
-         leftCaptures.style.bottom = '0px';
-         leftCaptures.style.left = '0px';
-         leftCaptures.style.width = `${leftCapturesWidth}px`;
-         leftCaptures.style.height = `${capturesHeight}px`;
-         leftCaptures.style.position = 'absolute';
-         
-         const rightCaptures = document.getElementById('rightCaptures');
-         rightCaptures.style.bottom = '0px';
-         rightCaptures.style.right = '0px';
-         rightCaptures.style.width = `${rightCapturesWidth}px`;
-         rightCaptures.style.height = `${capturesHeight}px`;
-         rightCaptures.style.position = 'absolute';
+                                   const leftCaptures = document.getElementById('leftCaptures');
+          leftCaptures.style.bottom = '0px'; // Reduced from 1px to 0px for minimal bottom margin
+          leftCaptures.style.left = '0px';
+          leftCaptures.style.width = `${leftCapturesWidth}px`;
+          leftCaptures.style.height = `${capturesHeight}px`;
+          leftCaptures.style.position = 'absolute';
+          
+          const rightCaptures = document.getElementById('rightCaptures');
+          rightCaptures.style.bottom = '0px'; // Reduced from 1px to 0px for minimal bottom margin
+          rightCaptures.style.right = '0px';
+          rightCaptures.style.width = `${rightCapturesWidth}px`;
+          rightCaptures.style.height = `${capturesHeight}px`;
+          rightCaptures.style.position = 'absolute';
         }
 
         // Generate the game board
@@ -725,6 +778,9 @@
             playAreaHeight = playAreaSize.height;
             
             squareSize = calculateSquareSize();
+            
+            // Update font sizes based on new play area dimensions
+            updateFontSizes();
             
             // Debug information
             console.log('Page dimensions:', window.innerWidth, 'x', window.innerHeight);
