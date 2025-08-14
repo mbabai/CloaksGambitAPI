@@ -153,8 +153,15 @@ router.post('/', async (req, res) => {
 
         if (pieceTo && pieceTo.color !== pieceFrom.color) {
           capturedPiece = pieceTo;
-          captureBy = normalizedColor;
-          game.captured[normalizedColor].push(pieceTo);
+          captureBy = lastMove.player; // The original mover captures the challenging piece
+          game.captured[lastMove.player].push(pieceTo); // Store in original mover's array
+          
+          console.log('Move challenge failed - capturing challenging piece:', {
+            pieceTo: pieceTo,
+            captureBy: captureBy,
+            storedInArray: lastMove.player,
+            challengerColor: normalizedColor
+          });
         }
 
         game.stashes[lastMove.player].push(pieceFrom);
@@ -241,8 +248,15 @@ router.post('/', async (req, res) => {
         if (pieceFrom) {
           capturedPiece = pieceFrom;
           captureBy = pieceTo.color;
-          game.captured[lastMove.player].push(pieceFrom);
+          game.captured[1 - normalizedColor].push(pieceFrom); // Store in opposite of challenger's array
           game.board[from.row][from.col] = null;
+          
+          console.log('Bomb challenge failed - capturing original piece:', {
+            pieceFrom: pieceFrom,
+            captureBy: captureBy,
+            storedInArray: 1 - normalizedColor,
+            challengerColor: normalizedColor
+          });
         }
 
         game.daggers[lastMove.player] += 1;
