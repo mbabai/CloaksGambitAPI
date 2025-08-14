@@ -19,6 +19,9 @@
             align-items: center;
             justify-content: center;
             overflow: hidden;
+            margin: 0;
+            padding: 0; /* Remove padding to extend to edges */
+            box-sizing: border-box;
         }
 
         /* Background decorative elements */
@@ -76,95 +79,89 @@
             to { opacity: 1; }
         }
 
-        /* Game Area Container */
-        .game-area {
+        /* Main Play Area Container - This will be dynamically sized */
+        .play-area {
+            position: relative;
             background: rgba(34, 197, 94, 0.1);
             border: 2px solid #22c55e;
             border-radius: 10px;
-            padding: 10px;
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-            min-width: 400px;
-            max-width: 90vw;
-            min-height: 90vh;
-            max-height: 95vh;
             z-index: 10;
-            position: relative;
-            margin-top: -20px;
+            /* Aspect ratio will be maintained via JavaScript */
+            /* Ensure it's centered on the page */
+            margin: 0 auto;
         }
 
-        /* Headings Section */
-        .headings {
+        /* Game State Section - Positioned above the board */
+        .game-state {
+            position: absolute;
+            left: 0;
+            right: 0;
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
-            background: transparent;
-            border: none;
-            border-radius: 0px;
-            padding: 5px;
-            min-height: 80px;
+            /* Height and positioning will be set dynamically */
         }
 
-        .player-info {
+        .player-state {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            gap: 5px;
-            flex: 1;
-        }
-
-        .player-info.left {
             align-items: flex-start;
-            margin-left: 0px;
+            /* Width and positioning will be set dynamically */
         }
 
-        .player-info.right {
+        .player-state.right {
             align-items: flex-end;
-            margin-right: 0px;
         }
 
         .player-name {
-            font-size: 16px;
-            font-weight: bold;
-            color: #ffffff;
-        }
-
-        .player-controls {
+            /* Height and positioning will be set dynamically */
             display: flex;
             align-items: center;
-            gap: 10px;
+            justify-content: center;
+            font-size: 20px; /* Increased from 16px */
+            font-weight: normal; /* Changed from bold to normal */
+            color: #ffffff;
+            background: transparent;
+            border: 1px solid transparent; /* For testing - remove later */
+            padding: 0;
+            margin: 0;
         }
 
-        .clock {
-            width: 70px;
-            height: 35px;
-            border: 2px solid #000;
-            border-radius: 0px;
+        .player-clock {
+            /* Height, width, and positioning will be set dynamically */
             display: flex;
             align-items: center;
             justify-content: center;
             font-size: 18px;
             font-weight: bold;
             font-family: 'Courier New', monospace;
+            border: 2px solid #8b5cf6; /* Purple border */
+            margin: 2px 0;
         }
 
-        .clock.white {
+        .player-clock.white {
             background: #ffffff;
             color: #000;
         }
 
-        .clock.black {
+        .player-clock.black {
             background: #1f2937;
             color: #fff;
         }
 
-        .dagger {
-            width: 25px;
-            height: 25px;
+        .dagger-space {
+            /* Height, width, and positioning will be set dynamically */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid transparent; /* For testing - remove later */
+        }
+
+        .dagger-token {
+            width: 100%;
+            height: 100%;
             background: #dc2626;
-            border: 2px solid #000;
-            border-radius: 0px;
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -173,22 +170,28 @@
             font-weight: bold;
         }
 
-        .captured-pieces {
+        .captures-area {
+            /* Height, width, and positioning will be set dynamically */
             display: flex;
             gap: 3px;
-            margin-top: 5px;
+            background: transparent;
+            border: 1px solid transparent; /* For testing - remove later */
+        }
+
+        .captures-area.right {
+            justify-content: flex-end;
         }
 
         .captured-piece {
-            width: 18px;
-            height: 18px;
+            width: 36px; /* Doubled from 18px */
+            height: 36px; /* Doubled from 18px */
             background: #ffffff;
             border: 1px solid #000;
             border-radius: 0px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 9px;
+            font-size: 18px; /* Doubled from 9px to maintain proportion */
             color: #000;
         }
 
@@ -197,34 +200,16 @@
             color: #fff;
         }
 
-        /* Board Section */
+        /* Board Section - The center of everything */
         .board {
-            background: transparent;
-            border: 2px solid #000;
-            border-radius: 0px;
-            padding: 10px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 5px;
-            flex: 1;
-            min-height: 450px;
-            position: relative;
-        }
-
-        .board-grid {
+            position: absolute;
+            /* Positioning will be set dynamically */
             display: grid;
             gap: 0px;
-            background: #000;
-            padding: 2px;
-            border-radius: 0px;
-            width: 250px;
-            height: 400px;
+            background: transparent;
         }
 
         .board-square {
-            width: 50px;
-            height: 66.67px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -243,10 +228,10 @@
         }
 
         .board-piece {
-            width: 40px;
-            height: 50px;
+            width: 80%;
+            height: 80%;
             background: #ffffff;
-            border: 2px solid #000;
+            border: none;
             border-radius: 0px;
             display: flex;
             align-items: center;
@@ -261,64 +246,18 @@
             color: #fff;
         }
 
-        .board-labels {
-            display: flex;
-            gap: 0px;
-        }
-
-        .board-labels.vertical {
-            flex-direction: column;
-            position: absolute;
-            left: -20px;
-            top: 10px;
-        }
-
-        .board-labels.horizontal {
-            position: absolute;
-            left: 10px;
-            top: 415px;
-        }
-
-        .board-label {
-            width: 20px;
-            height: 66.67px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            font-weight: bold;
-            color: #1f2937;
-        }
-
-        .board-label.horizontal {
-            width: 50px;
-            height: 20px;
-        }
-
-        /* Stash Section */
+        /* Stash Section - Below the board */
         .stash {
-            background: transparent;
-            border: none;
-            border-radius: 0px;
-            padding: 5px;
-            min-height: 80px;
-        }
-
-        .stash-title {
-            display: none;
-        }
-
-        .stash-grid {
+            position: absolute;
+            /* Positioning will be set dynamically */
             display: grid;
             gap: 0px;
-            justify-content: center;
+            background: transparent;
         }
 
         .stash-slot {
-            width: 50px;
-            height: 50px;
             background: transparent;
-            border: none;
+            border: 2px dotted #666; /* Temporary border for testing */
             border-radius: 0px;
             display: flex;
             align-items: center;
@@ -326,28 +265,23 @@
             font-size: 12px;
             font-weight: bold;
             color: #fff;
-        }
-
-        .stash-slot.empty {
-            background: transparent;
-            border: none;
+            position: relative;
         }
 
         .stash-slot.on-deck {
-            background: #8b5cf6;
-            border: 2px solid #000;
-        }
-
-        .stash-slot.stash {
-            background: #000;
-            border: 2px solid #000;
+            background: #8b5cf6; /* Purple background */
+            border: none; /* No border for on-deck */
         }
 
         .stash-piece {
-            width: 40px;
-            height: 40px;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 80%;
             background: #ffffff;
-            border: 2px solid #000;
+            border: none;
             border-radius: 0px;
             display: flex;
             align-items: center;
@@ -361,78 +295,6 @@
             background: #000;
             color: #fff;
         }
-
-        /* Action Buttons */
-        .actions {
-            display: none;
-        }
-
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .game-area {
-                min-width: 95vw;
-                max-width: 95vw;
-                padding: 15px;
-            }
-
-            .board-square {
-                width: 40px;
-                height: 40px;
-            }
-
-            .board-piece {
-                width: 32px;
-                height: 32px;
-                font-size: 10px;
-            }
-
-            .stash-slot {
-                width: 40px;
-                height: 40px;
-            }
-
-            .stash-piece {
-                width: 32px;
-                height: 32px;
-                font-size: 10px;
-            }
-
-            .board-label {
-                width: 40px;
-                height: 16px;
-                font-size: 10px;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .board-square {
-                width: 35px;
-                height: 35px;
-            }
-
-            .board-piece {
-                width: 28px;
-                height: 28px;
-                font-size: 8px;
-            }
-
-            .stash-slot {
-                width: 35px;
-                height: 35px;
-            }
-
-            .stash-piece {
-                width: 28px;
-                height: 28px;
-                font-size: 8px;
-            }
-
-            .board-label {
-                width: 35px;
-                height: 14px;
-                font-size: 8px;
-            }
-        }
     </style>
 </head>
 <body>
@@ -440,30 +302,30 @@
     <div class="background-sword"></div>
     <div class="background-potion"></div>
 
-    <!-- Main Game Area -->
-    <div class="game-area">
-        <!-- Headings Section -->
-        <div class="headings">
-            <!-- Left Player -->
-            <div class="player-info left">
-                <div class="player-name">My Name</div>
-                <div class="player-controls">
-                    <div class="clock white">5:00</div>
-                    <div class="dagger">⚔1</div>
+    <!-- Main Play Area -->
+    <div class="play-area" id="playArea">
+        <!-- Game State Section -->
+        <div class="game-state" id="gameState">
+            <!-- Left Player State -->
+            <div class="player-state left" id="leftPlayerState">
+                <div class="player-name" id="leftPlayerName">My Name</div>
+                <div class="dagger-space" id="leftDaggerSpace">
+                    <div class="dagger-token">⚔1</div>
                 </div>
-                <div class="captured-pieces">
+                <div class="player-clock white" id="leftClock">5:00</div>
+                <div class="captures-area" id="leftCaptures">
                     <div class="captured-piece">♔</div>
                 </div>
             </div>
 
-            <!-- Right Player -->
-            <div class="player-info right">
-                <div class="player-name">Opponent Name</div>
-                <div class="player-controls">
-                    <div class="dagger">⚔1</div>
-                    <div class="clock black">5:00</div>
+            <!-- Right Player State -->
+            <div class="player-state right" id="rightPlayerState">
+                <div class="player-name" id="rightPlayerName">Opponent Name</div>
+                <div class="dagger-space" id="rightDaggerSpace">
+                    <div class="dagger-token">⚔1</div>
                 </div>
-                <div class="captured-pieces">
+                <div class="player-clock black" id="rightClock">5:00</div>
+                <div class="captures-area right" id="rightCaptures">
                     <div class="captured-piece black">♔</div>
                     <div class="captured-piece black">♔</div>
                 </div>
@@ -471,26 +333,32 @@
         </div>
 
         <!-- Board Section -->
-        <div class="board">
-            <div class="board-grid" id="boardGrid">
-                <!-- Board will be generated here -->
-            </div>
+        <div class="board" id="board">
+            <!-- Board squares will be generated here -->
         </div>
 
         <!-- Stash Section -->
-        <div class="stash">
-            <div class="stash-grid" id="stashGrid">
-                <!-- Stash will be generated here -->
-            </div>
+        <div class="stash" id="stash">
+            <!-- Stash slots will be generated here -->
         </div>
     </div>
 
     <script>
         // Game configuration
         const BOARD_ROWS = 6;
-        const BOARD_COLS = 5;
+        const BOARD_COLS = 5; // Files
         const STASH_ROWS = 2;
         const STASH_COLS = 5;
+        
+        // Target aspect ratio: 17:10
+        const TARGET_ASPECT_RATIO = 17 / 10;
+        
+        // Global variables for sizing
+        let squareSize = 0;
+        let playAreaWidth = 0;
+        let playAreaHeight = 0;
+        let boardWidth = 0;
+        let boardHeight = 0;
 
         // Piece identities mapping
         const PIECE_IDENTITIES = {
@@ -529,17 +397,210 @@
             ]
         };
 
+        // Calculate the optimal play area size based on page dimensions
+        function calculatePlayAreaSize() {
+            const pageWidth = window.innerWidth;
+            const pageHeight = window.innerHeight;
+            
+            // Calculate how much space we can use while maintaining aspect ratio
+            // Use 100% of page dimensions to extend to edges
+            const maxWidth = pageWidth * 1.0; // Use 100% of page width
+            const maxHeight = pageHeight * 1.0; // Use 100% of page height
+            
+            let finalWidth, finalHeight;
+            
+            // Target aspect ratio is 17:10 (width:height)
+            // This means width should be larger than height
+            // So if we have a certain width, the height should be width * (10/17)
+            // If we have a certain height, the width should be height * (17/10)
+            
+            // Check if we can fit the full height
+            const widthForFullHeight = maxHeight * (10 / 17);
+            if (widthForFullHeight <= maxWidth) {
+                // We can fit the full height - fill the height
+                finalHeight = maxHeight;
+                finalWidth = widthForFullHeight;
+            } else {
+                // Width is the limiting factor - fill the width
+                finalWidth = maxWidth;
+                finalHeight = maxWidth * (10 / 17);
+            }
+            
+            return { width: finalWidth, height: finalHeight };
+        }
+
+        // Calculate square size based on board dimensions
+        function calculateSquareSize() {
+            // Square size = play area width / (F + 1) where F is files (columns)
+            // This ensures half-side length on both sides
+            let calculatedSize = playAreaWidth / (BOARD_COLS + 1);
+            
+            // Safety check: ensure the board fits within the play area
+            const maxBoardWidth = playAreaWidth * 0.8; // Board should use max 80% of play area width
+            const maxBoardHeight = playAreaHeight * 0.6; // Board should use max 60% of play area height
+            
+            const maxSquareSizeByWidth = maxBoardWidth / BOARD_COLS;
+            const maxSquareSizeByHeight = maxBoardHeight / BOARD_ROWS;
+            
+            // Use the smaller of the calculated size or the maximum allowed size
+            calculatedSize = Math.min(calculatedSize, maxSquareSizeByWidth, maxSquareSizeByHeight);
+            
+            return calculatedSize;
+        }
+
+        // Position all elements based on calculated sizes
+        function positionElements() {
+            const playArea = document.getElementById('playArea');
+            const gameState = document.getElementById('gameState');
+            const board = document.getElementById('board');
+            const stash = document.getElementById('stash');
+            
+            // Set play area dimensions and center it on the page
+            playArea.style.width = `${playAreaWidth}px`;
+            playArea.style.height = `${playAreaHeight}px`;
+            
+            // Calculate board dimensions
+            boardWidth = squareSize * BOARD_COLS;
+            boardHeight = squareSize * BOARD_ROWS;
+            
+            // Position board in center of play area
+            const boardLeft = (playAreaWidth - boardWidth) / 2;
+            const boardTop = (playAreaHeight - boardHeight) / 2;
+            
+            board.style.left = `${boardLeft}px`;
+            board.style.top = `${boardTop}px`;
+            board.style.width = `${boardWidth}px`;
+            board.style.height = `${boardHeight}px`;
+            board.style.gridTemplateColumns = `repeat(${BOARD_COLS}, ${squareSize}px)`;
+            board.style.gridTemplateRows = `repeat(${BOARD_ROWS}, ${squareSize}px)`;
+            
+            // Position stash below board
+            const stashLeft = boardLeft;
+            const stashTop = boardTop + boardHeight + 5; // 5px gap
+            
+            stash.style.left = `${stashLeft}px`;
+            stash.style.top = `${stashTop}px`;
+            stash.style.width = `${boardWidth}px`;
+            stash.style.height = `${squareSize * STASH_ROWS}px`;
+            stash.style.gridTemplateColumns = `repeat(${STASH_COLS}, ${squareSize}px)`;
+            stash.style.gridTemplateRows = `repeat(${STASH_ROWS}, ${squareSize}px)`;
+            
+            // Position game state above board
+            const gameStateHeight = squareSize * 2; // Reduced from 2.2 to 1.8 for minimal spacing
+            const gameStateTop = boardTop - gameStateHeight - 5; // 5px gap above board
+            
+            gameState.style.top = `${gameStateTop}px`;
+            gameState.style.height = `${gameStateHeight}px`;
+            
+            // Position left player state - ensure it doesn't go off the left edge
+            const leftStateLeft = Math.max(squareSize * 0.25, 10); // At least 10px from left edge
+            const leftStateWidth = Math.min(squareSize * 4, (playAreaWidth - leftStateLeft - 10) / 2); // Ensure it fits
+            
+            const leftPlayerState = document.getElementById('leftPlayerState');
+            leftPlayerState.style.left = `${leftStateLeft}px`;
+            leftPlayerState.style.width = `${leftStateWidth}px`;
+            leftPlayerState.style.height = `${gameStateHeight}px`;
+            
+            // Position right player state - ensure it doesn't go off the right edge
+            const rightStateRight = Math.max(squareSize * 0.25, 10); // At least 10px from right edge
+            const rightStateWidth = Math.min(squareSize * 4, (playAreaWidth - rightStateRight - 10) / 2); // Ensure it fits
+            
+            const rightPlayerState = document.getElementById('rightPlayerState');
+            rightPlayerState.style.right = `${rightStateRight}px`;
+            rightPlayerState.style.width = `${rightStateWidth}px`;
+            rightPlayerState.style.height = `${gameStateHeight}px`;
+            
+            // Position player names (top of game state)
+            const nameHeight = squareSize * 0.66; // Same height as clocks
+            const nameWidth = Math.min(squareSize * 2, leftStateWidth * 0.8); // Ensure it fits within player state
+            
+            const leftPlayerName = document.getElementById('leftPlayerName');
+            leftPlayerName.style.top = '0px';
+            leftPlayerName.style.left = '0px'; // Left aligned with no margin
+            leftPlayerName.style.width = `${nameWidth}px`;
+            leftPlayerName.style.height = `${nameHeight}px`;
+            leftPlayerName.style.padding = '0px';
+            leftPlayerName.style.margin = '0px';
+            leftPlayerName.style.position = 'absolute';
+            leftPlayerName.style.justifyContent = 'flex-start'; // Left align text within the name box
+            
+            const rightPlayerName = document.getElementById('rightPlayerName');
+            rightPlayerName.style.top = '0px';
+            rightPlayerName.style.right = '0px'; // Right aligned with no margin
+            rightPlayerName.style.width = `${nameWidth}px`;
+            rightPlayerName.style.height = `${nameHeight}px`;
+            rightPlayerName.style.padding = '0px';
+            rightPlayerName.style.margin = '0px';
+            rightPlayerName.style.position = 'absolute';
+            rightPlayerName.style.justifyContent = 'flex-end'; // Right align text within the name box
+            
+            // Position clocks (below names)
+            const clockHeight = squareSize * 0.66;
+            const clockWidth = Math.min(squareSize * 1.4, leftStateWidth * 0.6); // 30% narrower (was 2.0, now 1.4)
+            
+            const leftClock = document.getElementById('leftClock');
+            leftClock.style.top = `${nameHeight + 2}px`; // 2px margin from name
+            leftClock.style.left = '0px';
+            leftClock.style.width = `${clockWidth}px`;
+            leftClock.style.height = `${clockHeight}px`;
+            leftClock.style.position = 'absolute';
+            
+            const rightClock = document.getElementById('rightClock');
+            rightClock.style.top = `${nameHeight + 2}px`; // 2px margin from name
+            rightClock.style.right = '0px';
+            rightClock.style.width = `${clockWidth}px`;
+            rightClock.style.height = `${clockHeight}px`;
+            rightClock.style.position = 'absolute';
+            
+            // Position dagger spaces (next to clocks)
+            const daggerHeight = squareSize * 0.66; // Same height as clocks
+            const daggerWidth = daggerHeight; // Perfect 1:1 aspect ratio
+            
+            const leftDaggerSpace = document.getElementById('leftDaggerSpace');
+            leftDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
+            leftDaggerSpace.style.left = `${clockWidth + 5}px`; // 5px to the right of clock
+            leftDaggerSpace.style.width = `${daggerWidth}px`;
+            leftDaggerSpace.style.height = `${daggerHeight}px`;
+            leftDaggerSpace.style.position = 'absolute';
+            
+            const rightDaggerSpace = document.getElementById('rightDaggerSpace');
+            rightDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
+            rightDaggerSpace.style.right = `${clockWidth + 5}px`; // 5px to the left of clock
+            rightDaggerSpace.style.width = `${daggerWidth}px`;
+            rightDaggerSpace.style.height = `${daggerHeight}px`;
+            rightDaggerSpace.style.position = 'absolute';
+            
+            // Position captures (bottom of game state)
+            const capturesHeight = squareSize * 0.5; // Half square height
+            const capturesWidth = Math.min(squareSize * 2.5, leftStateWidth * 0.9); // Ensure it fits
+            
+            const leftCaptures = document.getElementById('leftCaptures');
+            leftCaptures.style.bottom = '0px';
+            leftCaptures.style.left = '0px';
+            leftCaptures.style.width = `${capturesWidth}px`;
+            leftCaptures.style.height = `${capturesHeight}px`;
+            leftCaptures.style.position = 'absolute';
+            
+            const rightCaptures = document.getElementById('rightCaptures');
+            rightCaptures.style.bottom = '0px';
+            rightCaptures.style.right = '0px';
+            rightCaptures.style.width = `${capturesWidth}px`;
+            rightCaptures.style.height = `${capturesHeight}px`;
+            rightCaptures.style.position = 'absolute';
+        }
+
         // Generate the game board
         function generateBoard() {
-            const boardGrid = document.getElementById('boardGrid');
-            boardGrid.style.gridTemplateColumns = `repeat(${BOARD_COLS}, 1fr)`;
-            boardGrid.style.gridTemplateRows = `repeat(${BOARD_ROWS}, 1fr)`;
-
+            const board = document.getElementById('board');
+            board.innerHTML = ''; // Clear existing content
+            
             // Generate board squares
             for (let row = 0; row < BOARD_ROWS; row++) {
                 for (let col = 0; col < BOARD_COLS; col++) {
                     const square = document.createElement('div');
                     square.className = `board-square ${(row + col) % 2 === 0 ? 'light' : 'dark'}`;
+                    square.style.width = `${squareSize}px`;
+                    square.style.height = `${squareSize}px`;
                     
                     // Check if there's a piece on this square
                     const piece = sampleGameState.board[row][col];
@@ -550,75 +611,52 @@
                         square.appendChild(pieceElement);
                     }
                     
-                    boardGrid.appendChild(square);
+                    board.appendChild(square);
                 }
             }
-
-            // Add row labels (vertical) - positioned on the left side
-            const rowLabels = document.createElement('div');
-            rowLabels.className = 'board-labels vertical';
-            
-            for (let row = BOARD_ROWS; row >= 1; row--) {
-                const label = document.createElement('div');
-                label.className = 'board-label';
-                label.textContent = row;
-                rowLabels.appendChild(label);
-            }
-            boardGrid.appendChild(rowLabels);
-
-            // Add column labels (horizontal) - positioned below the board
-            const colLabels = document.createElement('div');
-            colLabels.className = 'board-labels horizontal';
-            
-            for (let col = 0; col < BOARD_COLS; col++) {
-                const label = document.createElement('div');
-                label.className = 'board-label horizontal';
-                label.textContent = String.fromCharCode(65 + col); // A, B, C, D, E
-                colLabels.appendChild(label);
-            }
-            boardGrid.appendChild(colLabels);
         }
 
         // Generate the stash
         function generateStash() {
-            const stashGrid = document.getElementById('stashGrid');
-            stashGrid.style.gridTemplateColumns = `repeat(${STASH_COLS}, 1fr)`;
-            stashGrid.style.gridTemplateRows = `repeat(${STASH_ROWS}, 1fr)`;
-
+            const stash = document.getElementById('stash');
+            stash.innerHTML = ''; // Clear existing content
+            
             // Generate stash slots
             for (let row = 0; row < STASH_ROWS; row++) {
                 for (let col = 0; col < STASH_COLS; col++) {
                     const slot = document.createElement('div');
                     slot.className = 'stash-slot';
+                    slot.style.width = `${squareSize}px`;
+                    slot.style.height = `${squareSize}px`;
                     
-                    // Check if there's a piece in this stash slot
-                    const piece = sampleGameState.stashes[row][col];
-                    if (piece) {
+                    // Create purple on-deck square in the middle of the top row
+                    if (row === 0 && col === 2) {
+                        slot.classList.add('on-deck');
+                        // Add a piece to the on-deck slot
                         const pieceElement = document.createElement('div');
-                        pieceElement.className = `stash-piece ${piece.color === 0 ? 'white' : 'black'}`;
-                        pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
+                        pieceElement.className = 'stash-piece black';
+                        pieceElement.textContent = '?';
                         slot.appendChild(pieceElement);
-                        
-                        // Add on-deck styling for first row, stash styling for second row
-                        if (row === 0) {
-                            slot.classList.add('on-deck');
-                        } else {
-                            slot.classList.add('stash');
-                        }
                     } else {
-                        slot.classList.add('empty');
-                        slot.textContent = '';
+                        // Check if there's a piece in this stash slot
+                        const piece = sampleGameState.stashes[row][col];
+                        if (piece) {
+                            const pieceElement = document.createElement('div');
+                            pieceElement.className = `stash-piece ${piece.color === 0 ? 'white' : 'black'}`;
+                            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
+                            slot.appendChild(pieceElement);
+                        }
                     }
                     
-                    stashGrid.appendChild(slot);
+                    stash.appendChild(slot);
                 }
             }
         }
 
         // Update captured pieces display
         function updateCapturedPieces() {
-            const leftCaptured = document.querySelector('.player-info.left .captured-pieces');
-            const rightCaptured = document.querySelector('.player-info.right .captured-pieces');
+            const leftCaptured = document.getElementById('leftCaptures');
+            const rightCaptured = document.getElementById('rightCaptures');
             
             // Clear existing
             leftCaptured.innerHTML = '';
@@ -643,32 +681,48 @@
 
         // Update dagger counts
         function updateDaggers() {
-            const leftDagger = document.querySelector('.player-info.left .dagger');
-            const rightDagger = document.querySelector('.player-info.right .dagger');
+            const leftDagger = document.querySelector('#leftDaggerSpace .dagger-token');
+            const rightDagger = document.querySelector('#rightDaggerSpace .dagger-token');
             
             leftDagger.textContent = `⚔${sampleGameState.daggers[0]}`;
             rightDagger.textContent = `⚔${sampleGameState.daggers[1]}`;
         }
 
-        // Initialize the game UI
-        function initGame() {
+        // Main initialization function
+        function initializeGame() {
+            // Calculate sizes
+            const playAreaSize = calculatePlayAreaSize();
+            playAreaWidth = playAreaSize.width;
+            playAreaHeight = playAreaSize.height;
+            
+            squareSize = calculateSquareSize();
+            
+            // Debug information
+            console.log('Page dimensions:', window.innerWidth, 'x', window.innerHeight);
+            console.log('Play area dimensions:', playAreaWidth, 'x', playAreaHeight);
+            console.log('Square size:', squareSize);
+            console.log('Board dimensions:', BOARD_COLS * squareSize, 'x', BOARD_ROWS * squareSize);
+            
+            // Position all elements
+            positionElements();
+            
+            // Generate game elements
             generateBoard();
             generateStash();
             updateCapturedPieces();
             updateDaggers();
         }
 
-        // Start the game when the page loads
-        document.addEventListener('DOMContentLoaded', initGame);
+        // Handle window resize
+        function handleResize() {
+            initializeGame();
+        }
 
-        // Add some interactivity to the action buttons
-        document.querySelector('.action-btn.challenge').addEventListener('click', () => {
-            console.log('Challenge button clicked');
-        });
-
-        document.querySelector('.action-btn.bomb').addEventListener('click', () => {
-            console.log('Bomb button clicked');
-        });
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initializeGame);
+        
+        // Handle window resize
+        window.addEventListener('resize', handleResize);
     </script>
 </body>
 </html>
