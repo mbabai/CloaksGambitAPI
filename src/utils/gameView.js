@@ -21,17 +21,28 @@ function maskGameForColor(game, color) {
     return piece;
   };
 
-  if (Array.isArray(game.board)) {
-    game.board = game.board.map((row) => row.map(maskPiece));
+  // Create a copy of the game to avoid modifying the original
+  const maskedGame = { ...game };
+
+  if (Array.isArray(maskedGame.board)) {
+    maskedGame.board = maskedGame.board.map((row) => row.map(maskPiece));
   }
-  if (Array.isArray(game.stashes)) {
-    game.stashes = game.stashes.map((stash) => stash.map(maskPiece));
+  if (Array.isArray(maskedGame.stashes)) {
+    maskedGame.stashes = maskedGame.stashes.map((stash) => stash.map(maskPiece));
   }
-  if (Array.isArray(game.onDecks)) {
-    game.onDecks = game.onDecks.map(maskPiece);
+  if (Array.isArray(maskedGame.onDecks)) {
+    maskedGame.onDecks = maskedGame.onDecks.map(maskPiece);
   }
 
-  return game;
+  // Ensure game state fields are preserved
+  // These fields are important for win condition detection
+  maskedGame.isActive = game.isActive;
+  maskedGame.winner = game.winner;
+  maskedGame.winReason = game.winReason;
+  maskedGame.onDeckingPlayer = game.onDeckingPlayer;
+  maskedGame.playerTurn = game.playerTurn;
+
+  return maskedGame;
 }
 
 module.exports = maskGameForColor;

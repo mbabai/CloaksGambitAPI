@@ -23,8 +23,24 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Game is not active' });
     }
 
-    if (game.playerTurn !== normalizedColor) {
-      return res.status(400).json({ message: "Not this player's turn" });
+    // Add debugging information
+    console.log('On-deck request debug:', {
+      requestedColor: normalizedColor,
+      gamePlayerTurn: game.playerTurn,
+      gameOnDeckingPlayer: game.onDeckingPlayer,
+      isPlayerTurn: game.playerTurn === normalizedColor,
+      isOnDeckingPlayer: game.onDeckingPlayer === normalizedColor
+    });
+
+    if (game.playerTurn !== normalizedColor && game.onDeckingPlayer !== normalizedColor) {
+      return res.status(400).json({ 
+        message: "Not this player's turn",
+        debug: {
+          requestedColor: normalizedColor,
+          gamePlayerTurn: game.playerTurn,
+          gameOnDeckingPlayer: game.onDeckingPlayer
+        }
+      });
     }
 
     if (game.onDeckingPlayer !== normalizedColor) {

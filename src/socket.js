@@ -102,7 +102,10 @@ function initSocket(httpServer) {
         players: masked.players,
         daggers: masked.daggers,
         playerTurn: masked.playerTurn,
-        onDeckingPlayer: masked.onDeckingPlayer
+        onDeckingPlayer: masked.onDeckingPlayer,
+        isActive: masked.isActive,
+        winner: masked.winner,
+        winReason: masked.winReason
       });
     });
   });

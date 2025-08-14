@@ -328,7 +328,9 @@ gameSchema.methods.endGame = async function(winner, winReason) {
         throw new Error('Winner must be 0 (white), 1 (black) or null for draw');
     }
 
-    if (!defaultConfig.winReasons.has(winReason)) {
+    // Check if winReason is one of the valid values in the winReasons Map
+    const validWinReasons = Array.from(defaultConfig.winReasons.values());
+    if (!validWinReasons.includes(winReason)) {
         throw new Error('Invalid win reason');
     }
 

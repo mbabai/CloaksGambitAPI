@@ -164,8 +164,16 @@ router.post('/', async (req, res) => {
         game.board[to.row][to.col] = deckPiece;
         game.onDecks[lastMove.player] = null;
 
-        game.onDeckingPlayer = lastMove.player;
-        game.playerTurn = lastMove.player;
+        // The challenger (who failed the challenge) needs to go on-deck, not the original mover
+        game.onDeckingPlayer = 1 - normalizedColor; // Opposite of challenger (1 - challenger)
+        game.playerTurn = 1 - normalizedColor;      // It's the opposite player's turn to go on-deck
+
+        console.log('Move challenge failed - setting on-deck state:', {
+          challengerColor: normalizedColor,
+          oppositeColor: 1 - normalizedColor,
+          onDeckingPlayer: game.onDeckingPlayer,
+          playerTurn: game.playerTurn
+        });
       }
     } else if (lastAction.type === bombType) {
       // For bomb actions, we need a valid lastMove
@@ -219,14 +227,21 @@ router.post('/', async (req, res) => {
         game.board[to.row][to.col] = deckPiece;
         game.onDecks[pieceTo.color] = null;
         
-        // The mover (who moved to the bomb) needs to on-deck, not the bomb owner
-        game.onDeckingPlayer = lastMove.player;
-        game.playerTurn = lastMove.player;
+        // The challenger (who failed the challenge) needs to go on-deck, not the original mover
+        game.onDeckingPlayer = 1 - normalizedColor; // Opposite of challenger (1 - challenger)
+        game.playerTurn = 1 - normalizedColor;      // It's the opposite player's turn to go on-deck
+
+        console.log('Bomb challenge failed - setting on-deck state:', {
+          challengerColor: normalizedColor,
+          oppositeColor: 1 - normalizedColor,
+          onDeckingPlayer: game.onDeckingPlayer,
+          playerTurn: game.playerTurn
+        });
 
         if (pieceFrom) {
           capturedPiece = pieceFrom;
           captureBy = pieceTo.color;
-          game.captured[pieceTo.color].push(pieceFrom);
+          game.captured[lastMove.player].push(pieceFrom);
           game.board[from.row][from.col] = null;
         }
 
@@ -238,11 +253,26 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Last action type cannot be challenged' });
     }
 
-    // If no player currently needs to place an on-deck piece, set the turn to
-    // the opponent of the player who made the last move
-    if (game.onDeckingPlayer === null && lastMove) {
+    // Handle turn logic after challenge resolution
+    if (game.onDeckingPlayer !== null) {
+      // If someone needs to go on-deck, it's their turn
+      game.playerTurn = game.onDeckingPlayer;
+    } else if (lastMove) {
+      // If no one needs to go on-deck, turn goes to the opponent of the last mover
       game.playerTurn = lastMove.player === 0 ? 1 : 0;
     }
+
+    // Add debugging for turn logic
+    console.log('Challenge turn logic debug:', {
+      wasSuccessful,
+      onDeckingPlayer: game.onDeckingPlayer,
+      playerTurn: game.playerTurn,
+      lastMovePlayer: lastMove ? lastMove.player : null,
+      challengeColor: normalizedColor
+    });
+
+    // Save the game state after all board changes
+    await game.save();
 
     await game.addAction(
       config.actions.get('CHALLENGE'),
@@ -255,6 +285,16 @@ router.post('/', async (req, res) => {
 
     if (trueKing && game.isActive) {
       await game.endGame(lastMove.player, config.winReasons.get('TRUE_KING'));
+      // Check if game ended and return early
+      if (!game.isActive) {
+        return res.json({ 
+          success: wasSuccessful, 
+          message: 'Game ended: True king victory',
+          capturedPiece,
+          captureBy,
+          trueKing
+        });
+      }
     }
 
     if (
@@ -263,14 +303,32 @@ router.post('/', async (req, res) => {
       game.isActive
     ) {
       await game.endGame(captureBy, config.winReasons.get('CAPTURED_KING'));
+      // Check if game ended and return early
+      if (!game.isActive) {
+        return res.json({ 
+          success: wasSuccessful, 
+          message: 'Game ended: King captured',
+          capturedPiece,
+          captureBy,
+          trueKing
+        });
+      }
     }
 
     if (game.isActive && (game.daggers[0] >= 3 || game.daggers[1] >= 3)) {
       const winner = game.daggers[0] >= 3 ? 0 : 1;
       await game.endGame(winner, config.winReasons.get('DAGGERS'));
+      // Check if game ended and return early
+      if (!game.isActive) {
+        return res.json({ 
+          success: wasSuccessful, 
+          message: 'Game ended: Dagger victory',
+          capturedPiece,
+          captureBy,
+          trueKing
+        });
+      }
     }
-
-    await game.save();
 
     eventBus.emit('gameChanged', {
       game: typeof game.toObject === 'function' ? game.toObject() : game,

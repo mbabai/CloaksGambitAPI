@@ -142,23 +142,35 @@ router.post('/', async (req, res) => {
         const targetPiece = game.board[pt.row][pt.col];
 
         if (targetPiece) {
-          game.captured[targetPiece.color].push(targetPiece);
+          game.captured[prevMove.player].push(targetPiece);
         }
 
         game.board[pt.row][pt.col] = movingPiece;
         game.board[pf.row][pf.col] = null;
 
+        // Mark the move as resolved first
+        prevMove.state = config.moveStates.get('RESOLVED');
+
+        // Save the game state after resolving the move
+        await game.save();
+
         const kingId = config.identities.get('KING');
         if (targetPiece && targetPiece.identity === kingId) {
           await game.endGame(prevMove.player, config.winReasons.get('CAPTURED_KING'));
+          // Check if game ended and return early
+          if (!game.isActive) {
+            return res.json({ message: 'Game ended: King captured' });
+          }
         } else if (prevMove.declaration === kingId) {
           const throneRow = prevMove.player === 0 ? config.boardDimensions.RANKS - 1 : 0;
           if (pt.row === throneRow) {
             await game.endGame(prevMove.player, config.winReasons.get('THRONE'));
+            // Check if game ended and return early
+            if (!game.isActive) {
+              return res.json({ message: 'Game ended: King reached throne' });
+            }
           }
         }
-
-        prevMove.state = config.moveStates.get('RESOLVED');
 
         if (targetPiece) {
           game.movesSinceAction = 0;
@@ -166,13 +178,18 @@ router.post('/', async (req, res) => {
           game.movesSinceAction += 1;
           if (game.movesSinceAction >= 20 && game.isActive) {
             await game.endGame(null, config.winReasons.get('DRAW'));
+            // Check if game ended and return early
+            if (!game.isActive) {
+              return res.json({ message: 'Game ended: Draw by inactivity' });
+            }
           }
         }
       }
     }
 
+    // Final check to ensure game is still active before proceeding
     if (!game.isActive) {
-      return res.json({ message: 'Game drawn by inactivity' });
+      return res.status(400).json({ message: 'Game is not active' });
     }
 
     game.moves.push(move);

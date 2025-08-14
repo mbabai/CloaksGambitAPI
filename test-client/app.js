@@ -44,7 +44,10 @@ let pendingOnDeck = null; // Track if a player needs to go on-deck after a faile
 let gameState = {
   lastMove: null, // Store the last move for persistence
   lastAction: null, // Store the last action for persistence
-  turnState: 'normal' // 'normal', 'challenge', 'bomb', 'onDeck'
+  turnState: 'normal', // 'normal', 'challenge', 'bomb', 'onDeck'
+  isActive: true, // Whether the game is still active
+  winner: null, // Winner of the game (0 for white, 1 for black, null for draw)
+  winReason: null // Reason for the game ending
 };
 
 // Logging functions for each player
@@ -60,8 +63,8 @@ function logServerMessage(player, msg) {
 }
 
 // Update action history (shared between both players)
-function updateActionHistory(actions) {
-  const actionHistory = formatActions(actions);
+function updateActionHistory(actions, gameState = null) {
+  const actionHistory = formatActions(actions, gameState);
   players.player1.actionHistoryEl.innerHTML = actionHistory;
   players.player2.actionHistoryEl.innerHTML = actionHistory;
 }
@@ -323,6 +326,9 @@ async function establishSocketConnection(player) {
                 if (playerIndex !== -1) {
                   player.color = playerIndex; // Player 0 is white, Player 1 is black
                   console.log(`Player ${player.name} color set to ${player.color} (${player.color === 0 ? 'white' : 'black'})`);
+                  
+                  // Update on-deck button handlers now that colors are determined
+                  setupOnDeckButtons();
                 } else {
                   // Fallback: use player name as before
                   if (player.name === 'Player 1') {
@@ -331,6 +337,9 @@ async function establishSocketConnection(player) {
                     player.color = 1; // Usually Player 2 is black
                   }
                   console.log(`Player ${player.name} color set to ${player.color} (${player.color === 0 ? 'white' : 'black'}) by name fallback`);
+                  
+                  // Update on-deck button handlers now that colors are determined
+                  setupOnDeckButtons();
                 }
               }
             }
@@ -361,8 +370,29 @@ async function establishSocketConnection(player) {
               }
             }
             
+            // Update global game state
+            if (u.isActive !== undefined) {
+              gameState.isActive = u.isActive;
+            }
+            if (u.winner !== undefined) {
+              gameState.winner = u.winner;
+            }
+            if (u.winReason !== undefined) {
+              gameState.winReason = u.winReason;
+            }
+            
+            // Check if game just ended and show win alert
+            if (u.isActive === false && u.winner !== undefined && u.winReason !== undefined) {
+              // Game just ended - show win alert
+              showWinAlert(u.winner, u.winReason);
+            }
+            
             // Update action history (shared between both players)
-            updateActionHistory(u.actions);
+            updateActionHistory(u.actions, {
+              isActive: u.isActive,
+              winner: u.winner,
+              winReason: u.winReason
+            });
             
             // Update game state for this player (includes captured)
             updateGameState(player, u.board, u.stashes, u.onDecks, u.daggers, u.moves, u.captured);
@@ -677,7 +707,10 @@ function resetReadyState() {
   gameState = {
     lastMove: null,
     lastAction: null,
-    turnState: 'normal'
+    turnState: 'normal',
+    isActive: true,
+    winner: null,
+    winReason: null
   };
   
   // Disable ready and setup buttons
@@ -800,7 +833,10 @@ function checkSetupCompletion() {
     gameState = {
       lastMove: null,
       lastAction: null,
-      turnState: 'normal'
+      turnState: 'normal',
+      isActive: true,
+      winner: null,
+      winReason: null
     };
     
     // Update action controls based on whose turn it is
@@ -1143,18 +1179,23 @@ document.getElementById('bomb2').onclick = () => {
   }
 };
 
-// On-deck button handlers
-document.getElementById('onDeckKing1').onclick = () => executeOnDeckIdentity(0, 1);
-document.getElementById('onDeckBomb1').onclick = () => executeOnDeckIdentity(0, 2);
-document.getElementById('onDeckBishop1').onclick = () => executeOnDeckIdentity(0, 3);
-document.getElementById('onDeckRook1').onclick = () => executeOnDeckIdentity(0, 4);
-document.getElementById('onDeckKnight1').onclick = () => executeOnDeckIdentity(0, 5);
+// Function to set up on-deck button handlers
+function setupOnDeckButtons() {
+  document.getElementById('onDeckKing1').onclick = () => executeOnDeckIdentity(players.player1.color, 1);
+  document.getElementById('onDeckBomb1').onclick = () => executeOnDeckIdentity(players.player1.color, 2);
+  document.getElementById('onDeckBishop1').onclick = () => executeOnDeckIdentity(players.player1.color, 3);
+  document.getElementById('onDeckRook1').onclick = () => executeOnDeckIdentity(players.player1.color, 4);
+  document.getElementById('onDeckKnight1').onclick = () => executeOnDeckIdentity(players.player1.color, 5);
 
-document.getElementById('onDeckKing2').onclick = () => executeOnDeckIdentity(1, 1);
-document.getElementById('onDeckBomb2').onclick = () => executeOnDeckIdentity(1, 2);
-document.getElementById('onDeckBishop2').onclick = () => executeOnDeckIdentity(1, 3);
-document.getElementById('onDeckRook2').onclick = () => executeOnDeckIdentity(1, 4);
-document.getElementById('onDeckKnight2').onclick = () => executeOnDeckIdentity(1, 5);
+  document.getElementById('onDeckKing2').onclick = () => executeOnDeckIdentity(players.player2.color, 1);
+  document.getElementById('onDeckBomb2').onclick = () => executeOnDeckIdentity(players.player2.color, 2);
+  document.getElementById('onDeckBishop2').onclick = () => executeOnDeckIdentity(players.player2.color, 3);
+  document.getElementById('onDeckRook2').onclick = () => executeOnDeckIdentity(players.player2.color, 4);
+  document.getElementById('onDeckKnight2').onclick = () => executeOnDeckIdentity(players.player2.color, 5);
+}
+
+// Set up on-deck buttons initially (will be updated when colors are determined)
+setupOnDeckButtons();
 
 // Coordinate conversion functions
 function chessToCoordinates(chessNotation) {
@@ -1218,7 +1259,17 @@ async function executeMove(player, fromInput, toInput, declarationSelect) {
     });
     
     if (res.ok) {
-      logServerMessage(player, 'Move successful!');
+      const responseData = await res.json();
+      
+      // Check if this response indicates the game has ended
+      if (responseData.message && responseData.message.includes('Game ended:')) {
+        logServerMessage(player, `Game ended: ${responseData.message}`);
+        // Don't show "Move successful!" for game-ending moves
+        // The game:update event will handle updating the UI
+      } else {
+        logServerMessage(player, 'Move successful!');
+      }
+      
       // Store the move state
       lastActionType = 'move';
       lastActionPlayer = player.color;
@@ -1261,7 +1312,18 @@ async function executePass(player) {
     });
     
     if (res.ok) {
-      logServerMessage(player, 'Pass successful!');
+      const responseData = await res.json();
+      
+      // Check if this response indicates the game has ended
+      if (responseData.message && responseData.message.includes('Game ended:')) {
+        logServerMessage(player, `Game ended: ${responseData.message}`);
+        // Don't show "Pass successful!" for game-ending passes
+        // The game:update event will handle updating the UI
+        return; // Exit early since game ended
+      } else {
+        logServerMessage(player, 'Pass successful!');
+      }
+      
       lastActionType = 'pass';
       lastActionPlayer = player.color;
       
@@ -1301,6 +1363,15 @@ async function executeChallenge(player) {
     
     if (res.ok) {
       const responseData = await res.json();
+      
+      // Check if this response indicates the game has ended
+      if (responseData.message && responseData.message.includes('Game ended:')) {
+        logServerMessage(player, `Game ended: ${responseData.message}`);
+        // Don't process challenge logic for game-ending challenges
+        // The game:update event will handle updating the UI
+        return; // Exit early since game ended
+      }
+      
       logServerMessage(player, `Challenge response: ${JSON.stringify(responseData)}`);
       
       lastActionType = 'challenge';
@@ -1590,10 +1661,91 @@ function isLastMoveTo(row, col, moves) {
   return lastMove && lastMove.to && lastMove.to.row === row && lastMove.to.col === col;
 }
 
-function formatActions(actions) {
+function formatActions(actions, gameState = null) {
   if (!actions || !Array.isArray(actions)) return 'No actions';
   if (actions.length === 0) return 'No actions yet';
   
+  // Check if game has ended and we should show win condition
+  if (gameState && !gameState.isActive && gameState.winner !== undefined) {
+    const winner = gameState.winner === 0 ? 'White' : 'Black';
+    let winMessage = '';
+    
+    // Get win reason description
+    switch (gameState.winReason) {
+      case 0: // CAPTURED_KING
+        winMessage = `${winner} wins via capturing the king`;
+        break;
+      case 1: // THRONE
+        winMessage = `${winner} wins via reaching the throne`;
+        break;
+      case 2: // TRUE_KING
+        winMessage = `${winner} wins via true king victory`;
+        break;
+      case 3: // DAGGERS
+        winMessage = `${winner} wins via dagger victory`;
+        break;
+      case 4: // TIME_CONTROL
+        winMessage = `${winner} wins via time control`;
+        break;
+      case 5: // DISCONNECT
+        winMessage = `${winner} wins via opponent disconnect`;
+        break;
+      case 6: // RESIGN
+        winMessage = `${winner} wins via opponent resignation`;
+        break;
+      case 7: // DRAW
+        winMessage = 'Game drawn';
+        break;
+      default:
+        winMessage = `${winner} wins`;
+    }
+    
+    // Show all actions except the last one if it resulted in a win
+    const actionsToShow = actions.slice(0, -1);
+    let result = actionsToShow.map((action, index) => {
+      const player = action.player === 0 ? 'W' : 'B';
+      
+      switch (action.type) {
+        case 0: // SETUP
+          return `${index + 1}. ${player}: Setup`;
+        case 1: // MOVE
+          if (action.details && action.details.from && action.details.to) {
+            const from = `${String.fromCharCode(65 + action.details.from.col)}${action.details.from.row + 1}`;
+            const to = `${String.fromCharCode(65 + action.details.to.col)}${action.details.to.row + 1}`;
+            const piece = getPieceName(action.details.declaration);
+            return `${index + 1}. ${player}: ${from}→${to} "${piece}"`;
+          }
+          return `${index + 1}. ${player}: Move`;
+        case 2: // CHALLENGE
+          if (action.details && action.details.outcome) {
+            return `${index + 1}. ${player}: Challenge (${action.details.outcome})`;
+          }
+          return `${index + 1}. ${player}: Challenge`;
+        case 3: // BOMB
+          return `${index + 1}. ${player}: Bomb`;
+        case 4: // PASS
+          return `${index + 1}. ${player}: Pass`;
+        case 5: // ON_DECK
+          if (action.details && action.details.piece) {
+            const piece = getPieceName(action.details.piece.identity);
+            return `${index + 1}. ${player}: On-Deck ${piece}`;
+          }
+          return `${index + 1}. ${player}: On-Deck`;
+        case 6: // RESIGN
+          return `${index + 1}. ${player}: Resign`;
+        case 7: // READY
+          return `${index + 1}. ${player}: Ready`;
+        default:
+          return `${index + 1}. ${player}: Action ${action.type}`;
+      }
+    }).join('\n');
+    
+    // Add the win message
+    result += `\n\n🎯 GAME OVER: ${winMessage}`;
+    return result;
+  }
+  
+  // Normal case - show all actions
   return actions.map((action, index) => {
     const player = action.player === 0 ? 'W' : 'B';
     
@@ -1769,14 +1921,45 @@ function updateActionControlsWrapper() {
   if (gamePhase === 'Setup Complete') {
     // Use the server's playerTurn instead of local calculation
     updateActionControls(currentTurn);
+  } else if (gameState && !gameState.isActive) {
+    // Game has ended - update controls to reflect this
+    updateActionControls(currentTurn);
   }
 }
 
-// Update action controls - enable ALL buttons all the time for testing
+// Update action controls based on game state
 function updateActionControls(currentTurn) {
-  // Enable ALL action buttons for both players all the time
-  // Let the server handle validation and return errors if needed
+  // Check if game has ended
+  if (gameState && !gameState.isActive) {
+    // Game has ended - disable all controls for both players
+    const allControls = [
+      'move1', 'pass1', 'challenge1', 'bomb1', 'onDeck1',
+      'move2', 'pass2', 'challenge2', 'bomb2', 'onDeck2'
+    ];
+    
+    allControls.forEach(controlId => {
+      const control = document.getElementById(controlId);
+      if (control) {
+        control.disabled = true;
+        control.style.opacity = '0.5';
+        control.style.cursor = 'not-allowed';
+      }
+    });
+    
+    // Disable all coordinate inputs for both players
+    const allInputs = ['from1', 'to1', 'declaration1', 'from2', 'to2', 'declaration2'];
+    allInputs.forEach(inputId => {
+      const input = document.getElementById(inputId);
+      if (input) {
+        input.disabled = true;
+        input.style.opacity = '0.5';
+      }
+    });
+    
+    return;
+  }
   
+  // Game is still active - enable controls based on turn
   const allControls = [
     'move1', 'pass1', 'challenge1', 'bomb1', 'onDeck1',
     'move2', 'pass2', 'challenge2', 'bomb2', 'onDeck2'
@@ -1787,10 +1970,11 @@ function updateActionControls(currentTurn) {
     if (control) {
       control.disabled = false;
       control.style.opacity = '1';
+      control.style.cursor = 'pointer';
     }
   });
   
-  // Enable ALL coordinate inputs for both players
+  // Enable all coordinate inputs for both players
   const allInputs = ['from1', 'to1', 'declaration1', 'from2', 'to2', 'declaration2'];
   allInputs.forEach(inputId => {
     const input = document.getElementById(inputId);
@@ -1801,11 +1985,29 @@ function updateActionControls(currentTurn) {
   });
 }
 
-// Update on-deck button states - always enable all buttons, let server handle validation
+// Update on-deck button states based on game state
 function updateOnDeckButtons(stashes, player) {
-  // Enable all on-deck buttons for all players all the time
-  // Let the server handle validation and return errors if needed
+  // Check if game has ended
+  if (gameState && !gameState.isActive) {
+    // Game has ended - disable all on-deck buttons
+    [0, 1].forEach(color => {
+      const playerNum = color + 1;
+      
+      // Update each button for this player
+      [1, 2, 3, 4, 5].forEach(identity => {
+        const buttonId = `onDeck${getPieceName(identity)}${playerNum}`;
+        const button = document.getElementById(buttonId);
+        if (button) {
+          button.disabled = true;
+          button.style.opacity = '0.5';
+          button.style.cursor = 'not-allowed';
+        }
+      });
+    });
+    return;
+  }
   
+  // Game is still active - enable all on-deck buttons
   [0, 1].forEach(color => {
     const playerNum = color + 1;
     
@@ -1814,7 +2016,6 @@ function updateOnDeckButtons(stashes, player) {
       const buttonId = `onDeck${getPieceName(identity)}${playerNum}`;
       const button = document.getElementById(buttonId);
       if (button) {
-        // Always enable all buttons
         button.disabled = false;
         button.style.opacity = '1';
         button.style.cursor = 'pointer';
@@ -1824,7 +2025,14 @@ function updateOnDeckButtons(stashes, player) {
 }
 
 function executeOnDeckIdentity(color, identity) {
-  const player = color === 0 ? players.player1 : players.player2;
+  // Find the player by their actual color, not by assumed mapping
+  const player = players.player1.color === color ? players.player1 : 
+                 players.player2.color === color ? players.player2 : null;
+  
+  if (!player) {
+    console.error(`No player found with color ${color}`);
+    return;
+  }
   if (gamePhase !== 'Setup Complete') {
     logServerMessage(player, 'Game not ready for on-deck yet');
     return;
@@ -1856,6 +2064,44 @@ function executeOnDeckIdentity(color, identity) {
   });
 }
 
+// Show win alert when game ends
+function showWinAlert(winner, winReason) {
+  const winnerName = winner === 0 ? 'White' : 'Black';
+  let winMessage = '';
+  
+  // Get win reason description
+  switch (winReason) {
+    case 0: // CAPTURED_KING
+      winMessage = `${winnerName} wins via capturing the king`;
+      break;
+    case 1: // THRONE
+      winMessage = `${winnerName} wins via reaching the throne`;
+      break;
+    case 2: // TRUE_KING
+      winMessage = `${winnerName} wins via true king victory`;
+      break;
+    case 3: // DAGGERS
+      winMessage = `${winnerName} wins via dagger victory`;
+      break;
+    case 4: // TIME_CONTROL
+      winMessage = `${winnerName} wins via time control`;
+      break;
+    case 5: // DISCONNECT
+      winMessage = `${winnerName} wins via opponent disconnect`;
+      break;
+    case 6: // RESIGN
+      winMessage = `${winnerName} wins via opponent resignation`;
+      break;
+    case 7: // DRAW
+      winMessage = 'Game drawn';
+      break;
+    default:
+      winMessage = `${winnerName} wins`;
+  }
+  
+  // Show alert
+  alert(`🎯 GAME OVER!\n\n${winMessage}`);
+}
 
 // Initialize the interface
 updateGameStatus();

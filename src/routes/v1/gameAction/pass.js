@@ -55,6 +55,10 @@ router.post('/', async (req, res) => {
 
     if (piece.identity === config.identities.get('KING') && game.isActive) {
       await game.endGame(normalizedColor, config.winReasons.get('CAPTURED_KING'));
+      // Check if game ended and return early
+      if (!game.isActive) {
+        return res.json({ message: 'Game ended: King captured' });
+      }
     }
 
     await game.save();

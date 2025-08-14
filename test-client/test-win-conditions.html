@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Win Conditions Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .action-history {
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .win-message {
+            color: #28a745;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Win Conditions Test</h1>
+    
+    <div class="test-section">
+        <h2>Test 1: Normal Game (No Win)</h2>
+        <p>This shows a normal game with actions but no win condition.</p>
+        <button onclick="testNormalGame()">Show Normal Game</button>
+        <div id="normalGame" class="action-history"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test 2: King Capture Win</h2>
+        <p>This shows a game that ended with a king capture - the last move should be hidden and replaced with a win message.</p>
+        <button onclick="testKingCaptureWin()">Show King Capture Win</button>
+        <div id="kingCaptureWin" class="action-history"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test 3: Throne Win</h2>
+        <p>This shows a game that ended with a throne victory.</p>
+        <button onclick="testThroneWin()">Show Throne Win</button>
+        <div id="throneWin" class="action-history"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test 4: Dagger Win</h2>
+        <p>This shows a game that ended with a dagger victory.</p>
+        <button onclick="testDaggerWin()">Show Dagger Win</button>
+        <div id="daggerWin" class="action-history"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 5: True King Win</h2>
+        <p>This shows a game that ended with a true king victory (challenging the true king).</p>
+        <button onclick="testTrueKingWin()">Show True King Win</button>
+        <div id="trueKingWin" class="action-history"></div>
+    </div>
+
+    <script>
+        // Sample actions for testing
+        const sampleActions = [
+            { type: 0, player: 0, details: {} }, // White: Setup
+            { type: 0, player: 1, details: {} }, // Black: Setup
+            { type: 7, player: 0, details: {} }, // White: Ready
+            { type: 7, player: 1, details: {} }, // Black: Ready
+            { type: 1, player: 0, details: { from: { row: 0, col: 0 }, to: { row: 2, col: 0 }, declaration: 4 } }, // White: A1→A3 "Rook"
+            { type: 1, player: 1, details: { from: { row: 5, col: 0 }, to: { row: 3, col: 0 }, declaration: 4 } }, // Black: A6→A4 "Rook"
+            { type: 1, player: 0, details: { from: { row: 2, col: 0 }, to: { row: 4, col: 0 }, declaration: 4 } }, // White: A3→A5 "Rook"
+            { type: 1, player: 1, details: { from: { row: 3, col: 0 }, to: { row: 1, col: 0 }, declaration: 4 } }  // Black: A4→A2 "Rook"
+        ];
+
+        // Function to format actions (copied from app.js)
+        function formatActions(actions, gameState = null) {
+            if (!actions || !Array.isArray(actions)) return 'No actions';
+            if (actions.length === 0) return 'No actions yet';
+            
+            // Check if game has ended and we should show win condition
+            if (gameState && !gameState.isActive && gameState.winner !== undefined) {
+                const winner = gameState.winner === 0 ? 'White' : 'Black';
+                let winMessage = '';
+                
+                // Get win reason description
+                switch (gameState.winReason) {
+                    case 0: // CAPTURED_KING
+                        winMessage = `${winner} wins via capturing the king`;
+                        break;
+                    case 1: // THRONE
+                        winMessage = `${winner} wins via reaching the throne`;
+                        break;
+                    case 2: // TRUE_KING
+                        winMessage = `${winner} wins via true king victory`;
+                        break;
+                    case 3: // DAGGERS
+                        winMessage = `${winner} wins via dagger victory`;
+                        break;
+                    case 4: // TIME_CONTROL
+                        winMessage = `${winner} wins via time control`;
+                        break;
+                    case 5: // DISCONNECT
+                        winMessage = `${winner} wins via opponent disconnect`;
+                        break;
+                    case 6: // RESIGN
+                        winMessage = `${winner} wins via opponent resignation`;
+                        break;
+                    case 7: // DRAW
+                        winMessage = 'Game drawn';
+                        break;
+                    default:
+                        winMessage = `${winner} wins`;
+                }
+                
+                // Show all actions except the last one if it resulted in a win
+                const actionsToShow = actions.slice(0, -1);
+                let result = actionsToShow.map((action, index) => {
+                    const player = action.player === 0 ? 'W' : 'B';
+                    
+                    switch (action.type) {
+                        case 0: // SETUP
+                            return `${index + 1}. ${player}: Setup`;
+                        case 1: // MOVE
+                            if (action.details && action.details.from && action.details.to) {
+                                const from = `${String.fromCharCode(65 + action.details.from.col)}${action.details.from.row + 1}`;
+                                const to = `${String.fromCharCode(65 + action.details.to.col)}${action.details.to.row + 1}`;
+                                const piece = getPieceName(action.details.declaration);
+                                return `${index + 1}. ${player}: ${from}→${to} "${piece}"`;
+                            }
+                            return `${index + 1}. ${player}: Move`;
+                        case 2: // CHALLENGE
+                            if (action.details && action.details.outcome) {
+                                return `${index + 1}. ${player}: Challenge (${action.details.outcome})`;
+                            }
+                            return `${index + 1}. ${player}: Challenge`;
+                        case 3: // BOMB
+                            return `${index + 1}. ${player}: Bomb`;
+                        case 4: // PASS
+                            return `${index + 1}. ${player}: Pass`;
+                        case 5: // ON_DECK
+                            if (action.details && action.details.piece) {
+                                const piece = getPieceName(action.details.piece.identity);
+                                return `${index + 1}. ${player}: On-Deck ${piece}`;
+                            }
+                            return `${index + 1}. ${player}: On-Deck`;
+                        case 6: // RESIGN
+                            return `${index + 1}. ${player}: Resign`;
+                        case 7: // READY
+                            return `${index + 1}. ${player}: Ready`;
+                        default:
+                            return `${index + 1}. ${player}: Action ${action.type}`;
+                    }
+                }).join('\n');
+                
+                // Add the win message
+                result += `\n\n🎯 GAME OVER: ${winMessage}`;
+                return result;
+            }
+            
+            // Normal case - show all actions
+            return actions.map((action, index) => {
+                const player = action.player === 0 ? 'W' : 'B';
+                
+                switch (action.type) {
+                    case 0: // SETUP
+                        return `${index + 1}. ${player}: Setup`;
+                    case 1: // MOVE
+                        if (action.details && action.details.from && action.details.to) {
+                            const from = `${String.fromCharCode(65 + action.details.from.col)}${action.details.from.row + 1}`;
+                            const to = `${String.fromCharCode(65 + action.details.to.col)}${action.details.to.row + 1}`;
+                            const piece = getPieceName(action.details.declaration);
+                            return `${index + 1}. ${player}: ${from}→${to} "${piece}"`;
+                        }
+                        return `${index + 1}. ${player}: Move`;
+                    case 2: // CHALLENGE
+                        if (action.details && action.details.outcome) {
+                            return `${index + 1}. ${player}: Challenge (${action.details.outcome})`;
+                        }
+                        return `${index + 1}. ${player}: Challenge`;
+                    case 3: // BOMB
+                        return `${index + 1}. ${player}: Bomb`;
+                    case 4: // PASS
+                        return `${index + 1}. ${player}: Pass`;
+                    case 5: // ON_DECK
+                        if (action.details && action.details.piece) {
+                            const piece = getPieceName(action.details.piece.identity);
+                            return `${index + 1}. ${player}: On-Deck ${piece}`;
+                        }
+                        return `${index + 1}. ${player}: On-Deck`;
+                    case 6: // RESIGN
+                        return `${index + 1}. ${player}: Resign`;
+                    case 7: // READY
+                        return `${index + 1}. ${player}: Ready`;
+                    default:
+                        return `${index + 1}. ${player}: Action ${action.type}`;
+                }
+            }).join('\n');
+        }
+
+        // Helper function to get piece names
+        function getPieceName(identity) {
+            switch (identity) {
+                case 1: return 'King';
+                case 2: return 'Bomb';
+                case 3: return 'Bishop';
+                case 4: return 'Rook';
+                case 5: return 'Knight';
+                default: return 'Unknown';
+            }
+        }
+
+        // Test functions
+        function testNormalGame() {
+            const result = formatActions(sampleActions);
+            document.getElementById('normalGame').textContent = result;
+        }
+
+        function testKingCaptureWin() {
+            const gameState = {
+                isActive: false,
+                winner: 1, // Black wins
+                winReason: 0 // CAPTURED_KING
+            };
+            const result = formatActions(sampleActions, gameState);
+            document.getElementById('kingCaptureWin').textContent = result;
+        }
+
+        function testThroneWin() {
+            const gameState = {
+                isActive: false,
+                winner: 0, // White wins
+                winReason: 1 // THRONE
+            };
+            const result = formatActions(sampleActions, gameState);
+            document.getElementById('throneWin').textContent = result;
+        }
+
+        function testDaggerWin() {
+            const gameState = {
+                isActive: false,
+                winner: 1, // Black wins
+                winReason: 3 // DAGGERS
+            };
+            const result = formatActions(sampleActions, gameState);
+            document.getElementById('daggerWin').textContent = result;
+        }
+
+        function testTrueKingWin() {
+            const gameState = {
+                isActive: false,
+                winner: 0, // White wins
+                winReason: 2 // TRUE_KING
+            };
+            const result = formatActions(sampleActions, gameState);
+            document.getElementById('trueKingWin').textContent = result;
+        }
+
+        // Initialize with normal game
+        testNormalGame();
+    </script>
+</body>
+</html>
