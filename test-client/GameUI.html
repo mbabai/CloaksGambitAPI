@@ -156,8 +156,8 @@
         }
 
         .dagger-token {
-            width: 100%; /* Use full height of container */
-            height: 100%; /* Use full height of container */
+            width: 40px; /* Fixed width to match clock height */
+            height: 40px; /* Fixed height to match clock height */
             background: #dc2626;
             border-radius: 50%;
             display: flex;
@@ -182,8 +182,8 @@
         }
 
         .captured-piece {
-            width: 36px; /* Doubled from 18px */
-            height: 36px; /* Doubled from 18px */
+            width: 100%; /* Use full height of container */
+            height: 100%; /* Use full height of container */
             background: #ffffff;
             border: 1px solid #000;
             border-radius: 0px;
@@ -508,89 +508,100 @@
             rightPlayerState.style.width = `${rightStateWidth}px`;
             rightPlayerState.style.height = `${gameStateHeight}px`;
             
-            // Position player names (top of game state)
-            const nameHeight = squareSize * 0.66; // Same height as clocks
-            const nameWidth = Math.min(squareSize * 4, leftStateWidth * 1); // Ensure it fits within player state
-            
-            const leftPlayerName = document.getElementById('leftPlayerName');
-            leftPlayerName.style.top = '0px';
-            leftPlayerName.style.left = '0px'; // Left aligned with no margin
-            leftPlayerName.style.width = `${nameWidth}px`;
-            leftPlayerName.style.height = `${nameHeight}px`;
-            leftPlayerName.style.padding = '0px';
-            leftPlayerName.style.margin = '0px';
-            leftPlayerName.style.position = 'absolute';
-            leftPlayerName.style.justifyContent = 'flex-start'; // Left align text within the name box
-            
-            const rightPlayerName = document.getElementById('rightPlayerName');
-            rightPlayerName.style.top = '0px';
-            rightPlayerName.style.right = '0px'; // Right aligned with no margin
-            rightPlayerName.style.width = `${nameWidth}px`;
-            rightPlayerName.style.height = `${nameHeight}px`;
-            rightPlayerName.style.padding = '0px';
-            rightPlayerName.style.margin = '0px';
-            rightPlayerName.style.position = 'absolute';
-            rightPlayerName.style.justifyContent = 'flex-end'; // Right align text within the name box
-            
-            // Position clocks (below names)
-            const clockHeight = squareSize * 0.66;
-            const clockWidth = Math.min(squareSize * 1.4, leftStateWidth * 0.6); // 30% narrower (was 2.0, now 1.4)
-            
-            const leftClock = document.getElementById('leftClock');
-            leftClock.style.top = `${nameHeight + 2}px`; // 2px margin from name
-            leftClock.style.left = '0px';
-            leftClock.style.width = `${clockWidth}px`;
-            leftClock.style.height = `${clockHeight}px`;
-            leftClock.style.position = 'absolute';
-            
-            const rightClock = document.getElementById('rightClock');
-            rightClock.style.top = `${nameHeight + 2}px`; // 2px margin from name
-            rightClock.style.right = '0px';
-            rightClock.style.width = `${clockWidth}px`;
-            rightClock.style.height = `${clockHeight}px`;
-            rightClock.style.position = 'absolute';
-            
-            // Position dagger spaces (next to clocks)
-            const daggerHeight = squareSize * 0.66; // Same height as clocks
-            const daggerWidth = daggerHeight; // Perfect 1:1 aspect ratio
-            
-            // Calculate total width needed for dagger space (including multiple tokens)
-            const leftDaggerCount = sampleGameState.daggers[0];
-            const rightDaggerCount = sampleGameState.daggers[1];
-            const leftDaggerSpaceWidth = (daggerWidth * leftDaggerCount) + (8 * (leftDaggerCount - 1)); // Width + increased gaps
-            const rightDaggerSpaceWidth = (daggerWidth * rightDaggerCount) + (8 * (rightDaggerCount - 1)); // Width + increased gaps
-            
-            const leftDaggerSpace = document.getElementById('leftDaggerSpace');
-            leftDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
-            leftDaggerSpace.style.left = `${clockWidth + 2}px`; // 2px to the right of clock (closer)
-            leftDaggerSpace.style.width = `${leftDaggerSpaceWidth}px`;
-            leftDaggerSpace.style.height = `${daggerHeight}px`;
-            leftDaggerSpace.style.position = 'absolute';
-            
-            const rightDaggerSpace = document.getElementById('rightDaggerSpace');
-            rightDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
-            rightDaggerSpace.style.right = `${clockWidth + 2}px`; // 2px to the left of clock (closer)
-            rightDaggerSpace.style.width = `${rightDaggerSpaceWidth}px`;
-            rightDaggerSpace.style.height = `${daggerHeight}px`;
-            rightDaggerSpace.style.position = 'absolute';
-            
-            // Position captures (bottom of game state)
-            const capturesHeight = squareSize * 0.5; // Half square height
-            const capturesWidth = Math.min(squareSize * 2.5, leftStateWidth * 0.9); // Ensure it fits
-            
-            const leftCaptures = document.getElementById('leftCaptures');
-            leftCaptures.style.bottom = '0px';
-            leftCaptures.style.left = '0px';
-            leftCaptures.style.width = `${capturesWidth}px`;
-            leftCaptures.style.height = `${capturesHeight}px`;
-            leftCaptures.style.position = 'absolute';
-            
-            const rightCaptures = document.getElementById('rightCaptures');
-            rightCaptures.style.bottom = '0px';
-            rightCaptures.style.right = '0px';
-            rightCaptures.style.width = `${capturesWidth}px`;
-            rightCaptures.style.height = `${capturesHeight}px`;
-            rightCaptures.style.position = 'absolute';
+                    // Position player names (top of game state)
+        // 4E: Names should be same height as clocks, aligned to outside of states div
+        const nameHeight = squareSize * 0.66; // Same height as clocks
+        const nameWidth = squareSize * 2; // Fixed width: 2 squares
+        
+        const leftPlayerName = document.getElementById('leftPlayerName');
+        leftPlayerName.style.top = '0px';
+        leftPlayerName.style.left = '0px'; // Left aligned with no margin
+        leftPlayerName.style.width = `${nameWidth}px`;
+        leftPlayerName.style.height = `${nameHeight}px`;
+        leftPlayerName.style.padding = '0px';
+        leftPlayerName.style.margin = '0px';
+        leftPlayerName.style.position = 'absolute';
+        leftPlayerName.style.justifyContent = 'flex-start'; // Left align text within the name box
+        
+        const rightPlayerName = document.getElementById('rightPlayerName');
+        rightPlayerName.style.top = '0px';
+        rightPlayerName.style.right = '0px'; // Right aligned with no margin
+        rightPlayerName.style.width = `${nameWidth}px`;
+        rightPlayerName.style.height = `${nameHeight}px`;
+        rightPlayerName.style.padding = '0px';
+        rightPlayerName.style.margin = '0px';
+        rightPlayerName.style.position = 'absolute';
+        rightPlayerName.style.justifyContent = 'flex-end'; // Right align text within the name box
+        
+                 // Position clocks (below names)
+         // 4C: Height 0.66 of square, width 1.4 squares (30% narrower), aligned to outside
+         const clockHeight = squareSize * 0.66;
+         const clockWidth = squareSize * 1.4; // Fixed width: 1.4 squares (30% narrower)
+        
+        const leftClock = document.getElementById('leftClock');
+        leftClock.style.top = `${nameHeight + 2}px`; // 2px margin from name
+        leftClock.style.left = '0px';
+        leftClock.style.width = `${clockWidth}px`;
+        leftClock.style.height = `${clockHeight}px`;
+        leftClock.style.position = 'absolute';
+        
+        const rightClock = document.getElementById('rightClock');
+        rightClock.style.top = `${nameHeight + 2}px`; // 2px margin from name
+        rightClock.style.right = '0px';
+        rightClock.style.width = `${clockWidth}px`;
+        rightClock.style.height = `${clockHeight}px`;
+        rightClock.style.position = 'absolute';
+        
+        // Position dagger spaces (next to clocks)
+        // 4D: Same height as clocks, split into equal aspect ratio = 1 halves
+        const daggerHeight = squareSize * 0.66; // Same height as clocks
+        const daggerWidth = squareSize * 1; // Fixed width: 1 square (for the container)
+        
+                 // Calculate total width needed for dagger space (including multiple tokens)
+         const leftDaggerCount = sampleGameState.daggers[0];
+         const rightDaggerCount = sampleGameState.daggers[1];
+         const tokenSize = 40; // Fixed token size
+         const leftDaggerSpaceWidth = (tokenSize * leftDaggerCount) + (8 * (leftDaggerCount - 1)); // Width + gaps
+         const rightDaggerSpaceWidth = (tokenSize * rightDaggerCount) + (8 * (rightDaggerCount - 1)); // Width + gaps
+        
+        const leftDaggerSpace = document.getElementById('leftDaggerSpace');
+        leftDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
+        leftDaggerSpace.style.left = `${clockWidth + 2}px`; // 2px to the right of clock
+        leftDaggerSpace.style.width = `${leftDaggerSpaceWidth}px`;
+        leftDaggerSpace.style.height = `${daggerHeight}px`;
+        leftDaggerSpace.style.position = 'absolute';
+        
+        const rightDaggerSpace = document.getElementById('rightDaggerSpace');
+        rightDaggerSpace.style.top = `${nameHeight + 2}px`; // Same level as clocks
+        rightDaggerSpace.style.right = `${clockWidth + 2}px`; // 2px to the left of clock
+        rightDaggerSpace.style.width = `${rightDaggerSpaceWidth}px`;
+        rightDaggerSpace.style.height = `${daggerHeight}px`;
+        rightDaggerSpace.style.position = 'absolute';
+        
+                 // Position captures (bottom of game state)
+         // 4B: Height 1/2 square, width calculated based on number of pieces, aligned to outside
+         const capturesHeight = squareSize * 0.5; // Half square height
+         
+         // Calculate width needed for captured pieces (each piece is 0.5 square + gaps)
+         const leftCapturesCount = sampleGameState.captured[0].length;
+         const rightCapturesCount = sampleGameState.captured[1].length;
+         const pieceSize = squareSize * 0.5; // Each piece is half square
+         const leftCapturesWidth = (pieceSize * leftCapturesCount) + (3 * Math.max(0, leftCapturesCount - 1)); // Width + gaps
+         const rightCapturesWidth = (pieceSize * rightCapturesCount) + (3 * Math.max(0, rightCapturesCount - 1)); // Width + gaps
+        
+                 const leftCaptures = document.getElementById('leftCaptures');
+         leftCaptures.style.bottom = '0px';
+         leftCaptures.style.left = '0px';
+         leftCaptures.style.width = `${leftCapturesWidth}px`;
+         leftCaptures.style.height = `${capturesHeight}px`;
+         leftCaptures.style.position = 'absolute';
+         
+         const rightCaptures = document.getElementById('rightCaptures');
+         rightCaptures.style.bottom = '0px';
+         rightCaptures.style.right = '0px';
+         rightCaptures.style.width = `${rightCapturesWidth}px`;
+         rightCaptures.style.height = `${capturesHeight}px`;
+         rightCaptures.style.position = 'absolute';
         }
 
         // Generate the game board
