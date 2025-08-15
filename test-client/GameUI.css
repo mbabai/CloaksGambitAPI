@@ -229,6 +229,7 @@ body {
     font-weight: bold;
     border: 1px solid #AAA;
     position: relative;
+    z-index: 1;
 }
 
 .board-square.light {
@@ -242,15 +243,13 @@ body {
 /* Board labels for row and column identification */
 .board-label {
     font-size: var(--font-size-board-square);
-    font-weight: bold;
     color: #111;
-    /* background: rgba(255, 255, 255, 0.9); */
     padding: 2px 4px;
     border-radius: 3px;
     user-select: none;
     pointer-events: none;
-    /* text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.8); */
-    /* border: 1px solid rgba(0, 0, 0, 0.1); */
+
+    z-index: 2;
 }
 
 .board-label.row-label {
@@ -277,6 +276,7 @@ body {
     font-size: var(--font-size-board-piece);
     font-weight: bold;
     color: #000;
+    z-index: 3;
 }
 
 .board-piece.black {
@@ -387,7 +387,7 @@ body {
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;
-    z-index: 100;
+    z-index: 4;
     pointer-events: none;
     transition: opacity 0.3s ease;
 }
