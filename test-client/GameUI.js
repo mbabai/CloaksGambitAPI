@@ -191,12 +191,20 @@ function positionElements() {
     // Position individual buttons
     const challengeButton = document.getElementById('challengeButton');
     const passButton = document.getElementById('passButton');
+    const bombButton = document.getElementById('bombButton');
     
     challengeButton.style.width = `${buttonWidth}px`;
     challengeButton.style.height = `${buttonHeight}px`;
     
     passButton.style.width = `${buttonWidth}px`;
     passButton.style.height = `${buttonHeight}px`;
+    
+    bombButton.style.width = `${buttonWidth}px`;
+    bombButton.style.height = `${buttonHeight}px`;
+    // Position bomb button in same location as pass button (it will cover it)
+    bombButton.style.position = 'absolute';
+    bombButton.style.right = '0px';
+    bombButton.style.top = '0px';
     
     // Position game state above board
     const gameStateHeight = squareSize * 1.9; // Reduced from 2.0 to 1.6 for more compact spacing

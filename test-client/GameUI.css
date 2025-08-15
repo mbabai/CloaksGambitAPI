@@ -143,7 +143,6 @@ body {
     font-size: var(--font-size-player-clock);
     font-weight: bold;
     font-family: 'Courier New', monospace;
-    border: 2px solid #8b5cf6; /* Purple border */
     margin: 2px 0;
 }
 
@@ -153,7 +152,7 @@ body {
 }
 
 .player-clock.black {
-    background: #1f2937;
+    background: #000000;
     color: #fff;
 }
 
@@ -319,15 +318,25 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: var(--font-size-action-button);
+    font-size: calc(var(--font-size-action-button) * 1.5); /* 50% bigger font */
     font-weight: bold;
     color: #ffffff;
     background: #4815be; /* Purple background */
     border: 2px solid #fbbf24; /* Gold border */
-    border-radius: 2px;
+    border-radius: 4px;
     cursor: pointer;
     transition: all 0.2s ease;
     /* Width and height will be set dynamically */
+}
+
+.action-button.bomb {
+    background: #850202; /* Deep red background */
+    border-color: #fbbf24; /* Gold border */
+}
+
+.action-button.bomb:hover {
+    background: #b91c1c; /* Darker red on hover */
+    border-color: #f59e0b; /* Darker gold on hover */
 }
 
 .action-button:hover {
