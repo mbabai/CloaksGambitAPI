@@ -8,6 +8,7 @@
     --font-size-board-piece: 14px;
     --font-size-stash-slot: 12px;
     --font-size-stash-piece: 12px;
+    --font-size-action-button: 16px; /* New property for action button font size */
 }
 
 * {
@@ -303,4 +304,40 @@ body {
 .stash-piece.black {
     background: #000;
     color: #fff;
+}
+
+/* Action Buttons Section - Below the stash */
+.action-buttons {
+    position: absolute;
+    /* Positioning will be set dynamically */
+    display: flex;
+    justify-content: space-between;
+    background: transparent;
+}
+
+.action-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-action-button);
+    font-weight: bold;
+    color: #ffffff;
+    background: #4815be; /* Purple background */
+    border: 2px solid #fbbf24; /* Gold border */
+    border-radius: 2px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    /* Width and height will be set dynamically */
+}
+
+.action-button:hover {
+    background: #7c3aed; /* Darker purple on hover */
+    border-color: #f59e0b; /* Darker gold on hover */
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.action-button:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }

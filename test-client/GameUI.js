@@ -68,6 +68,7 @@ function updateFontSizes() {
     const boardPieceRatio = 0.032; // 28px / 850px (doubled from 0.016)
     const stashSlotRatio = 0.028; // 24px / 850px (doubled from 0.014)
     const stashPieceRatio = 0.028; // 24px / 850px (doubled from 0.014)
+    const actionButtonRatio = 0.038; // 32px / 850px (doubled from 0.019)
     
     // Update CSS custom properties
     root.style.setProperty('--font-size-player-name', `${baseSize * playerNameRatio}px`);
@@ -78,6 +79,7 @@ function updateFontSizes() {
     root.style.setProperty('--font-size-board-piece', `${baseSize * boardPieceRatio}px`);
     root.style.setProperty('--font-size-stash-slot', `${baseSize * stashSlotRatio}px`);
     root.style.setProperty('--font-size-stash-piece', `${baseSize * stashPieceRatio}px`);
+    root.style.setProperty('--font-size-action-button', `${baseSize * actionButtonRatio}px`);
 }
 
 // Calculate the optimal play area size based on page dimensions
@@ -165,6 +167,36 @@ function positionElements() {
     stash.style.height = `${squareSize * STASH_ROWS}px`;
     stash.style.gridTemplateColumns = `repeat(${STASH_COLS}, ${squareSize}px)`;
     stash.style.gridTemplateRows = `repeat(${STASH_ROWS}, ${squareSize}px)`;
+    
+    // Position action buttons below stash
+    const actionButtons = document.getElementById('actionButtons');
+    const buttonWidth = squareSize * 2.2; // 2.2x square width
+    const buttonHeight = squareSize * 1.1; // 1.1x square height
+    let actionButtonsTop = squareSize * 8.1; // 10px gap below stash
+    
+    // Check if action buttons would extend beyond play area
+    const totalHeight = boardTop + boardHeight + (squareSize * STASH_ROWS) + 10 + buttonHeight;
+    if (totalHeight > playAreaHeight) {
+        // If buttons would extend beyond play area, reduce the gap
+        const availableSpace = playAreaHeight - (boardTop + boardHeight + (squareSize * STASH_ROWS));
+        const adjustedGap = Math.max(5, availableSpace - buttonHeight); // At least 5px gap
+        actionButtonsTop = squareSize * 8.1;
+    }
+    
+    actionButtons.style.left = `${stashLeft}px`;
+    actionButtons.style.top = `${actionButtonsTop}px`;
+    actionButtons.style.width = `${boardWidth}px`;
+    actionButtons.style.height = `${buttonHeight}px`;
+    
+    // Position individual buttons
+    const challengeButton = document.getElementById('challengeButton');
+    const passButton = document.getElementById('passButton');
+    
+    challengeButton.style.width = `${buttonWidth}px`;
+    challengeButton.style.height = `${buttonHeight}px`;
+    
+    passButton.style.width = `${buttonWidth}px`;
+    passButton.style.height = `${buttonHeight}px`;
     
     // Position game state above board
     const gameStateHeight = squareSize * 1.9; // Reduced from 2.0 to 1.6 for more compact spacing
