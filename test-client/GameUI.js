@@ -352,11 +352,32 @@ function generateBoard() {
                 pieceElement.className = `board-piece ${piece.color === 0 ? 'white' : 'black'}`;
                 pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
                 square.appendChild(pieceElement);
+                
+                // Add bubbles to the piece at C2 (column 2, row 4 in 0-indexed)
+                if (col === 2 && row === 4) {
+                    addBubblesToPiece(square, pieceElement);
+                }
             }
             
             board.appendChild(square);
         }
     }
+}
+
+// Function to add bubbles to a specific piece
+function addBubblesToPiece(square, pieceElement) {
+    // Make the square relative positioned to contain the bubbles
+    square.style.position = 'relative';
+    
+    // Create left thought bubble
+    const leftBubble = document.createElement('div');
+    leftBubble.className = 'bubble left thought-left visible';
+    square.appendChild(leftBubble);
+    
+    // Create right thought bubble
+    const rightBubble = document.createElement('div');
+    rightBubble.className = 'bubble right thought-right visible';
+    square.appendChild(rightBubble);
 }
 
 // Generate the stash
