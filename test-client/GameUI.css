@@ -373,7 +373,7 @@ body {
 /* Right-side bubbles */
 .bubble.right {
     right: -50%; /* Half square right */
-    top: -45%;   /* Half square up */
+    top: -45%;   /* Half square up */ 
 }
 
 /* Speech bubble variants */
