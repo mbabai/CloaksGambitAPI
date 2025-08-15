@@ -203,6 +203,8 @@ body {
     justify-content: center;
     font-size: var(--font-size-captured-piece);
     color: #000;
+    aspect-ratio: 1;
+    flex-shrink: 0;
 }
 
 .captured-piece.black {
@@ -235,6 +237,34 @@ body {
 
 .board-square.dark {
     background: #424242;
+}
+
+/* Board labels for row and column identification */
+.board-label {
+    font-size: var(--font-size-board-square);
+    font-weight: bold;
+    color: #333;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 2px 4px;
+    border-radius: 3px;
+    user-select: none;
+    pointer-events: none;
+    text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.board-label.row-label {
+    /* Row labels (numbers) on the left column */
+    background: rgba(255, 255, 255, 0.95);
+    min-width: 16px;
+    text-align: center;
+}
+
+.board-label.col-label {
+    /* Column labels (letters) on the bottom row */
+    background: rgba(255, 255, 255, 0.95);
+    min-width: 16px;
+    text-align: center;
 }
 
 .board-piece {

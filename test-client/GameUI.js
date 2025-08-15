@@ -14,6 +14,9 @@ let playAreaHeight = 0;
 let boardWidth = 0;
 let boardHeight = 0;
 
+// Global variable to track current player perspective
+let currentPlayerPerspective = 'white'; // 'white' or 'black'
+
 // Piece identities mapping
 const PIECE_IDENTITIES = {
     0: '?',    // UNKNOWN
@@ -218,18 +221,28 @@ function positionElements() {
      const leftStateWidth = (playAreaWidth - leftStateLeft - 10) / 2; // Use half of remaining space
      
      const leftPlayerState = document.getElementById('leftPlayerState');
-     leftPlayerState.style.left = `${leftStateLeft}px`;
-     leftPlayerState.style.width = `${leftStateWidth}px`;
-     leftPlayerState.style.height = `${gameStateHeight}px`;
-     
-     // Position right player state - ensure it doesn't go off the right edge
-     const rightStateRight = Math.max(squareSize * 0.25, 10); // At least 10px from right edge
-     const rightStateWidth = (playAreaWidth - rightStateRight - 10) / 2; // Use half of remaining space
-     
      const rightPlayerState = document.getElementById('rightPlayerState');
-     rightPlayerState.style.right = `${rightStateRight}px`;
-     rightPlayerState.style.width = `${rightStateWidth}px`;
-     rightPlayerState.style.height = `${gameStateHeight}px`;
+     
+     // Position player states based on perspective
+     if (currentPlayerPerspective === 'white') {
+         // White perspective: white on left, black on right
+         leftPlayerState.style.left = `${leftStateLeft}px`;
+         leftPlayerState.style.width = `${leftStateWidth}px`;
+         leftPlayerState.style.height = `${gameStateHeight}px`;
+         
+         rightPlayerState.style.right = `${Math.max(squareSize * 0.25, 10)}px`;
+         rightPlayerState.style.width = `${leftStateWidth}px`;
+         rightPlayerState.style.height = `${gameStateHeight}px`;
+     } else {
+         // Black perspective: black on left, white on right
+         leftPlayerState.style.left = `${leftStateLeft}px`;
+         leftPlayerState.style.width = `${leftStateWidth}px`;
+         leftPlayerState.style.height = `${gameStateHeight}px`;
+         
+         rightPlayerState.style.right = `${Math.max(squareSize * 0.25, 10)}px`;
+         rightPlayerState.style.width = `${leftStateWidth}px`;
+         rightPlayerState.style.height = `${gameStateHeight}px`;
+     }
     
             // Position player names (top of game state)
 // 4E: Names should be same height as clocks, aligned to outside of states div
@@ -237,6 +250,33 @@ const nameHeight = squareSize * 0.66; // Same height as clocks
 const nameWidth = squareSize * 3; // Increased width: 3 squares for more space
 
 const leftPlayerName = document.getElementById('leftPlayerName');
+const rightPlayerName = document.getElementById('rightPlayerName');
+
+        // Position player names based on perspective
+        if (currentPlayerPerspective === 'white') {
+            // White perspective: white name on left, black name on right
+            leftPlayerName.textContent = 'White';
+            rightPlayerName.textContent = 'Black';
+        } else {
+            // Black perspective: black name on left, white name on right
+            leftPlayerName.textContent = 'Black';
+            rightPlayerName.textContent = 'White';
+        }
+        
+        // Update clock colors based on perspective
+        const leftClock = document.getElementById('leftClock');
+        const rightClock = document.getElementById('rightClock');
+        
+        if (currentPlayerPerspective === 'white') {
+            // White perspective: white clock (white background) on left, black clock (black background) on right
+            leftClock.className = 'player-clock white';
+            rightClock.className = 'player-clock black';
+        } else {
+            // Black perspective: black clock (black background) on left, white clock (white background) on right
+            leftClock.className = 'player-clock black';
+            rightClock.className = 'player-clock white';
+        }
+
 leftPlayerName.style.top = `${nameHeight * 0.15}px`; // Move down by 1/4 of name height to halve the gap
 leftPlayerName.style.left = '0px'; // Left aligned with no margin
 leftPlayerName.style.width = `${nameWidth}px`;
@@ -246,7 +286,6 @@ leftPlayerName.style.margin = '0px';
 leftPlayerName.style.position = 'absolute';
 leftPlayerName.style.justifyContent = 'flex-start'; // Left align text within the name box
 
-const rightPlayerName = document.getElementById('rightPlayerName');
 rightPlayerName.style.top = `${nameHeight * 0.15}px`; // Move down by 1/4 of name height to halve the gap
 rightPlayerName.style.right = '0px'; // Right aligned with no margin
 rightPlayerName.style.width = `${nameWidth}px`;
@@ -267,19 +306,17 @@ rightPlayerName.style.width = `${nameWidth - nameGap/2}px`; // Reduce right name
  const clockHeight = squareSize * 0.66;
  const clockWidth = squareSize * 1.4; // Fixed width: 1.4 squares (30% narrower)
 
-        const leftClock = document.getElementById('leftClock');
-leftClock.style.top = `${nameHeight + 0.5}px`; // Reduced from 1px to 0.5px margin from name
-leftClock.style.left = '0px';
-leftClock.style.width = `${clockWidth}px`;
-leftClock.style.height = `${clockHeight}px`;
-leftClock.style.position = 'absolute';
+        leftClock.style.top = `${nameHeight + 0.5}px`; // Reduced from 1px to 0.5px margin from name
+        leftClock.style.left = '0px';
+        leftClock.style.width = `${clockWidth}px`;
+        leftClock.style.height = `${clockHeight}px`;
+        leftClock.style.position = 'absolute';
 
-const rightClock = document.getElementById('rightClock');
-rightClock.style.top = `${nameHeight + 0.5}px`; // Reduced from 1px to 0.5px margin from name
-rightClock.style.right = '0px';
-rightClock.style.width = `${clockWidth}px`;
-rightClock.style.height = `${clockHeight}px`;
-rightClock.style.position = 'absolute';
+        rightClock.style.top = `${nameHeight + 0.5}px`; // Reduced from 1px to 0.5px margin from name
+        rightClock.style.right = '0px';
+        rightClock.style.width = `${clockWidth}px`;
+        rightClock.style.height = `${clockHeight}px`;
+        rightClock.style.position = 'absolute';
 
 // Position dagger spaces (next to clocks)
 // 4D: Same height as clocks, split into equal aspect ratio = 1 halves
@@ -306,16 +343,12 @@ rightDaggerSpace.style.width = `${rightDaggerSpaceWidth}px`;
 rightDaggerSpace.style.height = `${daggerHeight}px`;
 rightDaggerSpace.style.position = 'absolute';
 
-                 // Position captures (bottom of game state)
- // 4B: Height 1/2 square, width calculated based on number of pieces, aligned to outside
- const capturesHeight = squareSize * 0.5; // Half square height
- 
- // Calculate width needed for captured pieces (each piece is 0.5 square + gaps)
- const leftCapturesCount = sampleGameState.captured[0].length;
- const rightCapturesCount = sampleGameState.captured[1].length;
- const pieceSize = squareSize * 0.5; // Each piece is half square
- const leftCapturesWidth = (pieceSize * leftCapturesCount) + (3 * Math.max(0, leftCapturesCount - 1)); // Width + gaps
- const rightCapturesWidth = (pieceSize * rightCapturesCount) + (3 * Math.max(0, rightCapturesCount - 1)); // Width + gaps
+                                   // Position captures (bottom of game state)
+  // 4B: Height 1/2 square, width calculated based on number of pieces, aligned to outside
+  const capturesHeight = squareSize * 0.5; // Half square height
+  const pieceSize = squareSize * 0.5; // Each piece is half square
+  const leftCapturesWidth = pieceSize
+  const rightCapturesWidth = pieceSize
 
                                const leftCaptures = document.getElementById('leftCaptures');
   leftCaptures.style.bottom = '0px'; // Reduced from 1px to 0px for minimal bottom margin
@@ -337,13 +370,71 @@ function generateBoard() {
     const board = document.getElementById('board');
     board.innerHTML = ''; // Clear existing content
     
-    // Generate board squares
+    // Generate board squares with perspective-based coloring and labeling
     for (let row = 0; row < BOARD_ROWS; row++) {
         for (let col = 0; col < BOARD_COLS; col++) {
             const square = document.createElement('div');
-            square.className = `board-square ${(row + col) % 2 === 0 ? 'light' : 'dark'}`;
+            
+            // Determine square color based on perspective
+            let squareClass = 'board-square';
+            if (currentPlayerPerspective === 'white') {
+                // White perspective: bottom row starts with light square
+                squareClass += (row + col) % 2 === 1 ? ' light' : ' dark';
+            } else {
+                // Black perspective: bottom row starts with dark square
+                squareClass += (row + col) % 2 === 0 ? ' light' : ' dark';
+            }
+            
+            square.className = squareClass;
             square.style.width = `${squareSize}px`;
             square.style.height = `${squareSize}px`;
+            square.style.position = 'relative'; // For positioning labels
+            
+            // Add row labels (numbers) on the left column
+            if (col === 0) {
+                const rowLabel = document.createElement('div');
+                rowLabel.className = 'board-label row-label';
+                rowLabel.style.position = 'absolute';
+                rowLabel.style.top = '2px';
+                rowLabel.style.left = '2px';
+                rowLabel.style.fontSize = 'var(--font-size-board-square)';
+                rowLabel.style.fontWeight = 'bold';
+                rowLabel.style.color = '#333';
+                rowLabel.style.zIndex = '1';
+                
+                if (currentPlayerPerspective === 'white') {
+                    // White perspective: numbers go 6->1 (top to bottom)
+                    rowLabel.textContent = (BOARD_ROWS - row).toString();
+                } else {
+                    // Black perspective: numbers go 1->6 (top to bottom)
+                    rowLabel.textContent = (row + 1).toString();
+                }
+                
+                square.appendChild(rowLabel);
+            }
+            
+            // Add column labels (letters) on the bottom row
+            if (row === BOARD_ROWS - 1) {
+                const colLabel = document.createElement('div');
+                colLabel.className = 'board-label col-label';
+                colLabel.style.position = 'absolute';
+                colLabel.style.bottom = '2px';
+                colLabel.style.right = '2px';
+                colLabel.style.fontSize = 'var(--font-size-board-square)';
+                colLabel.style.fontWeight = 'bold';
+                colLabel.style.color = '#333';
+                colLabel.style.zIndex = '1';
+                
+                if (currentPlayerPerspective === 'white') {
+                    // White perspective: letters go A->E (left to right)
+                    colLabel.textContent = String.fromCharCode(65 + col); // A, B, C, D, E
+                } else {
+                    // Black perspective: letters go E->A (left to right)
+                    colLabel.textContent = String.fromCharCode(69 - col); // E, D, C, B, A
+                }
+                
+                square.appendChild(colLabel);
+            }
             
             // Check if there's a piece on this square
             const piece = sampleGameState.board[row][col];
@@ -426,21 +517,38 @@ function updateCapturedPieces() {
     leftCaptured.innerHTML = '';
     rightCaptured.innerHTML = '';
     
-    // Add white captured pieces
-    sampleGameState.captured[0].forEach(piece => {
-        const pieceElement = document.createElement('div');
-        pieceElement.className = 'captured-piece';
-        pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
-        leftCaptured.appendChild(pieceElement);
-    });
-    
-    // Add black captured pieces
-    sampleGameState.captured[1].forEach(piece => {
-        const pieceElement = document.createElement('div');
-        pieceElement.className = 'captured-piece black';
-        pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
-        rightCaptured.appendChild(pieceElement);
-    });
+    // Add captured pieces based on perspective
+    if (currentPlayerPerspective === 'white') {
+        // White perspective: black captured on left (under white player), white captured on right (under black player)
+        sampleGameState.captured[1].forEach(piece => {
+            const pieceElement = document.createElement('div');
+            pieceElement.className = 'captured-piece black';
+            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
+            leftCaptured.appendChild(pieceElement);
+        });
+        
+        sampleGameState.captured[0].forEach(piece => {
+            const pieceElement = document.createElement('div');
+            pieceElement.className = 'captured-piece';
+            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
+            rightCaptured.appendChild(pieceElement);
+        });
+    } else {
+        // Black perspective: white captured on left (under black player), black captured on right (under white player)
+        sampleGameState.captured[0].forEach(piece => {
+            const pieceElement = document.createElement('div');
+            pieceElement.className = 'captured-piece';
+            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
+            leftCaptured.appendChild(pieceElement);
+        });
+        
+        sampleGameState.captured[1].forEach(piece => {
+            const pieceElement = document.createElement('div');
+            pieceElement.className = 'captured-piece black';
+            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
+            rightCaptured.appendChild(pieceElement);
+        });
+    }
 }
 
 // Update dagger counts
@@ -452,20 +560,37 @@ function updateDaggers() {
     leftDaggerSpace.innerHTML = '';
     rightDaggerSpace.innerHTML = '';
     
-    // Create dagger tokens for left player (white)
-    for (let i = 0; i < sampleGameState.daggers[0]; i++) {
-        const daggerToken = document.createElement('div');
-        daggerToken.className = 'dagger-token';
-        daggerToken.textContent = '⚔';
-        leftDaggerSpace.appendChild(daggerToken);
-    }
-    
-    // Create dagger tokens for right player (black)
-    for (let i = 0; i < sampleGameState.daggers[1]; i++) {
-        const daggerToken = document.createElement('div');
-        daggerToken.className = 'dagger-token';
-        daggerToken.textContent = '⚔';
-        rightDaggerSpace.appendChild(daggerToken);
+    // Create dagger tokens based on perspective
+    if (currentPlayerPerspective === 'white') {
+        // White perspective: white daggers on left, black daggers on right
+        for (let i = 0; i < sampleGameState.daggers[0]; i++) {
+            const daggerToken = document.createElement('div');
+            daggerToken.className = 'dagger-token';
+            daggerToken.textContent = '⚔';
+            leftDaggerSpace.appendChild(daggerToken);
+        }
+        
+        for (let i = 0; i < sampleGameState.daggers[1]; i++) {
+            const daggerToken = document.createElement('div');
+            daggerToken.className = 'dagger-token';
+            daggerToken.textContent = '⚔';
+            rightDaggerSpace.appendChild(daggerToken);
+        }
+    } else {
+        // Black perspective: black daggers on left, white daggers on right
+        for (let i = 0; i < sampleGameState.daggers[1]; i++) {
+            const daggerToken = document.createElement('div');
+            daggerToken.className = 'dagger-token';
+            daggerToken.textContent = '⚔';
+            leftDaggerSpace.appendChild(daggerToken);
+        }
+        
+        for (let i = 0; i < sampleGameState.daggers[0]; i++) {
+            const daggerToken = document.createElement('div');
+            daggerToken.className = 'dagger-token';
+            daggerToken.textContent = '⚔';
+            rightDaggerSpace.appendChild(daggerToken);
+        }
     }
 }
 
@@ -481,11 +606,7 @@ function initializeGame() {
     // Update font sizes based on new play area dimensions
     updateFontSizes();
     
-    // Debug information
-    console.log('Page dimensions:', window.innerWidth, 'x', window.innerHeight);
-    console.log('Play area dimensions:', playAreaWidth, 'x', playAreaHeight);
-    console.log('Square size:', squareSize);
-    console.log('Board dimensions:', BOARD_COLS * squareSize, 'x', BOARD_ROWS * squareSize);
+    // Debug information removed
     
     // Position all elements
     positionElements();
@@ -507,3 +628,23 @@ document.addEventListener('DOMContentLoaded', initializeGame);
 
 // Handle window resize
 window.addEventListener('resize', handleResize);
+
+// Global function to flip the board perspective
+function flipBoard() {
+    // Toggle the current player perspective
+    currentPlayerPerspective = currentPlayerPerspective === 'white' ? 'black' : 'white';
+    
+    // Regenerate the board and update all game elements
+    generateBoard();
+    updateCapturedPieces();
+    updateDaggers();
+    
+    // Reposition elements to reflect the new perspective
+    positionElements();
+}
+
+// Helper function to show current board status
+function showBoardStatus() {
+    // Function to display current board configuration
+    // (Console output removed)
+}
