@@ -140,7 +140,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: var(--font-size-player-clock);
+    font-size: var(--font-size-player-clock) ;
     font-weight: bold;
     font-family: 'Courier New', monospace;
     margin: 2px 0;
@@ -346,7 +346,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: calc(var(--font-size-action-button) * 1.5); /* 50% bigger font */
+    font-size: calc(var(--font-size-action-button) * 1.5); 
     font-weight: bold;
     color: #ffffff;
     background: #4815be; /* Purple background */

@@ -12,6 +12,8 @@ function initSocket(httpServer) {
     },
   });
   const clients = new Map();
+  // Admin namespace for dashboard metrics
+  const adminNamespace = io.of('/admin');
 
   const lobbyState = { quickplayQueue: [], rankedQueue: [] };
   Lobby.findOne().lean().then(lobby => {
@@ -60,6 +62,9 @@ function initSocket(httpServer) {
 
     lobbyState.quickplayQueue = newQuick;
     lobbyState.rankedQueue = newRanked;
+
+		// Emit updated metrics to admin dashboard
+		emitAdminMetrics();
   });
 
   eventBus.on('gameChanged', async (payload) => {
@@ -180,8 +185,13 @@ function initSocket(httpServer) {
 
   io.on('connection', async (socket) => {
     const { userId } = socket.handshake.auth;
-    clients.set(userId, socket);
+    if (userId) {
+      clients.set(userId, socket);
+    }
     console.log('Client connected', socket.id);
+
+    // Emit updated metrics to admin dashboard on new connection
+    emitAdminMetrics();
 
     try {
       const lobby = await Lobby.findOne().lean();
@@ -203,9 +213,40 @@ function initSocket(httpServer) {
 
     socket.on('disconnect', () => {
       console.log('Client disconnected', socket.id);
-      clients.delete(userId);
+      if (userId) {
+        clients.delete(userId);
+      }
+      // Emit updated metrics to admin dashboard
+      emitAdminMetrics();
     });
   });
+
+  // Admin namespace connections
+  adminNamespace.on('connection', (socket) => {
+    console.log('Admin connected', socket.id);
+    // Send initial metrics snapshot
+    emitAdminMetrics();
+
+    socket.on('disconnect', () => {
+      console.log('Admin disconnected', socket.id);
+    });
+  });
+
+  function emitAdminMetrics() {
+    try {
+      const connectedIds = Array.from(clients.keys());
+      adminNamespace.emit('admin:metrics', {
+        connectedUsers: connectedIds.length,
+        quickplayQueue: lobbyState.quickplayQueue.length,
+        rankedQueue: lobbyState.rankedQueue.length,
+        connectedUserIds: connectedIds,
+        quickplayQueueUserIds: lobbyState.quickplayQueue,
+        rankedQueueUserIds: lobbyState.rankedQueue,
+      });
+    } catch (err) {
+      console.error('Error emitting admin metrics:', err);
+    }
+  }
 
   return io;
 }

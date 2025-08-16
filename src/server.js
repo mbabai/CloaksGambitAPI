@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -18,6 +19,7 @@ app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit')
@@ -51,6 +53,11 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-ga
 // Routes
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Cloaks Gambit API' });
+});
+
+// Serve admin dashboard as a standalone endpoint
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
 });
 
 app.use('/api', routes);

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard</title>
+    <style>
+      :root {
+        --deep-green: #0b3d2e;
+        --deep-purple: #3b0764;
+        --deep-gold: #b8860b;
+        --light-gold: #f5e6a7;
+      }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 0; background: var(--deep-green); color: var(--light-gold); }
+      .container { padding: 24px; max-width: 1000px; margin: 0 auto; }
+      h2 { margin: 0 0 16px; font-weight: 700; color: var(--light-gold); }
+      .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+      .card { border: 4px solid var(--deep-gold); border-radius: 6px; padding: 16px; background: var(--deep-purple); }
+      .label { color: var(--light-gold); font-size: 14px; }
+      .value { font-size: 28px; font-weight: 700; color: var(--light-gold); }
+      .listCard { border: 4px solid var(--deep-gold); border-radius: 6px; padding: 12px; background: var(--deep-purple); }
+      .listCard .title { color: var(--light-gold); font-size: 14px; margin: 0 0 8px; font-weight: 700; }
+      .tableList { height: 200px; overflow: auto; border: 1px solid rgba(184,134,11,0.55); border-radius: 4px; background: transparent; }
+      .tableList .row { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; word-break: break-all; }
+      .tableList .row:last-child { border-bottom: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Admin Dashboard</h2>
+      <div class="grid">
+        <div class="card"><div class="label">Connected Users</div><div id="connectedUsers" class="value">0</div></div>
+        <div class="card"><div class="label">Quickplay Queue</div><div id="quickplayQueue" class="value">0</div></div>
+        <div class="card"><div class="label">Ranked Queue</div><div id="rankedQueue" class="value">0</div></div>
+      </div>
+
+      <div class="grid" style="margin-top: 12px;">
+        <div class="listCard">
+          <div class="title">Connected User IDs</div>
+          <div id="connectedUsersList" class="tableList" role="table"></div>
+        </div>
+        <div class="listCard">
+          <div class="title">Quickplay Queue User IDs</div>
+          <div id="quickplayQueueList" class="tableList" role="table"></div>
+        </div>
+        <div class="listCard">
+          <div class="title">Ranked Queue User IDs</div>
+          <div id="rankedQueueList" class="tableList" role="table"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/admin.js" defer></script>
+  </body>
+  </html>
+
+
