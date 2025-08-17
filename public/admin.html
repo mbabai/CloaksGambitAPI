@@ -21,7 +21,8 @@
       .listCard { border: 4px solid var(--deep-gold); border-radius: 6px; padding: 12px; background: var(--deep-purple); }
       .listCard .title { color: var(--light-gold); font-size: 14px; margin: 0 0 8px; font-weight: 700; }
       .tableList { height: 200px; overflow: auto; border: 1px solid rgba(184,134,11,0.55); border-radius: 4px; background: transparent; }
-      .tableList .row { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; word-break: break-all; }
+      .tableList .row { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; word-break: break-all; display: flex; align-items: center; gap: 8px; }
+      .tableList .swatch { width: 14px; height: 14px; border-radius: 2px; border: 1px solid rgba(184,134,11,0.8); flex: none; }
       .tableList .row:last-child { border-bottom: 0; }
     </style>
   </head>
@@ -46,6 +47,23 @@
         <div class="listCard">
           <div class="title">Ranked Queue User IDs</div>
           <div id="rankedQueueList" class="tableList" role="table"></div>
+        </div>
+      </div>
+
+      <div style="margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap;">
+        <button id="purgeGamesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Games</button>
+        <button id="purgeMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Matches</button>
+        <span style="opacity:0.85; font-size:12px; align-self:center;">Requires server `ADMIN_SECRET` header to authorize.</span>
+      </div>
+
+      <div class="grid" style="margin-top: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
+        <div class="listCard" style="grid-column: span 2;">
+          <div class="title">Active Games</div>
+          <div id="gamesList" class="tableList" role="table"></div>
+        </div>
+        <div class="listCard" style="grid-column: span 2;">
+          <div class="title">Active Matches</div>
+          <div id="matchesList" class="tableList" role="table"></div>
         </div>
       </div>
     </div>

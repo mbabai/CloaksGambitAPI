@@ -25,9 +25,9 @@ export default function Stash({ stashes, sizes, positions, identityToChar }) {
           }
           return (
             <div key={`${r}-${c}`} className={`stash-slot ${isOnDeck ? 'on-deck' : ''}`} style={slotStyle}>
-              {(isOnDeck || cell) && (
+              {cell && (
                 <div className={`stash-piece ${cell && cell.color === 1 ? 'black' : ''}`} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '80%', height: '80%', background: cell && cell.color === 1 ? '#000' : '#fff', color: cell && cell.color === 1 ? '#fff' : '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-size-stash-piece)' }}>
-                  {cell ? identityToChar[cell.identity] : '?'}
+                  {identityToChar[cell.identity]}
                 </div>
               )}
             </div>

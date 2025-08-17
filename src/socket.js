@@ -110,7 +110,9 @@ function initSocket(httpServer) {
         onDeckingPlayer: masked.onDeckingPlayer,
         isActive: masked.isActive,
         winner: masked.winner,
-        winReason: masked.winReason
+        winReason: masked.winReason,
+        playersReady: game.playersReady,
+        startTime: game.startTime,
       });
     });
   });
@@ -183,6 +185,9 @@ function initSocket(httpServer) {
     console.log('Change streams disabled in development mode (requires replica set)');
   }
 
+  // Allow other parts of the app to request an on-demand admin metrics refresh
+  eventBus.on('adminRefresh', () => emitAdminMetrics());
+
   io.on('connection', async (socket) => {
     const { userId } = socket.handshake.auth;
     if (userId) {
@@ -203,7 +208,14 @@ function initSocket(httpServer) {
       const games = await Game.find({ players: userId, isActive: true }).lean();
       const maskedGames = games.map((game) => {
         const color = game.players.findIndex(p => p.toString() === userId);
-        return maskGameForColor(game, color);
+        const masked = maskGameForColor(game, color);
+        return {
+          ...masked,
+          _id: game._id,
+          players: game.players.map(p => p.toString()),
+          playersReady: game.playersReady,
+          startTime: game.startTime,
+        };
       });
 
       socket.emit('initialState', { queued, games: maskedGames });
@@ -211,10 +223,33 @@ function initSocket(httpServer) {
       console.error('Error fetching initial state:', err);
     }
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       console.log('Client disconnected', socket.id);
       if (userId) {
+        // Grace period: remove mapping now, but defer queue cleanup
         clients.delete(userId);
+        setTimeout(async () => {
+          // If user reconnected, skip cleanup
+          if (clients.has(userId)) return;
+          try {
+            const Lobby = require('./models/Lobby');
+            const lobby = await Lobby.findOne();
+            if (!lobby) return;
+            const before = lobby.quickplayQueue.length;
+            lobby.quickplayQueue = lobby.quickplayQueue.filter(id => id.toString() !== userId);
+            if (lobby.quickplayQueue.length !== before) {
+              await lobby.save();
+              const eventBus = require('./eventBus');
+              eventBus.emit('queueChanged', {
+                quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
+                rankedQueue: lobby.rankedQueue.map(id => id.toString()),
+                affectedUsers: [userId.toString()],
+              });
+            }
+          } catch (err) {
+            console.error('Error cleaning up queue after disconnect:', err);
+          }
+        }, 3000);
       }
       // Emit updated metrics to admin dashboard
       emitAdminMetrics();
@@ -232,16 +267,44 @@ function initSocket(httpServer) {
     });
   });
 
-  function emitAdminMetrics() {
+  async function emitAdminMetrics() {
     try {
       const connectedIds = Array.from(clients.keys());
+      // Build in-game user list from active games
+      let inGameIds = [];
+      let gamesList = [];
+      let matchesList = [];
+      try {
+        const activeGames = await Game.find({ isActive: true }).select('players _id').lean();
+        const set = new Set();
+        activeGames.forEach(g => {
+          (g.players || []).forEach(p => set.add(p.toString()));
+          gamesList.push({ id: g._id.toString(), players: (g.players || []).map(p => p.toString()) });
+        });
+        inGameIds = Array.from(set);
+      } catch (err) {
+        console.error('Error fetching active games for admin metrics:', err);
+      }
+
+      try {
+        const Match = require('./models/Match');
+        const activeMatches = await Match.find({ isActive: true }).select('player1 player2 _id').lean();
+        matchesList = activeMatches.map(m => ({ id: m._id.toString(), players: [m.player1?.toString(), m.player2?.toString()].filter(Boolean) }));
+      } catch (err) {
+        console.error('Error fetching active matches for admin metrics:', err);
+      }
+
       adminNamespace.emit('admin:metrics', {
         connectedUsers: connectedIds.length,
         quickplayQueue: lobbyState.quickplayQueue.length,
         rankedQueue: lobbyState.rankedQueue.length,
+        inGameUsers: inGameIds.length,
         connectedUserIds: connectedIds,
         quickplayQueueUserIds: lobbyState.quickplayQueue,
         rankedQueueUserIds: lobbyState.rankedQueue,
+        inGameUserIds: inGameIds,
+        games: gamesList,
+        matches: matchesList,
       });
     } catch (err) {
       console.error('Error emitting admin metrics:', err);

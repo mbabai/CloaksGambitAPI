@@ -1,8 +1,6 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo } from 'react'
 
-export default function Queuer({ sizes, positions, onChangeMode }) {
-  const [mode, setMode] = useState('quickplay')
-  const [isSearching, setIsSearching] = useState(false)
+export default function Queuer({ sizes, positions, mode, isSearching, onToggleSearch, onChangeMode }) {
 
   const wrapperStyle = useMemo(() => ({
     position: 'absolute',
@@ -65,15 +63,8 @@ export default function Queuer({ sizes, positions, onChangeMode }) {
     fontSize: 'calc(var(--font-size-action-button) * 1.1)'
   }), [])
 
-  const handleToggleSearch = () => {
-    setIsSearching(s => !s)
-  }
-
-  const handleChange = (e) => {
-    const value = e.target.value
-    setMode(value)
-    if (onChangeMode) onChangeMode(value)
-  }
+  const handleToggleSearch = () => { if (onToggleSearch) onToggleSearch() }
+  const handleChange = (e) => { if (onChangeMode) onChangeMode(e.target.value) }
 
   return (
     <div style={wrapperStyle}>

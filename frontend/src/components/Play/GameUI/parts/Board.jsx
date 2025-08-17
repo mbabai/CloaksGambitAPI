@@ -50,8 +50,8 @@ export default function Board({ board, perspective, sizes, positions, identityTo
               )}
               {c === 2 && r === 4 && (
                 <>
-                  <div className="bubble left thought-left visible" style={{ position: 'absolute', width: '100%', height: '100%', left: '-50%', top: '-45%', backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center', zIndex: 4, pointerEvents: 'none', backgroundImage: 'url(/assets/images/UI/BubbleSpeechLeftBishop.svg)' }} />
-                  <div className="bubble right thought-right visible" style={{ position: 'absolute', width: '100%', height: '100%', right: '-50%', top: '-45%', backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center', zIndex: 4, pointerEvents: 'none', backgroundImage: 'url(/assets/images/UI/BubbleThoughtRightKing.svg)' }} />
+                  <div className="bubble left thought-left" style={{ position: 'absolute', width: '100%', height: '100%', left: '-50%', top: '-45%', backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center', zIndex: 4, pointerEvents: 'none', backgroundImage: 'url(/assets/images/UI/BubbleSpeechLeftBishop.svg)', display: 'none' }} />
+                  <div className="bubble right thought-right" style={{ position: 'absolute', width: '100%', height: '100%', right: '-50%', top: '-45%', backgroundSize: 'contain', backgroundRepeat: 'no-repeat', backgroundPosition: 'center', zIndex: 4, pointerEvents: 'none', backgroundImage: 'url(/assets/images/UI/BubbleThoughtRightKing.svg)', display: 'none' }} />
                 </>
               )}
             </div>

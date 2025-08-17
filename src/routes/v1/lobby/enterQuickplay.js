@@ -4,12 +4,16 @@ const Lobby = require('../../../models/Lobby');
 const Match = require('../../../models/Match');
 const { checkAndCreateMatches } = require('./matchmaking');
 const eventBus = require('../../../eventBus');
+const mongoose = require('mongoose');
 
 router.post('/', async (req, res) => {
   try {
     const { userId } = req.body;
     if (!userId) {
       return res.status(400).json({ message: 'User ID required' });
+    }
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: 'Invalid userId' });
     }
 
     let lobby = await Lobby.findOne();
@@ -31,7 +35,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'User already in ranked queue' });
     }
 
-    lobby.quickplayQueue.push(userId);
+    lobby.quickplayQueue.push(new mongoose.Types.ObjectId(userId));
     await lobby.save();
     
     console.log(`User ${userId} added to quickplay queue. Queue length: ${lobby.quickplayQueue.length}`);

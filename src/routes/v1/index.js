@@ -11,11 +11,13 @@ const userUpdate = require('./users/update');
 const matchGetList = require('./matches/getList');
 const matchGetDetails = require('./matches/getDetails');
 const matchCreate = require('./matches/create');
+const matchPurge = require('./matches/purge');
 
 // Game routes
 const gameGetList = require('./games/getList');
 const gameGetDetails = require('./games/getDetails');
 const gameCreate = require('./games/create');
+const gamePurge = require('./games/purge');
 
 // Game action routes
 const gameActionCheckTimeControl = require('./gameAction/checkTimeControl');
@@ -46,11 +48,13 @@ router.use('/users/update', userUpdate);
 router.use('/matches/getList', matchGetList);
 router.use('/matches/getDetails', matchGetDetails);
 router.use('/matches/create', matchCreate);
+router.use('/matches/purge', matchPurge);
 
 // Game routes
 router.use('/games/getList', gameGetList);
 router.use('/games/getDetails', gameGetDetails);
 router.use('/games/create', gameCreate);
+router.use('/games/purge', gamePurge);
 
 // Game action routes
 router.use('/gameAction/checkTimeControl', gameActionCheckTimeControl);
