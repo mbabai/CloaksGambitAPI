@@ -52,7 +52,11 @@ export function usePlayAreaLayout(ref, { rows, cols, stashRows, stashCols }) {
     const boardWidth = squareSize * cols
     const boardHeight = squareSize * rows
     const boardLeft = (playAreaWidth - boardWidth) / 2
-    const boardTop = (playAreaHeight - boardHeight) / 2
+    // Place board with its center at 40% of play area height (pushed upward from 50%)
+    const desiredCenterY = playAreaHeight * 0.40
+    let boardTop = desiredCenterY - (boardHeight / 2)
+    // Clamp within play area bounds
+    boardTop = Math.max(0, Math.min(playAreaHeight - boardHeight, boardTop))
 
     // Placeholder values for other UI sections (stash/actions) until specified
     const stashTop = boardTop + boardHeight + 5

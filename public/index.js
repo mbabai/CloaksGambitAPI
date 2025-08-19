@@ -401,7 +401,12 @@
     boardRoot.style.width = bW + 'px';
     boardRoot.style.height = bH + 'px';
     boardRoot.style.left = Math.floor((playAreaRoot.clientWidth - bW) / 2) + 'px';
-    boardRoot.style.top = Math.floor((playAreaRoot.clientHeight - bH) / 2) + 'px';
+    // target the board center at 35% of play area height to push it upward
+    var desiredCenterY = playAreaRoot.clientHeight * 0.40;
+    var topPx = Math.floor(desiredCenterY - (bH / 2));
+    if (topPx < 0) topPx = 0;
+    if (topPx > playAreaRoot.clientHeight - bH) topPx = playAreaRoot.clientHeight - bH;
+    boardRoot.style.top = topPx + 'px';
     boardRoot.style.display = 'grid';
     boardRoot.style.gridTemplateColumns = `repeat(${currentCols}, ${s}px)`;
     boardRoot.style.gridTemplateRows = `repeat(${currentRows}, ${s}px)`;
