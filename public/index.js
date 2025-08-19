@@ -42,6 +42,7 @@
   let lastGameId = null;
   let bannerInterval = null;
   let bannerEl = null;
+  let isInPlayArea = false;
 
   // Track server truth and optimistic intent to avoid flicker
   let isQueuedServer = false;
@@ -84,11 +85,12 @@
       try {
         if (!payload || !payload.gameId || !Array.isArray(payload.players)) return;
         const gameId = payload.gameId;
-        if (lastGameId === gameId) return; // already handled for this game
-        lastGameId = gameId;
-
         const color = payload.players.findIndex(p => p === userId);
         if (color !== 0 && color !== 1) return;
+
+
+        if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
+        lastGameId = gameId;
 
         showMatchFoundBanner(3, async function onTick(remaining) {
           if (remaining === 0) {
@@ -109,6 +111,13 @@
       }
     });
     socket.on('disconnect', function() { /* keep UI; server handles grace */ });
+
+    // New explicit signal when both players are ready
+    socket.on('players:bothReady', function(payload) {
+      // Keep only this single log and remove inferred duplicates from game:update
+      console.log('[socket] players:bothReady', payload);
+      showPlayArea();
+    });
   }
 
   // If we don't receive initialState within 2 seconds, enable UI anyway
@@ -247,6 +256,31 @@
        }
        countEl.textContent = remaining === 0 ? 'Go!' : String(remaining);
     }, 1000);
+  }
+
+  // ------- Minimal PlayArea placeholder for the simple queue page -------
+  function showPlayArea() {
+    if (isInPlayArea) return;
+    isInPlayArea = true;
+    try {
+      const queuer = document.querySelector('.queuer');
+      if (queuer) queuer.style.display = 'none';
+      const root = document.createElement('div');
+      root.id = 'playAreaRoot';
+      root.style.position = 'fixed';
+      root.style.inset = '0';
+      root.style.background = '#2a3f2f';
+      root.style.display = 'flex';
+      root.style.alignItems = 'center';
+      root.style.justifyContent = 'center';
+      root.style.color = '#fff';
+      root.style.fontSize = '28px';
+      root.style.fontWeight = '800';
+      root.textContent = 'PlayArea starting...';
+      document.body.appendChild(root);
+    } catch (e) {
+      console.error('Failed to show PlayArea placeholder:', e);
+    }
   }
 })();
 

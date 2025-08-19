@@ -1,0 +1,23 @@
+.playAreaContainer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.playArea {
+  /* Base styles are applied via inline styles for dynamic sizing */
+  /* Additional custom styles can be added here */
+}
+
+/* Optional: Add some default responsive behavior */
+@media (max-width: 768px) {
+  .playArea {
+    /* Mobile-specific adjustments if needed */
+  }
+}
+
+/* Optional: Add focus styles for accessibility */
+.playArea:focus-within {
+  outline: 2px solid #007bff;
+  outline-offset: 2px;
+}

@@ -57,12 +57,31 @@ router.post('/', async (req, res) => {
     });
     
     await game.save();
-    console.log('Game saved successfully');
+    console.log('Game saved successfully (ready):', {
+      gameId: game._id.toString(),
+      playersReady: game.playersReady
+    });
 
     eventBus.emit('gameChanged', {
       game: typeof game.toObject === 'function' ? game.toObject() : game,
       affectedUsers: (game.players || []).map(p => p.toString()),
     });
+
+    // If both players are now ready, emit an explicit signal
+    try {
+      if (game.playersReady[0] && game.playersReady[1]) {
+        console.log('[server] both players READY – emitting players:bothReady', {
+          gameId: game._id.toString(),
+          players: (game.players || []).map(p => p.toString())
+        });
+        eventBus.emit('players:bothReady', {
+          gameId: game._id.toString(),
+          affectedUsers: (game.players || []).map(p => p.toString()),
+        });
+      }
+    } catch (emitErr) {
+      console.error('Error emitting players:bothReady:', emitErr);
+    }
 
     res.json({ message: 'Player marked ready' });
   } catch (err) {

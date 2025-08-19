@@ -117,6 +117,21 @@ function initSocket(httpServer) {
     });
   });
 
+  // Relay explicit both-ready signal to affected users
+  eventBus.on('players:bothReady', (payload) => {
+    const gameId = payload?.gameId?.toString?.() || payload?.gameId
+    const users = (payload?.affectedUsers || []).map(id => id.toString())
+    console.log('[server] relaying players:bothReady', { gameId, users })
+    users.forEach((playerId) => {
+      const socket = clients.get(playerId)
+      if (socket) {
+        socket.emit('players:bothReady', { gameId })
+      } else {
+        console.warn('[server] players:bothReady user not connected:', playerId)
+      }
+    })
+  })
+
   async function setupChangeStream(Model, streamName, pipeline, options, handler) {
     let resumeToken = await ChangeStreamToken.getToken(streamName);
 

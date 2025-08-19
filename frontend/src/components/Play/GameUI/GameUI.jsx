@@ -7,6 +7,7 @@ import Stash from './parts/Stash.jsx'
 import ActionButtons from './parts/ActionButtons.jsx'
 import Queuer from './parts/Queuer.jsx'
 import MatchFoundBanner from './parts/MatchFoundBanner.jsx'
+import PlayArea from './PlayArea.jsx'
 import { usePlayAreaLayout } from './hooks/usePlayAreaLayout.js'
 
 const BOARD_ROWS = 6
@@ -55,63 +56,106 @@ export default function GameUI() {
   const viewportRef = useRef(null)
   const containerRef = useRef(null)
   const lastBannerGameIdRef = useRef(null)
+  const [bothReady, setBothReady] = useState(false)
   // Measure the viewport wrapper so the play area can grow/shrink dynamically
   const layout = usePlayAreaLayout(viewportRef, { rows: BOARD_ROWS, cols: BOARD_COLS, stashRows: STASH_ROWS, stashCols: STASH_COLS })
 
   const identityToChar = useMemo(() => PIECE_IDENTITIES, [])
 
+  // Determine API origin for dev (vite on 5173) vs prod (same origin)
+  const API_ORIGIN = (import.meta.env?.VITE_API_ORIGIN) || (window.location.origin.includes(':5173') ? 'http://localhost:3000' : window.location.origin)
+
   // Wire socket to receive initial state and game updates
   useEffect(() => {
-    const userId = document.cookie.match(/(?:^|; )userId=([^;]+)/)?.[1]
-    if (!userId) return
-    const socket = io('/', { auth: { userId } })
-    socketRef.current = socket
-    socket.on('initialState', ({ queued, games }) => {
-      setIsQueuedServer(Boolean(queued?.quickplay))
-      setPendingAction(null)
-      if (Array.isArray(games) && games.length > 0) {
-        const g = games[0]
-        const existingId = g.gameId || g._id
-        setActiveGame({ id: existingId, color: g.players?.findIndex?.(p => p === userId) ?? 0 })
-        // Do not show banner for existing game on page load
-        lastBannerGameIdRef.current = existingId
-        setPerspective((g.players?.findIndex?.(p => p === userId) ?? 0) === 0 ? 'white' : 'black')
-      }
-    })
-    socket.on('queue:update', (payload) => {
-      setIsQueuedServer(Boolean(payload?.quickplay))
-      setPendingAction(null)
-    })
-    socket.on('game:update', (payload) => {
-      // When game becomes active, hide queue and display board from server perspective
-      if (payload && payload.board) {
-        const colorIdx = payload.players?.findIndex?.(p => p === userId) ?? 0
-        const nextGameId = payload.gameId
-        const isNewGame = lastBannerGameIdRef.current !== nextGameId
-        setActiveGame({ id: nextGameId, color: colorIdx })
-        setPerspective(((payload.players?.findIndex?.(p => p === userId) ?? 0) === 0) ? 'white' : 'black')
-        setGame({
-          board: payload.board,
-          stashes: payload.stashes,
-          daggers: payload.daggers,
-          captured: payload.captured,
-          actions: payload.actions,
-          moves: payload.moves,
-          playerTurn: payload.playerTurn,
-          onDeckingPlayer: payload.onDeckingPlayer,
-          isActive: payload.isActive,
-          winner: payload.winner,
-          winReason: payload.winReason
-        })
+    let isMounted = true
 
-        // Trigger one-shot "match found" countdown only when a new game appears
-        if (isNewGame) {
-          setJustMatched({ gameId: nextGameId, seconds: 3 })
-          lastBannerGameIdRef.current = nextGameId
-        }
+    async function ensureUserId() {
+      const match = document.cookie.match(/(?:^|; )userId=([^;]+)/)
+      if (match) return decodeURIComponent(match[1])
+      const nonce = Date.now().toString(36) + Math.random().toString(36).slice(2)
+      const username = 'guest_' + nonce
+      const email = nonce + '@guest.local'
+      const res = await fetch(`${API_ORIGIN}/api/v1/users/create`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email })
+      })
+      if (!res.ok) throw new Error('Failed to create guest user')
+      const user = await res.json()
+      const id = user && user._id
+      document.cookie = `userId=${encodeURIComponent(id)}; Path=/; SameSite=Lax; Max-Age=${60 * 60 * 24 * 365}`
+      return id
+    }
+
+    (async () => {
+      try {
+        const userId = await ensureUserId()
+        if (!isMounted) return
+        const socket = io(API_ORIGIN, { auth: { userId } })
+        socketRef.current = socket
+        socket.on('initialState', ({ queued, games }) => {
+          setIsQueuedServer(Boolean(queued?.quickplay))
+          setPendingAction(null)
+          if (Array.isArray(games) && games.length > 0) {
+            const g = games[0]
+            const existingId = g.gameId || g._id
+            setActiveGame({ id: existingId, color: g.players?.findIndex?.(p => p === userId) ?? 0 })
+            lastBannerGameIdRef.current = existingId
+            setPerspective((g.players?.findIndex?.(p => p === userId) ?? 0) === 0 ? 'white' : 'black')
+          }
+        })
+        socket.on('queue:update', (payload) => {
+          setIsQueuedServer(Boolean(payload?.quickplay))
+          setPendingAction(null)
+        })
+        socket.on('game:update', (payload) => {
+          console.log('[client] game:update', {
+            gameId: payload?.gameId,
+            playersReady: payload?.playersReady,
+            playerTurn: payload?.playerTurn
+          })
+          if (payload && payload.board) {
+            const colorIdx = payload.players?.findIndex?.(p => p === userId) ?? 0
+            const nextGameId = payload.gameId
+            const isNewGame = lastBannerGameIdRef.current !== nextGameId
+            setActiveGame({ id: nextGameId, color: colorIdx })
+            setPerspective(((payload.players?.findIndex?.(p => p === userId) ?? 0) === 0) ? 'white' : 'black')
+            setGame({
+              board: payload.board,
+              stashes: payload.stashes,
+              daggers: payload.daggers,
+              captured: payload.captured,
+              actions: payload.actions,
+              moves: payload.moves,
+              playerTurn: payload.playerTurn,
+              onDeckingPlayer: payload.onDeckingPlayer,
+              isActive: payload.isActive,
+              winner: payload.winner,
+              winReason: payload.winReason
+            })
+
+            if (Array.isArray(payload.playersReady) && payload.playersReady[0] && payload.playersReady[1]) {
+              setBothReady(true)
+            }
+
+            if (isNewGame) {
+              setJustMatched({ gameId: nextGameId, seconds: 3 })
+              lastBannerGameIdRef.current = nextGameId
+            }
+          }
+        })
+        socket.on('players:bothReady', (data) => {
+          console.log('[client] players:bothReady', data)
+          setBothReady(true)
+        })
+      } catch (e) {
+        console.error(e)
       }
-    })
-    return () => socket.disconnect()
+    })()
+
+    return () => {
+      isMounted = false
+      try { socketRef.current?.disconnect() } catch (_) {}
+    }
   }, [])
 
   // Countdown effect for the match-found banner; auto-sends READY at 1s
@@ -132,7 +176,7 @@ export default function GameUI() {
           try {
             const color = activeGame.color
             console.log('[game] sending READY at 0s', { gameId: activeGame.id, color })
-            await fetch('/api/v1/gameAction/ready', {
+            await fetch(`${API_ORIGIN}/api/v1/gameAction/ready`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ gameId: activeGame.id, color })
@@ -169,13 +213,25 @@ export default function GameUI() {
         />
         </div>
 
-      <Board
-        board={game.board}
-        perspective={perspective}
-        sizes={layout.sizes}
-        positions={layout.positions}
-        identityToChar={identityToChar}
-      />
+      {bothReady ? (
+        <PlayArea aspectRatio={layout.sizes.playAreaHeight / layout.sizes.playAreaWidth}>
+          <Board
+            board={game.board}
+            perspective={perspective}
+            sizes={layout.sizes}
+            positions={layout.positions}
+            identityToChar={identityToChar}
+          />
+        </PlayArea>
+      ) : (
+        <Board
+          board={game.board}
+          perspective={perspective}
+          sizes={layout.sizes}
+          positions={layout.positions}
+          identityToChar={identityToChar}
+        />
+      )}
 
       <Stash
         stashes={game.stashes}

@@ -19,7 +19,7 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 50,
+    zIndex: 1000,
     pointerEvents: 'none'
   },
   card: {
