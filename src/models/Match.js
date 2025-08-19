@@ -106,7 +106,7 @@ matchSchema.virtual('duration').get(function() {
 });
 
 // Method to end the match
-matchSchema.methods.endMatch = function(winnerId) {
+matchSchema.methods.endMatch = async function(winnerId) {
     if (!this.isActive) {
         throw new Error('Match is already ended');
     }
@@ -119,7 +119,33 @@ matchSchema.methods.endMatch = function(winnerId) {
     this.winner = winnerId;
     this.endTime = new Date();
     this.isActive = false;
-    return this.save();
+
+    const saved = await this.save();
+
+    // Ensure players are removed from lobby.inGame when a match ends
+    try {
+        const Lobby = require('./Lobby');
+        const eventBus = require('../eventBus');
+        const updateResult = await Lobby.updateOne({}, {
+            $pull: { inGame: { $in: [this.player1, this.player2] } }
+        });
+
+        if (updateResult.modifiedCount > 0) {
+            const lobby = await Lobby.findOne().lean();
+            if (lobby) {
+                eventBus.emit('queueChanged', {
+                    quickplayQueue: (lobby.quickplayQueue || []).map(id => id.toString()),
+                    rankedQueue: (lobby.rankedQueue || []).map(id => id.toString()),
+                    affectedUsers: [this.player1.toString(), this.player2.toString()],
+                });
+            }
+        }
+    } catch (err) {
+        // Do not crash on cleanup failures; log for investigation
+        console.error('Error removing players from lobby.inGame after match end:', err);
+    }
+
+    return saved;
 };
 
 // Pre-save middleware to ensure endTime is set when match is ended

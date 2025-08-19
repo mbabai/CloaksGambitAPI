@@ -19,7 +19,22 @@ router.post('/', async (req, res) => {
 
     // Check if user is already in a game
     if (lobby.inGame.some(id => id.toString() === userId)) {
-      return res.status(400).json({ message: 'User is already in a game' });
+      // Defensive cleanup: verify there is actually an active game or match
+      // If there isn't, remove stale inGame entry and allow queuing
+      const Game = require('../../../models/Game');
+      const Match = require('../../../models/Match');
+      const hasActiveGame = await Game.exists({ players: userId, isActive: true });
+      const hasActiveMatch = await Match.exists({
+        $or: [{ player1: userId }, { player2: userId }],
+        isActive: true,
+      });
+      if (!hasActiveGame && !hasActiveMatch) {
+        lobby.inGame = lobby.inGame.filter(id => id.toString() !== userId);
+        await lobby.save();
+        console.warn(`Removed stale inGame entry for user ${userId}`);
+      } else {
+        return res.status(400).json({ message: 'User is already in a game' });
+      }
     }
 
     if (lobby.rankedQueue.some(id => id.toString() === userId)) {
