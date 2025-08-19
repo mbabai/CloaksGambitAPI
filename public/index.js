@@ -42,7 +42,8 @@
   let lastGameId = null;
   let bannerInterval = null;
   let bannerEl = null;
-  let isInPlayArea = false;
+  let playAreaRoot = null;
+  let isPlayAreaVisible = false;
 
   // Track server truth and optimistic intent to avoid flicker
   let isQueuedServer = false;
@@ -258,29 +259,55 @@
     }, 1000);
   }
 
-  // ------- Minimal PlayArea placeholder for the simple queue page -------
-  function showPlayArea() {
-    if (isInPlayArea) return;
-    isInPlayArea = true;
-    try {
-      const queuer = document.querySelector('.queuer');
-      if (queuer) queuer.style.display = 'none';
-      const root = document.createElement('div');
-      root.id = 'playAreaRoot';
-      root.style.position = 'fixed';
-      root.style.inset = '0';
-      root.style.background = '#2a3f2f';
-      root.style.display = 'flex';
-      root.style.alignItems = 'center';
-      root.style.justifyContent = 'center';
-      root.style.color = '#fff';
-      root.style.fontSize = '28px';
-      root.style.fontWeight = '800';
-      root.textContent = 'PlayArea starting...';
-      document.body.appendChild(root);
-    } catch (e) {
-      console.error('Failed to show PlayArea placeholder:', e);
+  // ------- Simple PlayArea box for the plain page (no React) -------
+  function ensurePlayAreaRoot() {
+    if (playAreaRoot) return playAreaRoot;
+    playAreaRoot = document.createElement('div');
+    playAreaRoot.id = 'playAreaRoot';
+    playAreaRoot.style.position = 'fixed';
+    playAreaRoot.style.display = 'none'; // hidden until ready
+    playAreaRoot.style.zIndex = '1000';
+    // No backdrop; we want the rest of the page untouched
+    document.body.appendChild(playAreaRoot);
+    window.addEventListener('resize', layoutPlayArea);
+    return playAreaRoot;
+  }
+
+  function layoutPlayArea() {
+    if (!playAreaRoot) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const target = 1.618; // height / width
+    const parentRatio = vh / vw;
+    let width, height;
+    if (parentRatio < target) {
+      // Parent is wider than target -> fill vertical space
+      height = vh;
+      width = Math.floor(height / target);
+    } else {
+      // Parent is taller than target -> fill horizontal space
+      width = vw;
+      height = Math.floor(width * target);
     }
+    const left = Math.floor((vw - width) / 2);
+    const top = Math.floor((vh - height) / 2);
+    Object.assign(playAreaRoot.style, {
+      left: left + 'px',
+      top: top + 'px',
+      width: width + 'px',
+      height: height + 'px',
+      border: '3px solid #DAA520',
+      background: '#800080',
+      boxSizing: 'border-box'
+    });
+  }
+
+  function showPlayArea() {
+    ensurePlayAreaRoot();
+    layoutPlayArea();
+    if (isPlayAreaVisible) return;
+    isPlayAreaVisible = true;
+    playAreaRoot.style.display = 'block';
   }
 })();
 
