@@ -45,6 +45,12 @@
   let playAreaRoot = null;
   let isPlayAreaVisible = false;
   let queuerHidden = false;
+  // Simple board rendering state (plain page)
+  let boardRoot = null;
+  let currentBoard = null;
+  let currentRows = 0;
+  let currentCols = 0;
+  let currentIsWhite = true;
 
   // Track server truth and optimistic intent to avoid flicker
   let isQueuedServer = false;
@@ -104,6 +110,19 @@
               }).catch(function(err){ console.error('READY on reconnect failed', err); });
             }
           } catch (e) { console.error('Error evaluating reconnect ready state', e); }
+
+          // Render board immediately if present
+          try {
+            if (Array.isArray(latest?.board)) {
+              currentBoard = latest.board;
+              currentRows = latest.board.length || 6;
+              currentCols = latest.board[0]?.length || 5;
+              currentIsWhite = (Array.isArray(latest?.players) ? latest.players.findIndex(function(p){ return p === userId; }) : 0) === 0;
+              ensurePlayAreaRoot();
+              layoutPlayArea();
+              renderBoard();
+            }
+          } catch (_) {}
         }
       } catch (_) {}
     });
@@ -125,6 +144,16 @@
         // As soon as we are in a game, hide the Find Game UI
         hideQueuer();
 
+        // Render board if present
+        if (Array.isArray(payload.board)) {
+          currentBoard = payload.board;
+          currentRows = payload.board.length || 6;
+          currentCols = payload.board[0]?.length || 5;
+          currentIsWhite = (color === 0);
+          ensurePlayAreaRoot();
+          layoutPlayArea();
+          renderBoard();
+        }
 
         if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
         lastGameId = gameId;
@@ -285,7 +314,7 @@
       if (typeof onTick === 'function') {
         try { onTick(remaining); } catch (_) {}
       }
-             if (remaining < 0) {
+           if (remaining < 0) {
          clearInterval(bannerInterval);
          bannerInterval = null;
          el.style.display = 'none';
@@ -305,6 +334,11 @@
     playAreaRoot.style.zIndex = '1000';
     // No backdrop; we want the rest of the page untouched
     document.body.appendChild(playAreaRoot);
+    // Add inner board container
+    boardRoot = document.createElement('div');
+    boardRoot.id = 'playAreaBoard';
+    boardRoot.style.position = 'absolute';
+    playAreaRoot.appendChild(boardRoot);
     window.addEventListener('resize', layoutPlayArea);
     return playAreaRoot;
   }
@@ -336,6 +370,7 @@
       background: '#800080',
       boxSizing: 'border-box'
     });
+    if (currentBoard) renderBoard();
   }
 
   function showPlayArea() {
@@ -352,6 +387,36 @@
     if (queuer) {
       queuer.style.display = 'none';
       queuerHidden = true;
+    }
+  }
+
+  // Render a simple board grid into the play area
+  function renderBoard() {
+    if (!playAreaRoot || !boardRoot || !currentRows || !currentCols) return;
+    const widthLimit = playAreaRoot.clientWidth / (currentCols + 1);
+    const heightLimit = (0.6 * playAreaRoot.clientHeight) / currentRows;
+    const s = Math.max(1, Math.floor(Math.min(widthLimit, heightLimit)));
+    const bW = s * currentCols;
+    const bH = s * currentRows;
+    boardRoot.style.width = bW + 'px';
+    boardRoot.style.height = bH + 'px';
+    boardRoot.style.left = Math.floor((playAreaRoot.clientWidth - bW) / 2) + 'px';
+    boardRoot.style.top = Math.floor((playAreaRoot.clientHeight - bH) / 2) + 'px';
+    boardRoot.style.display = 'grid';
+    boardRoot.style.gridTemplateColumns = `repeat(${currentCols}, ${s}px)`;
+    boardRoot.style.gridTemplateRows = `repeat(${currentRows}, ${s}px)`;
+    while (boardRoot.firstChild) boardRoot.removeChild(boardRoot.firstChild);
+    for (let r = 0; r < currentRows; r++) {
+      for (let c = 0; c < currentCols; c++) {
+        const light = currentIsWhite ? ((r + c) % 2 === 1) : ((r + c) % 2 === 0);
+        const cell = document.createElement('div');
+        cell.style.width = s + 'px';
+        cell.style.height = s + 'px';
+        cell.style.boxSizing = 'border-box';
+        cell.style.border = '1px solid #9ca3af';
+        cell.style.background = light ? '#f7f7f7' : '#6b7280';
+        boardRoot.appendChild(cell);
+      }
     }
   }
 })();

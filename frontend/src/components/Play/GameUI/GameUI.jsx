@@ -233,17 +233,7 @@ export default function GameUI() {
         />
         </div>
 
-      {bothReady ? (
-        <PlayArea aspectRatio={layout.sizes.playAreaHeight / layout.sizes.playAreaWidth}>
-          <Board
-            board={game.board}
-            perspective={perspective}
-            sizes={layout.sizes}
-            positions={layout.positions}
-            identityToChar={identityToChar}
-          />
-        </PlayArea>
-      ) : (
+      <PlayArea>
         <Board
           board={game.board}
           perspective={perspective}
@@ -251,7 +241,7 @@ export default function GameUI() {
           positions={layout.positions}
           identityToChar={identityToChar}
         />
-      )}
+      </PlayArea>
 
       <Stash
         stashes={game.stashes}

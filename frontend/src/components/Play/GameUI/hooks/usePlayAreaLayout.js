@@ -29,6 +29,7 @@ export function usePlayAreaLayout(ref, { rows, cols, stashRows, stashCols }) {
     const pageWidth = container.width || window.innerWidth
     const pageHeight = container.height || window.innerHeight
 
+    // Play area maintains 17:10 visually, but we size the board within it
     const pageRatio = pageHeight / pageWidth
     const idealRatio = 1.7
     let playAreaWidth, playAreaHeight
@@ -40,23 +41,24 @@ export function usePlayAreaLayout(ref, { rows, cols, stashRows, stashCols }) {
       playAreaWidth = pageHeight / idealRatio
     }
 
-    const maxBoardWidth = playAreaWidth * 0.9
-    const maxBoardHeight = playAreaHeight * 0.7
-    const squareFromWidth = maxBoardWidth / cols
-    const squareFromHeight = maxBoardHeight / rows
-    const squareSize = Math.min(playAreaWidth / (cols + 1), squareFromWidth, squareFromHeight)
+    // Board sizing rules:
+    // - Squares are 1:1; edge length S is min of:
+    //   S <= playAreaWidth / (cols + 1)   (half-square margin on both sides)
+    //   S <= (0.6 * playAreaHeight) / rows (board <= 60% of play area height)
+    const squareFromWidthLimit = playAreaWidth / (cols + 1)
+    const squareFromHeightLimit = (0.6 * playAreaHeight) / rows
+    const squareSize = Math.max(1, Math.floor(Math.min(squareFromWidthLimit, squareFromHeightLimit)))
 
     const boardWidth = squareSize * cols
     const boardHeight = squareSize * rows
     const boardLeft = (playAreaWidth - boardWidth) / 2
     const boardTop = (playAreaHeight - boardHeight) / 2
 
+    // Placeholder values for other UI sections (stash/actions) until specified
     const stashTop = boardTop + boardHeight + 5
-    const stashHeight = squareSize * stashRows
-
+    const stashHeight = squareSize * (stashRows || 0)
     const buttonHeight = squareSize * 1.1
-    const actionButtonsTop = squareSize * 8.1
-
+    const actionButtonsTop = boardTop + boardHeight + 10
     const gameStateHeight = squareSize * 1.9
     const gameStateTop = boardTop - gameStateHeight - 5
 
