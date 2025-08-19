@@ -44,6 +44,7 @@
   let bannerEl = null;
   let playAreaRoot = null;
   let isPlayAreaVisible = false;
+  let queuerHidden = false;
 
   // Track server truth and optimistic intent to avoid flicker
   let isQueuedServer = false;
@@ -88,6 +89,9 @@
         const gameId = payload.gameId;
         const color = payload.players.findIndex(p => p === userId);
         if (color !== 0 && color !== 1) return;
+
+        // As soon as we are in a game, hide the Find Game UI
+        hideQueuer();
 
 
         if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
@@ -308,6 +312,15 @@
     if (isPlayAreaVisible) return;
     isPlayAreaVisible = true;
     playAreaRoot.style.display = 'block';
+  }
+
+  function hideQueuer() {
+    if (queuerHidden) return;
+    const queuer = document.querySelector('.queuer');
+    if (queuer) {
+      queuer.style.display = 'none';
+      queuerHidden = true;
+    }
   }
 })();
 

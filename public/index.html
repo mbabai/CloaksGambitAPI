@@ -45,20 +45,6 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/index.js" defer></script>
-    <script>
-      // Pre-create the play area root so it can be shown instantly later
-      (function(){
-        var existing = document.getElementById('playAreaRoot');
-        if (!existing) {
-          var root = document.createElement('div');
-          root.id = 'playAreaRoot';
-          root.style.position = 'fixed';
-          root.style.display = 'none';
-          root.style.zIndex = '1000';
-          document.body.appendChild(root);
-        }
-      })();
-    </script>
   </body>
   </html>
 
