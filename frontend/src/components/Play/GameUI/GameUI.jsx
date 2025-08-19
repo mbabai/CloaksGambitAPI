@@ -96,11 +96,31 @@ export default function GameUI() {
           setIsQueuedServer(Boolean(queued?.quickplay))
           setPendingAction(null)
           if (Array.isArray(games) && games.length > 0) {
+            // Reconnect flow: pick the most recent active game and jump in immediately
             const g = games[0]
             const existingId = g.gameId || g._id
-            setActiveGame({ id: existingId, color: g.players?.findIndex?.(p => p === userId) ?? 0 })
+            const colorIdx = g.players?.findIndex?.(p => p === userId) ?? 0
+            setActiveGame({ id: existingId, color: colorIdx })
+            setPerspective(colorIdx === 0 ? 'white' : 'black')
             lastBannerGameIdRef.current = existingId
-            setPerspective((g.players?.findIndex?.(p => p === userId) ?? 0) === 0 ? 'white' : 'black')
+            setBothReady(Boolean(g?.playersReady?.[0] && g?.playersReady?.[1]))
+
+            // If not ready yet, send READY immediately on reconnect
+            const isReady = Array.isArray(g?.playersReady) ? Boolean(g.playersReady[colorIdx]) : false
+            if (!isReady) {
+              ;(async () => {
+                try {
+                  console.log('[client] reconnect sending READY immediately', { gameId: existingId, color: colorIdx })
+                  await fetch(`${API_ORIGIN}/api/v1/gameAction/ready`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ gameId: existingId, color: colorIdx })
+                  })
+                } catch (e) {
+                  console.error('READY on reconnect failed', e)
+                }
+              })()
+            }
           }
         })
         socket.on('queue:update', (payload) => {

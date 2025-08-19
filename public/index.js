@@ -74,6 +74,38 @@
       isQueuedServer = Boolean(queued);
       pendingAction = null;
       updateFindButton();
+
+      // Reconnect flow: if server says we already have an active game, show play area now
+      try {
+        const games = Array.isArray(payload?.games) ? payload.games : [];
+        if (games.length > 0) {
+          // Use the newest active game id to suppress banners/auto-ready
+          const latest = games[0];
+          if (latest?._id) {
+            lastGameId = latest._id; // treat as already handled
+          }
+          hideQueuer();
+          showPlayArea();
+
+          // If this player is not marked ready yet, send READY immediately
+          try {
+            const colorIdx = Array.isArray(latest?.players)
+              ? latest.players.findIndex(function(p){ return p === userId; })
+              : -1;
+            const isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
+              ? Boolean(latest.playersReady[colorIdx])
+              : false;
+            if (colorIdx > -1 && !isReady) {
+              console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
+              fetch('/api/v1/gameAction/ready', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ gameId: latest._id, color: colorIdx })
+              }).catch(function(err){ console.error('READY on reconnect failed', err); });
+            }
+          } catch (e) { console.error('Error evaluating reconnect ready state', e); }
+        }
+      } catch (_) {}
     });
     socket.on('queue:update', function(payload) {
       console.log('[socket] queue:update', payload);
