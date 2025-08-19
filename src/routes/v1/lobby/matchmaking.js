@@ -108,6 +108,9 @@ async function checkAndCreateMatches() {
           affectedUsers: [player1.toString(), player2.toString()],
         });
 
+        // Defensive: make sure playersReady is initialized [false, false]
+        await Game.updateOne({ _id: game._id, playersReady: { $exists: false } }, { $set: { playersReady: [false, false] } });
+
         console.log('Quickplay match created successfully');
       } catch (matchErr) {
         console.error('Error creating match:', matchErr);
@@ -179,6 +182,8 @@ async function checkAndCreateMatches() {
           rankedQueue: updatedLobby.rankedQueue.map(id => id.toString()),
           affectedUsers: [player1.toString(), player2.toString()],
         });
+
+        await Game.updateOne({ _id: game._id, playersReady: { $exists: false } }, { $set: { playersReady: [false, false] } });
 
         console.log('Ranked match created successfully');
       } catch (matchErr) {

@@ -206,6 +206,11 @@ function initSocket(httpServer) {
   io.on('connection', async (socket) => {
     const { userId } = socket.handshake.auth;
     if (userId) {
+      // If a user reconnects quickly, keep the most recent socket only
+      const prev = clients.get(userId)
+      if (prev && prev.id !== socket.id) {
+        try { prev.disconnect(true) } catch (_) {}
+      }
       clients.set(userId, socket);
     }
     console.log('Client connected', socket.id);
