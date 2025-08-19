@@ -6,6 +6,7 @@ import Board from './parts/Board.jsx'
 import Stash from './parts/Stash.jsx'
 import ActionButtons from './parts/ActionButtons.jsx'
 import Queuer from './parts/Queuer.jsx'
+import MatchFoundBanner from './parts/MatchFoundBanner.jsx'
 import { usePlayAreaLayout } from './hooks/usePlayAreaLayout.js'
 
 const BOARD_ROWS = 6
@@ -49,9 +50,11 @@ export default function GameUI() {
   const [isQueuedServer, setIsQueuedServer] = useState(false)
   const [pendingAction, setPendingAction] = useState(null)
   const [activeGame, setActiveGame] = useState(null)
+  const [justMatched, setJustMatched] = useState(null) // { gameId, seconds }
   const socketRef = useRef(null)
   const viewportRef = useRef(null)
   const containerRef = useRef(null)
+  const lastBannerGameIdRef = useRef(null)
   // Measure the viewport wrapper so the play area can grow/shrink dynamically
   const layout = usePlayAreaLayout(viewportRef, { rows: BOARD_ROWS, cols: BOARD_COLS, stashRows: STASH_ROWS, stashCols: STASH_COLS })
 
@@ -68,7 +71,10 @@ export default function GameUI() {
       setPendingAction(null)
       if (Array.isArray(games) && games.length > 0) {
         const g = games[0]
-        setActiveGame({ id: g.gameId || g._id, color: g.players?.findIndex?.(p => p === userId) ?? 0 })
+        const existingId = g.gameId || g._id
+        setActiveGame({ id: existingId, color: g.players?.findIndex?.(p => p === userId) ?? 0 })
+        // Do not show banner for existing game on page load
+        lastBannerGameIdRef.current = existingId
         setPerspective((g.players?.findIndex?.(p => p === userId) ?? 0) === 0 ? 'white' : 'black')
       }
     })
@@ -79,7 +85,10 @@ export default function GameUI() {
     socket.on('game:update', (payload) => {
       // When game becomes active, hide queue and display board from server perspective
       if (payload && payload.board) {
-        setActiveGame({ id: payload.gameId, color: payload.players?.findIndex?.(p => p === userId) ?? 0 })
+        const colorIdx = payload.players?.findIndex?.(p => p === userId) ?? 0
+        const nextGameId = payload.gameId
+        const isNewGame = lastBannerGameIdRef.current !== nextGameId
+        setActiveGame({ id: nextGameId, color: colorIdx })
         setPerspective(((payload.players?.findIndex?.(p => p === userId) ?? 0) === 0) ? 'white' : 'black')
         setGame({
           board: payload.board,
@@ -94,10 +103,49 @@ export default function GameUI() {
           winner: payload.winner,
           winReason: payload.winReason
         })
+
+        // Trigger one-shot "match found" countdown only when a new game appears
+        if (isNewGame) {
+          setJustMatched({ gameId: nextGameId, seconds: 3 })
+          lastBannerGameIdRef.current = nextGameId
+        }
       }
     })
     return () => socket.disconnect()
   }, [])
+
+  // Countdown effect for the match-found banner; auto-sends READY at 1s
+  useEffect(() => {
+    if (!justMatched) return
+    if (!activeGame) return
+    if (justMatched.gameId !== activeGame.id) return
+
+    if (justMatched.seconds <= 0) {
+      setJustMatched(null)
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      const next = justMatched.seconds - 1
+              // When reaching 0 seconds, send READY
+        if (next === 0) {
+          try {
+            const color = activeGame.color
+            console.log('[game] sending READY at 0s', { gameId: activeGame.id, color })
+            await fetch('/api/v1/gameAction/ready', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ gameId: activeGame.id, color })
+            })
+          } catch (e) {
+            console.error('Failed to send READY:', e)
+          }
+        }
+      setJustMatched({ ...justMatched, seconds: next })
+    }, 1000)
+
+    return () => clearTimeout(timer)
+  }, [justMatched, activeGame])
 
   return (
     <div ref={viewportRef} className={styles.viewport}>
@@ -143,6 +191,10 @@ export default function GameUI() {
         onPass={() => {}}
         onBomb={() => {}}
       />
+
+      {justMatched && (
+        <MatchFoundBanner seconds={justMatched.seconds} />
+      )}
 
       {!activeGame && (
         <Queuer
