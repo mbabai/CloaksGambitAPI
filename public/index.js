@@ -440,6 +440,14 @@
     playAreaRoot.style.touchAction = 'none';
     document.body.appendChild(playAreaRoot);
 
+    // Global click/tap outside interactive zones should clear selection
+    const clearSelectionIfAny = () => {
+      if (!isInSetup) return;
+      if (selected) { selected = null; renderBoardAndBars(); }
+    };
+    playAreaRoot.addEventListener('mousedown', clearSelectionIfAny, false);
+    playAreaRoot.addEventListener('touchstart', clearSelectionIfAny, { passive: true });
+
     boardRoot = document.createElement('div');
     boardRoot.id = 'playAreaBoard';
     boardRoot.style.position = 'absolute';
