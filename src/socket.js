@@ -108,6 +108,7 @@ function initSocket(httpServer) {
         daggers: masked.daggers,
         playerTurn: masked.playerTurn,
         onDeckingPlayer: masked.onDeckingPlayer,
+        setupComplete: game.setupComplete,
         isActive: masked.isActive,
         winner: masked.winner,
         winReason: masked.winReason,

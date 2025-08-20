@@ -69,6 +69,26 @@
   let currentOnDecks = [null, null];
   let currentCaptured = [[], []]; // pieces captured by [white, black]
   let currentDaggers = [0, 0];
+  let currentSquareSize = 0; // last computed board square size
+
+  // Setup interaction state
+  let isInSetup = false;         // true when local player is arranging pieces
+  let myColor = 0;               // 0 white, 1 black (derived when entering setup)
+  let workingRank = new Array(5).fill(null);   // UI bottom-row columns 0..4 -> piece or null
+  let workingOnDeck = null;                     // piece or null
+  let workingStash = new Array(8).fill(null);   // 8 stash slots (top 4 + bottom 4)
+  let setupComplete = [false, false];
+
+  // Selection/drag state
+  let selected = null; // { type: 'stash'|'board'|'deck', index: number }
+  let dragging = null; // { piece, origin, ghostEl }
+
+  // Element refs for hit-testing during drag
+  const refs = {
+    deckEl: null,
+    stashSlots: [], // [{el, ordinal}] length 8
+    bottomCells: [] // [{el, col}] length 5
+  }
 
   // Track server truth and optimistic intent to avoid flicker
   let isQueuedServer = false;
@@ -92,7 +112,7 @@
 
   function wireSocket() {
     socket.on('connect', function() { console.log('[socket] connected'); });
-    socket.on('initialState', function(payload) {
+    socket.on('initialState', async function(payload) {
       console.log('[socket] initialState', payload);
       const queued = payload && payload.queued && !!payload.queued.quickplay;
       isQueuedServer = Boolean(queued);
@@ -129,12 +149,33 @@
             currentIsWhite = (colorIdx === 0);
           } catch (e) { console.error('Error evaluating reconnect ready state', e); }
 
-          // Adopt masked state immediately if present
+          // Adopt masked state immediately if present, and enter setup if needed
           try {
             if (Array.isArray(latest?.board)) {
               currentRows = latest.board.length || 6;
               currentCols = latest.board[0]?.length || 5;
               setStateFromServer(latest);
+              myColor = currentIsWhite ? 0 : 1;
+              const setupArr = Array.isArray(latest?.setupComplete) ? latest.setupComplete : setupComplete;
+              const mineDone = Boolean(setupArr?.[myColor]);
+              if (!mineDone) {
+                // Fetch a fresh masked view to seed working state
+                try {
+                  const res = await fetch('/api/v1/games/getDetails', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ gameId: latest._id, color: myColor })
+                  });
+                  const view = await res.json().catch(() => latest);
+                  bootstrapWorkingStateFromServer(view || latest);
+                  isInSetup = true;
+                  console.log('[setup] entering setup mode on initialState');
+                } catch (_) {
+                  bootstrapWorkingStateFromServer(latest);
+                  isInSetup = true;
+                }
+              } else {
+                isInSetup = false;
+              }
               ensurePlayAreaRoot();
               layoutPlayArea();
               renderBoardAndBars();
@@ -167,6 +208,19 @@
           currentRows = payload.board.length || 6;
           currentCols = payload.board[0]?.length || 5;
           setStateFromServer(payload);
+          // Keep setup mode consistent after refresh or reconnect
+          myColor = currentIsWhite ? 0 : 1;
+          const setupArr = Array.isArray(payload?.setupComplete) ? payload.setupComplete : setupComplete;
+          const mineDone = Boolean(setupArr?.[myColor]);
+          if (!mineDone) {
+            if (!isInSetup) {
+              // bootstrap if just entering
+              bootstrapWorkingStateFromServer(payload);
+            }
+            isInSetup = true;
+          } else {
+            isInSetup = false;
+          }
           ensurePlayAreaRoot();
           layoutPlayArea();
           renderBoardAndBars();
@@ -198,8 +252,8 @@
     // New explicit signal when both players are ready
     socket.on('players:bothReady', async function(payload) {
       try {
-        console.log('[socket] players:bothReady', payload);
-        showPlayArea();
+      console.log('[socket] players:bothReady', payload);
+      showPlayArea();
         const gameId = payload?.gameId || lastGameId;
         if (!gameId) return;
         const colorIdx = currentIsWhite ? 0 : 1;
@@ -211,6 +265,18 @@
         if (!res.ok) return;
         const view = await res.json();
         setStateFromServer(view);
+        // Enter setup mode if our setup is not complete
+        myColor = currentIsWhite ? 0 : 1;
+        const serverSetup = Array.isArray(view?.setupComplete) ? view.setupComplete : setupComplete;
+        const myDone = Boolean(serverSetup?.[myColor]);
+        console.log('[setup] getDetails setupComplete=', serverSetup, 'myColor=', myColor, 'myDone=', myDone);
+        if (!myDone) {
+          bootstrapWorkingStateFromServer(view);
+          isInSetup = true;
+          console.log('[setup] entering setup mode');
+        } else {
+          isInSetup = false;
+        }
         ensurePlayAreaRoot();
         layoutPlayArea();
         renderBoardAndBars();
@@ -361,6 +427,10 @@
     playAreaRoot.style.position = 'fixed';
     playAreaRoot.style.display = 'none';
     playAreaRoot.style.zIndex = '1000';
+    // Prevent text selection/highlighting inside the play area
+    playAreaRoot.style.userSelect = 'none';
+    // Prevent browser gestures/scroll during touch interactions in the play area
+    playAreaRoot.style.touchAction = 'none';
     document.body.appendChild(playAreaRoot);
 
     boardRoot = document.createElement('div');
@@ -435,9 +505,14 @@
 
   function renderBoardAndBars() {
     if (!playAreaRoot || !boardRoot || !currentRows || !currentCols) return;
+    // Reset interactive refs each render
+    refs.bottomCells = [];
+    refs.stashSlots = [];
+    refs.deckEl = null;
     const widthLimit = playAreaRoot.clientWidth / (currentCols + 1);
     const heightLimit = (0.6 * playAreaRoot.clientHeight) / currentRows;
     const s = Math.max(1, Math.floor(Math.min(widthLimit, heightLimit)));
+    currentSquareSize = s;
     const bW = s * currentCols;
     const bH = s * currentRows;
     const leftPx = Math.floor((playAreaRoot.clientWidth - bW) / 2);
@@ -505,31 +580,93 @@
 
         // Render piece if present at this board coordinate
         try {
-          if (currentBoard) {
+          // If in setup, overlay our bottom rank with working state; else use server board
+          const uiBottomRow = currentRows - 1;
+          const uiCol = c;
+          const isBottomRankCell = (r === uiBottomRow);
+          let piece = null;
+          if (isInSetup && isBottomRankCell) {
+            piece = workingRank[uiCol] || null;
+          } else if (currentBoard) {
             const srcR = currentIsWhite ? r : (currentRows - 1 - r);
             const srcC = currentIsWhite ? c : (currentCols - 1 - c);
-            const piece = currentBoard?.[srcR]?.[srcC];
-            if (piece) {
-              const p = document.createElement('div');
-              p.style.width = Math.floor(s * 0.8) + 'px';
-              p.style.height = Math.floor(s * 0.8) + 'px';
-              p.style.display = 'flex';
-              p.style.alignItems = 'center';
-              p.style.justifyContent = 'center';
-              p.style.fontSize = Math.floor(s * 0.7) + 'px';
-              p.style.background = piece.color === 1 ? '#000' : '#fff';
-              p.style.color = piece.color === 1 ? '#fff' : '#000';
-              p.textContent = PIECE_IDENTITIES[piece.identity] || '?';
-              cell.appendChild(p);
+            piece = currentBoard?.[srcR]?.[srcC];
+          }
+          if (piece) {
+            const p = document.createElement('div');
+            // Center the piece absolutely so it overlays square labels when needed
+            const psz = Math.floor(s * 0.8);
+            p.style.position = 'absolute';
+            p.style.left = '50%';
+            p.style.top = '50%';
+            p.style.transform = 'translate(-50%, -50%)';
+            p.style.width = psz + 'px';
+            p.style.height = psz + 'px';
+            p.style.display = 'flex';
+            p.style.alignItems = 'center';
+            p.style.justifyContent = 'center';
+            p.style.fontSize = Math.floor(s * 0.7) + 'px';
+            p.style.background = piece.color === 1 ? '#000' : '#fff';
+            p.style.color = piece.color === 1 ? '#fff' : '#000';
+            if (dragging && dragging.origin && dragging.origin.type === 'board' && dragging.origin.index === uiCol && isBottomRankCell) {
+              p.style.opacity = '0.5';
             }
+            if (selected && selected.type === 'board' && selected.index === uiCol && isBottomRankCell) {
+              p.style.boxShadow = '0 0 0 3px rgba(251,191,36,0.85)';
+            }
+            p.textContent = PIECE_IDENTITIES[piece.identity] || '?';
+            cell.appendChild(p);
           }
         } catch (_) {}
+
+        // Attach setup interactions to bottom-rank cells when in setup mode
+        const isUiBottom = (r === (currentRows - 1));
+        if (isInSetup && isUiBottom) {
+          const uiCol = c;
+          attachInteractiveHandlers(cell, { type: 'board', index: uiCol });
+          refs.bottomCells[uiCol] = { el: cell, col: uiCol };
+        }
         boardRoot.appendChild(cell);
       }
     }
 
     renderBars(s, bW, bH, leftPx, topPx);
     renderStash(s, bW, bH, leftPx, topPx);
+
+    // Ready button overlay when setup is completable
+    if (isInSetup && isSetupCompletable()) {
+      const btn = document.createElement('button');
+      btn.textContent = 'Ready!';
+      btn.style.position = 'absolute';
+      btn.style.left = Math.floor(leftPx + (bW / 2) - 80) + 'px';
+      btn.style.top = Math.floor(topPx + (bH / 2) - 24) + 'px';
+      btn.style.width = '160px';
+      btn.style.height = '48px';
+      btn.style.background = '#7c3aed'; // lavender/purple
+      btn.style.border = '3px solid #DAA520';
+      btn.style.color = '#fff';
+      btn.style.fontWeight = '800';
+      btn.style.fontSize = '20px';
+      btn.style.cursor = 'pointer';
+      btn.addEventListener('click', async () => {
+        try {
+          const payload = buildSetupPayload();
+          console.log('[client] POST /api/v1/gameAction/setup ->', payload);
+          const res = await fetch('/api/v1/gameAction/setup', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const json = await res.json().catch(() => ({}));
+          console.log('[client] setup response', res.status, json);
+          if (!res.ok) return alert(json?.message || 'Setup failed');
+          // Lock interactions; server will broadcast update
+          isInSetup = false;
+          selected = null; dragging = null;
+          renderBoardAndBars();
+        } catch (e) { console.error('setup error', e); }
+      });
+      playAreaRoot.appendChild(btn);
+    }
   }
 
   function renderBars(s, bW, bH, leftPx, topPx) {
@@ -779,20 +916,32 @@
     const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * topSpace;
     let xCursor = Math.round(blockCenterX - topTotal / 2);
     const bottomColor = currentIsWhite ? 0 : 1;
-    const stash = Array.isArray(currentStashes?.[bottomColor]) ? currentStashes[bottomColor] : [];
+    const stash = isInSetup
+      ? workingStash
+      : (Array.isArray(currentStashes?.[bottomColor]) ? currentStashes[bottomColor] : []);
     // Map UI slots (excluding center on-deck) to sequential stash pieces
     const uiToOrdinal = { 0: 0, 1: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7 };
     for (let i = 0; i < widthsTop.length; i++) {
       const isOnDeck = (i === 2);
       let content = null;
       if (isOnDeck) {
-        const deck = currentOnDecks?.[bottomColor] || null;
+        const deck = isInSetup ? (workingOnDeck || null) : (currentOnDecks?.[bottomColor] || null);
         if (deck) content = pieceGlyph(deck, isOnDeck ? s : slot);
       } else {
         const ord = uiToOrdinal[i];
         if (ord !== undefined && stash[ord]) content = pieceGlyph(stash[ord], isOnDeck ? s : slot);
       }
-      stashRoot.appendChild(makeSlot(xCursor, yTop, isOnDeck, true, content));
+      const el = makeSlot(xCursor, yTop, isOnDeck, true, content);
+      if (isOnDeck) {
+        refs.deckEl = el;
+        el.style.zIndex = '10'; // ensure on-deck sits above other stash slots/pieces
+        if (isInSetup) attachInteractiveHandlers(el, { type: 'deck', index: 0 });
+      } else {
+        const ord = uiToOrdinal[i];
+        if (isInSetup) attachInteractiveHandlers(el, { type: 'stash', index: ord });
+        refs.stashSlots[ord] = { el, ordinal: ord };
+      }
+      stashRoot.appendChild(el);
       xCursor += widthsTop[i] + topSpace;
     }
 
@@ -807,7 +956,10 @@
       const ord = uiToOrdinal[5 + i];
       const piece = (ord !== undefined) ? stash[ord] : null;
       const content = piece ? pieceGlyph(piece, slot) : null;
-      stashRoot.appendChild(makeSlot(x, y, false, false, content));
+      const el = makeSlot(x, y, false, false, content);
+      if (isInSetup) attachInteractiveHandlers(el, { type: 'stash', index: ord });
+      refs.stashSlots[ord] = { el, ordinal: ord };
+      stashRoot.appendChild(el);
     }
   }
 
@@ -821,6 +973,8 @@
       el.style.display = 'flex';
       el.style.alignItems = 'center';
       el.style.justifyContent = 'center';
+      el.style.position = 'relative';
+      el.style.zIndex = '1';
       el.style.fontSize = Math.floor(size * 0.8) + 'px';
       const isBlack = piece.color === 1;
       el.style.background = isBlack ? '#000' : '#fff';
@@ -837,7 +991,239 @@
       if (Array.isArray(u.onDecks)) currentOnDecks = u.onDecks;
       if (Array.isArray(u.captured)) currentCaptured = u.captured;
       if (Array.isArray(u.daggers)) currentDaggers = u.daggers;
+      if (Array.isArray(u.setupComplete)) setupComplete = u.setupComplete;
     } catch (_) {}
+  }
+
+  // ---- Setup helpers ----
+  function bootstrapWorkingStateFromServer(view) {
+    try {
+      // Seed working stash from server order; limit to 8
+      const base = Array.isArray(view?.stashes?.[myColor]) ? view.stashes[myColor] : [];
+      for (let i = 0; i < 8; i++) workingStash[i] = base[i] || null;
+
+      // Seed on-deck if present
+      workingOnDeck = (Array.isArray(view?.onDecks) ? view.onDecks[myColor] : null) || null;
+
+      // Remove deck piece from working stash if present
+      if (workingOnDeck) {
+        const idx = workingStash.findIndex(p => p && p.identity === workingOnDeck.identity && p.color === workingOnDeck.color);
+        if (idx !== -1) workingStash[idx] = null;
+      }
+
+      // Populate working rank from board row for our color if any
+      for (let uiCol = 0; uiCol < 5; uiCol++) workingRank[uiCol] = null;
+      if (Array.isArray(view?.board)) {
+        const rowServer = 0; // always server row 0; UI bottom maps there
+        for (let serverCol = 0; serverCol < 5; serverCol++) {
+          const piece = view.board?.[rowServer]?.[serverCol];
+          if (piece && piece.color === myColor) {
+            const uiCol = currentIsWhite ? serverCol : (5 - 1 - serverCol);
+            workingRank[uiCol] = piece;
+            // Remove from working stash if present
+            const idx2 = workingStash.findIndex(p => p && p.identity === piece.identity && p.color === piece.color);
+            if (idx2 !== -1) workingStash[idx2] = null;
+          }
+        }
+      }
+    } catch (e) { console.error('bootstrapWorkingStateFromServer failed', e); }
+  }
+
+  function isSetupCompletable() {
+    const allFilled = workingRank.every(p => !!p);
+    return Boolean(allFilled && workingOnDeck);
+  }
+
+  function buildSetupPayload() {
+    const pieces = [];
+    const rowServer = 0; // always the first (server) rank; UI bottom maps there for both colors
+    for (let uiCol = 0; uiCol < 5; uiCol++) {
+      const piece = workingRank[uiCol];
+      if (!piece) continue;
+      const colServer = currentIsWhite ? uiCol : (currentCols - 1 - uiCol);
+      pieces.push({ identity: piece.identity, color: myColor, row: rowServer, col: colServer });
+    }
+    return { gameId: lastGameId, color: myColor, pieces, onDeck: workingOnDeck };
+  }
+
+  function attachInteractiveHandlers(el, target) {
+    try { el.style.cursor = 'pointer'; } catch (_) {}
+    // Implement click vs. drag threshold: start drag only if movement exceeds a small delta
+    let downX = 0, downY = 0, dragStarted = false;
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isInSetup) return;
+      const originPiece = getPieceAt(target);
+      if (!originPiece) return; // only start drag if there is a piece
+      downX = e.clientX; downY = e.clientY; dragStarted = false;
+      const move = (ev) => {
+        if (dragStarted) return;
+        const dx = Math.abs(ev.clientX - downX);
+        const dy = Math.abs(ev.clientY - downY);
+        if (dx > 4 || dy > 4) {
+          dragStarted = true;
+          console.log('[setup] drag start', target);
+          startDrag(ev, target, originPiece);
+          document.removeEventListener('mousemove', move);
+        }
+      };
+      const up = (ev) => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        if (!dragStarted) {
+          // treat as click
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (!isInSetup) return;
+          console.log('[setup] click', target);
+          handleClickTarget(target);
+        }
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+    // Touch support (mobile): mirror the same logic using touch events
+    el.addEventListener('touchstart', (e) => {
+      if (!isInSetup) return;
+      const originPiece = getPieceAt(target);
+      if (!originPiece) return;
+      const t = e.touches[0];
+      downX = t.clientX; downY = t.clientY; dragStarted = false;
+      const move = (ev) => {
+        if (dragStarted) return;
+        const tt = ev.touches[0];
+        const dx = Math.abs(tt.clientX - downX);
+        const dy = Math.abs(tt.clientY - downY);
+        if (dx > 6 || dy > 6) { // slightly larger threshold for touch
+          dragStarted = true;
+          // Construct a minimal event-like object for touch to avoid calling methods that don't exist
+          startDrag({ clientX: tt.clientX, clientY: tt.clientY }, target, originPiece);
+        }
+      };
+      const end = (ev) => {
+        document.removeEventListener('touchmove', move);
+        document.removeEventListener('touchend', end);
+        document.removeEventListener('touchcancel', end);
+        if (!dragStarted) {
+          handleClickTarget(target);
+        }
+      };
+      document.addEventListener('touchmove', move, { passive: false });
+      document.addEventListener('touchend', end);
+      document.addEventListener('touchcancel', end);
+    }, { passive: false });
+  }
+
+  function handleClickTarget(target) {
+    const pieceAtTarget = getPieceAt(target);
+    if (!selected) {
+      if (!pieceAtTarget) return; // nothing to select
+      selected = { ...target };
+      renderBoardAndBars();
+      return;
+    }
+    // Attempt move/swap
+    if (selected.type === target.type && selected.index === target.index) {
+      selected = null; renderBoardAndBars(); return;
+    }
+    const moved = performMove(selected, target);
+    console.log('[setup] click move', { from: selected, to: target, moved });
+    selected = null;
+    if (!moved) {
+      // illegal: simply clear selection
+    }
+    renderBoardAndBars();
+  }
+
+  function startDrag(e, origin, piece) {
+    try { if (e && typeof e.preventDefault === 'function') e.preventDefault(); } catch (_) {}
+    try { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); } catch (_) {}
+    selected = { ...origin };
+    // Use board-square-sized ghost to avoid shrinking during drag
+    const ghost = pieceGlyph(piece, currentSquareSize);
+    ghost.style.position = 'fixed';
+    ghost.style.pointerEvents = 'none';
+    ghost.style.transform = 'translate(-50%, -50%)';
+    ghost.style.boxShadow = '0 0 0 3px rgba(251,191,36,0.85)';
+    ghost.style.zIndex = '99999';
+    document.body.appendChild(ghost);
+    dragging = { piece, origin, ghostEl: ghost };
+    const move = (ev) => {
+      if (!dragging) return;
+      const x = ev.clientX !== undefined ? ev.clientX : (ev.touches && ev.touches[0] && ev.touches[0].clientX);
+      const y = ev.clientY !== undefined ? ev.clientY : (ev.touches && ev.touches[0] && ev.touches[0].clientY);
+      if (x !== undefined) ghost.style.left = x + 'px';
+      if (y !== undefined) ghost.style.top = y + 'px';
+    };
+    const up = (ev) => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      document.removeEventListener('touchmove', move);
+      document.removeEventListener('touchend', up);
+      document.removeEventListener('touchcancel', up);
+      if (!dragging) return;
+      const cx = ev.clientX !== undefined ? ev.clientX : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientX);
+      const cy = ev.clientY !== undefined ? ev.clientY : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientY);
+      const dest = hitTestDrop(cx, cy);
+      if (dest) {
+        const moved = performMove(dragging.origin, dest);
+        console.log('[setup] drop', { from: dragging.origin, to: dest, moved });
+      }
+      try { document.body.removeChild(ghost); } catch (_) {}
+      dragging = null; selected = null; renderBoardAndBars();
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+    document.addEventListener('touchmove', move, { passive: false });
+    document.addEventListener('touchend', up);
+    document.addEventListener('touchcancel', up);
+  }
+
+  function hitTestDrop(x, y) {
+    // Deck first
+    if (refs.deckEl) {
+      const r = refs.deckEl.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return { type: 'deck', index: 0 };
+    }
+    // Bottom board cells
+    for (const entry of refs.bottomCells) {
+      if (!entry || !entry.el) continue;
+      const r = entry.el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return { type: 'board', index: entry.col };
+    }
+    // Stash slots
+    for (const entry of refs.stashSlots) {
+      if (!entry || !entry.el) continue;
+      const r = entry.el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return { type: 'stash', index: entry.ordinal };
+    }
+    return null;
+  }
+
+  function getPieceAt(target) {
+    if (!target) return null;
+    if (target.type === 'board') return workingRank[target.index] || null;
+    if (target.type === 'deck') return workingOnDeck || null;
+    if (target.type === 'stash') return workingStash[target.index] || null;
+    return null;
+  }
+
+  function setPieceAt(target, piece) {
+    if (target.type === 'board') { workingRank[target.index] = piece; return; }
+    if (target.type === 'deck') { workingOnDeck = piece; return; }
+    if (target.type === 'stash') { workingStash[target.index] = piece; return; }
+  }
+
+  function performMove(origin, dest) {
+    // Enforce legal bottom-rank placement and center snapping is handled by CSS box model
+    const pieceFrom = getPieceAt(origin);
+    if (!pieceFrom) return false;
+    const pieceTo = getPieceAt(dest);
+    // Only allow board destinations on bottom rank squares (we only expose those in refs)
+    setPieceAt(origin, pieceTo || null);
+    setPieceAt(dest, pieceFrom);
+    return true;
   }
 })();
 
