@@ -64,6 +64,7 @@
     4: '♖',   // ROOK
     5: '♘'    // KNIGHT
   };
+  const KING_ID = 1;
   let currentBoard = null;        // 2D array of cells
   let currentStashes = [[], []];  // [white[], black[]]
   let currentOnDecks = [null, null];
@@ -277,6 +278,7 @@
         } else {
           isInSetup = false;
         }
+        // If opponent has completed setup, render their back rank as unknown pieces (already masked by server)
         ensurePlayAreaRoot();
         layoutPlayArea();
         renderBoardAndBars();
@@ -536,7 +538,7 @@
     const fileLetters = ['A','B','C','D','E'];
     for (let r = 0; r < currentRows; r++) {
       for (let c = 0; c < currentCols; c++) {
-        const light = currentIsWhite ? ((r + c) % 2 === 1) : ((r + c) % 2 === 0);
+        const light = ((r + c) % 2 === 1);
         const cell = document.createElement('div');
         cell.style.width = s + 'px';
         cell.style.height = s + 'px';
@@ -544,6 +546,13 @@
         cell.style.position = 'relative';
         cell.style.border = '1px solid #9ca3af';
         cell.style.background = light ? '#f7f7f7' : '#6b7280';
+        // Add server-oriented coordinates and algebraic notation
+        const serverRowForCell = currentIsWhite ? (currentRows - 1 - r) : r;
+        const serverColForCell = currentIsWhite ? c : (currentCols - 1 - c);
+        cell.dataset.serverRow = String(serverRowForCell);
+        cell.dataset.serverCol = String(serverColForCell);
+        const fileCharMeta = String.fromCharCode('A'.charCodeAt(0) + serverColForCell);
+        cell.dataset.square = `${fileCharMeta}${serverRowForCell + 1}`;
         // Bottom row file labels
         if (r === currentRows - 1) {
           const fileIdx = currentIsWhite ? c : (currentCols - 1 - c);
@@ -588,7 +597,10 @@
           if (isInSetup && isBottomRankCell) {
             piece = workingRank[uiCol] || null;
           } else if (currentBoard) {
-            const srcR = currentIsWhite ? r : (currentRows - 1 - r);
+            // Orientation mapping:
+            // - White perspective: flip rows only so UI bottom maps to server row 0; columns unchanged
+            // - Black perspective: keep rows, flip columns so UI bottom maps to server row rows-1
+            const srcR = currentIsWhite ? (currentRows - 1 - r) : r;
             const srcC = currentIsWhite ? c : (currentCols - 1 - c);
             piece = currentBoard?.[srcR]?.[srcC];
           }
@@ -634,8 +646,12 @@
     renderStash(s, bW, bH, leftPx, topPx);
 
     // Ready button overlay when setup is completable
+    // Always clear any existing button first so it disappears when not completable
+    const existingBtn = document.getElementById('setupReadyBtn');
+    if (existingBtn && existingBtn.parentNode) existingBtn.parentNode.removeChild(existingBtn);
     if (isInSetup && isSetupCompletable()) {
       const btn = document.createElement('button');
+      btn.id = 'setupReadyBtn';
       btn.textContent = 'Ready!';
       btn.style.position = 'absolute';
       btn.style.left = Math.floor(leftPx + (bW / 2) - 80) + 'px';
@@ -1014,7 +1030,8 @@
       // Populate working rank from board row for our color if any
       for (let uiCol = 0; uiCol < 5; uiCol++) workingRank[uiCol] = null;
       if (Array.isArray(view?.board)) {
-        const rowServer = 0; // always server row 0; UI bottom maps there
+        // Read server back rank for this color
+        const rowServer = myColor === 0 ? 0 : (view.board.length - 1);
         for (let serverCol = 0; serverCol < 5; serverCol++) {
           const piece = view.board?.[rowServer]?.[serverCol];
           if (piece && piece.color === myColor) {
@@ -1031,16 +1048,31 @@
 
   function isSetupCompletable() {
     const allFilled = workingRank.every(p => !!p);
-    return Boolean(allFilled && workingOnDeck);
+    const hasKing = workingRank.some(p => p && p.identity === KING_ID);
+    return Boolean(allFilled && hasKing && workingOnDeck);
   }
 
   function buildSetupPayload() {
     const pieces = [];
-    const rowServer = 0; // always the first (server) rank; UI bottom maps there for both colors
+    // Server expects placement on its own back rank for the current color
+    const rowServer = myColor === 0 ? 0 : (currentRows - 1);
     for (let uiCol = 0; uiCol < 5; uiCol++) {
       const piece = workingRank[uiCol];
       if (!piece) continue;
-      const colServer = currentIsWhite ? uiCol : (currentCols - 1 - uiCol);
+      // Derive server column from labeled bottom-row cell for robustness
+      // Find the bottom UI cell DIV corresponding to this uiCol and read its serverCol mapping
+      let colServer = null;
+      try {
+        const bottomRowIndex = currentRows - 1;
+        const boardChildrenIndex = bottomRowIndex * currentCols + uiCol; // grid order
+        const cellEl = boardRoot?.children?.[boardChildrenIndex];
+        const parsed = cellEl ? parseInt(cellEl?.dataset?.serverCol, 10) : NaN;
+        if (!Number.isNaN(parsed)) colServer = parsed;
+      } catch (_) {}
+      if (colServer === null) {
+        // Fallback to perspective mapping if dataset not available
+        colServer = currentIsWhite ? uiCol : (currentCols - 1 - uiCol);
+      }
       pieces.push({ identity: piece.identity, color: myColor, row: rowServer, col: colServer });
     }
     return { gameId: lastGameId, color: myColor, pieces, onDeck: workingOnDeck };
@@ -1223,6 +1255,9 @@
     // Only allow board destinations on bottom rank squares (we only expose those in refs)
     setPieceAt(origin, pieceTo || null);
     setPieceAt(dest, pieceFrom);
+    // After any move, re-render to update Ready button visibility
+    // (isSetupCompletable checks for king presence and full rank)
+    try { if (playAreaRoot) renderBoardAndBars(); } catch (_) {}
     return true;
   }
 })();

@@ -113,6 +113,7 @@ function initSocket(httpServer) {
         winner: masked.winner,
         winReason: masked.winReason,
         playersReady: game.playersReady,
+        setupComplete: game.setupComplete,
         startTime: game.startTime,
       });
     });
