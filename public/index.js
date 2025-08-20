@@ -637,7 +637,7 @@
               p.style.opacity = '0.5';
             }
             if (selected && selected.type === 'board' && selected.index === uiCol && isBottomRankCell) {
-              p.style.boxShadow = '0 0 0 3px rgba(218,165,32,0.95)';
+              p.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
             }
             p.textContent = PIECE_IDENTITIES[piece.identity] || '?';
             cell.appendChild(p);
@@ -967,14 +967,14 @@
         if (isInSetup) attachInteractiveHandlers(el, { type: 'deck', index: 0 });
         // Apply selection halo if on-deck is selected
         if (selected && selected.type === 'deck') {
-          el.style.boxShadow = '0 0 0 3px rgba(218,165,32,0.95)';
+          el.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
         }
       } else {
         const ord = uiToOrdinal[i];
         if (isInSetup) attachInteractiveHandlers(el, { type: 'stash', index: ord });
         refs.stashSlots[ord] = { el, ordinal: ord };
         if (selected && selected.type === 'stash' && selected.index === ord) {
-          el.style.boxShadow = '0 0 0 3px rgba(218,165,32,0.95)';
+          el.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
         }
       }
       stashRoot.appendChild(el);
@@ -996,7 +996,7 @@
       if (isInSetup) attachInteractiveHandlers(el, { type: 'stash', index: ord });
       refs.stashSlots[ord] = { el, ordinal: ord };
       if (selected && selected.type === 'stash' && selected.index === ord) {
-        el.style.boxShadow = '0 0 0 3px rgba(218,165,32,0.95)';
+        el.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
       }
       stashRoot.appendChild(el);
     }
@@ -1202,7 +1202,7 @@
     ghost.style.position = 'fixed';
     ghost.style.pointerEvents = 'none';
     ghost.style.transform = 'translate(-50%, -50%)';
-    ghost.style.boxShadow = '0 0 0 3px rgba(251,191,36,0.85)';
+    ghost.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
     ghost.style.zIndex = '99999';
     document.body.appendChild(ghost);
     dragging = { piece, origin, ghostEl: ghost };
