@@ -726,11 +726,18 @@
     let bottomBarTop = boardBottom + bottomGap;
     if (bottomBarTop + contH > H) bottomBarTop = Math.max(0, H - contH);
 
-    const yStart = bottomBarTop + contH + 20; // moved stash further down (was +8)
+    // Place stash block just under the bottom player's name bar
+    const yStart = bottomBarTop + contH + 4;
+    // Nudges: move top row up slightly; bottom row up twice that amount
+    const verticalNudge = Math.max(2, Math.floor(0.04 * s));
+    const yTop = yStart - verticalNudge;
 
-    // Slot sizing: 80% of board square size
-    const slot = Math.floor(0.8 * s);
-    const space = Math.max(4, Math.floor(0.12 * slot));
+    // Make stash slots the same size as board squares so pieces (80% of slot) match board piece size
+    const slot = s;
+    // Slight horizontal overlap (5%) to tighten spacing
+    const overlapRatio = 0.05;
+    const topSpace = -Math.round(overlapRatio * slot);
+    const bottomSpace = -Math.round(overlapRatio * slot);
 
     // rows: top has 5, bottom has 4; bottom is offset by half the (slot + spacing)
     const topCols = 5;
@@ -755,7 +762,7 @@
       el.style.width = w + 'px';
       el.style.height = h + 'px';
       el.style.boxSizing = 'border-box';
-      el.style.border = '3px solid #DAA520';
+      el.style.border = isOnDeck ? '3px solid #DAA520' : '0px solid transparent';
       el.style.background = isOnDeck ? '#3d2e88' : 'transparent';
       el.style.display = 'flex';
       el.style.alignItems = 'center';
@@ -769,7 +776,7 @@
 
     // Top row with exact-width layout to keep all gaps = space
     const widthsTop = [slot, slot, s, slot, slot];
-    const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * space;
+    const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * topSpace;
     let xCursor = Math.round(blockCenterX - topTotal / 2);
     const bottomColor = currentIsWhite ? 0 : 1;
     const stash = Array.isArray(currentStashes?.[bottomColor]) ? currentStashes[bottomColor] : [];
@@ -785,18 +792,18 @@
         const ord = uiToOrdinal[i];
         if (ord !== undefined && stash[ord]) content = pieceGlyph(stash[ord], isOnDeck ? s : slot);
       }
-      stashRoot.appendChild(makeSlot(xCursor, yStart, isOnDeck, true, content));
-      xCursor += widthsTop[i] + space;
+      stashRoot.appendChild(makeSlot(xCursor, yTop, isOnDeck, true, content));
+      xCursor += widthsTop[i] + topSpace;
     }
 
-    // Bottom row content width and left, then apply half-(slot+space) offset
-    const bottomContentWidth = bottomCols * slot + (bottomCols - 1) * space;
-    const bottomOffset = Math.round((slot + space) / 2);
+    // Bottom row content width and left
+    const bottomContentWidth = bottomCols * slot + (bottomCols - 1) * bottomSpace;
     const bottomLeft = Math.round(blockCenterX - bottomContentWidth / 2 );
 
     for (let i = 0; i < bottomCols; i++) {
-      const x = bottomLeft + i * (slot + space);
-      const y = yStart + slot + space;
+      const x = bottomLeft + i * (slot + bottomSpace);
+      // Bottom row touches the top row (no gap) and is nudged up twice as much as the top row
+      const y = yStart + slot - (verticalNudge * 2);
       const ord = uiToOrdinal[5 + i];
       const piece = (ord !== undefined) ? stash[ord] : null;
       const content = piece ? pieceGlyph(piece, slot) : null;
