@@ -55,6 +55,21 @@
   let currentCols = 0;
   let currentIsWhite = true;
 
+  // Live game state (masked per player)
+  const PIECE_IDENTITIES = {
+    0: '?',   // UNKNOWN
+    1: '♔',   // KING
+    2: '💣',  // BOMB
+    3: '♗',   // BISHOP
+    4: '♖',   // ROOK
+    5: '♘'    // KNIGHT
+  };
+  let currentBoard = null;        // 2D array of cells
+  let currentStashes = [[], []];  // [white[], black[]]
+  let currentOnDecks = [null, null];
+  let currentCaptured = [[], []]; // pieces captured by [white, black]
+  let currentDaggers = [0, 0];
+
   // Track server truth and optimistic intent to avoid flicker
   let isQueuedServer = false;
   let pendingAction = null; // 'join' | 'leave' | null
@@ -114,11 +129,12 @@
             currentIsWhite = (colorIdx === 0);
           } catch (e) { console.error('Error evaluating reconnect ready state', e); }
 
-          // Render board immediately if present
+          // Adopt masked state immediately if present
           try {
             if (Array.isArray(latest?.board)) {
               currentRows = latest.board.length || 6;
               currentCols = latest.board[0]?.length || 5;
+              setStateFromServer(latest);
               ensurePlayAreaRoot();
               layoutPlayArea();
               renderBoardAndBars();
@@ -146,10 +162,11 @@
         hideQueuer();
         currentIsWhite = (color === 0);
 
-        // If the server provided a board, render it
+        // If the server provided a board/state, adopt and render
         if (Array.isArray(payload.board)) {
           currentRows = payload.board.length || 6;
           currentCols = payload.board[0]?.length || 5;
+          setStateFromServer(payload);
           ensurePlayAreaRoot();
           layoutPlayArea();
           renderBoardAndBars();
@@ -179,9 +196,27 @@
     socket.on('disconnect', function() { /* keep UI; server handles grace */ });
 
     // New explicit signal when both players are ready
-    socket.on('players:bothReady', function(payload) {
-      console.log('[socket] players:bothReady', payload);
-      showPlayArea();
+    socket.on('players:bothReady', async function(payload) {
+      try {
+        console.log('[socket] players:bothReady', payload);
+        showPlayArea();
+        const gameId = payload?.gameId || lastGameId;
+        if (!gameId) return;
+        const colorIdx = currentIsWhite ? 0 : 1;
+        const res = await fetch('/api/v1/games/getDetails', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gameId, color: colorIdx })
+        });
+        if (!res.ok) return;
+        const view = await res.json();
+        setStateFromServer(view);
+        ensurePlayAreaRoot();
+        layoutPlayArea();
+        renderBoardAndBars();
+      } catch (e) {
+        console.error('players:bothReady handler failed', e);
+      }
     });
   }
 
@@ -467,6 +502,28 @@
           rankSpan.style.pointerEvents = 'none';
           cell.appendChild(rankSpan);
         }
+
+        // Render piece if present at this board coordinate
+        try {
+          if (currentBoard) {
+            const srcR = currentIsWhite ? r : (currentRows - 1 - r);
+            const srcC = currentIsWhite ? c : (currentCols - 1 - c);
+            const piece = currentBoard?.[srcR]?.[srcC];
+            if (piece) {
+              const p = document.createElement('div');
+              p.style.width = Math.floor(s * 0.8) + 'px';
+              p.style.height = Math.floor(s * 0.8) + 'px';
+              p.style.display = 'flex';
+              p.style.alignItems = 'center';
+              p.style.justifyContent = 'center';
+              p.style.fontSize = Math.floor(s * 0.7) + 'px';
+              p.style.background = piece.color === 1 ? '#000' : '#fff';
+              p.style.color = piece.color === 1 ? '#fff' : '#000';
+              p.textContent = PIECE_IDENTITIES[piece.identity] || '?';
+              cell.appendChild(p);
+            }
+          }
+        } catch (_) {}
         boardRoot.appendChild(cell);
       }
     }
@@ -556,12 +613,13 @@
       return box;
     }
 
-    function makeDaggers() {
+    function makeDaggers(count) {
       const wrap = document.createElement('div');
       wrap.style.display = 'flex';
       wrap.style.alignItems = 'center';
       wrap.style.gap = '6px';
-      for (let i = 0; i < 2; i++) {
+      const n = Math.max(0, Number(count || 0));
+      for (let i = 0; i < n; i++) {
         const token = document.createElement('div');
         // make tokens as tall as the clock row
         const sz = Math.floor(rowH);
@@ -582,15 +640,15 @@
       return wrap;
     }
 
-    function makeCaptured(oppColor) {
+    function makeCapturedForColor(colorIdx) {
       const strip = document.createElement('div');
       strip.style.display = 'flex';
       strip.style.alignItems = 'center';
       strip.style.gap = '4px';
-      const ids = [1,3,4,5];
-      ids.forEach(id => {
+      const pieces = (currentCaptured?.[colorIdx] || []);
+      pieces.forEach(piece => {
         const sq = document.createElement('div');
-        const cap = Math.floor(0.405 * s * 0.9); // ~36.45% of square edge
+        const cap = Math.floor(0.365 * s); // ~36.5% of square
         sq.style.width = cap + 'px';
         sq.style.height = cap + 'px';
         sq.style.border = '1px solid #000';
@@ -598,9 +656,10 @@
         sq.style.alignItems = 'center';
         sq.style.justifyContent = 'center';
         sq.style.fontSize = Math.floor(cap * 0.7) + 'px';
-        sq.style.background = oppColor === 1 ? '#000' : '#fff';
-        sq.style.color = oppColor === 1 ? '#fff' : '#000';
-        sq.textContent = id === 1 ? '♔' : id === 3 ? '♗' : id === 4 ? '♖' : '♘';
+        const isBlack = piece.color === 1;
+        sq.style.background = isBlack ? '#000' : '#fff';
+        sq.style.color = isBlack ? '#fff' : '#000';
+        sq.textContent = PIECE_IDENTITIES[piece.identity] || '?';
         strip.appendChild(sq);
       });
       return strip;
@@ -616,26 +675,28 @@
       row.style.justifyContent = 'space-between';
 
       if (isTopBar) {
-        row.appendChild(makeCaptured(currentIsWhite ? 0 : 1));
+        const topColor = currentIsWhite ? 1 : 0;
+        row.appendChild(makeCapturedForColor(topColor));
         const right = document.createElement('div');
         right.style.display = 'flex';
         right.style.alignItems = 'center';
         right.style.gap = '6px';
-        right.appendChild(makeDaggers());
-        right.appendChild(makeClock(!currentIsWhite));
+        right.appendChild(makeDaggers(currentDaggers?.[topColor] || 0));
+        right.appendChild(makeClock(topColor === 0));
         row.appendChild(right);
         // Top: name first, then row
         barEl.appendChild(nameRow);
         barEl.appendChild(row);
       } else {
+        const bottomColor = currentIsWhite ? 0 : 1;
         const left = document.createElement('div');
         left.style.display = 'flex';
         left.style.alignItems = 'center';
         left.style.gap = '6px';
-        left.appendChild(makeClock(currentIsWhite));
-        left.appendChild(makeDaggers());
+        left.appendChild(makeClock(bottomColor === 0));
+        left.appendChild(makeDaggers(currentDaggers?.[bottomColor] || 0));
         row.appendChild(left);
-        row.appendChild(makeCaptured(currentIsWhite ? 1 : 0));
+        row.appendChild(makeCapturedForColor(bottomColor));
         // Bottom: lower the stats row slightly without moving the name
         const spacer = Math.max(4, Math.floor(0.012 * H));
         row.style.marginTop = spacer + 'px';
@@ -678,7 +739,7 @@
     // Clear render
     while (stashRoot.firstChild) stashRoot.removeChild(stashRoot.firstChild);
 
-    function makeSlot(x, y, isOnDeck, exactLeft) {
+    function makeSlot(x, y, isOnDeck, exactLeft, content) {
       const el = document.createElement('div');
       el.style.position = 'absolute';
       // on-deck uses full board-square size s; others use reduced slot size
@@ -696,6 +757,10 @@
       el.style.boxSizing = 'border-box';
       el.style.border = '3px solid #DAA520';
       el.style.background = isOnDeck ? '#3d2e88' : 'transparent';
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.justifyContent = 'center';
+      if (content) el.appendChild(content);
       return el;
     }
 
@@ -706,9 +771,21 @@
     const widthsTop = [slot, slot, s, slot, slot];
     const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * space;
     let xCursor = Math.round(blockCenterX - topTotal / 2);
+    const bottomColor = currentIsWhite ? 0 : 1;
+    const stash = Array.isArray(currentStashes?.[bottomColor]) ? currentStashes[bottomColor] : [];
+    // Map UI slots (excluding center on-deck) to sequential stash pieces
+    const uiToOrdinal = { 0: 0, 1: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7 };
     for (let i = 0; i < widthsTop.length; i++) {
       const isOnDeck = (i === 2);
-      stashRoot.appendChild(makeSlot(xCursor, yStart, isOnDeck, true));
+      let content = null;
+      if (isOnDeck) {
+        const deck = currentOnDecks?.[bottomColor] || null;
+        if (deck) content = pieceGlyph(deck, isOnDeck ? s : slot);
+      } else {
+        const ord = uiToOrdinal[i];
+        if (ord !== undefined && stash[ord]) content = pieceGlyph(stash[ord], isOnDeck ? s : slot);
+      }
+      stashRoot.appendChild(makeSlot(xCursor, yStart, isOnDeck, true, content));
       xCursor += widthsTop[i] + space;
     }
 
@@ -720,8 +797,40 @@
     for (let i = 0; i < bottomCols; i++) {
       const x = bottomLeft + i * (slot + space);
       const y = yStart + slot + space;
-      stashRoot.appendChild(makeSlot(x, y, false));
+      const ord = uiToOrdinal[5 + i];
+      const piece = (ord !== undefined) ? stash[ord] : null;
+      const content = piece ? pieceGlyph(piece, slot) : null;
+      stashRoot.appendChild(makeSlot(x, y, false, false, content));
     }
+  }
+
+  function pieceGlyph(piece, target) {
+    try {
+      if (!piece) return null;
+      const el = document.createElement('div');
+      const size = Math.floor(target * 0.8);
+      el.style.width = size + 'px';
+      el.style.height = size + 'px';
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.justifyContent = 'center';
+      el.style.fontSize = Math.floor(size * 0.8) + 'px';
+      const isBlack = piece.color === 1;
+      el.style.background = isBlack ? '#000' : '#fff';
+      el.style.color = isBlack ? '#fff' : '#000';
+      el.textContent = PIECE_IDENTITIES[piece.identity] || '?';
+      return el;
+    } catch (_) { return null; }
+  }
+
+  function setStateFromServer(u) {
+    try {
+      if (Array.isArray(u.board)) currentBoard = u.board; else if (u.board === null) currentBoard = null;
+      if (Array.isArray(u.stashes)) currentStashes = u.stashes;
+      if (Array.isArray(u.onDecks)) currentOnDecks = u.onDecks;
+      if (Array.isArray(u.captured)) currentCaptured = u.captured;
+      if (Array.isArray(u.daggers)) currentDaggers = u.daggers;
+    } catch (_) {}
   }
 })();
 

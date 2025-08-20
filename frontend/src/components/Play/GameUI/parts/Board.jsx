@@ -67,7 +67,10 @@ export default function Board({ board, perspective, sizes, positions, identityTo
             top: '2px'
           }
 
-          const cell = board?.[r]?.[c]
+          // Select the correct board cell based on perspective (rotate for black)
+          const srcR = isWhite ? r : (rows - 1 - r)
+          const srcC = isWhite ? c : (cols - 1 - c)
+          const cell = board?.[srcR]?.[srcC]
           return (
             <div key={`${r}-${c}`} className={`board-square ${light ? 'light' : 'dark'}`} style={squareStyle}>
               {cell && (

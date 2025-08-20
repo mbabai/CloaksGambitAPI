@@ -41,7 +41,8 @@ const sampleGameState = {
   captured: [
     [],
     []
-  ]
+  ],
+  onDecks: [null, null]
 }
 
 export default function GameUI() {
@@ -150,7 +151,8 @@ export default function GameUI() {
               onDeckingPlayer: payload.onDeckingPlayer,
               isActive: payload.isActive,
               winner: payload.winner,
-              winReason: payload.winReason
+              winReason: payload.winReason,
+              onDecks: payload.onDecks
             })
 
             if (Array.isArray(payload.playersReady) && payload.playersReady[0] && payload.playersReady[1]) {
@@ -211,6 +213,43 @@ export default function GameUI() {
     return () => clearTimeout(timer)
   }, [justMatched, activeGame])
 
+  // When both players are ready, fetch the full masked game view for this player
+  useEffect(() => {
+    if (!bothReady) return
+    if (!activeGame) return
+    let aborted = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_ORIGIN}/api/v1/games/getDetails`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gameId: activeGame.id, color: activeGame.color })
+        })
+        if (!res.ok) return
+        const view = await res.json()
+        if (aborted) return
+        if (view && view.board) {
+          setGame(g => ({
+            ...g,
+            board: view.board,
+            stashes: view.stashes,
+            onDecks: view.onDecks,
+            daggers: view.daggers,
+            captured: view.captured,
+            actions: view.actions,
+            moves: view.moves,
+            playerTurn: view.playerTurn,
+            onDeckingPlayer: view.onDeckingPlayer,
+            isActive: view.isActive,
+            winner: view.winner,
+            winReason: view.winReason
+          }))
+        }
+      } catch (_) {}
+    })()
+    return () => { aborted = true }
+  }, [bothReady, activeGame])
+
   return (
     <div ref={viewportRef} className={styles.viewport}>
       <div ref={containerRef} className={styles.playArea} style={layout.cssVars}>
@@ -223,6 +262,8 @@ export default function GameUI() {
             sizes={layout.sizes}
             positions={layout.positions}
             identityToChar={identityToChar}
+            daggerCount={game?.daggers?.[perspective === 'white' ? 1 : 0] || 0}
+            capturedPieces={game?.captured?.[perspective === 'white' ? 1 : 0] || []}
           />
           {/* Self bar (bottom) */}
           <PlayerState
@@ -232,6 +273,8 @@ export default function GameUI() {
             sizes={layout.sizes}
             positions={layout.positions}
             identityToChar={identityToChar}
+            daggerCount={game?.daggers?.[perspective === 'white' ? 0 : 1] || 0}
+            capturedPieces={game?.captured?.[perspective === 'white' ? 0 : 1] || []}
           />
         </div>
 
@@ -245,7 +288,13 @@ export default function GameUI() {
         />
       </PlayArea>
 
-      <Stash sizes={layout.sizes} positions={layout.positions} />
+      <Stash
+        sizes={layout.sizes}
+        positions={layout.positions}
+        identityToChar={identityToChar}
+        stashPieces={game?.stashes?.[perspective === 'white' ? 0 : 1] || []}
+        onDeckPiece={game?.onDecks?.[perspective === 'white' ? 0 : 1] || null}
+      />
 
       <ActionButtons
         sizes={layout.sizes}

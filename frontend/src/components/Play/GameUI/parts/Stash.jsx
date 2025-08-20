@@ -1,7 +1,7 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 
 // Staggered stash + on-deck layout (top row 5 with on-deck center, bottom row 4)
-export default function Stash({ sizes, positions }) {
+export default function Stash({ sizes, positions, identityToChar, stashPieces = [], onDeckPiece = null }) {
   const s = Math.floor(sizes.squareSize)
   const slot = Math.floor(0.8 * s)
   const space = Math.max(4, Math.floor(0.12 * slot))
@@ -25,6 +25,36 @@ export default function Stash({ sizes, positions }) {
   const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * space
   let xCursorTop = Math.round(boardCenterX - topTotal / 2)
 
+  // Helper: render a piece glyph inside a slot
+  const renderPiece = (piece, width, height) => {
+    if (!piece) return null
+    const bg = piece.color === 1 ? '#000' : '#fff'
+    const fg = piece.color === 1 ? '#fff' : '#000'
+    return (
+      <div style={{
+        width: `${Math.floor(width * 0.8)}px`,
+        height: `${Math.floor(height * 0.8)}px`,
+        background: bg,
+        color: fg,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 'var(--font-size-stash-piece)'
+      }}>
+        {typeof piece.identity === 'number' ? (identityToChar?.[piece.identity] || '?') : '?'}
+      </div>
+    )
+  }
+
+  // Map UI slot order (excluding on-deck center) to the sequential stash pieces
+  const uiSlotsExcludingOnDeck = useMemo(() => [0, 1, 3, 4, 5, 6, 7, 8], [])
+
+  const getPieceForUiSlot = (uiIndex) => {
+    const ordinal = uiSlotsExcludingOnDeck.indexOf(uiIndex)
+    if (ordinal === -1) return null
+    return Array.isArray(stashPieces) ? (stashPieces[ordinal] || null) : null
+  }
+
   const topRow = widthsTop.map((w, i) => {
     const isOnDeck = i === 2
     const left = xCursorTop
@@ -32,6 +62,9 @@ export default function Stash({ sizes, positions }) {
     const top = isOnDeck ? Math.round(yStart - (s - slot)) : yStart
     const width = isOnDeck ? s : slot
     const height = isOnDeck ? s : slot
+    const content = isOnDeck
+      ? (onDeckPiece ? renderPiece(onDeckPiece, width, height) : null)
+      : (renderPiece(getPieceForUiSlot(i), width, height))
     return (
       <div
         key={`top-${i}`}
@@ -43,9 +76,14 @@ export default function Stash({ sizes, positions }) {
           height: `${height}px`,
           boxSizing: 'border-box',
           border: '3px solid #DAA520',
-          background: isOnDeck ? '#3d2e88' : 'transparent'
+          background: isOnDeck ? '#3d2e88' : 'transparent',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
         }}
-      />
+      >
+        {content}
+      </div>
     )
   })
 
@@ -66,9 +104,14 @@ export default function Stash({ sizes, positions }) {
         height: `${slot}px`,
         boxSizing: 'border-box',
         border: '3px solid #DAA520',
-        background: 'transparent'
+        background: 'transparent',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
       }}
-    />
+    >
+      {renderPiece(getPieceForUiSlot(i + 5), slot, slot)}
+    </div>
   ))
 
   return (
@@ -79,7 +122,7 @@ export default function Stash({ sizes, positions }) {
         top: `${yStart - (s - slot)}px`,
         width: `${sizes.boardWidth}px`,
         height: `${containerHeight + (s - slot)}px`,
-        pointerEvents: 'none' // visual only for now
+        pointerEvents: 'none' // visual only for now (no drag/drop yet)
       }}
     >
       {topRow}

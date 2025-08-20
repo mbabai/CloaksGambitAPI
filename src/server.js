@@ -51,8 +51,9 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-ga
   .catch((err) => console.error('MongoDB connection error:', err));
 
 // Routes
+// Serve the PlayArea page at root
 app.get('/', (req, res) => {
-  res.json({ message: 'Welcome to Cloaks Gambit API' });
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
 // Serve admin dashboard as a standalone endpoint

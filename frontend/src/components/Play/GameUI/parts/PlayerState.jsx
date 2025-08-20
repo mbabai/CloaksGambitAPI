@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react'
 
 // New PlayerState bar positioned relative to the board (top or bottom)
-export default function PlayerState({ position, playerName, playerColor, sizes, positions, identityToChar }) {
+export default function PlayerState({ position, playerName, playerColor, sizes, positions, identityToChar, daggerCount = 0, capturedPieces = [] }) {
   const isTop = position === 'top'
   const isSelf = position === 'bottom'
   const name = playerName || (playerColor === 0 ? 'White' : 'Black')
@@ -41,7 +41,7 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
   }
 
   const clockBoxStyle = {
-    width: `${sizes.squareSize * 1.6}px`,
+    width: `${2.9 * (sizes.squareSize * 0.7) }px`,
     height: `${rowHeight}px`,
     display: 'flex',
     alignItems: 'center',
@@ -50,7 +50,8 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
     background: playerColor === 0 ? '#ffffff' : '#000000',
     color: playerColor === 0 ? '#000' : '#fff',
     fontWeight: 'bold',
-    fontFamily: 'Courier New, monospace'
+    fontFamily: 'Courier New, monospace',
+    border: '2px solid #DAA520'
   }
 
   const daggerWrapStyle = {
@@ -60,7 +61,7 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
   }
 
   const daggerToken = (i) => {
-    const tokenSize = rowHeight * 0.8
+    const tokenSize = rowHeight
     return (
       <div
         key={i}
@@ -84,17 +85,13 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
     )
   }
 
-  // For testing: show 4 captured pieces always
-  const capturedPieces = useMemo(() => {
-    const oppColor = playerColor === 0 ? 1 : 0
-    const ids = [1, 3, 4, 5] // King, Bishop, Rook, Knight
-    return ids.map(id => ({ color: oppColor, identity: id }))
-  }, [playerColor])
+  // Render provided capturedPieces as small squares
+  const capturedToShow = useMemo(() => Array.isArray(capturedPieces) ? capturedPieces : [], [capturedPieces])
 
   const capturedStrip = (
     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-      {capturedPieces.map((p, i) => {
-        const capSize = sizes.squareSize * 0.5
+      {capturedToShow.map((p, i) => {
+        const capSize = sizes.squareSize * 0.365
         return (
           <div
             key={i}
@@ -118,11 +115,17 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
     </div>
   )
 
-  const rightCluster = (
+  const rightClusterTop = (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-      {!isTop && <></>}
-      <div style={daggerWrapStyle}>{[0,1].map(daggerToken)}</div>
+      <div style={daggerWrapStyle}>{Array.from({ length: Math.max(0, daggerCount) }).map((_, i) => daggerToken(i))}</div>
       <div style={clockBoxStyle}>{'5:00'}</div>
+    </div>
+  )
+
+  const leftClusterBottom = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={clockBoxStyle}>{'5:00'}</div>
+      <div style={daggerWrapStyle}>{Array.from({ length: Math.max(0, daggerCount) }).map((_, i) => daggerToken(i))}</div>
     </div>
   )
 
@@ -134,20 +137,21 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
 
   return (
     <div className={`player-bar ${isTop ? 'top' : 'bottom'}`} style={containerStyle}>
-      <div style={nameStyle}>{name}</div>
+      {isTop && <div style={nameStyle}>{name}</div>}
       <div style={rowStyle}>
         {isTop ? (
           <>
             {leftCluster}
-            {rightCluster}
+            {rightClusterTop}
           </>
         ) : (
           <>
+            {leftClusterBottom}
             {leftCluster}
-            {rightCluster}
           </>
         )}
       </div>
+      {!isTop && <div style={nameStyle}>{name}</div>}
     </div>
   )
 }
