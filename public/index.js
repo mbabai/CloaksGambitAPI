@@ -72,6 +72,11 @@
   let currentDaggers = [0, 0];
   let currentSquareSize = 0; // last computed board square size
 
+  // Pointer interaction thresholds
+  const DRAG_PX_THRESHOLD = 6;
+  const CLICK_TIME_MAX_MS = 300;
+  let suppressMouseUntil = 0; // timestamp to ignore mouse after touch
+
   // Setup interaction state
   let isInSetup = false;         // true when local player is arranging pieces
   let myColor = 0;               // 0 white, 1 black (derived when entering setup)
@@ -624,7 +629,7 @@
               p.style.opacity = '0.5';
             }
             if (selected && selected.type === 'board' && selected.index === uiCol && isBottomRankCell) {
-              p.style.boxShadow = '0 0 0 3px rgba(251,191,36,0.85)';
+              p.style.boxShadow = '0 0 0 3px rgba(218,165,32,0.95)';
             }
             p.textContent = PIECE_IDENTITIES[piece.identity] || '?';
             cell.appendChild(p);
@@ -952,10 +957,17 @@
         refs.deckEl = el;
         el.style.zIndex = '10'; // ensure on-deck sits above other stash slots/pieces
         if (isInSetup) attachInteractiveHandlers(el, { type: 'deck', index: 0 });
+        // Apply selection halo if on-deck is selected
+        if (selected && selected.type === 'deck') {
+          el.style.boxShadow = '0 0 0 3px rgba(218,165,32,0.95)';
+        }
       } else {
         const ord = uiToOrdinal[i];
         if (isInSetup) attachInteractiveHandlers(el, { type: 'stash', index: ord });
         refs.stashSlots[ord] = { el, ordinal: ord };
+        if (selected && selected.type === 'stash' && selected.index === ord) {
+          el.style.boxShadow = '0 0 0 3px rgba(218,165,32,0.95)';
+        }
       }
       stashRoot.appendChild(el);
       xCursor += widthsTop[i] + topSpace;
@@ -975,6 +987,9 @@
       const el = makeSlot(x, y, false, false, content);
       if (isInSetup) attachInteractiveHandlers(el, { type: 'stash', index: ord });
       refs.stashSlots[ord] = { el, ordinal: ord };
+      if (selected && selected.type === 'stash' && selected.index === ord) {
+        el.style.boxShadow = '0 0 0 3px rgba(218,165,32,0.95)';
+      }
       stashRoot.appendChild(el);
     }
   }
@@ -995,6 +1010,10 @@
       const isBlack = piece.color === 1;
       el.style.background = isBlack ? '#000' : '#fff';
       el.style.color = isBlack ? '#fff' : '#000';
+      // Selection halo for stash/deck selections
+      if (selected && ((selected.type === 'stash' && selected.index !== undefined) || (selected.type === 'deck'))) {
+        // The caller wraps which slot is being rendered; we can’t know here, so the halo is applied in render if needed.
+      }
       el.textContent = PIECE_IDENTITIES[piece.identity] || '?';
       return el;
     } catch (_) { return null; }
@@ -1080,22 +1099,22 @@
 
   function attachInteractiveHandlers(el, target) {
     try { el.style.cursor = 'pointer'; } catch (_) {}
-    // Implement click vs. drag threshold: start drag only if movement exceeds a small delta
-    let downX = 0, downY = 0, dragStarted = false;
+    // Mouse: threshold promotion to drag, otherwise click-to-move
     el.addEventListener('mousedown', (e) => {
+      if (Date.now() < suppressMouseUntil) return; // ignore synthetic mouse after touch
+      if (!isInSetup) return;
+      const originPiece = getPieceAt(target); // may be null for empty dest; still allow click path
       e.preventDefault();
       e.stopPropagation();
-      if (!isInSetup) return;
-      const originPiece = getPieceAt(target);
-      if (!originPiece) return; // only start drag if there is a piece
-      downX = e.clientX; downY = e.clientY; dragStarted = false;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let dragStarted = false;
       const move = (ev) => {
         if (dragStarted) return;
-        const dx = Math.abs(ev.clientX - downX);
-        const dy = Math.abs(ev.clientY - downY);
-        if (dx > 4 || dy > 4) {
+        const dx = Math.abs(ev.clientX - startX);
+        const dy = Math.abs(ev.clientY - startY);
+        if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece) {
           dragStarted = true;
-          console.log('[setup] drag start', target);
           startDrag(ev, target, originPiece);
           document.removeEventListener('mousemove', move);
         }
@@ -1104,32 +1123,30 @@
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
         if (!dragStarted) {
-          // treat as click
           ev.preventDefault();
           ev.stopPropagation();
-          if (!isInSetup) return;
-          console.log('[setup] click', target);
           handleClickTarget(target);
         }
       };
       document.addEventListener('mousemove', move);
       document.addEventListener('mouseup', up);
     });
-    // Touch support (mobile): mirror the same logic using touch events
+    // Touch: mirror behavior with slightly higher jitter tolerance
     el.addEventListener('touchstart', (e) => {
       if (!isInSetup) return;
-      const originPiece = getPieceAt(target);
-      if (!originPiece) return;
+      const originPiece = getPieceAt(target); // may be null
+      try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
+      suppressMouseUntil = Date.now() + 500;
       const t = e.touches[0];
-      downX = t.clientX; downY = t.clientY; dragStarted = false;
+      const startX = t.clientX, startY = t.clientY;
+      let dragStarted = false;
       const move = (ev) => {
         if (dragStarted) return;
         const tt = ev.touches[0];
-        const dx = Math.abs(tt.clientX - downX);
-        const dy = Math.abs(tt.clientY - downY);
-        if (dx > 6 || dy > 6) { // slightly larger threshold for touch
+        const dx = Math.abs(tt.clientX - startX);
+        const dy = Math.abs(tt.clientY - startY);
+        if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece) {
           dragStarted = true;
-          // Construct a minimal event-like object for touch to avoid calling methods that don't exist
           startDrag({ clientX: tt.clientX, clientY: tt.clientY }, target, originPiece);
         }
       };
@@ -1137,6 +1154,7 @@
         document.removeEventListener('touchmove', move);
         document.removeEventListener('touchend', end);
         document.removeEventListener('touchcancel', end);
+        try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {}
         if (!dragStarted) {
           handleClickTarget(target);
         }
@@ -1150,21 +1168,20 @@
   function handleClickTarget(target) {
     const pieceAtTarget = getPieceAt(target);
     if (!selected) {
+      // Select anything that has a piece (board/stash/deck). If empty, ignore
       if (!pieceAtTarget) return; // nothing to select
       selected = { ...target };
       renderBoardAndBars();
       return;
     }
-    // Attempt move/swap
+    // If clicking the same spot, unselect
     if (selected.type === target.type && selected.index === target.index) {
       selected = null; renderBoardAndBars(); return;
     }
+    // Attempt move/swap to any destination (empty or filled) across board/stash/deck
     const moved = performMove(selected, target);
     console.log('[setup] click move', { from: selected, to: target, moved });
     selected = null;
-    if (!moved) {
-      // illegal: simply clear selection
-    }
     renderBoardAndBars();
   }
 

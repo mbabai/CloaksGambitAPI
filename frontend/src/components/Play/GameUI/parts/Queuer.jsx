@@ -7,6 +7,7 @@ export default function Queuer({ sizes, positions, mode, isSearching, onToggleSe
     left: `${positions.queuer.left}px`,
     top: `${positions.queuer.top}px`,
     width: `${sizes.squareSize * 3.4}px`,
+    maxWidth: '50vw',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'stretch',
@@ -34,7 +35,9 @@ export default function Queuer({ sizes, positions, mode, isSearching, onToggleSe
     borderRadius: '14px',
     background: '#5b21b6',
     display: 'flex',
-    alignItems: 'center'
+    alignItems: 'center',
+    width: '75%',
+    alignSelf: 'center'
   }), [sizes])
 
   const selectStyle = useMemo(() => ({
