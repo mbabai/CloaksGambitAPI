@@ -641,13 +641,16 @@
     // Clear render
     while (stashRoot.firstChild) stashRoot.removeChild(stashRoot.firstChild);
 
-    function makeSlot(x, y, isOnDeck) {
+    function makeSlot(x, y, isOnDeck, exactLeft) {
       const el = document.createElement('div');
       el.style.position = 'absolute';
       // on-deck uses full board-square size s; others use reduced slot size
       const w = isOnDeck ? s : slot;
       const h = isOnDeck ? s : slot;
-      const leftAdj = isOnDeck ? Math.round(x - (w - slot) / 2) : x; // center horizontally
+      // For on-deck, if exactLeft is true, use x as the exact left edge; otherwise center over nominal slot
+      const leftAdj = isOnDeck
+        ? (exactLeft ? x : Math.round(x - (w - slot) / 2))
+        : x;
       const topAdj = isOnDeck ? Math.round(y - (h - slot)) : y;      // bottom-align
       el.style.left = leftAdj + 'px';
       el.style.top = topAdj + 'px';
@@ -662,20 +665,14 @@
     // Compute board center for stable centering
     const blockCenterX = leftPx + Math.floor(bW / 2);
 
-    // Top row content width and left
-    const topContentWidth = topCols * slot + (topCols - 1) * space;
-    const delta = Math.round((s - slot) / 2); // extra half-width from on-deck to balance gaps
-    const topEffectiveWidth = topContentWidth + 2 * delta;
-    const topLeft = Math.round(blockCenterX - topEffectiveWidth / 2);
-
-    for (let i = 0; i < topCols; i++) {
-      let x = topLeft + i * (slot + space);
-      // Maintain uniform edge gaps with larger on-deck by shifting neighbors equally
-      if (i === 1) x -= delta; // neighbor on left of on-deck
-      if (i === 3) x += delta; // neighbor on right of on-deck
-      const y = yStart;
+    // Top row with exact-width layout to keep all gaps = space
+    const widthsTop = [slot, slot, s, slot, slot];
+    const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * space;
+    let xCursor = Math.round(blockCenterX - topTotal / 2);
+    for (let i = 0; i < widthsTop.length; i++) {
       const isOnDeck = (i === 2);
-      stashRoot.appendChild(makeSlot(x, y, isOnDeck));
+      stashRoot.appendChild(makeSlot(xCursor, yStart, isOnDeck, true));
+      xCursor += widthsTop[i] + space;
     }
 
     // Bottom row content width and left, then apply half-(slot+space) offset
