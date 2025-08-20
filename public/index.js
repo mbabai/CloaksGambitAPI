@@ -421,6 +421,9 @@
     boardRoot.style.gridTemplateColumns = `repeat(${currentCols}, ${s}px)`;
     boardRoot.style.gridTemplateRows = `repeat(${currentRows}, ${s}px)`;
     while (boardRoot.firstChild) boardRoot.removeChild(boardRoot.firstChild);
+    // Label font scales with play area height for consistency
+    const labelFont = Math.max(10, Math.floor(0.024 * playAreaRoot.clientHeight));
+    const fileLetters = ['A','B','C','D','E'];
     for (let r = 0; r < currentRows; r++) {
       for (let c = 0; c < currentCols; c++) {
         const light = currentIsWhite ? ((r + c) % 2 === 1) : ((r + c) % 2 === 0);
@@ -428,8 +431,42 @@
         cell.style.width = s + 'px';
         cell.style.height = s + 'px';
         cell.style.boxSizing = 'border-box';
+        cell.style.position = 'relative';
         cell.style.border = '1px solid #9ca3af';
         cell.style.background = light ? '#f7f7f7' : '#6b7280';
+        // Bottom row file labels
+        if (r === currentRows - 1) {
+          const fileIdx = currentIsWhite ? c : (currentCols - 1 - c);
+          const file = fileLetters[fileIdx] || '';
+          const fileSpan = document.createElement('span');
+          fileSpan.textContent = file;
+          fileSpan.style.position = 'absolute';
+          fileSpan.style.right = '3px';
+          fileSpan.style.bottom = '2px';
+          fileSpan.style.color = '#000';
+          fileSpan.style.fontWeight = '400';
+          fileSpan.style.fontSize = labelFont + 'px';
+          fileSpan.style.lineHeight = '1';
+          fileSpan.style.userSelect = 'none';
+          fileSpan.style.pointerEvents = 'none';
+          cell.appendChild(fileSpan);
+        }
+        // Left column rank labels
+        if (c === 0) {
+          const rank = currentIsWhite ? (currentRows - r) : (r + 1);
+          const rankSpan = document.createElement('span');
+          rankSpan.textContent = String(rank);
+          rankSpan.style.position = 'absolute';
+          rankSpan.style.left = '3px';
+          rankSpan.style.top = '2px';
+          rankSpan.style.color = '#000';
+          rankSpan.style.fontWeight = '400';
+          rankSpan.style.fontSize = labelFont + 'px';
+          rankSpan.style.lineHeight = '1';
+          rankSpan.style.userSelect = 'none';
+          rankSpan.style.pointerEvents = 'none';
+          cell.appendChild(rankSpan);
+        }
         boardRoot.appendChild(cell);
       }
     }

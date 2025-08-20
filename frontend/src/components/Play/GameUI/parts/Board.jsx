@@ -15,6 +15,8 @@ export default function Board({ board, perspective, sizes, positions, identityTo
     gridTemplateRows: `repeat(${rows}, ${sizes.squareSize}px)`
   }), [positions.board.left, positions.board.top, sizes.boardWidth, sizes.boardHeight, sizes.squareSize, rows, cols])
 
+  const fileLetters = ['A','B','C','D','E']
+
   return (
     <div className="board" style={gridStyle}>
       {Array.from({ length: rows }).map((_, r) => (
@@ -32,6 +34,39 @@ export default function Board({ board, perspective, sizes, positions, identityTo
             background: light ? '#f7f7f7' : '#6b7280',
             border: '1px solid #9ca3af'
           }
+
+          // Notation
+          const showFile = r === rows - 1
+          const showRank = c === 0
+          const fileIndex = isWhite ? c : cols - 1 - c
+          const rankIndex = isWhite ? r : rows - 1 - r
+          const file = fileLetters[fileIndex] || ''
+          const rank = String(rankIndex + 1)
+
+          const notationStyleBase = {
+            position: 'absolute',
+            color: '#000',
+            fontSize: 'var(--font-size-notation)',
+            fontWeight: 400,
+            opacity: 0.9,
+            fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', serif",
+            lineHeight: 1,
+            userSelect: 'none',
+            pointerEvents: 'none',
+          }
+
+          const fileStyle = {
+            ...notationStyleBase,
+            right: '3px',
+            bottom: '2px'
+          }
+
+          const rankStyle = {
+            ...notationStyleBase,
+            left: '3px',
+            top: '2px'
+          }
+
           const cell = board?.[r]?.[c]
           return (
             <div key={`${r}-${c}`} className={`board-square ${light ? 'light' : 'dark'}`} style={squareStyle}>
@@ -51,6 +86,12 @@ export default function Board({ board, perspective, sizes, positions, identityTo
                 >
                   {identityToChar?.[cell.identity]}
                 </div>
+              )}
+              {showFile && (
+                <span style={fileStyle}>{file}</span>
+              )}
+              {showRank && (
+                <span style={rankStyle}>{rank}</span>
               )}
             </div>
           )

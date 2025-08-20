@@ -102,7 +102,8 @@ export function usePlayAreaLayout(ref, { rows, cols, stashRows, stashCols }) {
       '--font-size-board-piece': base * 0.032,
       '--font-size-stash-slot': base * 0.028,
       '--font-size-stash-piece': base * 0.028,
-      '--font-size-action-button': base * 0.038
+      '--font-size-action-button': base * 0.038,
+      '--font-size-notation': base * 0.020,
     }
     const style = {}
     for (const [k, v] of Object.entries(ratios)) style[k] = `${v}px`
