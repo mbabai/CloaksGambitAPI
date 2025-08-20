@@ -215,22 +215,24 @@ export default function GameUI() {
     <div ref={viewportRef} className={styles.viewport}>
       <div ref={containerRef} className={styles.playArea} style={layout.cssVars}>
         <div className={styles.gameState} style={{ top: layout.positions.gameStateTop, height: layout.sizes.gameStateHeight }}>
-        <PlayerState
-          side="left"
-          perspective={perspective}
-          daggers={game.daggers}
-          captured={game.captured}
-          sizes={layout.sizes}
-          identityToChar={identityToChar}
-        />
-        <PlayerState
-          side="right"
-          perspective={perspective}
-          daggers={game.daggers}
-          captured={game.captured}
-          sizes={layout.sizes}
-          identityToChar={identityToChar}
-        />
+          {/* Opponent bar (top) */}
+          <PlayerState
+            position="top"
+            playerName="Opponent Name"
+            playerColor={perspective === 'white' ? 1 : 0}
+            sizes={layout.sizes}
+            positions={layout.positions}
+            identityToChar={identityToChar}
+          />
+          {/* Self bar (bottom) */}
+          <PlayerState
+            position="bottom"
+            playerName="My Name"
+            playerColor={perspective === 'white' ? 0 : 1}
+            sizes={layout.sizes}
+            positions={layout.positions}
+            identityToChar={identityToChar}
+          />
         </div>
 
       <PlayArea>

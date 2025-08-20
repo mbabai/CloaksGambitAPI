@@ -45,9 +45,11 @@
   let playAreaRoot = null;
   let isPlayAreaVisible = false;
   let queuerHidden = false;
-  // Simple board rendering state (plain page)
+
+  // Simple board + bars state (plain page)
   let boardRoot = null;
-  let currentBoard = null;
+  let topBar = null;
+  let bottomBar = null;
   let currentRows = 0;
   let currentCols = 0;
   let currentIsWhite = true;
@@ -85,7 +87,6 @@
       try {
         const games = Array.isArray(payload?.games) ? payload.games : [];
         if (games.length > 0) {
-          // Use the newest active game id to suppress banners/auto-ready
           const latest = games[0];
           if (latest?._id) {
             lastGameId = latest._id; // treat as already handled
@@ -109,18 +110,17 @@
                 body: JSON.stringify({ gameId: latest._id, color: colorIdx })
               }).catch(function(err){ console.error('READY on reconnect failed', err); });
             }
+            currentIsWhite = (colorIdx === 0);
           } catch (e) { console.error('Error evaluating reconnect ready state', e); }
 
           // Render board immediately if present
           try {
             if (Array.isArray(latest?.board)) {
-              currentBoard = latest.board;
               currentRows = latest.board.length || 6;
               currentCols = latest.board[0]?.length || 5;
-              currentIsWhite = (Array.isArray(latest?.players) ? latest.players.findIndex(function(p){ return p === userId; }) : 0) === 0;
               ensurePlayAreaRoot();
               layoutPlayArea();
-              renderBoard();
+              renderBoardAndBars();
             }
           } catch (_) {}
         }
@@ -143,16 +143,15 @@
 
         // As soon as we are in a game, hide the Find Game UI
         hideQueuer();
+        currentIsWhite = (color === 0);
 
-        // Render board if present
+        // If the server provided a board, render it
         if (Array.isArray(payload.board)) {
-          currentBoard = payload.board;
           currentRows = payload.board.length || 6;
           currentCols = payload.board[0]?.length || 5;
-          currentIsWhite = (color === 0);
           ensurePlayAreaRoot();
           layoutPlayArea();
-          renderBoard();
+          renderBoardAndBars();
         }
 
         if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
@@ -180,14 +179,10 @@
 
     // New explicit signal when both players are ready
     socket.on('players:bothReady', function(payload) {
-      // Keep only this single log and remove inferred duplicates from game:update
       console.log('[socket] players:bothReady', payload);
       showPlayArea();
     });
   }
-
-  // If we don't receive initialState within 2 seconds, enable UI anyway
-  // No backend integration needed for visuals, but socket remains for future use
 
   async function enterQueue() {
     console.log('[action] enterQueue', { userId });
@@ -234,7 +229,6 @@
         updateFindButton();
         await exitQueue();
       }
-      // Rely on socket events to finalize; keep optimistic UI via pendingAction
     } catch (e) {
       console.error(e);
       pendingAction = null;
@@ -245,7 +239,6 @@
   // Fallback UI state
   updateFindButton();
 
-  // Bootstrap: ensure user, then connect socket with auth
   (async function init() {
     try {
       userId = await ensureUserId();
@@ -314,31 +307,41 @@
       if (typeof onTick === 'function') {
         try { onTick(remaining); } catch (_) {}
       }
-           if (remaining < 0) {
-         clearInterval(bannerInterval);
-         bannerInterval = null;
-         el.style.display = 'none';
-         return;
-       }
-       countEl.textContent = remaining === 0 ? 'Go!' : String(remaining);
+      if (remaining < 0) {
+        clearInterval(bannerInterval);
+        bannerInterval = null;
+        el.style.display = 'none';
+        return;
+      }
+      countEl.textContent = remaining === 0 ? 'Go!' : String(remaining);
     }, 1000);
   }
 
-  // ------- Simple PlayArea box for the plain page (no React) -------
+  // ------- PlayArea & Board & Bars -------
   function ensurePlayAreaRoot() {
     if (playAreaRoot) return playAreaRoot;
     playAreaRoot = document.createElement('div');
     playAreaRoot.id = 'playAreaRoot';
     playAreaRoot.style.position = 'fixed';
-    playAreaRoot.style.display = 'none'; // hidden until ready
+    playAreaRoot.style.display = 'none';
     playAreaRoot.style.zIndex = '1000';
-    // No backdrop; we want the rest of the page untouched
     document.body.appendChild(playAreaRoot);
-    // Add inner board container
+
     boardRoot = document.createElement('div');
     boardRoot.id = 'playAreaBoard';
     boardRoot.style.position = 'absolute';
     playAreaRoot.appendChild(boardRoot);
+
+    topBar = document.createElement('div');
+    topBar.id = 'playAreaTopBar';
+    topBar.style.position = 'absolute';
+    playAreaRoot.appendChild(topBar);
+
+    bottomBar = document.createElement('div');
+    bottomBar.id = 'playAreaBottomBar';
+    bottomBar.style.position = 'absolute';
+    playAreaRoot.appendChild(bottomBar);
+
     window.addEventListener('resize', layoutPlayArea);
     return playAreaRoot;
   }
@@ -351,11 +354,9 @@
     const parentRatio = vh / vw;
     let width, height;
     if (parentRatio < target) {
-      // Parent is wider than target -> fill vertical space
       height = vh;
       width = Math.floor(height / target);
     } else {
-      // Parent is taller than target -> fill horizontal space
       width = vw;
       height = Math.floor(width * target);
     }
@@ -370,7 +371,7 @@
       background: '#800080',
       boxSizing: 'border-box'
     });
-    if (currentBoard) renderBoard();
+    renderBoardAndBars();
   }
 
   function showPlayArea() {
@@ -390,22 +391,24 @@
     }
   }
 
-  // Render a simple board grid into the play area
-  function renderBoard() {
+  function renderBoardAndBars() {
     if (!playAreaRoot || !boardRoot || !currentRows || !currentCols) return;
     const widthLimit = playAreaRoot.clientWidth / (currentCols + 1);
     const heightLimit = (0.6 * playAreaRoot.clientHeight) / currentRows;
     const s = Math.max(1, Math.floor(Math.min(widthLimit, heightLimit)));
     const bW = s * currentCols;
     const bH = s * currentRows;
-    boardRoot.style.width = bW + 'px';
-    boardRoot.style.height = bH + 'px';
-    boardRoot.style.left = Math.floor((playAreaRoot.clientWidth - bW) / 2) + 'px';
-    // target the board center at 35% of play area height to push it upward
-    var desiredCenterY = playAreaRoot.clientHeight * 0.40;
-    var topPx = Math.floor(desiredCenterY - (bH / 2));
+    const leftPx = Math.floor((playAreaRoot.clientWidth - bW) / 2);
+    // Center at 40% of play area height
+    const desiredCenterY = playAreaRoot.clientHeight * 0.40;
+    let topPx = Math.floor(desiredCenterY - (bH / 2));
     if (topPx < 0) topPx = 0;
     if (topPx > playAreaRoot.clientHeight - bH) topPx = playAreaRoot.clientHeight - bH;
+
+    // Layout board grid
+    boardRoot.style.width = bW + 'px';
+    boardRoot.style.height = bH + 'px';
+    boardRoot.style.left = leftPx + 'px';
     boardRoot.style.top = topPx + 'px';
     boardRoot.style.display = 'grid';
     boardRoot.style.gridTemplateColumns = `repeat(${currentCols}, ${s}px)`;
@@ -423,6 +426,183 @@
         boardRoot.appendChild(cell);
       }
     }
+
+    renderBars(s, bW, bH, leftPx, topPx);
+  }
+
+  function renderBars(s, bW, bH, leftPx, topPx) {
+    if (!topBar || !bottomBar) return;
+    const H = playAreaRoot.clientHeight;
+
+    // Tightened vertical gap and proportional sizing
+    const gap = 6;
+    const topGap = 10;   // pixels between top bar and board
+    const bottomGap = 2; // bring the bottom bar closer to the board
+
+    // Size bars as percent of play-area height (consistent across resize)
+    const nameBarH = Math.max(18, Math.floor(0.045 * H));
+    const rowH = Math.max(16, Math.floor(0.040 * H));
+    const contH = nameBarH + rowH + gap;
+
+    // Target anchors as percent, then clamp to avoid overlap with the board
+    const desiredTopTop = Math.floor(0.05 * H);
+    let topBarTop = Math.min(desiredTopTop, topPx - topGap - contH);
+    topBarTop = Math.max(0, topBarTop);
+
+    const boardBottom = topPx + bH;
+    let bottomBarTop = boardBottom + bottomGap; // tight to board
+    if (bottomBarTop + contH > H) {
+      bottomBarTop = Math.max(0, H - contH);
+    }
+
+    // Font sizes anchored to play-area height (consistent percent feel)
+    const nameFont = Math.max(14, Math.floor(0.030 * H));
+    const clockFont = Math.max(12, Math.floor(0.026 * H));
+    const iconFont = Math.max(12, Math.floor(0.024 * H));
+
+    // Top (opponent)
+    topBar.style.left = leftPx + 'px';
+    topBar.style.top = topBarTop + 'px';
+    topBar.style.width = bW + 'px';
+    topBar.style.height = contH + 'px';
+    topBar.style.display = 'flex';
+    topBar.style.flexDirection = 'column';
+    topBar.style.gap = gap + 'px';
+
+    // Bottom (self)
+    bottomBar.style.left = leftPx + 'px';
+    bottomBar.style.top = bottomBarTop + 'px';
+    bottomBar.style.width = bW + 'px';
+    bottomBar.style.height = contH + 'px';
+    bottomBar.style.display = 'flex';
+    bottomBar.style.flexDirection = 'column';
+    bottomBar.style.gap = gap + 'px';
+
+    function makeNameRow(text, alignRight) {
+      const row = document.createElement('div');
+      row.style.height = nameBarH + 'px';
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.justifyContent = alignRight ? 'flex-end' : 'flex-start';
+      row.style.color = '#fff';
+      row.style.fontSize = nameFont + 'px';
+      row.style.fontWeight = 'bold';
+      row.textContent = text;
+      return row;
+    }
+
+    function makeClock(colorIsWhite) {
+      const box = document.createElement('div');
+      // 50% wider again (previous was 1.95 * rowH); now ~2.9 * rowH
+      box.style.width = Math.floor(2.9 * rowH) + 'px';
+      box.style.height = rowH + 'px';
+      box.style.display = 'flex';
+      box.style.alignItems = 'center';
+      box.style.justifyContent = 'center';
+      box.style.fontFamily = 'Courier New, monospace';
+      box.style.fontWeight = 'bold';
+      box.style.fontSize = clockFont + 'px';
+      box.style.background = colorIsWhite ? '#fff' : '#000';
+      box.style.color = colorIsWhite ? '#000' : '#fff';
+      box.style.border = '2px solid #DAA520';
+      // no rounded corners
+      box.style.borderRadius = '0px';
+      box.textContent = '5:00';
+      return box;
+    }
+
+    function makeDaggers() {
+      const wrap = document.createElement('div');
+      wrap.style.display = 'flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.gap = '6px';
+      for (let i = 0; i < 2; i++) {
+        const token = document.createElement('div');
+        // make tokens as tall as the clock row
+        const sz = Math.floor(rowH);
+        token.style.width = sz + 'px';
+        token.style.height = sz + 'px';
+        token.style.border = '2px solid #fff';
+        token.style.borderRadius = '50%';
+        token.style.background = '#dc2626';
+        token.style.color = '#fff';
+        token.style.display = 'flex';
+        token.style.alignItems = 'center';
+        token.style.justifyContent = 'center';
+        token.style.fontWeight = 'bold';
+        token.style.fontSize = iconFont + 'px';
+        token.textContent = '⚔';
+        wrap.appendChild(token);
+      }
+      return wrap;
+    }
+
+    function makeCaptured(oppColor) {
+      const strip = document.createElement('div');
+      strip.style.display = 'flex';
+      strip.style.alignItems = 'center';
+      strip.style.gap = '4px';
+      const ids = [1,3,4,5];
+      ids.forEach(id => {
+        const sq = document.createElement('div');
+        const cap = Math.floor(0.405 * s * 0.9); // ~36.45% of square edge
+        sq.style.width = cap + 'px';
+        sq.style.height = cap + 'px';
+        sq.style.border = '1px solid #000';
+        sq.style.display = 'flex';
+        sq.style.alignItems = 'center';
+        sq.style.justifyContent = 'center';
+        sq.style.fontSize = Math.floor(cap * 0.7) + 'px';
+        sq.style.background = oppColor === 1 ? '#000' : '#fff';
+        sq.style.color = oppColor === 1 ? '#fff' : '#000';
+        sq.textContent = id === 1 ? '♔' : id === 3 ? '♗' : id === 4 ? '♖' : '♘';
+        strip.appendChild(sq);
+      });
+      return strip;
+    }
+
+    function fillBar(barEl, isTopBar) {
+      while (barEl.firstChild) barEl.removeChild(barEl.firstChild);
+      const nameRow = makeNameRow(isTopBar ? 'Opponent Name' : 'My Name', isTopBar);
+      const row = document.createElement('div');
+      row.style.height = rowH + 'px';
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.justifyContent = 'space-between';
+
+      if (isTopBar) {
+        row.appendChild(makeCaptured(currentIsWhite ? 0 : 1));
+        const right = document.createElement('div');
+        right.style.display = 'flex';
+        right.style.alignItems = 'center';
+        right.style.gap = '6px';
+        right.appendChild(makeDaggers());
+        right.appendChild(makeClock(!currentIsWhite));
+        row.appendChild(right);
+        // Top: name first, then row
+        barEl.appendChild(nameRow);
+        barEl.appendChild(row);
+      } else {
+        const left = document.createElement('div');
+        left.style.display = 'flex';
+        left.style.alignItems = 'center';
+        left.style.gap = '6px';
+        left.appendChild(makeClock(currentIsWhite));
+        left.appendChild(makeDaggers());
+        row.appendChild(left);
+        row.appendChild(makeCaptured(currentIsWhite ? 1 : 0));
+        // Bottom: lower the stats row slightly without moving the name
+        const spacer = Math.max(4, Math.floor(0.012 * H));
+        row.style.marginTop = spacer + 'px';
+        nameRow.style.marginTop = (-spacer) + 'px';
+        // Bottom: row first (tight-ish to board), then name underneath
+        barEl.appendChild(row);
+        barEl.appendChild(nameRow);
+      }
+    }
+
+    fillBar(topBar, true);
+    fillBar(bottomBar, false);
   }
 })();
 
