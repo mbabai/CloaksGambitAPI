@@ -1,39 +1,89 @@
 import React from 'react'
 
-export default function Stash({ stashes, sizes, positions, identityToChar }) {
-  const gridStyle = {
-    position: 'absolute',
-    left: `${positions.stash.left}px`,
-    top: `${positions.stash.top}px`,
-    width: `${sizes.boardWidth}px`,
-    height: `${sizes.stashHeight}px`,
-    display: 'grid',
-    gridTemplateColumns: `repeat(${stashes[0].length}, ${sizes.squareSize}px)`,
-    gridTemplateRows: `repeat(${stashes.length}, ${sizes.squareSize}px)`
-  }
+// Staggered stash + on-deck layout (top row 5 with on-deck center, bottom row 4)
+export default function Stash({ sizes, positions }) {
+  const s = Math.floor(sizes.squareSize)
+  const slot = Math.floor(0.8 * s)
+  const space = Math.max(4, Math.floor(0.12 * slot))
+
+  // Bottom player bar metrics (must match PlayerState.jsx)
+  const nameBarH = Math.floor(s * 0.7)
+  const rowH = Math.floor(s * 0.7)
+  const barGap = 6
+  const barHeight = nameBarH + rowH + barGap
+
+  const boardBottom = Math.floor(positions.board.top + sizes.boardHeight)
+  const yStart = boardBottom + barGap + barHeight + 20
+
+  const containerHeight = (s /* tallest on-deck */) + space + slot
+
+  // Compute board center to center rows
+  const boardCenterX = Math.floor(positions.board.left + sizes.boardWidth / 2)
+
+  // Top row layout with true widths to keep all gaps = space
+  const widthsTop = [slot, slot, s, slot, slot]
+  const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * space
+  let xCursorTop = Math.round(boardCenterX - topTotal / 2)
+
+  const topRow = widthsTop.map((w, i) => {
+    const isOnDeck = i === 2
+    const left = xCursorTop
+    xCursorTop += w + space
+    const top = isOnDeck ? Math.round(yStart - (s - slot)) : yStart
+    const width = isOnDeck ? s : slot
+    const height = isOnDeck ? s : slot
+    return (
+      <div
+        key={`top-${i}`}
+        style={{
+          position: 'absolute',
+          left: `${left}px`,
+          top: `${top}px`,
+          width: `${width}px`,
+          height: `${height}px`,
+          boxSizing: 'border-box',
+          border: '3px solid #DAA520',
+          background: isOnDeck ? '#3d2e88' : 'transparent'
+        }}
+      />
+    )
+  })
+
+  // Bottom row centered under board (4 slots)
+  const bottomCols = 4
+  const bottomTotal = bottomCols * slot + (bottomCols - 1) * space
+  const xStartBottom = Math.round(boardCenterX - bottomTotal / 2)
+  const yBottom = yStart + slot + space
+
+  const bottomRow = Array.from({ length: bottomCols }).map((_, i) => (
+    <div
+      key={`bot-${i}`}
+      style={{
+        position: 'absolute',
+        left: `${xStartBottom + i * (slot + space)}px`,
+        top: `${yBottom}px`,
+        width: `${slot}px`,
+        height: `${slot}px`,
+        boxSizing: 'border-box',
+        border: '3px solid #DAA520',
+        background: 'transparent'
+      }}
+    />
+  ))
 
   return (
-    <div className="stash" style={gridStyle}>
-      {stashes.map((row, r) => (
-        row.map((cell, c) => {
-          const isOnDeck = r === 0 && c === 2
-          const slotStyle = {
-            position: 'relative',
-            width: `${sizes.squareSize}px`,
-            height: `${sizes.squareSize}px`,
-            background: isOnDeck ? '#8b5cf6' : 'transparent'
-          }
-          return (
-            <div key={`${r}-${c}`} className={`stash-slot ${isOnDeck ? 'on-deck' : ''}`} style={slotStyle}>
-              {cell && (
-                <div className={`stash-piece ${cell && cell.color === 1 ? 'black' : ''}`} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '80%', height: '80%', background: cell && cell.color === 1 ? '#000' : '#fff', color: cell && cell.color === 1 ? '#fff' : '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-size-stash-piece)' }}>
-                  {identityToChar[cell.identity]}
-                </div>
-              )}
-            </div>
-          )
-        })
-      ))}
+    <div
+      style={{
+        position: 'absolute',
+        left: `${positions.board.left}px`,
+        top: `${yStart - (s - slot)}px`,
+        width: `${sizes.boardWidth}px`,
+        height: `${containerHeight + (s - slot)}px`,
+        pointerEvents: 'none' // visual only for now
+      }}
+    >
+      {topRow}
+      {bottomRow}
     </div>
   )
 }

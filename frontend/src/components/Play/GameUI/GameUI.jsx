@@ -245,12 +245,7 @@ export default function GameUI() {
         />
       </PlayArea>
 
-      <Stash
-        stashes={game.stashes}
-        sizes={layout.sizes}
-        positions={layout.positions}
-        identityToChar={identityToChar}
-      />
+      <Stash sizes={layout.sizes} positions={layout.positions} />
 
       <ActionButtons
         sizes={layout.sizes}
