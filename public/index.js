@@ -1204,6 +1204,15 @@
     ghost.style.transform = 'translate(-50%, -50%)';
     ghost.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
     ghost.style.zIndex = '99999';
+    // Position the ghost at the pointer immediately to avoid top-left flash
+    const startCX = (e && e.clientX !== undefined)
+      ? e.clientX
+      : (e && e.touches && e.touches[0] && e.touches[0].clientX) || (e && e.changedTouches && e.changedTouches[0] && e.changedTouches[0].clientX) || 0;
+    const startCY = (e && e.clientY !== undefined)
+      ? e.clientY
+      : (e && e.touches && e.touches[0] && e.touches[0].clientY) || (e && e.changedTouches && e.changedTouches[0] && e.changedTouches[0].clientY) || 0;
+    ghost.style.left = startCX + 'px';
+    ghost.style.top = startCY + 'px';
     document.body.appendChild(ghost);
     dragging = { piece, origin, ghostEl: ghost };
     const move = (ev) => {
