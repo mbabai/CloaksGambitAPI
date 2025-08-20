@@ -50,6 +50,7 @@
   let boardRoot = null;
   let topBar = null;
   let bottomBar = null;
+  let stashRoot = null;
   let currentRows = 0;
   let currentCols = 0;
   let currentIsWhite = true;
@@ -342,6 +343,12 @@
     bottomBar.style.position = 'absolute';
     playAreaRoot.appendChild(bottomBar);
 
+    // Stash area container
+    stashRoot = document.createElement('div');
+    stashRoot.id = 'playAreaStash';
+    stashRoot.style.position = 'absolute';
+    playAreaRoot.appendChild(stashRoot);
+
     window.addEventListener('resize', layoutPlayArea);
     return playAreaRoot;
   }
@@ -367,8 +374,8 @@
       top: top + 'px',
       width: width + 'px',
       height: height + 'px',
-      border: '3px solid #DAA520',
-      background: '#800080',
+      border: 'none',
+      background: 'transparent',
       boxSizing: 'border-box'
     });
     renderBoardAndBars();
@@ -428,6 +435,7 @@
     }
 
     renderBars(s, bW, bH, leftPx, topPx);
+    renderStash(s, bW, bH, leftPx, topPx);
   }
 
   function renderBars(s, bW, bH, leftPx, topPx) {
@@ -603,6 +611,73 @@
 
     fillBar(topBar, true);
     fillBar(bottomBar, false);
+  }
+
+  // Render staggered stash slots + on-deck below the bottom bar
+  function renderStash(s, bW, bH, leftPx, topPx) {
+    if (!stashRoot) return;
+    const H = playAreaRoot.clientHeight;
+
+    // Recompute bar metrics to place stash beneath bottom bar
+    const gap = 6;
+    const bottomGap = 2;
+    const nameBarH = Math.max(18, Math.floor(0.045 * H));
+    const rowH = Math.max(16, Math.floor(0.040 * H));
+    const contH = nameBarH + rowH + gap;
+    const boardBottom = topPx + bH;
+    let bottomBarTop = boardBottom + bottomGap;
+    if (bottomBarTop + contH > H) bottomBarTop = Math.max(0, H - contH);
+
+    const yStart = bottomBarTop + contH + 8; // small gap below bottom bar
+
+    // Slot sizing: 80% of board square size
+    const slot = Math.floor(0.8 * s);
+    const space = Math.max(4, Math.floor(0.12 * slot));
+
+    // rows: top has 5, bottom has 4; bottom is offset by half the (slot + spacing)
+    const topCols = 5;
+    const bottomCols = 4;
+
+    // Clear render
+    while (stashRoot.firstChild) stashRoot.removeChild(stashRoot.firstChild);
+
+    function makeSlot(x, y, isOnDeck) {
+      const el = document.createElement('div');
+      el.style.position = 'absolute';
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      el.style.width = slot + 'px';
+      el.style.height = slot + 'px';
+      el.style.boxSizing = 'border-box';
+      el.style.border = '3px solid #DAA520';
+      el.style.background = isOnDeck ? '#3d2e88' : 'transparent';
+      return el;
+    }
+
+    // Compute board center for stable centering
+    const blockCenterX = leftPx + Math.floor(bW / 2);
+
+    // Top row content width and left
+    const topContentWidth = topCols * slot + (topCols - 1) * space;
+    const topLeft = Math.round(blockCenterX - topContentWidth / 2);
+
+    for (let i = 0; i < topCols; i++) {
+      const x = topLeft + i * (slot + space);
+      const y = yStart;
+      const isOnDeck = (i === 2);
+      stashRoot.appendChild(makeSlot(x, y, isOnDeck));
+    }
+
+    // Bottom row content width and left, then apply half-(slot+space) offset
+    const bottomContentWidth = bottomCols * slot + (bottomCols - 1) * space;
+    const bottomOffset = Math.round((slot + space) / 2);
+    const bottomLeft = Math.round(blockCenterX - bottomContentWidth / 2 );
+
+    for (let i = 0; i < bottomCols; i++) {
+      const x = bottomLeft + i * (slot + space);
+      const y = yStart + slot + space;
+      stashRoot.appendChild(makeSlot(x, y, false));
+    }
   }
 })();
 
