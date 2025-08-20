@@ -628,7 +628,7 @@
     let bottomBarTop = boardBottom + bottomGap;
     if (bottomBarTop + contH > H) bottomBarTop = Math.max(0, H - contH);
 
-    const yStart = bottomBarTop + contH + 8; // small gap below bottom bar
+    const yStart = bottomBarTop + contH + 20; // moved stash further down (was +8)
 
     // Slot sizing: 80% of board square size
     const slot = Math.floor(0.8 * s);
@@ -644,10 +644,15 @@
     function makeSlot(x, y, isOnDeck) {
       const el = document.createElement('div');
       el.style.position = 'absolute';
-      el.style.left = x + 'px';
-      el.style.top = y + 'px';
-      el.style.width = slot + 'px';
-      el.style.height = slot + 'px';
+      // on-deck uses full board-square size s; others use reduced slot size
+      const w = isOnDeck ? s : slot;
+      const h = isOnDeck ? s : slot;
+      const leftAdj = isOnDeck ? Math.round(x - (w - slot) / 2) : x; // center horizontally
+      const topAdj = isOnDeck ? Math.round(y - (h - slot)) : y;      // bottom-align
+      el.style.left = leftAdj + 'px';
+      el.style.top = topAdj + 'px';
+      el.style.width = w + 'px';
+      el.style.height = h + 'px';
       el.style.boxSizing = 'border-box';
       el.style.border = '3px solid #DAA520';
       el.style.background = isOnDeck ? '#3d2e88' : 'transparent';
@@ -659,10 +664,15 @@
 
     // Top row content width and left
     const topContentWidth = topCols * slot + (topCols - 1) * space;
-    const topLeft = Math.round(blockCenterX - topContentWidth / 2);
+    const delta = Math.round((s - slot) / 2); // extra half-width from on-deck to balance gaps
+    const topEffectiveWidth = topContentWidth + 2 * delta;
+    const topLeft = Math.round(blockCenterX - topEffectiveWidth / 2);
 
     for (let i = 0; i < topCols; i++) {
-      const x = topLeft + i * (slot + space);
+      let x = topLeft + i * (slot + space);
+      // Maintain uniform edge gaps with larger on-deck by shifting neighbors equally
+      if (i === 1) x -= delta; // neighbor on left of on-deck
+      if (i === 3) x += delta; // neighbor on right of on-deck
       const y = yStart;
       const isOnDeck = (i === 2);
       stashRoot.appendChild(makeSlot(x, y, isOnDeck));
