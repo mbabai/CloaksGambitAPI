@@ -8,6 +8,8 @@ import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
+import { renderGameButton } from '/js/modules/render/gameButton.js';
+import { randomizeSetup } from '/js/modules/setup/randomize.js';
 import { DRAG_PX_THRESHOLD as DRAG_PX_THRESHOLD_CFG, DRAG_PX_THRESHOLD_TOUCH as DRAG_PX_THRESHOLD_TOUCH_CFG, CLICK_TIME_MAX_MS as CLICK_TIME_MAX_MS_CFG } from '/js/modules/interactions/config.js';
 import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as performMoveM } from '/js/modules/state/moves.js';
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
@@ -576,6 +578,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       onAttachHandlers: (el, target) => attachInteractiveHandlers(el, target)
     });
 
+    const readyVisible = (isInSetup && isSetupCompletable());
+    const randomVisible = (isInSetup && !readyVisible);
+
     // Ready button overlay when setup is completable
     renderReadyButton({
       root: playAreaRoot,
@@ -583,7 +588,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       boardTop: topPx,
       boardWidth: bW,
       boardHeight: bH,
-      isVisible: (isInSetup && isSetupCompletable()),
+      isVisible: readyVisible,
       onClick: async () => {
         try {
           const payload = buildSetupPayload();
@@ -597,6 +602,31 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           selected = null; dragging = null;
           renderBoardAndBars();
         } catch (e) { console.error('setup error', e); }
+      }
+    });
+
+    // Random Setup button (deep red) visible when Ready is not
+    renderGameButton({
+      id: 'randomSetupBtn',
+      root: playAreaRoot,
+      boardLeft: leftPx,
+      boardTop: topPx,
+      boardWidth: bW,
+      boardHeight: bH,
+      text: 'Random Setup',
+      background: '#7f1d1d',
+      visible: randomVisible,
+      onClick: () => {
+        const result = randomizeSetup({
+          workingRank,
+          workingOnDeck,
+          workingStash,
+          myColor
+        });
+        // Adopt the returned references (arrays mutated; deck returned as value)
+        workingOnDeck = result.workingOnDeck;
+        // Render; if illegal (ok=false), button will remain (Ready not visible)
+        renderBoardAndBars();
       }
     });
   }
