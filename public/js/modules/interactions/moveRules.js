@@ -15,6 +15,7 @@ export function uiToServerCoords(uiR, uiC, rows, cols, isWhite) {
 export function isWithinPieceRange(from, to, dec) {
   const dr = Math.abs(to.row - from.row);
   const dc = Math.abs(to.col - from.col);
+  // Helper meta for later UI (direction)
   switch (dec) {
     case Declaration.KNIGHT:
       return (dr === 2 && dc === 1) || (dr === 1 && dc === 2);

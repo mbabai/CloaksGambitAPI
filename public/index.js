@@ -71,6 +71,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let currentDaggers = [0, 0];
   let currentSquareSize = 0; // last computed board square size
   let currentPlayerTurn = null; // 0 or 1
+  let postMoveOverlay = null; // { uiR, uiC, types: string[] }
 
   // Pointer interaction thresholds
   const DRAG_PX_THRESHOLD = DRAG_PX_THRESHOLD_CFG; // from config import (kept names for legacy usage)
@@ -123,43 +124,43 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     bindSocket(socket, {
       onConnect() { console.log('[socket] connected'); },
       async onInitialState(payload) {
-        console.log('[socket] initialState', payload);
-        const queued = payload && payload.queued && !!payload.queued.quickplay;
-        isQueuedServer = Boolean(queued);
-        pendingAction = null;
-        updateFindButton();
+      console.log('[socket] initialState', payload);
+      const queued = payload && payload.queued && !!payload.queued.quickplay;
+      isQueuedServer = Boolean(queued);
+      pendingAction = null;
+      updateFindButton();
 
-        // Reconnect flow: if server says we already have an active game, show play area now
-        try {
-          const games = Array.isArray(payload?.games) ? payload.games : [];
-          if (games.length > 0) {
-            const latest = games[0];
-            if (latest?._id) {
-              lastGameId = latest._id; // treat as already handled
-            }
-            hideQueuer();
-            showPlayArea();
+      // Reconnect flow: if server says we already have an active game, show play area now
+      try {
+        const games = Array.isArray(payload?.games) ? payload.games : [];
+        if (games.length > 0) {
+          const latest = games[0];
+          if (latest?._id) {
+            lastGameId = latest._id; // treat as already handled
+          }
+          hideQueuer();
+          showPlayArea();
 
-            // If this player is not marked ready yet, send READY immediately
-            try {
-              const colorIdx = Array.isArray(latest?.players)
-                ? latest.players.findIndex(function(p){ return p === userId; })
-                : -1;
-              const isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
-                ? Boolean(latest.playersReady[colorIdx])
-                : false;
-              if (colorIdx > -1 && !isReady) {
-                console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
+          // If this player is not marked ready yet, send READY immediately
+          try {
+            const colorIdx = Array.isArray(latest?.players)
+              ? latest.players.findIndex(function(p){ return p === userId; })
+              : -1;
+            const isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
+              ? Boolean(latest.playersReady[colorIdx])
+              : false;
+            if (colorIdx > -1 && !isReady) {
+              console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
                 apiReady(latest._id, colorIdx).catch(function(err){ console.error('READY on reconnect failed', err); });
-              }
-              currentIsWhite = (colorIdx === 0);
-            } catch (e) { console.error('Error evaluating reconnect ready state', e); }
+            }
+            currentIsWhite = (colorIdx === 0);
+          } catch (e) { console.error('Error evaluating reconnect ready state', e); }
 
             // Adopt masked state immediately if present, and enter setup if needed
-            try {
-              if (Array.isArray(latest?.board)) {
-                currentRows = latest.board.length || 6;
-                currentCols = latest.board[0]?.length || 5;
+          try {
+            if (Array.isArray(latest?.board)) {
+              currentRows = latest.board.length || 6;
+              currentCols = latest.board[0]?.length || 5;
                 setStateFromServer(latest);
                 myColor = currentIsWhite ? 0 : 1;
                 const setupArr = Array.isArray(latest?.setupComplete) ? latest.setupComplete : setupComplete;
@@ -178,36 +179,36 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
                 } else {
                   isInSetup = false;
                 }
-                ensurePlayAreaRoot();
-                layoutPlayArea();
-                renderBoardAndBars();
-              }
-            } catch (_) {}
-          }
-        } catch (_) {}
+              ensurePlayAreaRoot();
+              layoutPlayArea();
+              renderBoardAndBars();
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
       },
       onQueueUpdate(payload) {
-        console.log('[socket] queue:update', payload);
-        if (!payload) return;
-        isQueuedServer = Boolean(payload.quickplay);
-        pendingAction = null;
-        updateFindButton();
+      console.log('[socket] queue:update', payload);
+      if (!payload) return;
+      isQueuedServer = Boolean(payload.quickplay);
+      pendingAction = null;
+      updateFindButton();
       },
       async onGameUpdate(payload) {
-        try {
-          if (!payload || !payload.gameId || !Array.isArray(payload.players)) return;
-          const gameId = payload.gameId;
-          const color = payload.players.findIndex(p => p === userId);
-          if (color !== 0 && color !== 1) return;
+      try {
+        if (!payload || !payload.gameId || !Array.isArray(payload.players)) return;
+        const gameId = payload.gameId;
+        const color = payload.players.findIndex(p => p === userId);
+        if (color !== 0 && color !== 1) return;
 
-          // As soon as we are in a game, hide the Find Game UI
-          hideQueuer();
-          currentIsWhite = (color === 0);
+        // As soon as we are in a game, hide the Find Game UI
+        hideQueuer();
+        currentIsWhite = (color === 0);
 
           // If the server provided a board/state, adopt and render
-          if (Array.isArray(payload.board)) {
-            currentRows = payload.board.length || 6;
-            currentCols = payload.board[0]?.length || 5;
+        if (Array.isArray(payload.board)) {
+          currentRows = payload.board.length || 6;
+          currentCols = payload.board[0]?.length || 5;
             setStateFromServer(payload);
             // Keep setup mode consistent after refresh or reconnect
             myColor = currentIsWhite ? 0 : 1;
@@ -222,32 +223,32 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
             } else {
               isInSetup = false;
             }
-            ensurePlayAreaRoot();
-            layoutPlayArea();
-            renderBoardAndBars();
-          }
-
-          if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
-          lastGameId = gameId;
-
-          showMatchFoundBanner(3, async function onTick(remaining) {
-            if (remaining === 0) {
-              try {
-                console.log('[game] sending READY at 0s', { gameId, color })
-                await apiReady(gameId, color);
-              } catch (e) {
-                console.error('Failed to send READY', e);
-              }
-            }
-          });
-        } catch (e) {
-          console.error('Error handling game:update', e);
+          ensurePlayAreaRoot();
+          layoutPlayArea();
+          renderBoardAndBars();
         }
+
+        if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
+        lastGameId = gameId;
+
+        showMatchFoundBanner(3, async function onTick(remaining) {
+          if (remaining === 0) {
+            try {
+              console.log('[game] sending READY at 0s', { gameId, color })
+                await apiReady(gameId, color);
+            } catch (e) {
+              console.error('Failed to send READY', e);
+            }
+          }
+        });
+      } catch (e) {
+        console.error('Error handling game:update', e);
+      }
       },
       async onBothReady(payload) {
         try {
-          console.log('[socket] players:bothReady', payload);
-          showPlayArea();
+      console.log('[socket] players:bothReady', payload);
+      showPlayArea();
           const gameId = payload?.gameId || lastGameId;
           if (!gameId) return;
           const colorIdx = currentIsWhite ? 0 : 1;
@@ -590,6 +591,18 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       identityMap: PIECE_IDENTITIES,
       onAttachHandlers: (el, target) => attachInteractiveHandlers(el, target)
     });
+
+    // After board render, apply any pending move overlay bubbles
+    if (!isInSetup && postMoveOverlay && refs.boardCells) {
+      const cellRef = refs.boardCells?.[postMoveOverlay.uiR]?.[postMoveOverlay.uiC];
+      if (cellRef && cellRef.el) {
+        Array.from(cellRef.el.querySelectorAll('img[data-bubble]')).forEach(function(n){ try { n.remove(); } catch(_) {} });
+        for (const t of postMoveOverlay.types) {
+          const img = makeBubbleImg(t, currentSquareSize);
+          if (img) cellRef.el.appendChild(img);
+        }
+      }
+    }
 
     const readyVisible = (isInSetup && isSetupCompletable());
     const randomVisible = (isInSetup && !readyVisible);
@@ -983,6 +996,37 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     }
   }
 
+  function makeBubbleImg(type, square) {
+    try {
+      const map = {
+        knightSpeechLeft: 'BubbleSpeechLeftKnight.svg',
+        rookSpeechLeft: 'BubbleSpeechLeftRook.svg',
+        bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
+        kingThoughtRight: 'BubbleThoughtRightKing.svg',
+        bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
+        rookThoughtLeft: 'BubbleThoughtLeftRook.svg'
+      };
+      const srcName = map[type];
+      if (!srcName) return null;
+      const img = document.createElement('img');
+      img.dataset.bubble = '1';
+      img.draggable = false;
+      img.style.position = 'absolute';
+      img.style.pointerEvents = 'none';
+      img.style.zIndex = '20';
+      // Shrink ~15% from previous size (1.2x -> 1.02x square)
+      img.style.width = Math.floor(square * 1.08) + 'px';
+      img.style.height = 'auto';
+      const offsetX = Math.floor(square * 0.6); // push further to sides
+      const offsetY = Math.floor(square * 0.5); // raise above piece
+      if (type.endsWith('Right')) { img.style.right = (-offsetX) + 'px'; img.style.left = 'auto'; }
+      else { img.style.left = (-offsetX) + 'px'; img.style.right = 'auto'; }
+      img.style.top = (-offsetY) + 'px';
+      img.src = '/assets/images/UI/' + srcName;
+      return img;
+    } catch (_) { return null; }
+  }
+
   function setStateFromServer(u) {
     try {
       // Avoid overwriting optimistic in-game moves while a drag or selection is active
@@ -1246,6 +1290,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const target = currentBoard?.[to.row]?.[to.col];
       if (target && target.color === myColorIdx) return false;
       const decls = [Declaration.KNIGHT, Declaration.KING, Declaration.BISHOP, Declaration.ROOK];
+      let usedDecl = null;
       for (const d of decls) {
         if (!isWithinPieceRange(from, to, d)) continue;
         if (!isPathClear(currentBoard, from, to, d)) continue;
@@ -1260,11 +1305,36 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         currentBoard[from.row][from.col] = null;
         // Keep selection cleared post move
         selected = null;
+        // Lock further interactions until server updates turn
+        lockInteractionsAfterMove(origin, dest, d);
         renderBoardAndBars();
         return true;
       }
       return false;
     } catch (e) { console.error('attemptInGameMove failed', e); return false; }
+  }
+
+  function lockInteractionsAfterMove(origin, dest, declaration) {
+    try {
+      // Disable all game handlers by setting turn to null; server will set next turn on update
+      currentPlayerTurn = null;
+      // Prepare bubble overlay to attach on next render
+      const dx = Math.abs(dest.uiR - origin.uiR);
+      const dy = Math.abs(dest.uiC - origin.uiC);
+      const movedDistance = Math.max(dx, dy);
+      const types = [];
+      if (declaration === Declaration.KNIGHT) {
+        types.push('knightSpeechLeft');
+      } else if (declaration === Declaration.ROOK && movedDistance > 1) {
+        types.push('rookSpeechLeft');
+      } else if (declaration === Declaration.BISHOP && movedDistance > 1) {
+        types.push('bishopSpeechLeft');
+      } else if (declaration === Declaration.KING) {
+        types.push('kingThoughtRight');
+        if (dx === dy && dx > 0) types.push('bishopThoughtLeft'); else types.push('rookThoughtLeft');
+      }
+      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types };
+    } catch (_) {}
   }
 
   function handleClickTarget(target) {
