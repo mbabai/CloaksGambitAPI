@@ -1007,7 +1007,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
         kingThoughtRight: 'BubbleThoughtRightKing.svg',
         bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
-        rookThoughtLeft: 'BubbleThoughtLeftRook.svg'
+        rookThoughtLeft: 'BubbleThoughtLeftRook.svg',
+        knightThoughtLeft: 'BubbleThoughtLeftKnight.svg'
       };
       const srcName = map[type];
       if (!srcName) return null;
@@ -1038,7 +1039,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
       kingThoughtRight: 'BubbleThoughtRightKing.svg',
       bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
-      rookThoughtLeft: 'BubbleThoughtLeftRook.svg'
+      rookThoughtLeft: 'BubbleThoughtLeftRook.svg',
+      knightThoughtLeft: 'BubbleThoughtLeftKnight.svg'
     };
     Object.keys(files).forEach(function(k){
       const img = new Image();
@@ -1091,9 +1093,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         const dx = Math.abs(destUI.uiR - originUI.uiR);
         const dy = Math.abs(destUI.uiC - originUI.uiC);
         const movedDistance = Math.max(dx, dy);
-        if (d === Declaration.KNIGHT) return ['knightSpeechLeft'];
-        if (d === Declaration.ROOK && movedDistance > 1) return ['rookSpeechLeft'];
-        if (d === Declaration.BISHOP && movedDistance > 1) return ['bishopSpeechLeft'];
+        // During drag preview, always show thought bubbles for rook/bishop/knight
+        if (d === Declaration.KNIGHT) return ['knightThoughtLeft'];
+        if (d === Declaration.ROOK && movedDistance > 1) return ['rookThoughtLeft'];
+        if (d === Declaration.BISHOP && movedDistance > 1) return ['bishopThoughtLeft'];
         if (d === Declaration.KING) {
           return ['kingThoughtRight', (dx === dy && dx > 0) ? 'bishopThoughtLeft' : 'rookThoughtLeft'];
         }
