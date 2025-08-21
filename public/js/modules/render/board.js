@@ -12,6 +12,7 @@ export function renderBoard({
   refs,
   identityMap,
   onAttachHandlers,
+  onAttachGameHandlers,
   labelFont,
   fileLetters
 }) {
@@ -27,6 +28,10 @@ export function renderBoard({
   container.style.gridTemplateColumns = `repeat(${cols}, ${squareSize}px)`;
   container.style.gridTemplateRows = `repeat(${rows}, ${squareSize}px)`;
   while (container.firstChild) container.removeChild(container.firstChild);
+  // Prepare matrix for in-game hit-testing when not in setup
+  if (!state.isInSetup) {
+    refs.boardCells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null));
+  }
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -100,6 +105,10 @@ export function renderBoard({
         if (selected && selected.type === 'board' && selected.index === c && isUiBottom) {
           p.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
         }
+        // In-game selection highlight (boardAny)
+        if (!isInSetup && selected && selected.type === 'boardAny' && selected.uiR === r && selected.uiC === c) {
+          p.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
+        }
         cell.appendChild(p);
       }
 
@@ -107,6 +116,11 @@ export function renderBoard({
       if (isInSetup && isUiBottom && onAttachHandlers) {
         onAttachHandlers(cell, { type: 'board', index: c });
         if (Array.isArray(refs.bottomCells)) refs.bottomCells[c] = { el: cell, col: c };
+      }
+      // Attach in-game handlers for all cells when not in setup
+      if (!isInSetup && onAttachGameHandlers) {
+        onAttachGameHandlers(cell, r, c);
+        if (refs.boardCells) refs.boardCells[r][c] = { el: cell, uiR: r, uiC: c };
       }
 
       container.appendChild(cell);

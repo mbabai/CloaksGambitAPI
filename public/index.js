@@ -12,6 +12,7 @@ import { renderGameButton } from '/js/modules/render/gameButton.js';
 import { randomizeSetup } from '/js/modules/setup/randomize.js';
 import { DRAG_PX_THRESHOLD as DRAG_PX_THRESHOLD_CFG, DRAG_PX_THRESHOLD_TOUCH as DRAG_PX_THRESHOLD_TOUCH_CFG, CLICK_TIME_MAX_MS as CLICK_TIME_MAX_MS_CFG } from '/js/modules/interactions/config.js';
 import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as performMoveM } from '/js/modules/state/moves.js';
+import { Declaration, uiToServerCoords, isWithinPieceRange, isPathClear } from '/js/modules/interactions/moveRules.js';
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
 (function() {
@@ -69,6 +70,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let currentCaptured = [[], []]; // pieces captured by [white, black]
   let currentDaggers = [0, 0];
   let currentSquareSize = 0; // last computed board square size
+  let currentPlayerTurn = null; // 0 or 1
 
   // Pointer interaction thresholds
   const DRAG_PX_THRESHOLD = DRAG_PX_THRESHOLD_CFG; // from config import (kept names for legacy usage)
@@ -419,10 +421,20 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     } catch (_) {}
     document.body.appendChild(playAreaRoot);
 
-    // Global click/tap outside interactive zones should clear selection
-    const clearSelectionIfAny = () => {
-      if (!isInSetup) return;
-      if (selected) { selected = null; renderBoardAndBars(); }
+    // Global click/tap outside interactive zones should clear selection (setup and in-game)
+    const clearSelectionIfAny = (ev) => {
+      try {
+        if (dragging) return;
+        const t = ev && ev.target;
+        // If the click/tap is inside any interactive zone, don't clear; handlers there manage selection
+        if ((boardRoot && boardRoot.contains(t)) || (stashRoot && stashRoot.contains(t)) ||
+            (topBar && topBar.contains(t)) || (bottomBar && bottomBar.contains(t))) {
+          return;
+        }
+        if (selected) { selected = null; renderBoardAndBars(); }
+      } catch (_) {
+        if (selected) { selected = null; renderBoardAndBars(); }
+      }
     };
     playAreaRoot.addEventListener('mousedown', clearSelectionIfAny, false);
     playAreaRoot.addEventListener('touchstart', clearSelectionIfAny, { passive: true });
@@ -530,6 +542,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       refs,
       identityMap: PIECE_IDENTITIES,
       onAttachHandlers: (cell, target) => attachInteractiveHandlers(cell, target),
+      onAttachGameHandlers: (cell, r, c) => attachGameHandlers(cell, r, c),
       labelFont,
       fileLetters
     });
@@ -972,12 +985,16 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function setStateFromServer(u) {
     try {
-      if (Array.isArray(u.board)) currentBoard = u.board; else if (u.board === null) currentBoard = null;
+      // Avoid overwriting optimistic in-game moves while a drag or selection is active
+      if (!dragging) {
+        if (Array.isArray(u.board)) currentBoard = u.board; else if (u.board === null) currentBoard = null;
+      }
       if (Array.isArray(u.stashes)) currentStashes = u.stashes;
       if (Array.isArray(u.onDecks)) currentOnDecks = u.onDecks;
       if (Array.isArray(u.captured)) currentCaptured = u.captured;
       if (Array.isArray(u.daggers)) currentDaggers = u.daggers;
       if (Array.isArray(u.setupComplete)) setupComplete = u.setupComplete;
+      if (u.playerTurn === 0 || u.playerTurn === 1) currentPlayerTurn = u.playerTurn;
     } catch (_) {}
   }
 
@@ -1121,6 +1138,135 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     }, { passive: false });
   }
 
+  // In-game handlers reuse the same control pipeline but only target board cells and call a rules callback
+  function attachGameHandlers(cell, uiR, uiC) {
+    try { cell.style.cursor = 'pointer'; } catch (_) {}
+    const sourceTarget = { type: 'boardAny', uiR, uiC };
+    cell.addEventListener('mousedown', (e) => {
+      if (Date.now() < suppressMouseUntil) return;
+      if (isInSetup) return; // not in setup
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      const piece = getBoardPieceAtUI(uiR, uiC);
+      e.preventDefault(); e.stopPropagation();
+      const startX = e.clientX, startY = e.clientY;
+      let dragStarted = false;
+      const move = (ev) => {
+        if (dragStarted) return;
+        // Only start a drag if this square has your piece and it's your turn
+        if (!piece || piece.color !== myColorIdx || currentPlayerTurn !== myColorIdx) return;
+        const dx = Math.abs(ev.clientX - startX);
+        const dy = Math.abs(ev.clientY - startY);
+        if (dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) {
+          dragStarted = true;
+          startDrag(ev, sourceTarget, piece);
+          document.removeEventListener('mousemove', move);
+        }
+      };
+      const up = (ev) => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        if (!dragStarted) { handleGameClick(sourceTarget); }
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+    cell.addEventListener('touchstart', (e) => {
+      if (isInSetup) return;
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      const piece = getBoardPieceAtUI(uiR, uiC);
+      try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
+      suppressMouseUntil = Date.now() + 500;
+      const t = e.touches[0];
+      const startX = t.clientX, startY = t.clientY;
+      let dragStarted = false;
+      const move = (ev) => {
+        if (dragStarted) return;
+        // Only start a drag if this square has your piece and it's your turn
+        if (!piece || piece.color !== myColorIdx || currentPlayerTurn !== myColorIdx) return;
+        const tt = ev.touches[0];
+        const dx = Math.abs(tt.clientX - startX);
+        const dy = Math.abs(tt.clientY - startY);
+        if (dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) {
+          dragStarted = true; document.removeEventListener('touchmove', move);
+          startDrag({ clientX: tt.clientX, clientY: tt.clientY }, sourceTarget, piece);
+        }
+      };
+      const end = (ev) => {
+        document.removeEventListener('touchmove', move);
+        document.removeEventListener('touchend', end);
+        document.removeEventListener('touchcancel', end);
+        if (!dragStarted) { handleGameClick(sourceTarget); }
+      };
+      document.addEventListener('touchmove', move, { passive: false });
+      document.addEventListener('touchend', end);
+      document.addEventListener('touchcancel', end);
+    }, { passive: false });
+  }
+
+  function getBoardPieceAtUI(uiR, uiC) {
+    try {
+      const sr = currentIsWhite ? (currentRows - 1 - uiR) : uiR;
+      const sc = currentIsWhite ? uiC : (currentCols - 1 - uiC);
+      return currentBoard?.[sr]?.[sc] || null;
+    } catch (_) { return null; }
+  }
+
+  function handleGameClick(sourceTarget) {
+    // Select/deselect and wait for second click to choose destination
+    if (!selected) {
+      const p = getBoardPieceAtUI(sourceTarget.uiR, sourceTarget.uiC);
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      // Only allow selecting if it's your turn and you tapped your piece
+      if (!p || p.color !== myColorIdx || currentPlayerTurn !== myColorIdx) { selected = null; renderBoardAndBars(); return; }
+      selected = { ...sourceTarget };
+      renderBoardAndBars();
+      return;
+    }
+    // Second click: move attempt to destination
+    if (selected.type === 'boardAny' && sourceTarget.type === 'boardAny') {
+      const moved = attemptInGameMove(selected, sourceTarget);
+      selected = null;
+      renderBoardAndBars();
+      return;
+    }
+    // Any other case (e.g., click on non-board) clears selection
+    selected = null; renderBoardAndBars();
+  }
+
+  function attemptInGameMove(origin, dest) {
+    try {
+      if (!currentBoard) return false;
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      if (!(currentPlayerTurn === 0 || currentPlayerTurn === 1) || currentPlayerTurn !== myColorIdx) return false;
+      if (!(origin && origin.type === 'boardAny' && dest && dest.type === 'boardAny')) return false;
+      const fromS = uiToServerCoords(origin.uiR, origin.uiC, currentRows, currentCols, currentIsWhite);
+      const toS = uiToServerCoords(dest.uiR, dest.uiC, currentRows, currentCols, currentIsWhite);
+      const from = { row: fromS.serverRow, col: fromS.serverCol };
+      const to = { row: toS.serverRow, col: toS.serverCol };
+      const target = currentBoard?.[to.row]?.[to.col];
+      if (target && target.color === myColorIdx) return false;
+      const decls = [Declaration.KNIGHT, Declaration.KING, Declaration.BISHOP, Declaration.ROOK];
+      for (const d of decls) {
+        if (!isWithinPieceRange(from, to, d)) continue;
+        if (!isPathClear(currentBoard, from, to, d)) continue;
+        // Locally update board optimistically; server will confirm via game:update
+        const moving = currentBoard[from.row][from.col];
+        if (!moving || moving.color !== myColorIdx) return false;
+        // Apply optimistic move
+        currentBoard = currentBoard.map(row => row.slice());
+        currentBoard[to.row] = currentBoard[to.row].slice();
+        currentBoard[from.row] = currentBoard[from.row].slice();
+        currentBoard[to.row][to.col] = moving;
+        currentBoard[from.row][from.col] = null;
+        // Keep selection cleared post move
+        selected = null;
+        renderBoardAndBars();
+        return true;
+      }
+      return false;
+    } catch (e) { console.error('attemptInGameMove failed', e); return false; }
+  }
+
   function handleClickTarget(target) {
     const pieceAtTarget = getPieceAt(target);
     if (!selected) {
@@ -1194,8 +1340,12 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const dest = hitTestDrop(cx, cy);
       if (DRAG_DEBUG) console.log('[drag] end', { x: cx, y: cy, dest });
       if (dest) {
-        const moved = performMove(dragging.origin, dest);
-        console.log('[setup] drop', { from: dragging.origin, to: dest, moved });
+        if (isInSetup) {
+          const moved = performMove(dragging.origin, dest);
+          console.log('[setup] drop', { from: dragging.origin, to: dest, moved });
+        } else if (dragging.origin && dragging.origin.type === 'boardAny' && dest.type === 'boardAny') {
+          attemptInGameMove(dragging.origin, dest);
+        }
       }
       try { document.body.removeChild(ghost); } catch (_) {}
       try { restoreOriginEl(dragging.originEl); } catch(_) {}
@@ -1211,6 +1361,21 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function hitTestDrop(x, y) {
+    // If not in setup, allow dropping on any board cell
+    if (!isInSetup && refs.boardCells) {
+      for (let rIdx = 0; rIdx < refs.boardCells.length; rIdx++) {
+        const row = refs.boardCells[rIdx];
+        if (!row) continue;
+        for (let cIdx = 0; cIdx < row.length; cIdx++) {
+          const entry = row[cIdx];
+          if (!entry || !entry.el) continue;
+          const b = entry.el.getBoundingClientRect();
+          if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) {
+            return { type: 'boardAny', uiR: entry.uiR, uiC: entry.uiC };
+          }
+        }
+      }
+    }
     // Deck first
     if (refs.deckEl) {
       const r = refs.deckEl.getBoundingClientRect();

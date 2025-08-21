@@ -35,4 +35,11 @@ export async function apiExitQueue(userId) {
   });
 }
 
+export async function apiMove({ gameId, color, from, to, declaration }) {
+  return fetch('/api/v1/gameAction/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gameId, color, from, to, declaration })
+  });
+}
+
 
