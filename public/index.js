@@ -76,6 +76,9 @@
   const DRAG_PX_THRESHOLD = 6;
   const CLICK_TIME_MAX_MS = 300;
   let suppressMouseUntil = 0; // timestamp to ignore mouse after touch
+  const DRAG_DEBUG = true;
+  let debugDragMoveLast = 0;
+  const DRAG_PX_THRESHOLD_TOUCH = 3;
 
   // Setup interaction state
   let isInSetup = false;         // true when local player is arranging pieces
@@ -438,6 +441,10 @@
     playAreaRoot.style.userSelect = 'none';
     // Prevent browser gestures/scroll during touch interactions in the play area
     playAreaRoot.style.touchAction = 'none';
+    try {
+      document.body.style.touchAction = 'none';
+      document.body.style.overscrollBehavior = 'contain';
+    } catch (_) {}
     document.body.appendChild(playAreaRoot);
 
     // Global click/tap outside interactive zones should clear selection
@@ -447,6 +454,13 @@
     };
     playAreaRoot.addEventListener('mousedown', clearSelectionIfAny, false);
     playAreaRoot.addEventListener('touchstart', clearSelectionIfAny, { passive: true });
+    // Suppress synthetic clicks after touch/drag
+    document.addEventListener('click', (ev) => {
+      const now = Date.now();
+      const suppress = (now < suppressMouseUntil) || !!dragging;
+      if (DRAG_DEBUG) console.log('[drag] global click', { suppress, dragging: !!dragging, now, suppressMouseUntil });
+      if (suppress) { try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {} }
+    }, true);
 
     boardRoot = document.createElement('div');
     boardRoot.id = 'playAreaBoard';
@@ -952,13 +966,21 @@
     const uiToOrdinal = { 0: 0, 1: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7 };
     for (let i = 0; i < widthsTop.length; i++) {
       const isOnDeck = (i === 2);
+      const ord = uiToOrdinal[i];
       let content = null;
       if (isOnDeck) {
         const deck = isInSetup ? (workingOnDeck || null) : (currentOnDecks?.[bottomColor] || null);
         if (deck) content = pieceGlyph(deck, isOnDeck ? s : slot);
       } else {
-        const ord = uiToOrdinal[i];
         if (ord !== undefined && stash[ord]) content = pieceGlyph(stash[ord], isOnDeck ? s : slot);
+      }
+      // Fade the origin piece while dragging
+      if (content && dragging && dragging.origin) {
+        if (isOnDeck && dragging.origin.type === 'deck') {
+          content.style.opacity = '0.1';
+        } else if (!isOnDeck && dragging.origin.type === 'stash' && dragging.origin.index === ord) {
+          content.style.opacity = '0.1';
+        }
       }
       const el = makeSlot(xCursor, yTop, isOnDeck, true, content);
       if (isOnDeck) {
@@ -992,6 +1014,9 @@
       const ord = uiToOrdinal[5 + i];
       const piece = (ord !== undefined) ? stash[ord] : null;
       const content = piece ? pieceGlyph(piece, slot) : null;
+      if (content && dragging && dragging.origin && dragging.origin.type === 'stash' && dragging.origin.index === ord) {
+        content.style.opacity = '0.5';
+      }
       const el = makeSlot(x, y, false, false, content);
       if (isInSetup) attachInteractiveHandlers(el, { type: 'stash', index: ord });
       refs.stashSlots[ord] = { el, ordinal: ord };
@@ -1112,6 +1137,7 @@
       if (Date.now() < suppressMouseUntil) return; // ignore synthetic mouse after touch
       if (!isInSetup) return;
       const originPiece = getPieceAt(target); // may be null for empty dest; still allow click path
+      if (DRAG_DEBUG) console.log('[drag] mousedown', { suppressMouseUntil, now: Date.now(), originHasPiece: !!originPiece });
       e.preventDefault();
       e.stopPropagation();
       const startX = e.clientX;
@@ -1123,6 +1149,7 @@
         const dy = Math.abs(ev.clientY - startY);
         if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece) {
           dragStarted = true;
+          if (DRAG_DEBUG) console.log('[drag] start mouse', { target, x: ev.clientX, y: ev.clientY });
           startDrag(ev, target, originPiece);
           document.removeEventListener('mousemove', move);
         }
@@ -1153,8 +1180,11 @@
         const tt = ev.touches[0];
         const dx = Math.abs(tt.clientX - startX);
         const dy = Math.abs(tt.clientY - startY);
-        if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece) {
+        if ((dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) && originPiece) {
           dragStarted = true;
+          // stop listening to threshold moves once promoted to drag
+          document.removeEventListener('touchmove', move);
+          if (DRAG_DEBUG) console.log('[drag] start touch', { target, x: tt.clientX, y: tt.clientY });
           startDrag({ clientX: tt.clientX, clientY: tt.clientY }, target, originPiece);
         }
       };
@@ -1214,13 +1244,30 @@
     ghost.style.left = startCX + 'px';
     ghost.style.top = startCY + 'px';
     document.body.appendChild(ghost);
-    dragging = { piece, origin, ghostEl: ghost };
+    // Dim the origin element directly so we don't need to re-render immediately
+    let originEl = null;
+    try {
+      if (origin.type === 'board') originEl = refs.bottomCells?.[origin.index]?.el || null;
+      else if (origin.type === 'stash') originEl = refs.stashSlots?.[origin.index]?.el || null;
+      else if (origin.type === 'deck') originEl = refs.deckEl || null;
+      if (originEl) originEl.style.opacity = '0.2';
+    } catch(_) {}
+    dragging = { piece, origin, ghostEl: ghost, originEl };
+    suppressMouseUntil = Date.now() + 700; // extend suppression window during drag
+    if (DRAG_DEBUG) console.log('[drag] ghost init', { x: startCX, y: startCY, origin });
+    // Do not re-render here; we dim the origin element directly to avoid disrupting touch event streams
     const move = (ev) => {
       if (!dragging) return;
-      const x = ev.clientX !== undefined ? ev.clientX : (ev.touches && ev.touches[0] && ev.touches[0].clientX);
-      const y = ev.clientY !== undefined ? ev.clientY : (ev.touches && ev.touches[0] && ev.touches[0].clientY);
-      if (x !== undefined) ghost.style.left = x + 'px';
-      if (y !== undefined) ghost.style.top = y + 'px';
+      try { if (ev.cancelable) ev.preventDefault(); } catch (_) {}
+      const t = ev.touches ? ev.touches[0] : (ev.changedTouches ? ev.changedTouches[0] : null);
+      const x = (t && t.clientX !== undefined) ? t.clientX : ev.clientX;
+      const y = (t && t.clientY !== undefined) ? t.clientY : ev.clientY;
+      if (typeof x === 'number') ghost.style.left = x + 'px';
+      if (typeof y === 'number') ghost.style.top = y + 'px';
+      if (DRAG_DEBUG) {
+        const now = Date.now();
+        if (now - debugDragMoveLast > 80) { console.log('[drag] move', { x, y, type: ev.type, hasTouches: !!ev.touches }); debugDragMoveLast = now; }
+      }
     };
     const up = (ev) => {
       document.removeEventListener('mousemove', move);
@@ -1232,16 +1279,20 @@
       const cx = ev.clientX !== undefined ? ev.clientX : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientX);
       const cy = ev.clientY !== undefined ? ev.clientY : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientY);
       const dest = hitTestDrop(cx, cy);
+      if (DRAG_DEBUG) console.log('[drag] end', { x: cx, y: cy, dest });
       if (dest) {
         const moved = performMove(dragging.origin, dest);
         console.log('[setup] drop', { from: dragging.origin, to: dest, moved });
       }
       try { document.body.removeChild(ghost); } catch (_) {}
+      try { if (dragging && dragging.originEl) dragging.originEl.style.opacity = ''; } catch(_) {}
       dragging = null; selected = null; renderBoardAndBars();
+      suppressMouseUntil = Date.now() + 400; // brief suppression post-drag
     };
     document.addEventListener('mousemove', move);
     document.addEventListener('mouseup', up);
-    document.addEventListener('touchmove', move, { passive: false });
+    document.addEventListener('touchmove', move, { passive: false, capture: true });
+    window.addEventListener('touchmove', move, { passive: false, capture: true });
     document.addEventListener('touchend', up);
     document.addEventListener('touchcancel', up);
   }
