@@ -72,6 +72,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let currentSquareSize = 0; // last computed board square size
   let currentPlayerTurn = null; // 0 or 1
   let postMoveOverlay = null; // { uiR, uiC, types: string[] }
+  const BUBBLE_PRELOAD = {}; // type -> HTMLImageElement
+  let dragPreviewImgs = []; // active floating preview images
 
   // Pointer interaction thresholds
   const DRAG_PX_THRESHOLD = DRAG_PX_THRESHOLD_CFG; // from config import (kept names for legacy usage)
@@ -330,6 +332,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     try {
       userId = await ensureUserId();
       console.log('[init] userId', userId);
+      preloadBubbleImages();
       socket = io('/', { auth: { userId } });
       wireSocket();
     } catch (e) {
@@ -996,7 +999,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     }
   }
 
-  function makeBubbleImg(type, square) {
+  function makeBubbleImg(type, square, opts) {
     try {
       const map = {
         knightSpeechLeft: 'BubbleSpeechLeftKnight.svg',
@@ -1010,6 +1013,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (!srcName) return null;
       const img = document.createElement('img');
       img.dataset.bubble = '1';
+      if (opts && opts.preview) img.dataset.preview = '1';
       img.draggable = false;
       img.style.position = 'absolute';
       img.style.pointerEvents = 'none';
@@ -1022,9 +1026,97 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (type.endsWith('Right')) { img.style.right = (-offsetX) + 'px'; img.style.left = 'auto'; }
       else { img.style.left = (-offsetX) + 'px'; img.style.right = 'auto'; }
       img.style.top = (-offsetY) + 'px';
-      img.src = '/assets/images/UI/' + srcName;
+      img.src = (BUBBLE_PRELOAD[type] && BUBBLE_PRELOAD[type].src) || ('/assets/images/UI/' + srcName);
       return img;
     } catch (_) { return null; }
+  }
+
+  function preloadBubbleImages() {
+    const files = {
+      knightSpeechLeft: 'BubbleSpeechLeftKnight.svg',
+      rookSpeechLeft: 'BubbleSpeechLeftRook.svg',
+      bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
+      kingThoughtRight: 'BubbleThoughtRightKing.svg',
+      bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
+      rookThoughtLeft: 'BubbleThoughtLeftRook.svg'
+    };
+    Object.keys(files).forEach(function(k){
+      const img = new Image();
+      img.draggable = false; img.decoding = 'async';
+      img.src = '/assets/images/UI/' + files[k];
+      BUBBLE_PRELOAD[k] = img;
+    });
+  }
+
+  function clearDragPreviewImgs() {
+    try { dragPreviewImgs.forEach(function(n){ try { document.body.removeChild(n); } catch(_) {} }); } catch(_) {}
+    dragPreviewImgs = [];
+  }
+
+  function showDragPreviewAtPointer(types, x, y) {
+    clearDragPreviewImgs();
+    if (!types || !Array.isArray(types) || types.length === 0) return;
+    const square = currentSquareSize || 40;
+    const offsetX = Math.floor(square * 0.6);
+    const offsetY = Math.floor(square * 0.5);
+    types.forEach(function(t){
+      const img = makeBubbleImg(t, square, { preview: true });
+      if (!img) return;
+      img.style.position = 'fixed';
+      img.style.zIndex = '100001';
+      img.style.willChange = 'transform, left, top';
+      const w = parseInt(img.style.width || '0', 10) || (square * 1.08);
+      const leftPos = t.endsWith('Right') ? (x + offsetX - w / 2) : (x - offsetX - w / 2);
+      const topPos = y - offsetY - w / 2;
+      img.style.left = leftPos + 'px';
+      img.style.top = topPos + 'px';
+      document.body.appendChild(img);
+      dragPreviewImgs.push(img);
+    });
+  }
+
+  function computeBubbleTypesForMove(originUI, destUI) {
+    try {
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      const fromS = uiToServerCoords(originUI.uiR, originUI.uiC, currentRows, currentCols, currentIsWhite);
+      const toS = uiToServerCoords(destUI.uiR, destUI.uiC, currentRows, currentCols, currentIsWhite);
+      const from = { row: fromS.serverRow, col: fromS.serverCol };
+      const to = { row: toS.serverRow, col: toS.serverCol };
+      const target = currentBoard?.[to.row]?.[to.col];
+      if (target && target.color === myColorIdx) return null;
+      const decls = [Declaration.KNIGHT, Declaration.KING, Declaration.BISHOP, Declaration.ROOK];
+      for (const d of decls) {
+        if (!isWithinPieceRange(from, to, d)) continue;
+        if (!isPathClear(currentBoard, from, to, d)) continue;
+        const dx = Math.abs(destUI.uiR - originUI.uiR);
+        const dy = Math.abs(destUI.uiC - originUI.uiC);
+        const movedDistance = Math.max(dx, dy);
+        if (d === Declaration.KNIGHT) return ['knightSpeechLeft'];
+        if (d === Declaration.ROOK && movedDistance > 1) return ['rookSpeechLeft'];
+        if (d === Declaration.BISHOP && movedDistance > 1) return ['bishopSpeechLeft'];
+        if (d === Declaration.KING) {
+          return ['kingThoughtRight', (dx === dy && dx > 0) ? 'bishopThoughtLeft' : 'rookThoughtLeft'];
+        }
+      }
+      return null;
+    } catch (_) { return null; }
+  }
+
+  let dragPreview = null; // { uiR, uiC }
+  function updateDragPreview(newUIR, newUIC, types) {
+    try {
+      // Remove previous preview images
+      if (dragPreview && refs.boardCells?.[dragPreview.uiR]?.[dragPreview.uiC]?.el) {
+        const prevCell = refs.boardCells[dragPreview.uiR][dragPreview.uiC].el;
+        Array.from(prevCell.querySelectorAll('img[data-bubble][data-preview]')).forEach(function(n){ try { n.remove(); } catch(_) {} });
+      }
+      dragPreview = null;
+      if (!types || !Array.isArray(types) || types.length === 0) return;
+      const cell = refs.boardCells?.[newUIR]?.[newUIC]?.el;
+      if (!cell) return;
+      types.forEach(function(t){ const img = makeBubbleImg(t, currentSquareSize, { preview: true }); if (img) cell.appendChild(img); });
+      dragPreview = { uiR: newUIR, uiC: newUIC };
+    } catch (_) {}
   }
 
   function setStateFromServer(u) {
@@ -1392,6 +1484,29 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const y = (t && t.clientY !== undefined) ? t.clientY : ev.clientY;
       if (typeof x === 'number') ghost.style.left = x + 'px';
       if (typeof y === 'number') ghost.style.top = y + 'px';
+      // Drag preview bubbles following the pointer over legal destination squares
+      if (!isInSetup && refs.boardCells) {
+        let over = null; let overRect = null;
+        for (let rIdx = 0; rIdx < refs.boardCells.length; rIdx++) {
+          const row = refs.boardCells[rIdx]; if (!row) continue;
+          for (let cIdx = 0; cIdx < row.length; cIdx++) {
+            const entry = row[cIdx]; if (!entry || !entry.el) continue;
+            const b = entry.el.getBoundingClientRect();
+            if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) { over = entry; overRect = b; break; }
+          }
+          if (over) break;
+        }
+        if (over && dragging.origin && dragging.origin.type === 'boardAny' && (currentPlayerTurn === (currentIsWhite ? 0 : 1))) {
+          const types = computeBubbleTypesForMove(dragging.origin, { uiR: over.uiR, uiC: over.uiC });
+          if (types) {
+            showDragPreviewAtPointer(types, x, y);
+          } else {
+            clearDragPreviewImgs();
+          }
+        } else {
+          clearDragPreviewImgs();
+        }
+      }
       if (DRAG_DEBUG) {
         const now = Date.now();
         if (now - debugDragMoveLast > 80) { console.log('[drag] move', { x, y, type: ev.type, hasTouches: !!ev.touches }); debugDragMoveLast = now; }
@@ -1409,6 +1524,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const cy = ev.clientY !== undefined ? ev.clientY : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientY);
       const dest = hitTestDrop(cx, cy);
       if (DRAG_DEBUG) console.log('[drag] end', { x: cx, y: cy, dest });
+      // Clear preview overlays
+      clearDragPreviewImgs();
       if (dest) {
         if (isInSetup) {
           const moved = performMove(dragging.origin, dest);
