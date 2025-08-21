@@ -1,18 +1,23 @@
+import { pieceGlyph as modulePieceGlyph } from '/js/modules/render/pieceGlyph.js';
+import { renderBoard } from '/js/modules/render/board.js';
+import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
+import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
+import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
+import { PIECE_IDENTITIES, KING_ID } from '/js/modules/constants.js';
+import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
+import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue } from '/js/modules/api/game.js';
+import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
+import { renderReadyButton } from '/js/modules/render/readyButton.js';
+import { DRAG_PX_THRESHOLD as DRAG_PX_THRESHOLD_CFG, DRAG_PX_THRESHOLD_TOUCH as DRAG_PX_THRESHOLD_TOUCH_CFG, CLICK_TIME_MAX_MS as CLICK_TIME_MAX_MS_CFG } from '/js/modules/interactions/config.js';
+import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as performMoveM } from '/js/modules/state/moves.js';
+import { wireSocket as bindSocket } from '/js/modules/socket.js';
+
 (function() {
   const queueBtn = document.getElementById('queueBtn');
   const modeSelect = document.getElementById('modeSelect');
   const selectWrap = document.getElementById('selectWrap');
 
-  // Cookie helpers
-  function getCookie(name) {
-    const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-    return match ? decodeURIComponent(match[2]) : null;
-  }
-  function setCookie(name, value, maxAgeSeconds) {
-    const parts = [name + '=' + encodeURIComponent(value), 'Path=/', 'SameSite=Lax'];
-    if (maxAgeSeconds) parts.push('Max-Age=' + maxAgeSeconds);
-    document.cookie = parts.join('; ');
-  }
+  // Cookie helpers moved to modules/utils/cookies.js
 
   // Ensure a valid Mongo user exists and get its _id
   async function ensureUserId() {
@@ -56,15 +61,6 @@
   let currentIsWhite = true;
 
   // Live game state (masked per player)
-  const PIECE_IDENTITIES = {
-    0: '?',   // UNKNOWN
-    1: '♔',   // KING
-    2: '💣',  // BOMB
-    3: '♗',   // BISHOP
-    4: '♖',   // ROOK
-    5: '♘'    // KNIGHT
-  };
-  const KING_ID = 1;
   let currentBoard = null;        // 2D array of cells
   let currentStashes = [[], []];  // [white[], black[]]
   let currentOnDecks = [null, null];
@@ -73,12 +69,12 @@
   let currentSquareSize = 0; // last computed board square size
 
   // Pointer interaction thresholds
-  const DRAG_PX_THRESHOLD = 6;
-  const CLICK_TIME_MAX_MS = 300;
+  const DRAG_PX_THRESHOLD = DRAG_PX_THRESHOLD_CFG; // from config import (kept names for legacy usage)
+  const CLICK_TIME_MAX_MS = CLICK_TIME_MAX_MS_CFG;  // from config import
   let suppressMouseUntil = 0; // timestamp to ignore mouse after touch
   const DRAG_DEBUG = true;
   let debugDragMoveLast = 0;
-  const DRAG_PX_THRESHOLD_TOUCH = 3;
+  const DRAG_PX_THRESHOLD_TOUCH = DRAG_PX_THRESHOLD_TOUCH_CFG;
 
   // Setup interaction state
   let isInSetup = false;         // true when local player is arranging pieces
@@ -120,189 +116,167 @@
   }
 
   function wireSocket() {
-    socket.on('connect', function() { console.log('[socket] connected'); });
-    socket.on('initialState', async function(payload) {
-      console.log('[socket] initialState', payload);
-      const queued = payload && payload.queued && !!payload.queued.quickplay;
-      isQueuedServer = Boolean(queued);
-      pendingAction = null;
-      updateFindButton();
+    bindSocket(socket, {
+      onConnect() { console.log('[socket] connected'); },
+      async onInitialState(payload) {
+        console.log('[socket] initialState', payload);
+        const queued = payload && payload.queued && !!payload.queued.quickplay;
+        isQueuedServer = Boolean(queued);
+        pendingAction = null;
+        updateFindButton();
 
-      // Reconnect flow: if server says we already have an active game, show play area now
-      try {
-        const games = Array.isArray(payload?.games) ? payload.games : [];
-        if (games.length > 0) {
-          const latest = games[0];
-          if (latest?._id) {
-            lastGameId = latest._id; // treat as already handled
-          }
-          hideQueuer();
-          showPlayArea();
-
-          // If this player is not marked ready yet, send READY immediately
-          try {
-            const colorIdx = Array.isArray(latest?.players)
-              ? latest.players.findIndex(function(p){ return p === userId; })
-              : -1;
-            const isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
-              ? Boolean(latest.playersReady[colorIdx])
-              : false;
-            if (colorIdx > -1 && !isReady) {
-              console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
-              fetch('/api/v1/gameAction/ready', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ gameId: latest._id, color: colorIdx })
-              }).catch(function(err){ console.error('READY on reconnect failed', err); });
+        // Reconnect flow: if server says we already have an active game, show play area now
+        try {
+          const games = Array.isArray(payload?.games) ? payload.games : [];
+          if (games.length > 0) {
+            const latest = games[0];
+            if (latest?._id) {
+              lastGameId = latest._id; // treat as already handled
             }
-            currentIsWhite = (colorIdx === 0);
-          } catch (e) { console.error('Error evaluating reconnect ready state', e); }
+            hideQueuer();
+            showPlayArea();
 
-          // Adopt masked state immediately if present, and enter setup if needed
-          try {
-            if (Array.isArray(latest?.board)) {
-              currentRows = latest.board.length || 6;
-              currentCols = latest.board[0]?.length || 5;
-              setStateFromServer(latest);
-              myColor = currentIsWhite ? 0 : 1;
-              const setupArr = Array.isArray(latest?.setupComplete) ? latest.setupComplete : setupComplete;
-              const mineDone = Boolean(setupArr?.[myColor]);
-              if (!mineDone) {
-                // Fetch a fresh masked view to seed working state
-                try {
-                  const res = await fetch('/api/v1/games/getDetails', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ gameId: latest._id, color: myColor })
-                  });
-                  const view = await res.json().catch(() => latest);
-                  bootstrapWorkingStateFromServer(view || latest);
-                  isInSetup = true;
-                  console.log('[setup] entering setup mode on initialState');
-                } catch (_) {
-                  bootstrapWorkingStateFromServer(latest);
-                  isInSetup = true;
-                }
-              } else {
-                isInSetup = false;
+            // If this player is not marked ready yet, send READY immediately
+            try {
+              const colorIdx = Array.isArray(latest?.players)
+                ? latest.players.findIndex(function(p){ return p === userId; })
+                : -1;
+              const isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
+                ? Boolean(latest.playersReady[colorIdx])
+                : false;
+              if (colorIdx > -1 && !isReady) {
+                console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
+                apiReady(latest._id, colorIdx).catch(function(err){ console.error('READY on reconnect failed', err); });
               }
-              ensurePlayAreaRoot();
-              layoutPlayArea();
-              renderBoardAndBars();
+              currentIsWhite = (colorIdx === 0);
+            } catch (e) { console.error('Error evaluating reconnect ready state', e); }
+
+            // Adopt masked state immediately if present, and enter setup if needed
+            try {
+              if (Array.isArray(latest?.board)) {
+                currentRows = latest.board.length || 6;
+                currentCols = latest.board[0]?.length || 5;
+                setStateFromServer(latest);
+                myColor = currentIsWhite ? 0 : 1;
+                const setupArr = Array.isArray(latest?.setupComplete) ? latest.setupComplete : setupComplete;
+                const mineDone = Boolean(setupArr?.[myColor]);
+                if (!mineDone) {
+                  // Fetch a fresh masked view to seed working state
+                  try {
+                    const view = await apiGetDetails(latest._id, myColor) || latest;
+                    bootstrapWorkingStateFromServer(view || latest);
+                    isInSetup = true;
+                    console.log('[setup] entering setup mode on initialState');
+                  } catch (_) {
+                    bootstrapWorkingStateFromServer(latest);
+                    isInSetup = true;
+                  }
+                } else {
+                  isInSetup = false;
+                }
+                ensurePlayAreaRoot();
+                layoutPlayArea();
+                renderBoardAndBars();
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+      },
+      onQueueUpdate(payload) {
+        console.log('[socket] queue:update', payload);
+        if (!payload) return;
+        isQueuedServer = Boolean(payload.quickplay);
+        pendingAction = null;
+        updateFindButton();
+      },
+      async onGameUpdate(payload) {
+        try {
+          if (!payload || !payload.gameId || !Array.isArray(payload.players)) return;
+          const gameId = payload.gameId;
+          const color = payload.players.findIndex(p => p === userId);
+          if (color !== 0 && color !== 1) return;
+
+          // As soon as we are in a game, hide the Find Game UI
+          hideQueuer();
+          currentIsWhite = (color === 0);
+
+          // If the server provided a board/state, adopt and render
+          if (Array.isArray(payload.board)) {
+            currentRows = payload.board.length || 6;
+            currentCols = payload.board[0]?.length || 5;
+            setStateFromServer(payload);
+            // Keep setup mode consistent after refresh or reconnect
+            myColor = currentIsWhite ? 0 : 1;
+            const setupArr = Array.isArray(payload?.setupComplete) ? payload.setupComplete : setupComplete;
+            const mineDone = Boolean(setupArr?.[myColor]);
+            if (!mineDone) {
+              if (!isInSetup) {
+                // bootstrap if just entering
+                bootstrapWorkingStateFromServer(payload);
+              }
+              isInSetup = true;
+            } else {
+              isInSetup = false;
             }
-          } catch (_) {}
+            ensurePlayAreaRoot();
+            layoutPlayArea();
+            renderBoardAndBars();
+          }
+
+          if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
+          lastGameId = gameId;
+
+          showMatchFoundBanner(3, async function onTick(remaining) {
+            if (remaining === 0) {
+              try {
+                console.log('[game] sending READY at 0s', { gameId, color })
+                await apiReady(gameId, color);
+              } catch (e) {
+                console.error('Failed to send READY', e);
+              }
+            }
+          });
+        } catch (e) {
+          console.error('Error handling game:update', e);
         }
-      } catch (_) {}
-    });
-    socket.on('queue:update', function(payload) {
-      console.log('[socket] queue:update', payload);
-      if (!payload) return;
-      isQueuedServer = Boolean(payload.quickplay);
-      pendingAction = null;
-      updateFindButton();
-    });
-    // Show a one-time "match found" banner and auto-send READY
-    socket.on('game:update', function(payload) {
-      try {
-        if (!payload || !payload.gameId || !Array.isArray(payload.players)) return;
-        const gameId = payload.gameId;
-        const color = payload.players.findIndex(p => p === userId);
-        if (color !== 0 && color !== 1) return;
-
-        // As soon as we are in a game, hide the Find Game UI
-        hideQueuer();
-        currentIsWhite = (color === 0);
-
-        // If the server provided a board/state, adopt and render
-        if (Array.isArray(payload.board)) {
-          currentRows = payload.board.length || 6;
-          currentCols = payload.board[0]?.length || 5;
-          setStateFromServer(payload);
-          // Keep setup mode consistent after refresh or reconnect
+      },
+      async onBothReady(payload) {
+        try {
+          console.log('[socket] players:bothReady', payload);
+          showPlayArea();
+          const gameId = payload?.gameId || lastGameId;
+          if (!gameId) return;
+          const colorIdx = currentIsWhite ? 0 : 1;
+          const view = await apiGetDetails(gameId, colorIdx);
+          if (!view) return;
+          setStateFromServer(view);
+          // Enter setup mode if our setup is not complete
           myColor = currentIsWhite ? 0 : 1;
-          const setupArr = Array.isArray(payload?.setupComplete) ? payload.setupComplete : setupComplete;
-          const mineDone = Boolean(setupArr?.[myColor]);
-          if (!mineDone) {
-            if (!isInSetup) {
-              // bootstrap if just entering
-              bootstrapWorkingStateFromServer(payload);
-            }
+          const serverSetup = Array.isArray(view?.setupComplete) ? view.setupComplete : setupComplete;
+          const myDone = Boolean(serverSetup?.[myColor]);
+          console.log('[setup] getDetails setupComplete=', serverSetup, 'myColor=', myColor, 'myDone=', myDone);
+          if (!myDone) {
+            bootstrapWorkingStateFromServer(view);
             isInSetup = true;
+            console.log('[setup] entering setup mode');
           } else {
             isInSetup = false;
           }
+          // If opponent has completed setup, render their back rank as unknown pieces (already masked by server)
           ensurePlayAreaRoot();
           layoutPlayArea();
           renderBoardAndBars();
+        } catch (e) {
+          console.error('players:bothReady handler failed', e);
         }
-
-        if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
-        lastGameId = gameId;
-
-        showMatchFoundBanner(3, async function onTick(remaining) {
-          if (remaining === 0) {
-            try {
-              console.log('[game] sending READY at 0s', { gameId, color })
-              await fetch('/api/v1/gameAction/ready', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ gameId, color })
-              });
-            } catch (e) {
-              console.error('Failed to send READY', e);
-            }
-          }
-        });
-      } catch (e) {
-        console.error('Error handling game:update', e);
-      }
-    });
-    socket.on('disconnect', function() { /* keep UI; server handles grace */ });
-
-    // New explicit signal when both players are ready
-    socket.on('players:bothReady', async function(payload) {
-      try {
-      console.log('[socket] players:bothReady', payload);
-      showPlayArea();
-        const gameId = payload?.gameId || lastGameId;
-        if (!gameId) return;
-        const colorIdx = currentIsWhite ? 0 : 1;
-        const res = await fetch('/api/v1/games/getDetails', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ gameId, color: colorIdx })
-        });
-        if (!res.ok) return;
-        const view = await res.json();
-        setStateFromServer(view);
-        // Enter setup mode if our setup is not complete
-        myColor = currentIsWhite ? 0 : 1;
-        const serverSetup = Array.isArray(view?.setupComplete) ? view.setupComplete : setupComplete;
-        const myDone = Boolean(serverSetup?.[myColor]);
-        console.log('[setup] getDetails setupComplete=', serverSetup, 'myColor=', myColor, 'myDone=', myDone);
-        if (!myDone) {
-          bootstrapWorkingStateFromServer(view);
-          isInSetup = true;
-          console.log('[setup] entering setup mode');
-        } else {
-          isInSetup = false;
-        }
-        // If opponent has completed setup, render their back rank as unknown pieces (already masked by server)
-        ensurePlayAreaRoot();
-        layoutPlayArea();
-        renderBoardAndBars();
-      } catch (e) {
-        console.error('players:bothReady handler failed', e);
-      }
+      },
+      onDisconnect() { /* keep UI; server handles grace */ }
     });
   }
 
   async function enterQueue() {
     console.log('[action] enterQueue', { userId });
-    const res = await fetch('/api/v1/lobby/enterQuickplay', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId })
-    });
+    const res = await apiEnterQueue(userId);
     console.log('[action] enterQueue response', res.status);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -312,11 +286,7 @@
 
   async function exitQueue() {
     console.log('[action] exitQueue', { userId });
-    const res = await fetch('/api/v1/lobby/exitQuickplay', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId })
-    });
+    const res = await apiExitQueue(userId);
     console.log('[action] exitQueue response', res.status);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -491,18 +461,7 @@
     if (!playAreaRoot) return;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const target = 1.618; // height / width
-    const parentRatio = vh / vw;
-    let width, height;
-    if (parentRatio < target) {
-      height = vh;
-      width = Math.floor(height / target);
-    } else {
-      width = vw;
-      height = Math.floor(width * target);
-    }
-    const left = Math.floor((vw - width) / 2);
-    const top = Math.floor((vh - height) / 2);
+    const { left, top, width, height } = computePlayAreaBounds(vw, vh);
     Object.assign(playAreaRoot.style, {
       left: left + 'px',
       top: top + 'px',
@@ -538,167 +497,98 @@
     refs.bottomCells = [];
     refs.stashSlots = [];
     refs.deckEl = null;
-    const widthLimit = playAreaRoot.clientWidth / (currentCols + 1);
-    const heightLimit = (0.6 * playAreaRoot.clientHeight) / currentRows;
-    const s = Math.max(1, Math.floor(Math.min(widthLimit, heightLimit)));
+    const { squareSize: s, boardWidth: bW, boardHeight: bH, boardLeft: leftPx, boardTop: topPx } = computeBoardMetrics(
+      playAreaRoot.clientWidth,
+      playAreaRoot.clientHeight,
+      currentCols,
+      currentRows
+    );
     currentSquareSize = s;
-    const bW = s * currentCols;
-    const bH = s * currentRows;
-    const leftPx = Math.floor((playAreaRoot.clientWidth - bW) / 2);
-    // Center at 40% of play area height
-    const desiredCenterY = playAreaRoot.clientHeight * 0.40;
-    let topPx = Math.floor(desiredCenterY - (bH / 2));
-    if (topPx < 0) topPx = 0;
-    if (topPx > playAreaRoot.clientHeight - bH) topPx = playAreaRoot.clientHeight - bH;
-
-    // Layout board grid
-    boardRoot.style.width = bW + 'px';
-    boardRoot.style.height = bH + 'px';
-    boardRoot.style.left = leftPx + 'px';
-    boardRoot.style.top = topPx + 'px';
-    boardRoot.style.display = 'grid';
-    boardRoot.style.gridTemplateColumns = `repeat(${currentCols}, ${s}px)`;
-    boardRoot.style.gridTemplateRows = `repeat(${currentRows}, ${s}px)`;
-    while (boardRoot.firstChild) boardRoot.removeChild(boardRoot.firstChild);
     // Label font scales with play area height for consistency
     const labelFont = Math.max(10, Math.floor(0.024 * playAreaRoot.clientHeight));
     const fileLetters = ['A','B','C','D','E'];
-    for (let r = 0; r < currentRows; r++) {
-      for (let c = 0; c < currentCols; c++) {
-        const light = ((r + c) % 2 === 1);
-        const cell = document.createElement('div');
-        cell.style.width = s + 'px';
-        cell.style.height = s + 'px';
-        cell.style.boxSizing = 'border-box';
-        cell.style.position = 'relative';
-        cell.style.border = '1px solid #9ca3af';
-        cell.style.background = light ? '#f7f7f7' : '#6b7280';
-        // Add server-oriented coordinates and algebraic notation
-        const serverRowForCell = currentIsWhite ? (currentRows - 1 - r) : r;
-        const serverColForCell = currentIsWhite ? c : (currentCols - 1 - c);
-        cell.dataset.serverRow = String(serverRowForCell);
-        cell.dataset.serverCol = String(serverColForCell);
-        const fileCharMeta = String.fromCharCode('A'.charCodeAt(0) + serverColForCell);
-        cell.dataset.square = `${fileCharMeta}${serverRowForCell + 1}`;
-        // Bottom row file labels
-        if (r === currentRows - 1) {
-          const fileIdx = currentIsWhite ? c : (currentCols - 1 - c);
-          const file = fileLetters[fileIdx] || '';
-          const fileSpan = document.createElement('span');
-          fileSpan.textContent = file;
-          fileSpan.style.position = 'absolute';
-          fileSpan.style.right = '3px';
-          fileSpan.style.bottom = '2px';
-          fileSpan.style.color = '#000';
-          fileSpan.style.fontWeight = '400';
-          fileSpan.style.fontSize = labelFont + 'px';
-          fileSpan.style.lineHeight = '1';
-          fileSpan.style.userSelect = 'none';
-          fileSpan.style.pointerEvents = 'none';
-          cell.appendChild(fileSpan);
-        }
-        // Left column rank labels
-        if (c === 0) {
-          const rank = currentIsWhite ? (currentRows - r) : (r + 1);
-          const rankSpan = document.createElement('span');
-          rankSpan.textContent = String(rank);
-          rankSpan.style.position = 'absolute';
-          rankSpan.style.left = '3px';
-          rankSpan.style.top = '2px';
-          rankSpan.style.color = '#000';
-          rankSpan.style.fontWeight = '400';
-          rankSpan.style.fontSize = labelFont + 'px';
-          rankSpan.style.lineHeight = '1';
-          rankSpan.style.userSelect = 'none';
-          rankSpan.style.pointerEvents = 'none';
-          cell.appendChild(rankSpan);
-        }
 
-        // Render piece if present at this board coordinate
-        try {
-          // If in setup, overlay our bottom rank with working state; else use server board
-          const uiBottomRow = currentRows - 1;
-          const uiCol = c;
-          const isBottomRankCell = (r === uiBottomRow);
-          let piece = null;
-          if (isInSetup && isBottomRankCell) {
-            piece = workingRank[uiCol] || null;
-          } else if (currentBoard) {
-            // Orientation mapping:
-            // - White perspective: flip rows only so UI bottom maps to server row 0; columns unchanged
-            // - Black perspective: keep rows, flip columns so UI bottom maps to server row rows-1
-            const srcR = currentIsWhite ? (currentRows - 1 - r) : r;
-            const srcC = currentIsWhite ? c : (currentCols - 1 - c);
-            piece = currentBoard?.[srcR]?.[srcC];
-          }
-          if (piece) {
-            const p = document.createElement('div');
-            // Center the piece absolutely so it overlays square labels when needed
-            const psz = Math.floor(s * 0.8);
-            p.style.position = 'absolute';
-            p.style.left = '50%';
-            p.style.top = '50%';
-            p.style.transform = 'translate(-50%, -50%)';
-            p.style.width = psz + 'px';
-            p.style.height = psz + 'px';
-            p.style.display = 'flex';
-            p.style.alignItems = 'center';
-            p.style.justifyContent = 'center';
-            p.style.fontSize = Math.floor(s * 0.7) + 'px';
-            p.style.background = piece.color === 1 ? '#000' : '#fff';
-            p.style.color = piece.color === 1 ? '#fff' : '#000';
-            if (dragging && dragging.origin && dragging.origin.type === 'board' && dragging.origin.index === uiCol && isBottomRankCell) {
-              p.style.opacity = '0.5';
-            }
-            if (selected && selected.type === 'board' && selected.index === uiCol && isBottomRankCell) {
-              p.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
-            }
-            p.textContent = PIECE_IDENTITIES[piece.identity] || '?';
-            cell.appendChild(p);
-          }
-        } catch (_) {}
+    // Use modular board renderer
+    renderBoard({
+      container: boardRoot,
+      sizes: {
+        rows: currentRows,
+        cols: currentCols,
+        squareSize: s,
+        boardLeft: leftPx,
+        boardTop: topPx
+      },
+      state: {
+        currentBoard,
+        currentIsWhite,
+        selected,
+        isInSetup,
+        workingRank
+      },
+      refs,
+      identityMap: PIECE_IDENTITIES,
+      onAttachHandlers: (cell, target) => attachInteractiveHandlers(cell, target),
+      labelFont,
+      fileLetters
+    });
 
-        // Attach setup interactions to bottom-rank cells when in setup mode
-        const isUiBottom = (r === (currentRows - 1));
-        if (isInSetup && isUiBottom) {
-          const uiCol = c;
-          attachInteractiveHandlers(cell, { type: 'board', index: uiCol });
-          refs.bottomCells[uiCol] = { el: cell, col: uiCol };
-        }
-        boardRoot.appendChild(cell);
+    // Use modular bars and stash renderers
+    renderBarsModule({
+      topBar,
+      bottomBar,
+      sizes: {
+        squareSize: s,
+        boardWidth: bW,
+        boardHeight: bH,
+        boardLeft: leftPx,
+        boardTop: topPx,
+        playAreaHeight: playAreaRoot.clientHeight
+      },
+      state: {
+        currentIsWhite,
+        currentCaptured,
+        currentDaggers
       }
-    }
+    });
 
-    renderBars(s, bW, bH, leftPx, topPx);
-    renderStash(s, bW, bH, leftPx, topPx);
+    renderStashModule({
+      container: stashRoot,
+      sizes: {
+        squareSize: s,
+        boardWidth: bW,
+        boardHeight: bH,
+        boardLeft: leftPx,
+        boardTop: topPx,
+        playAreaHeight: playAreaRoot.clientHeight
+      },
+      state: {
+        currentIsWhite,
+        isInSetup,
+        workingStash,
+        workingOnDeck,
+        currentStashes,
+        currentOnDecks,
+        selected,
+        dragging
+      },
+      refs,
+      identityMap: PIECE_IDENTITIES,
+      onAttachHandlers: (el, target) => attachInteractiveHandlers(el, target)
+    });
 
     // Ready button overlay when setup is completable
-    // Always clear any existing button first so it disappears when not completable
-    const existingBtn = document.getElementById('setupReadyBtn');
-    if (existingBtn && existingBtn.parentNode) existingBtn.parentNode.removeChild(existingBtn);
-    if (isInSetup && isSetupCompletable()) {
-      const btn = document.createElement('button');
-      btn.id = 'setupReadyBtn';
-      btn.textContent = 'Ready!';
-      btn.style.position = 'absolute';
-      btn.style.left = Math.floor(leftPx + (bW / 2) - 80) + 'px';
-      btn.style.top = Math.floor(topPx + (bH / 2) - 24) + 'px';
-      btn.style.width = '160px';
-      btn.style.height = '48px';
-      btn.style.background = '#7c3aed'; // lavender/purple
-      btn.style.border = '3px solid #DAA520';
-      btn.style.color = '#fff';
-      btn.style.fontWeight = '800';
-      btn.style.fontSize = '20px';
-      btn.style.cursor = 'pointer';
-      btn.addEventListener('click', async () => {
+    renderReadyButton({
+      root: playAreaRoot,
+      boardLeft: leftPx,
+      boardTop: topPx,
+      boardWidth: bW,
+      boardHeight: bH,
+      isVisible: (isInSetup && isSetupCompletable()),
+      onClick: async () => {
         try {
           const payload = buildSetupPayload();
           console.log('[client] POST /api/v1/gameAction/setup ->', payload);
-          const res = await fetch('/api/v1/gameAction/setup', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
+          const res = await apiSetup(payload);
           const json = await res.json().catch(() => ({}));
           console.log('[client] setup response', res.status, json);
           if (!res.ok) return alert(json?.message || 'Setup failed');
@@ -707,9 +597,8 @@
           selected = null; dragging = null;
           renderBoardAndBars();
         } catch (e) { console.error('setup error', e); }
-      });
-      playAreaRoot.appendChild(btn);
-    }
+      }
+    });
   }
 
   function renderBars(s, bW, bH, leftPx, topPx) {
@@ -1029,6 +918,9 @@
 
   function pieceGlyph(piece, target) {
     try {
+      return modulePieceGlyph(piece, target, PIECE_IDENTITIES);
+    } catch (_) {
+      // Fallback to legacy inline behavior if import failed
       if (!piece) return null;
       const el = document.createElement('div');
       const size = Math.floor(target * 0.8);
@@ -1043,13 +935,9 @@
       const isBlack = piece.color === 1;
       el.style.background = isBlack ? '#000' : '#fff';
       el.style.color = isBlack ? '#fff' : '#000';
-      // Selection halo for stash/deck selections
-      if (selected && ((selected.type === 'stash' && selected.index !== undefined) || (selected.type === 'deck'))) {
-        // The caller wraps which slot is being rendered; we can’t know here, so the halo is applied in render if needed.
-      }
-      el.textContent = PIECE_IDENTITIES[piece.identity] || '?';
+      el.textContent = PIECE_IDENTITIES?.[piece.identity] || '?';
       return el;
-    } catch (_) { return null; }
+    }
   }
 
   function setStateFromServer(u) {
@@ -1245,13 +1133,7 @@
     ghost.style.top = startCY + 'px';
     document.body.appendChild(ghost);
     // Dim the origin element directly so we don't need to re-render immediately
-    let originEl = null;
-    try {
-      if (origin.type === 'board') originEl = refs.bottomCells?.[origin.index]?.el || null;
-      else if (origin.type === 'stash') originEl = refs.stashSlots?.[origin.index]?.el || null;
-      else if (origin.type === 'deck') originEl = refs.deckEl || null;
-      if (originEl) originEl.style.opacity = '0.2';
-    } catch(_) {}
+    let originEl = dimOriginEl(origin, refs, 0.5);
     dragging = { piece, origin, ghostEl: ghost, originEl };
     suppressMouseUntil = Date.now() + 700; // extend suppression window during drag
     if (DRAG_DEBUG) console.log('[drag] ghost init', { x: startCX, y: startCY, origin });
@@ -1272,7 +1154,8 @@
     const up = (ev) => {
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', up);
-      document.removeEventListener('touchmove', move);
+      document.removeEventListener('touchmove', move, true);
+      try { window.removeEventListener('touchmove', move, true); } catch (_) {}
       document.removeEventListener('touchend', up);
       document.removeEventListener('touchcancel', up);
       if (!dragging) return;
@@ -1285,7 +1168,7 @@
         console.log('[setup] drop', { from: dragging.origin, to: dest, moved });
       }
       try { document.body.removeChild(ghost); } catch (_) {}
-      try { if (dragging && dragging.originEl) dragging.originEl.style.opacity = ''; } catch(_) {}
+      try { restoreOriginEl(dragging.originEl); } catch(_) {}
       dragging = null; selected = null; renderBoardAndBars();
       suppressMouseUntil = Date.now() + 400; // brief suppression post-drag
     };
@@ -1318,32 +1201,14 @@
     return null;
   }
 
-  function getPieceAt(target) {
-    if (!target) return null;
-    if (target.type === 'board') return workingRank[target.index] || null;
-    if (target.type === 'deck') return workingOnDeck || null;
-    if (target.type === 'stash') return workingStash[target.index] || null;
-    return null;
-  }
-
-  function setPieceAt(target, piece) {
-    if (target.type === 'board') { workingRank[target.index] = piece; return; }
-    if (target.type === 'deck') { workingOnDeck = piece; return; }
-    if (target.type === 'stash') { workingStash[target.index] = piece; return; }
-  }
-
+  function getPieceAt(target) { return getPieceAtM(workingRank, workingOnDeck, workingStash, target); }
+  function setPieceAt(target, piece) { const ref = { value: workingOnDeck }; setPieceAtM(workingRank, ref, workingStash, target, piece); workingOnDeck = ref.value; }
   function performMove(origin, dest) {
-    // Enforce legal bottom-rank placement and center snapping is handled by CSS box model
-    const pieceFrom = getPieceAt(origin);
-    if (!pieceFrom) return false;
-    const pieceTo = getPieceAt(dest);
-    // Only allow board destinations on bottom rank squares (we only expose those in refs)
-    setPieceAt(origin, pieceTo || null);
-    setPieceAt(dest, pieceFrom);
-    // After any move, re-render to update Ready button visibility
-    // (isSetupCompletable checks for king presence and full rank)
-    try { if (playAreaRoot) renderBoardAndBars(); } catch (_) {}
-    return true;
+    const ref = { value: workingOnDeck };
+    const moved = performMoveM(workingRank, ref, workingStash, origin, dest);
+    workingOnDeck = ref.value;
+    try { if (moved && playAreaRoot) renderBoardAndBars(); } catch (_) {}
+    return moved;
   }
 })();
 
