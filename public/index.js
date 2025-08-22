@@ -173,7 +173,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
                     const view = await apiGetDetails(latest._id, myColor) || latest;
                     bootstrapWorkingStateFromServer(view || latest);
                     isInSetup = true;
-                    console.log('[setup] entering setup mode on initialState');
+                    
                   } catch (_) {
                     bootstrapWorkingStateFromServer(latest);
                     isInSetup = true;
@@ -190,7 +190,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       } catch (_) {}
       },
       onQueueUpdate(payload) {
-      console.log('[socket] queue:update', payload);
+      
       if (!payload) return;
       isQueuedServer = Boolean(payload.quickplay);
       pendingAction = null;
@@ -249,7 +249,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       },
       async onBothReady(payload) {
         try {
-      console.log('[socket] players:bothReady', payload);
+      
       showPlayArea();
           const gameId = payload?.gameId || lastGameId;
           if (!gameId) return;
@@ -261,11 +261,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           myColor = currentIsWhite ? 0 : 1;
           const serverSetup = Array.isArray(view?.setupComplete) ? view.setupComplete : setupComplete;
           const myDone = Boolean(serverSetup?.[myColor]);
-          console.log('[setup] getDetails setupComplete=', serverSetup, 'myColor=', myColor, 'myDone=', myDone);
+          
           if (!myDone) {
             bootstrapWorkingStateFromServer(view);
             isInSetup = true;
-            console.log('[setup] entering setup mode');
           } else {
             isInSetup = false;
           }
@@ -446,7 +445,6 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     document.addEventListener('click', (ev) => {
       const now = Date.now();
       const suppress = (now < suppressMouseUntil) || !!dragging;
-      if (DRAG_DEBUG) console.log('[drag] global click', { suppress, dragging: !!dragging, now, suppressMouseUntil });
       if (suppress) { try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {} }
     }, true);
 
