@@ -5,7 +5,7 @@ import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IDENTITIES, KING_ID } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue } from '/js/modules/api/game.js';
+import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -74,6 +74,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let postMoveOverlay = null; // { uiR, uiC, types: string[] }
   const BUBBLE_PRELOAD = {}; // type -> HTMLImageElement
   let dragPreviewImgs = []; // active floating preview images
+  let lastChoiceOrigin = null; // remember origin for two-option choice
 
   // Pointer interaction thresholds
   const DRAG_PX_THRESHOLD = DRAG_PX_THRESHOLD_CFG; // from config import (kept names for legacy usage)
@@ -445,8 +446,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     document.addEventListener('click', (ev) => {
       const now = Date.now();
       const suppress = (now < suppressMouseUntil) || !!dragging;
-      if (suppress) { try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {} }
+      // Do NOT suppress clicks on non-preview bubble overlays (choice or post-move)
+      const t = ev.target;
+      const isBubbleOverlay = t && t.closest && t.closest('img[data-bubble]:not([data-preview])');
+      if (suppress && !isBubbleOverlay) { try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {} }
     }, true);
+
+    // Removed global diagnostic click logger now that bubble click handling works
 
     boardRoot = document.createElement('div');
     boardRoot.id = 'playAreaBoard';
@@ -598,9 +604,24 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const cellRef = refs.boardCells?.[postMoveOverlay.uiR]?.[postMoveOverlay.uiC];
       if (cellRef && cellRef.el) {
         Array.from(cellRef.el.querySelectorAll('img[data-bubble]')).forEach(function(n){ try { n.remove(); } catch(_) {} });
+        const interactive = !!postMoveOverlay.interactive;
         for (const t of postMoveOverlay.types) {
           const img = makeBubbleImg(t, currentSquareSize);
-          if (img) cellRef.el.appendChild(img);
+          if (!img) continue;
+          try { cellRef.el.style.position = 'relative'; } catch(_) {}
+          img.style.zIndex = '1001';
+          if (interactive) {
+            img.style.pointerEvents = 'auto';
+            img.style.cursor = 'pointer';
+            img.addEventListener('click', function(ev){
+              try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {}
+              const decl = t.includes('king') ? Declaration.KING : (t.includes('bishop') ? Declaration.BISHOP : (t.includes('rook') ? Declaration.ROOK : Declaration.KNIGHT));
+              commitMoveFromOverlay(decl, { originUI: lastChoiceOrigin, destUI: { uiR: postMoveOverlay.uiR, uiC: postMoveOverlay.uiC } });
+            });
+          } else {
+            img.style.pointerEvents = 'none';
+          }
+          cellRef.el.appendChild(img);
         }
       }
     }
@@ -1013,9 +1034,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const img = document.createElement('img');
       img.dataset.bubble = '1';
       if (opts && opts.preview) img.dataset.preview = '1';
+      img.dataset.bubbleType = type;
       img.draggable = false;
       img.style.position = 'absolute';
-      img.style.pointerEvents = 'none';
+      // Default: previews are non-interactive; overlays can be clickable and are enabled by caller
+      img.style.pointerEvents = (opts && opts.preview) ? 'none' : 'auto';
       img.style.zIndex = '20';
       // Shrink ~15% from previous size (1.2x -> 1.02x square)
       img.style.width = Math.floor(square * 1.08) + 'px';
@@ -1284,6 +1307,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (isInSetup) return; // not in setup
       const myColorIdx = currentIsWhite ? 0 : 1;
       const piece = getBoardPieceAtUI(uiR, uiC);
+      // If user clicked a bubble overlay inside this cell, let it handle the click
+      const t = e.target;
+      if (t && t.closest && t.closest('img[data-bubble]:not([data-preview])')) {
+        return;
+      }
       e.preventDefault(); e.stopPropagation();
       const startX = e.clientX, startY = e.clientY;
       let dragStarted = false;
@@ -1311,6 +1339,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (isInSetup) return;
       const myColorIdx = currentIsWhite ? 0 : 1;
       const piece = getBoardPieceAtUI(uiR, uiC);
+      // Allow bubble overlay touches to pass through for tap/click handling
+      const tEl = e.target;
+      if (tEl && tEl.closest && tEl.closest('img[data-bubble]:not([data-preview])')) {
+        return;
+      }
       try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
       suppressMouseUntil = Date.now() + 500;
       const t = e.touches[0];
@@ -1395,7 +1428,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const dx = Math.abs(dest.uiR - origin.uiR);
       const dy = Math.abs(dest.uiC - origin.uiC);
       const movedDistance = Math.max(dx, dy);
-      const commitMove = (decl) => {
+      const commitMove = async (decl) => {
         let moving = currentBoard[from.row][from.col];
         // If we already optimistically moved for a choice, origin will be empty.
         // In that case, verify the destination has our piece and proceed.
@@ -1411,9 +1444,14 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           currentBoard[from.row][from.col] = null;
         }
         selected = null;
-        lockInteractionsAfterMove(origin, dest, decl);
-        // Log and (optionally) send to server here when wiring declaration API
-        try { console.log('[move] commit', { from, to, declaration: decl }); } catch(_) {}
+        // Show final left speech bubble only for the declared type
+        showFinalSpeechOnly(origin, dest, decl);
+        // Send to server
+        try {
+          console.log('[move] commit', { from, to, declaration: decl });
+          const color = myColorIdx;
+          await apiMove({ gameId: lastGameId, color, from, to, declaration: decl });
+        } catch (e) { console.error('apiMove failed', e); }
         renderBoardAndBars();
         return true;
       };
@@ -1459,13 +1497,18 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           const decl = t.includes('king') ? Declaration.KING : (t.includes('bishop') ? Declaration.BISHOP : Declaration.ROOK);
           commitMove(decl);
         });
+        // Ensure overlays remain clickable above the cell content
+        try { cellRef.el.style.position = 'relative'; } catch(_) {}
+        img.style.pointerEvents = 'auto';
+        img.style.zIndex = '1001';
         cellRef.el.appendChild(img);
       });
       // Also set overlay so re-render (if any) keeps them
-      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types };
+      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types, interactive: true };
       // Lock interactions while awaiting choice
       currentPlayerTurn = null;
       // Show the optimistic placement with choice bubbles
+      lastChoiceOrigin = { uiR: origin.uiR, uiC: origin.uiC };
       renderBoardAndBars();
       return true;
     } catch (e) { console.error('attemptInGameMove failed', e); return false; }
@@ -1495,7 +1538,47 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           if (dx === dy && dx > 0) types.push('bishopThoughtLeft'); else types.push('rookThoughtLeft');
         }
       }
+      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types, interactive: false };
+    } catch (_) {}
+  }
+
+  // After a declaration is chosen, only show the left speech bubble for that type
+  function showFinalSpeechOnly(origin, dest, declaration) {
+    try {
+      currentPlayerTurn = null;
+      const dx = Math.abs(dest.uiR - origin.uiR);
+      const dy = Math.abs(dest.uiC - origin.uiC);
+      const movedDistance = Math.max(dx, dy);
+      let types = [];
+      if (declaration === Declaration.KNIGHT) types = ['knightSpeechLeft'];
+      else if (declaration === Declaration.ROOK && movedDistance > 1) types = ['rookSpeechLeft'];
+      else if (declaration === Declaration.BISHOP && movedDistance > 1) types = ['bishopSpeechLeft'];
+      else if (declaration === Declaration.KING) {
+        // For king, per spec show only the left speech for the chosen axis
+        types = (dx === dy && dx > 0) ? ['bishopSpeechLeft'] : ['rookSpeechLeft'];
+      }
       postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types };
+      // Final overlays are visual only; forget lastChoiceOrigin
+      lastChoiceOrigin = null;
+    } catch (_) {}
+  }
+
+  // Commit from a post-move overlay click when we preserved origin/dest for choice UI
+  async function commitMoveFromOverlay(declaration, ctx) {
+    try {
+      if (!ctx || !ctx.originUI || !ctx.destUI) return;
+      const fromS = uiToServerCoords(ctx.originUI.uiR, ctx.originUI.uiC, currentRows, currentCols, currentIsWhite);
+      const toS = uiToServerCoords(ctx.destUI.uiR, ctx.destUI.uiC, currentRows, currentCols, currentIsWhite);
+      const from = { row: fromS.serverRow, col: fromS.serverCol };
+      const to = { row: toS.serverRow, col: toS.serverCol };
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      // Only show final speech and send to server; piece already optimistically placed
+      showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration);
+      try {
+        console.log('[move] commit', { from, to, declaration });
+        await apiMove({ gameId: lastGameId, color: myColorIdx, from, to, declaration });
+      } catch (e) { console.error('apiMove failed', e); }
+      renderBoardAndBars();
     } catch (_) {}
   }
 
