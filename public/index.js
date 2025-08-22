@@ -1383,31 +1383,95 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const target = currentBoard?.[to.row]?.[to.col];
       if (target && target.color === myColorIdx) return false;
       const decls = [Declaration.KNIGHT, Declaration.KING, Declaration.BISHOP, Declaration.ROOK];
-      let usedDecl = null;
+      const legal = [];
       for (const d of decls) {
         if (!isWithinPieceRange(from, to, d)) continue;
         if (!isPathClear(currentBoard, from, to, d)) continue;
-        // Locally update board optimistically; server will confirm via game:update
-        const moving = currentBoard[from.row][from.col];
-        if (!moving || moving.color !== myColorIdx) return false;
-        // Apply optimistic move
+        legal.push(d);
+      }
+      if (legal.length === 0) return false;
+
+      // If single legal declaration or non-king with distance criteria, auto-commit
+      const dx = Math.abs(dest.uiR - origin.uiR);
+      const dy = Math.abs(dest.uiC - origin.uiC);
+      const movedDistance = Math.max(dx, dy);
+      const commitMove = (decl) => {
+        let moving = currentBoard[from.row][from.col];
+        // If we already optimistically moved for a choice, origin will be empty.
+        // In that case, verify the destination has our piece and proceed.
+        if (!moving) {
+          const already = currentBoard?.[to.row]?.[to.col];
+          if (!already || already.color !== myColorIdx) return false;
+        } else {
+          if (moving.color !== myColorIdx) return false;
+          currentBoard = currentBoard.map(row => row.slice());
+          currentBoard[to.row] = currentBoard[to.row].slice();
+          currentBoard[from.row] = currentBoard[from.row].slice();
+          currentBoard[to.row][to.col] = moving;
+          currentBoard[from.row][from.col] = null;
+        }
+        selected = null;
+        lockInteractionsAfterMove(origin, dest, decl);
+        // Log and (optionally) send to server here when wiring declaration API
+        try { console.log('[move] commit', { from, to, declaration: decl }); } catch(_) {}
+        renderBoardAndBars();
+        return true;
+      };
+
+      // King can imply two thoughts, but we still must choose at placement per design
+      if (legal.length === 1) {
+        return commitMove(legal[0]);
+      }
+
+      // Choice UI: if KING + (ROOK or BISHOP), or other two-options, show clickable overlays on the destination
+      const cellRef = refs.boardCells?.[dest.uiR]?.[dest.uiC];
+      if (!cellRef || !cellRef.el) return false;
+      // Clear existing previews and overlays
+      clearDragPreviewImgs();
+      Array.from(cellRef.el.querySelectorAll('img[data-bubble]')).forEach(function(n){ try { n.remove(); } catch(_) {} });
+      // Optimistically place the piece at destination so it visually moves with the choice bubbles
+      const movingNow = currentBoard[from.row][from.col];
+      if (movingNow && movingNow.color === myColorIdx) {
         currentBoard = currentBoard.map(row => row.slice());
         currentBoard[to.row] = currentBoard[to.row].slice();
         currentBoard[from.row] = currentBoard[from.row].slice();
-        currentBoard[to.row][to.col] = moving;
+        currentBoard[to.row][to.col] = movingNow;
         currentBoard[from.row][from.col] = null;
-        // Keep selection cleared post move
-        selected = null;
-        // Lock further interactions until server updates turn
-        lockInteractionsAfterMove(origin, dest, d);
-        renderBoardAndBars();
-        return true;
       }
-      return false;
+      const types = [];
+      if (legal.includes(Declaration.KING)) {
+        // Always put king thought on the right
+        types.push('kingThoughtRight');
+        // Pair with bishop or rook on the left depending on direction — use THOUGHT bubbles for the choice UI
+        if (dx === dy && dx > 0) types.push('bishopThoughtLeft'); else types.push('rookThoughtLeft');
+      } else {
+        // Fallback: bishop/rook choice
+        if (legal.includes(Declaration.BISHOP)) types.push('bishopSpeechLeft');
+        if (legal.includes(Declaration.ROOK)) types.push('rookSpeechLeft');
+      }
+      // Create clickable images
+      types.forEach(function(t){
+        const img = makeBubbleImg(t, currentSquareSize, {});
+        if (!img) return;
+        img.style.cursor = 'pointer';
+        img.addEventListener('click', function(ev){
+          ev.preventDefault(); ev.stopPropagation();
+          const decl = t.includes('king') ? Declaration.KING : (t.includes('bishop') ? Declaration.BISHOP : Declaration.ROOK);
+          commitMove(decl);
+        });
+        cellRef.el.appendChild(img);
+      });
+      // Also set overlay so re-render (if any) keeps them
+      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types };
+      // Lock interactions while awaiting choice
+      currentPlayerTurn = null;
+      // Show the optimistic placement with choice bubbles
+      renderBoardAndBars();
+      return true;
     } catch (e) { console.error('attemptInGameMove failed', e); return false; }
   }
 
-  function lockInteractionsAfterMove(origin, dest, declaration) {
+  function lockInteractionsAfterMove(origin, dest, declaration, opts) {
     try {
       // Disable all game handlers by setting turn to null; server will set next turn on update
       currentPlayerTurn = null;
@@ -1423,8 +1487,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       } else if (declaration === Declaration.BISHOP && movedDistance > 1) {
         types.push('bishopSpeechLeft');
       } else if (declaration === Declaration.KING) {
-        types.push('kingThoughtRight');
-        if (dx === dy && dx > 0) types.push('bishopThoughtLeft'); else types.push('rookThoughtLeft');
+        // For choice confirmation we may want speech; otherwise default to thought
+        if (opts && opts.forceSpeechForKing) {
+          types.push('kingSpeechLeft');
+        } else {
+          types.push('kingThoughtRight');
+          if (dx === dy && dx > 0) types.push('bishopThoughtLeft'); else types.push('rookThoughtLeft');
+        }
       }
       postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types };
     } catch (_) {}
