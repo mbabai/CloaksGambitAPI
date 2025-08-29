@@ -250,7 +250,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       },
       async onBothReady(payload) {
         try {
-      
+
       showPlayArea();
           const gameId = payload?.gameId || lastGameId;
           if (!gameId) return;
@@ -1024,6 +1024,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         knightSpeechLeft: 'BubbleSpeechLeftKnight.svg',
         rookSpeechLeft: 'BubbleSpeechLeftRook.svg',
         bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
+        kingSpeechLeft: 'BubbleSpeechLeftKing.svg',
         kingThoughtRight: 'BubbleThoughtRightKing.svg',
         bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
         rookThoughtLeft: 'BubbleThoughtLeftRook.svg',
@@ -1428,7 +1429,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const dx = Math.abs(dest.uiR - origin.uiR);
       const dy = Math.abs(dest.uiC - origin.uiC);
       const movedDistance = Math.max(dx, dy);
-      const commitMove = async (decl) => {
+      const commitMove = async (decl, opts) => {
         let moving = currentBoard[from.row][from.col];
         // If we already optimistically moved for a choice, origin will be empty.
         // In that case, verify the destination has our piece and proceed.
@@ -1445,7 +1446,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         }
         selected = null;
         // Show final left speech bubble only for the declared type
-        showFinalSpeechOnly(origin, dest, decl);
+        showFinalSpeechOnly(origin, dest, decl, opts);
         // Send to server
         try {
           console.log('[move] commit', { from, to, declaration: decl });
@@ -1495,7 +1496,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         img.addEventListener('click', function(ev){
           ev.preventDefault(); ev.stopPropagation();
           const decl = t.includes('king') ? Declaration.KING : (t.includes('bishop') ? Declaration.BISHOP : Declaration.ROOK);
-          commitMove(decl);
+          commitMove(decl, { alwaysShow: true });
         });
         // Ensure overlays remain clickable above the cell content
         try { cellRef.el.style.position = 'relative'; } catch(_) {}
@@ -1543,7 +1544,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   // After a declaration is chosen, only show the left speech bubble for that type
-  function showFinalSpeechOnly(origin, dest, declaration) {
+  function showFinalSpeechOnly(origin, dest, declaration, opts) {
     try {
       currentPlayerTurn = null;
       const dx = Math.abs(dest.uiR - origin.uiR);
@@ -1551,11 +1552,16 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const movedDistance = Math.max(dx, dy);
       let types = [];
       if (declaration === Declaration.KNIGHT) types = ['knightSpeechLeft'];
-      else if (declaration === Declaration.ROOK && movedDistance > 1) types = ['rookSpeechLeft'];
-      else if (declaration === Declaration.BISHOP && movedDistance > 1) types = ['bishopSpeechLeft'];
+      else if (declaration === Declaration.ROOK) {
+        // For rook, show speech if either alwaysShow or moved beyond 1 square
+        if ((opts && opts.alwaysShow) || movedDistance > 1) types = ['rookSpeechLeft'];
+      }
+      else if (declaration === Declaration.BISHOP) {
+        if ((opts && opts.alwaysShow) || movedDistance > 1) types = ['bishopSpeechLeft'];
+      }
       else if (declaration === Declaration.KING) {
-        // For king, per spec show only the left speech for the chosen axis
-        types = (dx === dy && dx > 0) ? ['bishopSpeechLeft'] : ['rookSpeechLeft'];
+        // Show king speech on the left for king declaration
+        types = ['kingSpeechLeft'];
       }
       postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types };
       // Final overlays are visual only; forget lastChoiceOrigin
