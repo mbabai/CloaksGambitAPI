@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react'
+import Piece from './Piece.jsx'
 
 // Staggered stash + on-deck layout (top row 5 with on-deck center, bottom row 4)
-export default function Stash({ sizes, positions, identityToChar, stashPieces = [], onDeckPiece = null }) {
+export default function Stash({ sizes, positions, identityToImg, stashPieces = [], onDeckPiece = null }) {
   const s = Math.floor(sizes.squareSize)
   const slot = Math.floor(0.8 * s)
   const space = Math.max(4, Math.floor(0.12 * slot))
@@ -25,23 +26,17 @@ export default function Stash({ sizes, positions, identityToChar, stashPieces = 
   const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * space
   let xCursorTop = Math.round(boardCenterX - topTotal / 2)
 
-  // Helper: render a piece glyph inside a slot
+  // Helper: render a piece image inside a slot
   const renderPiece = (piece, width, height) => {
     if (!piece) return null
-    const bg = piece.color === 1 ? '#000' : '#fff'
-    const fg = piece.color === 1 ? '#fff' : '#000'
     return (
-      <div style={{
-        width: `${Math.floor(width * 0.8)}px`,
-        height: `${Math.floor(height * 0.8)}px`,
-        background: bg,
-        color: fg,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontSize: 'var(--font-size-stash-piece)'
-      }}>
-        {typeof piece.identity === 'number' ? (identityToChar?.[piece.identity] || '?') : '?'}
+      <div
+        style={{
+          width: `${Math.floor(width * 0.8)}px`,
+          height: `${Math.floor(height * 0.8)}px`
+        }}
+      >
+        <Piece identity={piece.identity} color={piece.color} identityToImg={identityToImg} />
       </div>
     )
   }

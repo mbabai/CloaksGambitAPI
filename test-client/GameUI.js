@@ -17,14 +17,32 @@ let boardHeight = 0;
 // Global variable to track current player perspective
 let currentPlayerPerspective = 'white'; // 'white' or 'black'
 
-// Piece identities mapping
-const PIECE_IDENTITIES = {
-    0: '?',    // UNKNOWN
-    1: '♔',    // KING
-    2: '💣',   // BOMB
-    3: '♗',    // BISHOP
-    4: '♖',    // ROOK
-    5: '♘'     // KNIGHT
+// Map piece identity and color to SVG assets
+const PIECE_IMAGES = {
+    0: {
+        0: '/assets/images/Pieces/PawnWhiteUnknown.svg',
+        1: '/assets/images/Pieces/PawnBlackUnknown.svg'
+    },
+    1: {
+        0: '/assets/images/Pieces/PawnWhiteKing.svg',
+        1: '/assets/images/Pieces/PawnBlackKing.svg'
+    },
+    2: {
+        0: '/assets/images/Pieces/PawnWhiteBomb.svg',
+        1: '/assets/images/Pieces/PawnBlackBomb.svg'
+    },
+    3: {
+        0: '/assets/images/Pieces/PawnWhiteBishop.svg',
+        1: '/assets/images/Pieces/PawnBlackBishop.svg'
+    },
+    4: {
+        0: '/assets/images/Pieces/PawnWhiteRook.svg',
+        1: '/assets/images/Pieces/PawnBlackRook.svg'
+    },
+    5: {
+        0: '/assets/images/Pieces/PawnWhiteKnight.svg',
+        1: '/assets/images/Pieces/PawnBlackKnight.svg'
+    }
 };
 
 // Sample game state (this would come from the API)
@@ -439,14 +457,15 @@ function generateBoard() {
             // Check if there's a piece on this square
             const piece = sampleGameState.board[row][col];
             if (piece) {
-                const pieceElement = document.createElement('div');
-                pieceElement.className = `board-piece ${piece.color === 0 ? 'white' : 'black'}`;
-                pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
-                square.appendChild(pieceElement);
-                
+                const img = document.createElement('img');
+                img.className = 'board-piece';
+                img.src = PIECE_IMAGES[piece.identity][piece.color];
+                img.alt = '';
+                square.appendChild(img);
+
                 // Add bubbles to the piece at C2 (column 2, row 4 in 0-indexed)
                 if (col === 2 && row === 4) {
-                    addBubblesToPiece(square, pieceElement);
+                    addBubblesToPiece(square, img);
                 }
             }
             
@@ -496,10 +515,11 @@ function generateStash() {
                 // Check if there's a piece in this stash slot
                 const piece = sampleGameState.stashes[row][col];
                 if (piece) {
-                    const pieceElement = document.createElement('div');
-                    pieceElement.className = `stash-piece ${piece.color === 0 ? 'white' : 'black'}`;
-                    pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
-                    slot.appendChild(pieceElement);
+                    const img = document.createElement('img');
+                    img.className = 'stash-piece';
+                    img.src = PIECE_IMAGES[piece.identity][piece.color];
+                    img.alt = '';
+                    slot.appendChild(img);
                 }
             }
             
@@ -521,32 +541,36 @@ function updateCapturedPieces() {
     if (currentPlayerPerspective === 'white') {
         // White perspective: black captured on left (under white player), white captured on right (under black player)
         sampleGameState.captured[1].forEach(piece => {
-            const pieceElement = document.createElement('div');
-            pieceElement.className = 'captured-piece black';
-            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
-            leftCaptured.appendChild(pieceElement);
+            const img = document.createElement('img');
+            img.className = 'captured-piece';
+            img.src = PIECE_IMAGES[piece.identity][piece.color];
+            img.alt = '';
+            leftCaptured.appendChild(img);
         });
-        
+
         sampleGameState.captured[0].forEach(piece => {
-            const pieceElement = document.createElement('div');
-            pieceElement.className = 'captured-piece';
-            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
-            rightCaptured.appendChild(pieceElement);
+            const img = document.createElement('img');
+            img.className = 'captured-piece';
+            img.src = PIECE_IMAGES[piece.identity][piece.color];
+            img.alt = '';
+            rightCaptured.appendChild(img);
         });
     } else {
         // Black perspective: white captured on left (under black player), black captured on right (under white player)
         sampleGameState.captured[0].forEach(piece => {
-            const pieceElement = document.createElement('div');
-            pieceElement.className = 'captured-piece';
-            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
-            leftCaptured.appendChild(pieceElement);
+            const img = document.createElement('img');
+            img.className = 'captured-piece';
+            img.src = PIECE_IMAGES[piece.identity][piece.color];
+            img.alt = '';
+            leftCaptured.appendChild(img);
         });
-        
+
         sampleGameState.captured[1].forEach(piece => {
-            const pieceElement = document.createElement('div');
-            pieceElement.className = 'captured-piece black';
-            pieceElement.textContent = PIECE_IDENTITIES[piece.identity];
-            rightCaptured.appendChild(pieceElement);
+            const img = document.createElement('img');
+            img.className = 'captured-piece';
+            img.src = PIECE_IMAGES[piece.identity][piece.color];
+            img.alt = '';
+            rightCaptured.appendChild(img);
         });
     }
 }

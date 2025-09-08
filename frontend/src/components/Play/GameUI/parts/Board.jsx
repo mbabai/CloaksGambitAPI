@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react'
+import Piece from './Piece.jsx'
 
-export default function Board({ board, perspective, sizes, positions, identityToChar }) {
+export default function Board({ board, perspective, sizes, positions, identityToImg }) {
   const rows = board?.length || 6
   const cols = board?.[0]?.length || 5
   const isWhite = perspective === 'white'
@@ -75,19 +76,19 @@ export default function Board({ board, perspective, sizes, positions, identityTo
             <div key={`${r}-${c}`} className={`board-square ${light ? 'light' : 'dark'}`} style={squareStyle}>
               {cell && (
                 <div
-                  className={`board-piece ${cell.color === 0 ? 'white' : 'black'}`}
                   style={{
                     width: '80%',
                     height: '80%',
-                    background: cell.color === 0 ? '#fff' : '#000',
-                    color: cell.color === 0 ? '#000' : '#fff',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 'var(--font-size-board-piece)'
+                    justifyContent: 'center'
                   }}
                 >
-                  {identityToChar?.[cell.identity]}
+                  <Piece
+                    identity={cell.identity}
+                    color={cell.color}
+                    identityToImg={identityToImg}
+                  />
                 </div>
               )}
               {showFile && (

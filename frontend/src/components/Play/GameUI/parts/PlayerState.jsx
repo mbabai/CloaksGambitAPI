@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react'
+import Piece from './Piece.jsx'
 
 // New PlayerState bar positioned relative to the board (top or bottom)
-export default function PlayerState({ position, playerName, playerColor, sizes, positions, identityToChar, daggerCount = 0, capturedPieces = [] }) {
+export default function PlayerState({ position, playerName, playerColor, sizes, positions, identityToImg, daggerCount = 0, capturedPieces = [] }) {
   const isTop = position === 'top'
   const isSelf = position === 'bottom'
   const name = playerName || (playerColor === 0 ? 'White' : 'Black')
@@ -85,7 +86,7 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
     )
   }
 
-  // Render provided capturedPieces as small squares
+  // Render provided capturedPieces as images
   const capturedToShow = useMemo(() => Array.isArray(capturedPieces) ? capturedPieces : [], [capturedPieces])
 
   const capturedStrip = (
@@ -98,17 +99,18 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
             style={{
               width: `${capSize}px`,
               height: `${capSize}px`,
-              background: p.color === 1 ? '#000' : '#fff',
               border: '1px solid #000',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: 'var(--font-size-captured-piece)',
-              color: p.color === 1 ? '#fff' : '#000',
               flexShrink: 0
             }}
           >
-            {identityToChar?.[p.identity]}
+            <Piece
+              identity={p.identity}
+              color={p.color}
+              identityToImg={identityToImg}
+            />
           </div>
         )
       })}

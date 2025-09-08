@@ -1,8 +1,11 @@
+import { pieceGlyph as makePieceGlyph } from './pieceGlyph.js';
+
 export function renderBars({
   topBar,
   bottomBar,
   sizes,
-  state
+  state,
+  identityMap
 }) {
   const { squareSize: s, boardWidth: bW, boardHeight: bH, boardLeft: leftPx, boardTop: topPx, playAreaHeight: H } = sizes;
   const { currentIsWhite, currentCaptured, currentDaggers } = state;
@@ -91,20 +94,18 @@ export function renderBars({
     strip.style.gap = '4px';
     const pieces = (currentCaptured?.[colorIdx] || []);
     pieces.forEach(piece => {
-      const sq = document.createElement('div');
       const cap = Math.floor(0.365 * s);
-      sq.style.width = cap + 'px';
-      sq.style.height = cap + 'px';
-      sq.style.border = '1px solid #000';
-      sq.style.display = 'flex';
-      sq.style.alignItems = 'center';
-      sq.style.justifyContent = 'center';
-      sq.style.fontSize = Math.floor(cap * 0.7) + 'px';
-      const isBlack = piece.color === 1;
-      sq.style.background = isBlack ? '#000' : '#fff';
-      sq.style.color = isBlack ? '#fff' : '#000';
-      sq.textContent = { 0: '?', 1: '♔', 2: '💣', 3: '♗', 4: '♖', 5: '♘' }[piece.identity] || '?';
-      strip.appendChild(sq);
+      const img = makePieceGlyph(piece, cap, identityMap);
+      if (img) {
+        const wrap = document.createElement('div');
+        wrap.style.width = cap + 'px';
+        wrap.style.height = cap + 'px';
+        wrap.style.display = 'flex';
+        wrap.style.alignItems = 'center';
+        wrap.style.justifyContent = 'center';
+        wrap.appendChild(img);
+        strip.appendChild(wrap);
+      }
     });
     return strip;
   }

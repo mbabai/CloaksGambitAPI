@@ -15,13 +15,32 @@ const BOARD_COLS = 5
 const STASH_ROWS = 2
 const STASH_COLS = 5
 
-const PIECE_IDENTITIES = {
-  0: '?',
-  1: '♔',
-  2: '💣',
-  3: '♗',
-  4: '♖',
-  5: '♘'
+// Map piece identity and color to image paths located in public/assets/images/Pieces
+const PIECE_IMAGES = {
+  0: {
+    0: '/assets/images/Pieces/PawnWhiteUnknown.svg',
+    1: '/assets/images/Pieces/PawnBlackUnknown.svg'
+  },
+  1: {
+    0: '/assets/images/Pieces/PawnWhiteKing.svg',
+    1: '/assets/images/Pieces/PawnBlackKing.svg'
+  },
+  2: {
+    0: '/assets/images/Pieces/PawnWhiteBomb.svg',
+    1: '/assets/images/Pieces/PawnBlackBomb.svg'
+  },
+  3: {
+    0: '/assets/images/Pieces/PawnWhiteBishop.svg',
+    1: '/assets/images/Pieces/PawnBlackBishop.svg'
+  },
+  4: {
+    0: '/assets/images/Pieces/PawnWhiteRook.svg',
+    1: '/assets/images/Pieces/PawnBlackRook.svg'
+  },
+  5: {
+    0: '/assets/images/Pieces/PawnWhiteKnight.svg',
+    1: '/assets/images/Pieces/PawnBlackKnight.svg'
+  }
 }
 
 const sampleGameState = {
@@ -61,7 +80,7 @@ export default function GameUI() {
   // Measure the viewport wrapper so the play area can grow/shrink dynamically
   const layout = usePlayAreaLayout(viewportRef, { rows: BOARD_ROWS, cols: BOARD_COLS, stashRows: STASH_ROWS, stashCols: STASH_COLS })
 
-  const identityToChar = useMemo(() => PIECE_IDENTITIES, [])
+  const identityToImg = useMemo(() => PIECE_IMAGES, [])
 
   // Determine API origin for dev (vite on 5173) vs prod (same origin)
   const API_ORIGIN = (import.meta.env?.VITE_API_ORIGIN) || (window.location.origin.includes(':5173') ? 'http://localhost:3000' : window.location.origin)
@@ -261,7 +280,7 @@ export default function GameUI() {
             playerColor={perspective === 'white' ? 1 : 0}
             sizes={layout.sizes}
             positions={layout.positions}
-            identityToChar={identityToChar}
+            identityToImg={identityToImg}
             daggerCount={game?.daggers?.[perspective === 'white' ? 1 : 0] || 0}
             capturedPieces={game?.captured?.[perspective === 'white' ? 1 : 0] || []}
           />
@@ -272,7 +291,7 @@ export default function GameUI() {
             playerColor={perspective === 'white' ? 0 : 1}
             sizes={layout.sizes}
             positions={layout.positions}
-            identityToChar={identityToChar}
+            identityToImg={identityToImg}
             daggerCount={game?.daggers?.[perspective === 'white' ? 0 : 1] || 0}
             capturedPieces={game?.captured?.[perspective === 'white' ? 0 : 1] || []}
           />
@@ -284,14 +303,14 @@ export default function GameUI() {
           perspective={perspective}
           sizes={layout.sizes}
           positions={layout.positions}
-          identityToChar={identityToChar}
+          identityToImg={identityToImg}
         />
       </PlayArea>
 
       <Stash
         sizes={layout.sizes}
         positions={layout.positions}
-        identityToChar={identityToChar}
+        identityToImg={identityToImg}
         stashPieces={game?.stashes?.[perspective === 'white' ? 0 : 1] || []}
         onDeckPiece={game?.onDecks?.[perspective === 'white' ? 0 : 1] || null}
       />

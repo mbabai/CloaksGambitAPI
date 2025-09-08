@@ -3,7 +3,7 @@ import { renderBoard } from '/js/modules/render/board.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
-import { PIECE_IDENTITIES, KING_ID } from '/js/modules/constants.js';
+import { PIECE_IMAGES, KING_ID } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
@@ -548,7 +548,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         workingRank
       },
       refs,
-      identityMap: PIECE_IDENTITIES,
+      identityMap: PIECE_IMAGES,
       onAttachHandlers: (cell, target) => attachInteractiveHandlers(cell, target),
       onAttachGameHandlers: (cell, r, c) => attachGameHandlers(cell, r, c),
       labelFont,
@@ -571,7 +571,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         currentIsWhite,
         currentCaptured,
         currentDaggers
-      }
+      },
+      identityMap: PIECE_IMAGES
     });
 
     renderStashModule({
@@ -595,7 +596,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         dragging
       },
       refs,
-      identityMap: PIECE_IDENTITIES,
+      identityMap: PIECE_IMAGES,
       onAttachHandlers: (el, target) => attachInteractiveHandlers(el, target)
     });
 
@@ -794,20 +795,18 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       strip.style.gap = '4px';
       const pieces = (currentCaptured?.[colorIdx] || []);
       pieces.forEach(piece => {
-        const sq = document.createElement('div');
         const cap = Math.floor(0.365 * s); // ~36.5% of square
-        sq.style.width = cap + 'px';
-        sq.style.height = cap + 'px';
-        sq.style.border = '1px solid #000';
-        sq.style.display = 'flex';
-        sq.style.alignItems = 'center';
-        sq.style.justifyContent = 'center';
-        sq.style.fontSize = Math.floor(cap * 0.7) + 'px';
-        const isBlack = piece.color === 1;
-        sq.style.background = isBlack ? '#000' : '#fff';
-        sq.style.color = isBlack ? '#fff' : '#000';
-        sq.textContent = PIECE_IDENTITIES[piece.identity] || '?';
-        strip.appendChild(sq);
+        const img = modulePieceGlyph(piece, cap, PIECE_IMAGES);
+        if (img) {
+          const wrap = document.createElement('div');
+          wrap.style.width = cap + 'px';
+          wrap.style.height = cap + 'px';
+          wrap.style.display = 'flex';
+          wrap.style.alignItems = 'center';
+          wrap.style.justifyContent = 'center';
+          wrap.appendChild(img);
+          strip.appendChild(wrap);
+        }
       });
       return strip;
     }
@@ -996,25 +995,20 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function pieceGlyph(piece, target) {
     try {
-      return modulePieceGlyph(piece, target, PIECE_IDENTITIES);
+      return modulePieceGlyph(piece, target, PIECE_IMAGES);
     } catch (_) {
-      // Fallback to legacy inline behavior if import failed
+      // Fallback to inline image if module import failed
       if (!piece) return null;
-      const el = document.createElement('div');
       const size = Math.floor(target * 0.8);
-      el.style.width = size + 'px';
-      el.style.height = size + 'px';
-      el.style.display = 'flex';
-      el.style.alignItems = 'center';
-      el.style.justifyContent = 'center';
-      el.style.position = 'relative';
-      el.style.zIndex = '1';
-      el.style.fontSize = Math.floor(size * 0.8) + 'px';
-      const isBlack = piece.color === 1;
-      el.style.background = isBlack ? '#000' : '#fff';
-      el.style.color = isBlack ? '#fff' : '#000';
-      el.textContent = PIECE_IDENTITIES?.[piece.identity] || '?';
-      return el;
+      const src = PIECE_IMAGES?.[piece.identity]?.[piece.color];
+      if (!src) return null;
+      const img = document.createElement('img');
+      img.src = src;
+      img.alt = '';
+      img.style.width = size + 'px';
+      img.style.height = size + 'px';
+      img.style.objectFit = 'contain';
+      return img;
     }
   }
 
