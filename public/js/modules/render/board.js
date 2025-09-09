@@ -124,7 +124,7 @@ export function renderBoard({
             capturedImg.style.top = '50%';
             capturedImg.style.transformOrigin = '100% 100%';
             // Tilt the captured piece 30° clockwise and drop it slightly for depth
-            capturedImg.style.transform = 'translate(-50%, -40%) rotate(30deg)';
+            capturedImg.style.transform = 'translate(-50%, -30%) rotate(30deg)';
           }
         }
         if (movingImg && capturedImg) {
