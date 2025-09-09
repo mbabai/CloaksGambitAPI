@@ -3,7 +3,7 @@ import { renderBoard } from '/js/modules/render/board.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
-import { PIECE_IMAGES, KING_ID } from '/js/modules/constants.js';
+import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
@@ -1138,6 +1138,24 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     } catch (_) {}
   }
 
+  function serverToUICoords(row, col) {
+    if (!currentRows || !currentCols) return { uiR: row, uiC: col };
+    const uiR = currentIsWhite ? (currentRows - 1 - row) : row;
+    const uiC = currentIsWhite ? col : (currentCols - 1 - col);
+    return { uiR, uiC };
+  }
+
+  function bubbleTypesForMove(originUI, destUI, declaration) {
+    const dx = Math.abs(destUI.uiR - originUI.uiR);
+    const dy = Math.abs(destUI.uiC - originUI.uiC);
+    const moved = Math.max(dx, dy);
+    if (declaration === Declaration.KNIGHT) return ['knightSpeechLeft'];
+    if (declaration === Declaration.ROOK) return moved > 1 ? ['rookSpeechLeft'] : [];
+    if (declaration === Declaration.BISHOP) return moved > 1 ? ['bishopSpeechLeft'] : [];
+    if (declaration === Declaration.KING) return ['kingSpeechLeft'];
+    return [];
+  }
+
   function setStateFromServer(u) {
     try {
       // Avoid overwriting optimistic in-game moves while a drag or selection is active
@@ -1150,6 +1168,31 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (Array.isArray(u.daggers)) currentDaggers = u.daggers;
       if (Array.isArray(u.setupComplete)) setupComplete = u.setupComplete;
       if (u.playerTurn === 0 || u.playerTurn === 1) currentPlayerTurn = u.playerTurn;
+      if (Array.isArray(u.moves)) {
+        const last = u.moves[u.moves.length - 1];
+        if (last && last.state === MOVE_STATES.PENDING) {
+          const from = last.from || {};
+          const to = last.to || {};
+          try {
+            const piece = currentBoard?.[from.row]?.[from.col] || currentBoard?.[to.row]?.[to.col];
+            if (piece) {
+              currentBoard = currentBoard.map(row => row.slice());
+              currentBoard[to.row] = currentBoard[to.row].slice();
+              currentBoard[from.row] = currentBoard[from.row].slice();
+              currentBoard[to.row][to.col] = piece;
+              currentBoard[from.row][from.col] = null;
+            }
+          } catch (_) {}
+          try {
+            const originUI = serverToUICoords(from.row, from.col);
+            const destUI = serverToUICoords(to.row, to.col);
+            const types = bubbleTypesForMove(originUI, destUI, last.declaration);
+            postMoveOverlay = { uiR: destUI.uiR, uiC: destUI.uiC, types };
+          } catch (_) {}
+        } else {
+          postMoveOverlay = null;
+        }
+      }
     } catch (_) {}
   }
 

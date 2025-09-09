@@ -28,4 +28,10 @@ export const PIECE_IMAGES = {
 
 export const KING_ID = 1;
 
+export const MOVE_STATES = {
+  PENDING: 0,
+  COMPLETED: 1,
+  RESOLVED: 2
+};
+
 
