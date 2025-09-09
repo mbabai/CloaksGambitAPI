@@ -72,6 +72,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let currentSquareSize = 0; // last computed board square size
   let currentPlayerTurn = null; // 0 or 1
   let postMoveOverlay = null; // { uiR, uiC, types: string[] }
+  let pendingCapture = null; // { row, col, piece }
   const BUBBLE_PRELOAD = {}; // type -> HTMLImageElement
   let dragPreviewImgs = []; // active floating preview images
   let lastChoiceOrigin = null; // remember origin for two-option choice
@@ -545,7 +546,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         currentIsWhite,
         selected,
         isInSetup,
-        workingRank
+        workingRank,
+        pendingCapture
       },
       refs,
       identityMap: PIECE_IMAGES,
@@ -1173,15 +1175,17 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           const from = last.from || {};
           const to = last.to || {};
           try {
-            const piece = currentBoard?.[from.row]?.[from.col] || currentBoard?.[to.row]?.[to.col];
-            if (piece) {
+            const moving = currentBoard?.[from.row]?.[from.col] || null;
+            const target = currentBoard?.[to.row]?.[to.col] || null;
+            if (moving || target) {
               currentBoard = currentBoard.map(row => row.slice());
               currentBoard[to.row] = currentBoard[to.row].slice();
               currentBoard[from.row] = currentBoard[from.row].slice();
-              currentBoard[to.row][to.col] = piece;
+              currentBoard[to.row][to.col] = moving || target;
               currentBoard[from.row][from.col] = null;
+              pendingCapture = target ? { row: to.row, col: to.col, piece: target } : null;
             }
-          } catch (_) {}
+          } catch (_) { pendingCapture = null; }
           try {
             const originUI = serverToUICoords(from.row, from.col);
             const destUI = serverToUICoords(to.row, to.col);
@@ -1190,6 +1194,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           } catch (_) {}
         } else {
           postMoveOverlay = null;
+          pendingCapture = null;
         }
       }
     } catch (_) {}

@@ -17,7 +17,7 @@ export function renderBoard({
   fileLetters
 }) {
   const { rows, cols, squareSize, boardLeft, boardTop } = sizes;
-  const { currentBoard, currentIsWhite, selected, isInSetup, workingRank } = state;
+  const { currentBoard, currentIsWhite, selected, isInSetup, workingRank, pendingCapture } = state;
 
   // Clear container and build grid
   container.style.width = (squareSize * cols) + 'px';
@@ -95,21 +95,49 @@ export function renderBoard({
         const srcC = currentIsWhite ? c : (cols - 1 - c);
         piece = currentBoard?.[srcR]?.[srcC] || null;
       }
-      if (piece) {
-        const p = makePieceGlyph(piece, squareSize, identityMap);
-        // Center piece absolutely in square (covers labels when needed)
-        p.style.position = 'absolute';
-        p.style.left = '50%';
-        p.style.top = '50%';
-        p.style.transform = 'translate(-50%, -50%)';
-        if (selected && selected.type === 'board' && selected.index === c && isUiBottom) {
-          p.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
+      const isPendingCaptureSquare = pendingCapture && pendingCapture.row === serverRow && pendingCapture.col === serverCol;
+      const capturedPiece = isPendingCaptureSquare ? pendingCapture.piece : null;
+      if (piece || capturedPiece) {
+        const myColorIdx = currentIsWhite ? 0 : 1;
+        let movingImg = null;
+        let capturedImg = null;
+        if (piece) {
+          movingImg = makePieceGlyph(piece, squareSize, identityMap);
+          if (movingImg) {
+            movingImg.style.position = 'absolute';
+            movingImg.style.left = '50%';
+            movingImg.style.top = '50%';
+            movingImg.style.transform = 'translate(-50%, -50%)';
+            if (selected && selected.type === 'board' && selected.index === c && isUiBottom) {
+              movingImg.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
+            }
+            if (!isInSetup && selected && selected.type === 'boardAny' && selected.uiR === r && selected.uiC === c) {
+              movingImg.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
+            }
+          }
         }
-        // In-game selection highlight (boardAny)
-        if (!isInSetup && selected && selected.type === 'boardAny' && selected.uiR === r && selected.uiC === c) {
-          p.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
+        if (capturedPiece) {
+          capturedImg = makePieceGlyph(capturedPiece, squareSize, identityMap);
+          if (capturedImg) {
+            capturedImg.style.position = 'absolute';
+            capturedImg.style.left = '50%';
+            capturedImg.style.top = '50%';
+            capturedImg.style.transformOrigin = '100% 100%';
+            // Tilt the captured piece 30° clockwise and drop it slightly for depth
+            capturedImg.style.transform = 'translate(-50%, -40%) rotate(30deg)';
+          }
         }
-        cell.appendChild(p);
+        if (movingImg && capturedImg) {
+          if (capturedPiece.color === myColorIdx) {
+            capturedImg.style.zIndex = '2';
+            movingImg.style.zIndex = '1';
+          } else {
+            movingImg.style.zIndex = '2';
+            capturedImg.style.zIndex = '1';
+          }
+        }
+        if (capturedImg) cell.appendChild(capturedImg);
+        if (movingImg) cell.appendChild(movingImg);
       }
 
       // Attach setup interactions and expose bottom cells for hit-testing

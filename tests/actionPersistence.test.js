@@ -86,6 +86,8 @@ describe('game action routes persist once', () => {
       ],
       captured: [[], []],
       daggers: [0, 0],
+      stashes: [[], []],
+      onDecks: [null, null],
       setupComplete: [true, true],
       onDeckingPlayer: null,
       playerTurn: 1,
