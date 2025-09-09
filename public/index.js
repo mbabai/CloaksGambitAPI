@@ -1146,12 +1146,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function bubbleTypesForMove(originUI, destUI, declaration) {
-    const dx = Math.abs(destUI.uiR - originUI.uiR);
-    const dy = Math.abs(destUI.uiC - originUI.uiC);
-    const moved = Math.max(dx, dy);
+    // Always show a speech bubble for the declared type so that
+    // one-square rook or bishop moves retain their bubble after server updates.
     if (declaration === Declaration.KNIGHT) return ['knightSpeechLeft'];
-    if (declaration === Declaration.ROOK) return moved > 1 ? ['rookSpeechLeft'] : [];
-    if (declaration === Declaration.BISHOP) return moved > 1 ? ['bishopSpeechLeft'] : [];
+    if (declaration === Declaration.ROOK) return ['rookSpeechLeft'];
+    if (declaration === Declaration.BISHOP) return ['bishopSpeechLeft'];
     if (declaration === Declaration.KING) return ['kingSpeechLeft'];
     return [];
   }
@@ -1616,7 +1615,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const to = { row: toS.serverRow, col: toS.serverCol };
       const myColorIdx = currentIsWhite ? 0 : 1;
       // Only show final speech and send to server; piece already optimistically placed
-      showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration);
+      // Always force the speech bubble so rook/bishop choices mirror king behavior
+      showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration, { alwaysShow: true });
       try {
         console.log('[move] commit', { from, to, declaration });
         await apiMove({ gameId: lastGameId, color: myColorIdx, from, to, declaration });
