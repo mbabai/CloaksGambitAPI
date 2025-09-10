@@ -1,6 +1,6 @@
 import React from 'react'
 
-export default function ActionButtons({ sizes, positions, onChallenge, onPass, onBomb }) {
+export default function ActionButtons({ sizes, positions, onChallenge, onPass, onBomb, canChallenge, canBomb }) {
   const wrapperStyle = {
     position: 'absolute',
     left: `${positions.actionButtons.left}px`,
@@ -8,7 +8,7 @@ export default function ActionButtons({ sizes, positions, onChallenge, onPass, o
     width: `${sizes.boardWidth}px`,
     height: `${sizes.buttonHeight}px`,
     display: 'flex',
-    justifyContent: 'space-between',
+    justifyContent: canChallenge ? 'space-between' : 'flex-end',
     background: 'transparent'
   }
   const buttonSize = { width: `${sizes.squareSize * 2.2}px`, height: `${sizes.buttonHeight}px` }
@@ -25,10 +25,14 @@ export default function ActionButtons({ sizes, positions, onChallenge, onPass, o
   }
   return (
     <div className="action-buttons" style={wrapperStyle}>
-      <button className="action-button challenge actionButton" style={{ ...baseButtonStyle }} onClick={onChallenge}>Challenge</button>
+      {canChallenge && (
+        <button className="action-button challenge actionButton" style={{ ...baseButtonStyle }} onClick={onChallenge}>Challenge</button>
+      )}
       <div style={{ position: 'relative' }}>
         <button className="action-button pass actionButton" style={{ ...baseButtonStyle }} onClick={onPass}>Pass</button>
-        <button className="action-button bomb actionButton" style={{ ...baseButtonStyle, position: 'absolute', right: 0, top: 0, background: '#850202' }} onClick={onBomb}>Bomb</button>
+        {canBomb && (
+          <button className="action-button bomb actionButton" style={{ ...baseButtonStyle, position: 'absolute', right: 0, top: 0, background: '#850202' }} onClick={onBomb}>Bomb</button>
+        )}
       </div>
     </div>
   )

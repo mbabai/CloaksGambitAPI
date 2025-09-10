@@ -42,4 +42,18 @@ export async function apiMove({ gameId, color, from, to, declaration }) {
   });
 }
 
+export async function apiChallenge(gameId, color) {
+  return fetch('/api/v1/gameAction/challenge', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gameId, color })
+  });
+}
+
+export async function apiBomb(gameId, color) {
+  return fetch('/api/v1/gameAction/bomb', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gameId, color })
+  });
+}
+
 

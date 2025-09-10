@@ -15,6 +15,17 @@ const BOARD_COLS = 5
 const STASH_ROWS = 2
 const STASH_COLS = 5
 
+// Action and move state constants mirrored from server config
+const ACTIONS = {
+  MOVE: 1,
+  CHALLENGE: 2,
+  BOMB: 3
+}
+
+const MOVE_STATES = {
+  PENDING: 0
+}
+
 // Map piece identity and color to image paths located in public/assets/images/Pieces
 const PIECE_IMAGES = {
   0: {
@@ -269,6 +280,60 @@ export default function GameUI() {
     return () => { aborted = true }
   }, [bothReady, activeGame])
 
+  const lastAction = game.actions && game.actions.length > 0 ? game.actions[game.actions.length - 1] : null
+  const lastMove = game.moves && game.moves.length > 0 ? game.moves[game.moves.length - 1] : null
+
+  const isMyTurn = Boolean(activeGame && game?.isActive && game?.playerTurn === activeGame.color)
+
+  const canChallenge = useMemo(() => {
+    if (!isMyTurn || !lastAction) return false
+    const myColor = activeGame.color
+    if (lastAction.type === ACTIONS.MOVE) {
+      if (!lastMove || lastMove.state !== MOVE_STATES.PENDING) return false
+      return lastMove.player !== myColor
+    }
+    if (lastAction.type === ACTIONS.BOMB) {
+      return lastAction.player !== myColor && lastAction.state === MOVE_STATES.PENDING
+    }
+    return false
+  }, [isMyTurn, activeGame, lastAction, lastMove])
+
+  const canBomb = useMemo(() => {
+    if (!isMyTurn || !lastAction || !lastMove) return false
+    const myColor = activeGame.color
+    if (lastAction.type !== ACTIONS.MOVE) return false
+    if (lastMove.player === myColor || lastMove.state !== MOVE_STATES.PENDING) return false
+    const tgt = lastMove.to
+    const pieceAtTarget = game.board?.[tgt.row]?.[tgt.col]
+    return Boolean(pieceAtTarget && pieceAtTarget.color === myColor)
+  }, [isMyTurn, activeGame, lastAction, lastMove, game.board])
+
+  const handleChallenge = async () => {
+    if (!activeGame) return
+    try {
+      await fetch(`${API_ORIGIN}/api/v1/gameAction/challenge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: activeGame.id, color: activeGame.color })
+      })
+    } catch (e) {
+      console.error('Challenge failed', e)
+    }
+  }
+
+  const handleBomb = async () => {
+    if (!activeGame) return
+    try {
+      await fetch(`${API_ORIGIN}/api/v1/gameAction/bomb`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: activeGame.id, color: activeGame.color })
+      })
+    } catch (e) {
+      console.error('Bomb failed', e)
+    }
+  }
+
   return (
     <div ref={viewportRef} className={styles.viewport}>
       <div ref={containerRef} className={styles.playArea} style={layout.cssVars}>
@@ -318,9 +383,11 @@ export default function GameUI() {
       <ActionButtons
         sizes={layout.sizes}
         positions={layout.positions}
-        onChallenge={() => {}}
+        onChallenge={handleChallenge}
         onPass={() => {}}
-        onBomb={() => {}}
+        onBomb={handleBomb}
+        canChallenge={canChallenge}
+        canBomb={canBomb}
       />
 
       {justMatched && (

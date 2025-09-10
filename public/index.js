@@ -5,7 +5,7 @@ import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove } from '/js/modules/api/game.js';
+import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove, apiChallenge, apiBomb } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -21,6 +21,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const selectWrap = document.getElementById('selectWrap');
 
   // Cookie helpers moved to modules/utils/cookies.js
+
+  const ACTIONS = { MOVE: 1, CHALLENGE: 2, BOMB: 3 };
 
   // Ensure a valid Mongo user exists and get its _id
   async function ensureUserId() {
@@ -73,6 +75,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let currentPlayerTurn = null; // 0 or 1
   let postMoveOverlay = null; // { uiR, uiC, types: string[] }
   let pendingCapture = null; // { row, col, piece }
+  let lastAction = null; // last action from server
+  let lastMove = null;   // last move from server
   const BUBBLE_PRELOAD = {}; // type -> HTMLImageElement
   let dragPreviewImgs = []; // active floating preview images
   let lastChoiceOrigin = null; // remember origin for two-option choice
@@ -630,6 +634,23 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const btnW = Math.min(160, maxBtnW);
       const btnH = Math.floor(btnW * 0.6);
       const fontSize = Math.max(18, Math.floor(btnH * (24 / 96)));
+      const isMyTurn = currentPlayerTurn === myColor && !isInSetup;
+      let canChallenge = false;
+      let canBomb = false;
+      if (isMyTurn && lastAction) {
+        if (lastAction.type === ACTIONS.MOVE) {
+          if (lastMove && lastMove.state === MOVE_STATES.PENDING && lastMove.player !== myColor) {
+            canChallenge = true;
+            if (pendingCapture && pendingCapture.piece && pendingCapture.piece.color === myColor) {
+              canBomb = true;
+            }
+          }
+        } else if (lastAction.type === ACTIONS.BOMB) {
+          if (lastAction.player !== myColor && lastMove && lastMove.state === MOVE_STATES.PENDING) {
+            canChallenge = true;
+          }
+        }
+      }
 
       // Bomb button (upper left)
       renderGameButton({
@@ -641,8 +662,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         boardHeight: 0,
         text: 'Bomb!',
         background: '#7f1d1d',
-        visible: true,
-        onClick: () => alert('Bomb!'),
+        visible: canBomb,
+        onClick: () => { if (lastGameId) apiBomb(lastGameId, myColor).catch(err => console.error('Bomb failed', err)); },
         width: btnW,
         height: btnH,
         fontSize
@@ -658,8 +679,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         boardHeight: 0,
         text: 'Challenge',
         background: '#7b3aec',
-        visible: true,
-        onClick: () => alert('Challenge'),
+        visible: canChallenge,
+        onClick: () => { if (lastGameId) apiChallenge(lastGameId, myColor).catch(err => console.error('Challenge failed', err)); },
         width: btnW,
         height: btnH,
         fontSize
@@ -1233,8 +1254,12 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (Array.isArray(u.daggers)) currentDaggers = u.daggers;
       if (Array.isArray(u.setupComplete)) setupComplete = u.setupComplete;
       if (u.playerTurn === 0 || u.playerTurn === 1) currentPlayerTurn = u.playerTurn;
+      if (Array.isArray(u.actions)) {
+        lastAction = u.actions[u.actions.length - 1] || null;
+      }
       if (Array.isArray(u.moves)) {
-        const last = u.moves[u.moves.length - 1];
+        lastMove = u.moves[u.moves.length - 1] || null;
+        const last = lastMove;
         if (last && last.state === MOVE_STATES.PENDING) {
           const from = last.from || {};
           const to = last.to || {};
