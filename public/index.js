@@ -5,7 +5,7 @@ import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove, apiChallenge, apiBomb } from '/js/modules/api/game.js';
+import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove, apiChallenge, apiBomb, apiOnDeck } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -73,6 +73,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let currentDaggers = [0, 0];
   let currentSquareSize = 0; // last computed board square size
   let currentPlayerTurn = null; // 0 or 1
+  let currentOnDeckingPlayer = null; // player index currently selecting on-deck piece
   let postMoveOverlay = null; // { uiR, uiC, types: string[] }
   let pendingCapture = null; // { row, col, piece }
   let lastAction = null; // last action from server
@@ -598,6 +599,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         workingOnDeck,
         currentStashes,
         currentOnDecks,
+        currentOnDeckingPlayer,
         selected,
         dragging
       },
@@ -1254,6 +1256,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (Array.isArray(u.daggers)) currentDaggers = u.daggers;
       if (Array.isArray(u.setupComplete)) setupComplete = u.setupComplete;
       if (u.playerTurn === 0 || u.playerTurn === 1) currentPlayerTurn = u.playerTurn;
+      if (u.onDeckingPlayer !== undefined) {
+        currentOnDeckingPlayer = u.onDeckingPlayer;
+        if (currentOnDeckingPlayer !== null) selected = null;
+      }
       if (Array.isArray(u.actions)) {
         lastAction = u.actions[u.actions.length - 1] || null;
       }
@@ -1361,9 +1367,19 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     // Mouse: threshold promotion to drag, otherwise click-to-move
     el.addEventListener('mousedown', (e) => {
       if (Date.now() < suppressMouseUntil) return; // ignore synthetic mouse after touch
-      if (!isInSetup) return;
-      const originPiece = getPieceAt(target); // may be null for empty dest; still allow click path
-      if (DRAG_DEBUG) console.log('[drag] mousedown', { suppressMouseUntil, now: Date.now(), originHasPiece: !!originPiece });
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      const isOnDeckTurn = (!isInSetup && currentOnDeckingPlayer === myColorIdx);
+      if (!isInSetup && !isOnDeckTurn) return;
+      let originPiece = null;
+      if (isInSetup) {
+        originPiece = getPieceAt(target);
+      } else if (isOnDeckTurn && target.type === 'stash') {
+        originPiece = currentStashes?.[myColorIdx]?.[target.index] || null;
+      } else if (isOnDeckTurn && target.type === 'deck') {
+        originPiece = currentOnDecks?.[myColorIdx] || null;
+      }
+      if (DRAG_DEBUG) console.log('[drag] mousedown', { suppressMouseUntil, now: Date.now(), originHasPiece: !!originPiece, target });
+      if (!originPiece && !(isOnDeckTurn && target.type === 'deck')) return;
       e.preventDefault();
       e.stopPropagation();
       const startX = e.clientX;
@@ -1373,7 +1389,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         if (dragStarted) return;
         const dx = Math.abs(ev.clientX - startX);
         const dy = Math.abs(ev.clientY - startY);
-        if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece) {
+        if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece && target.type === 'stash') {
           dragStarted = true;
           if (DRAG_DEBUG) console.log('[drag] start mouse', { target, x: ev.clientX, y: ev.clientY });
           startDrag(ev, target, originPiece);
@@ -1384,9 +1400,15 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
         if (!dragStarted) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          handleClickTarget(target);
+          if (isInSetup) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            handleClickTarget(target);
+          } else if (isOnDeckTurn) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            handleOnDeckClick(target);
+          }
         }
       };
       document.addEventListener('mousemove', move);
@@ -1394,8 +1416,18 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     });
     // Touch: mirror behavior with slightly higher jitter tolerance
     el.addEventListener('touchstart', (e) => {
-      if (!isInSetup) return;
-      const originPiece = getPieceAt(target); // may be null
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      const isOnDeckTurn = (!isInSetup && currentOnDeckingPlayer === myColorIdx);
+      if (!isInSetup && !isOnDeckTurn) return;
+      let originPiece = null;
+      if (isInSetup) {
+        originPiece = getPieceAt(target);
+      } else if (isOnDeckTurn && target.type === 'stash') {
+        originPiece = currentStashes?.[myColorIdx]?.[target.index] || null;
+      } else if (isOnDeckTurn && target.type === 'deck') {
+        originPiece = currentOnDecks?.[myColorIdx] || null;
+      }
+      if (!originPiece && !(isOnDeckTurn && target.type === 'deck')) return;
       try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
       suppressMouseUntil = Date.now() + 500;
       const t = e.touches[0];
@@ -1406,9 +1438,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         const tt = ev.touches[0];
         const dx = Math.abs(tt.clientX - startX);
         const dy = Math.abs(tt.clientY - startY);
-        if ((dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) && originPiece) {
+        if ((dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) && originPiece && target.type === 'stash') {
           dragStarted = true;
-          // stop listening to threshold moves once promoted to drag
           document.removeEventListener('touchmove', move);
           if (DRAG_DEBUG) console.log('[drag] start touch', { target, x: tt.clientX, y: tt.clientY });
           startDrag({ clientX: tt.clientX, clientY: tt.clientY }, target, originPiece);
@@ -1420,7 +1451,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         document.removeEventListener('touchcancel', end);
         try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {}
         if (!dragStarted) {
-          handleClickTarget(target);
+          if (isInSetup) {
+            handleClickTarget(target);
+          } else if (isOnDeckTurn) {
+            handleOnDeckClick(target);
+          }
         }
       };
       document.addEventListener('touchmove', move, { passive: false });
@@ -1436,6 +1471,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     cell.addEventListener('mousedown', (e) => {
       if (Date.now() < suppressMouseUntil) return;
       if (isInSetup) return; // not in setup
+      if (currentOnDeckingPlayer !== null) return; // disable board moves during on-deck phase
       const myColorIdx = currentIsWhite ? 0 : 1;
       const piece = getBoardPieceAtUI(uiR, uiC);
       // If user clicked a bubble overlay inside this cell, let it handle the click
@@ -1468,6 +1504,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     });
     cell.addEventListener('touchstart', (e) => {
       if (isInSetup) return;
+      if (currentOnDeckingPlayer !== null) return; // disable during on-deck phase
       const myColorIdx = currentIsWhite ? 0 : 1;
       const piece = getBoardPieceAtUI(uiR, uiC);
       // Allow bubble overlay touches to pass through for tap/click handling
@@ -1537,6 +1574,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   function attemptInGameMove(origin, dest) {
     try {
       if (!currentBoard) return false;
+      if (currentOnDeckingPlayer !== null) return false;
       const myColorIdx = currentIsWhite ? 0 : 1;
       if (!(currentPlayerTurn === 0 || currentPlayerTurn === 1) || currentPlayerTurn !== myColorIdx) return false;
       if (!(origin && origin.type === 'boardAny' && dest && dest.type === 'boardAny')) return false;
@@ -1720,6 +1758,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function handleClickTarget(target) {
+    if (!isInSetup && currentOnDeckingPlayer !== null) { selected = null; return; }
     const pieceAtTarget = getPieceAt(target);
     if (!selected) {
       // Select anything that has a piece (board/stash/deck). If empty, ignore
@@ -1737,6 +1776,53 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     console.log('[setup] click move', { from: selected, to: target, moved });
     selected = null;
     renderBoardAndBars();
+  }
+
+  function handleOnDeckClick(target) {
+    const myColorIdx = currentIsWhite ? 0 : 1;
+    if (currentOnDeckingPlayer !== myColorIdx) { selected = null; return; }
+    if (!selected) {
+      if (target.type !== 'stash') return;
+      const piece = currentStashes?.[myColorIdx]?.[target.index] || null;
+      if (!piece) return;
+      selected = { ...target };
+      renderBoardAndBars();
+      return;
+    }
+    if (selected.type === target.type && selected.index === target.index) {
+      selected = null; renderBoardAndBars(); return;
+    }
+    if (selected.type === 'stash' && target.type === 'stash') {
+      const piece = currentStashes?.[myColorIdx]?.[target.index] || null;
+      if (piece) {
+        selected = { ...target };
+      } else {
+        selected = null;
+      }
+      renderBoardAndBars();
+      return;
+    }
+    if (selected.type === 'stash' && target.type === 'deck') {
+      const ord = selected.index;
+      const piece = currentStashes?.[myColorIdx]?.[ord];
+      if (piece) {
+        currentStashes = currentStashes.map((arr, idx) => {
+          if (idx !== myColorIdx) return arr;
+          const clone = Array.isArray(arr) ? arr.slice() : [];
+          clone[ord] = null;
+          return clone;
+        });
+        currentOnDecks = currentOnDecks.map((p, idx) => (idx === myColorIdx ? piece : p));
+        currentOnDeckingPlayer = null;
+        selected = null;
+        renderBoardAndBars();
+        if (lastGameId) {
+          apiOnDeck(lastGameId, myColorIdx, { identity: piece.identity }).catch(err => console.error('onDeck failed', err));
+        }
+        return;
+      }
+    }
+    selected = null; renderBoardAndBars();
   }
 
   function startDrag(e, origin, piece) {
@@ -1820,8 +1906,30 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         if (isInSetup) {
           const moved = performMove(dragging.origin, dest);
           console.log('[setup] drop', { from: dragging.origin, to: dest, moved });
-        } else if (dragging.origin && dragging.origin.type === 'boardAny' && dest.type === 'boardAny') {
-          attemptInGameMove(dragging.origin, dest);
+        } else if (!isInSetup) {
+          const myColorIdx = currentIsWhite ? 0 : 1;
+          const isMyOnDeck = currentOnDeckingPlayer === myColorIdx;
+          if (isMyOnDeck && dragging.origin && dragging.origin.type === 'stash' && dest.type === 'deck') {
+            try {
+              const ord = dragging.origin.index;
+              const piece = dragging.piece;
+              if (piece) {
+                currentStashes = currentStashes.map((arr, idx) => {
+                  if (idx !== myColorIdx) return arr;
+                  const clone = Array.isArray(arr) ? arr.slice() : [];
+                  clone[ord] = null;
+                  return clone;
+                });
+                currentOnDecks = currentOnDecks.map((p, idx) => (idx === myColorIdx ? piece : p));
+                currentOnDeckingPlayer = null;
+                if (lastGameId) {
+                  apiOnDeck(lastGameId, myColorIdx, { identity: piece.identity }).catch(err => console.error('onDeck failed', err));
+                }
+              }
+            } catch (err) { console.error('onDeck local update failed', err); }
+          } else if (dragging.origin && dragging.origin.type === 'boardAny' && dest.type === 'boardAny') {
+            attemptInGameMove(dragging.origin, dest);
+          }
         }
       }
       try { document.body.removeChild(ghost); } catch (_) {}

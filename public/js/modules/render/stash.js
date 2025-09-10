@@ -9,7 +9,7 @@ export function renderStash({
   onAttachHandlers
 }) {
   const { squareSize: s, boardWidth: bW, boardHeight: bH, boardLeft: leftPx, boardTop: topPx, playAreaHeight: H } = sizes;
-  const { currentIsWhite, isInSetup, workingStash, workingOnDeck, currentStashes, currentOnDecks, selected, dragging } = state;
+  const { currentIsWhite, isInSetup, workingStash, workingOnDeck, currentStashes, currentOnDecks, selected, dragging, currentOnDeckingPlayer } = state;
 
   if (!container) return;
 
@@ -76,6 +76,7 @@ export function renderStash({
   const topTotal = widthsTop.reduce((a, b) => a + b, 0) + (widthsTop.length - 1) * topSpace;
   let xCursor = Math.round(blockCenterX - topTotal / 2);
   const bottomColor = currentIsWhite ? 0 : 1;
+  const isOnDeckTurn = (!isInSetup && currentOnDeckingPlayer === bottomColor);
   const stash = isInSetup
     ? workingStash
     : (Array.isArray(currentStashes?.[bottomColor]) ? currentStashes[bottomColor] : []);
@@ -103,14 +104,14 @@ export function renderStash({
     if (isOnDeck) {
       refs.deckEl = el;
       el.style.zIndex = '10'; // ensure on-deck sits above other stash slots/pieces
-      if (isInSetup && onAttachHandlers) onAttachHandlers(el, { type: 'deck', index: 0 });
-      // Apply selection halo if on-deck is selected
+      if (isOnDeckTurn) el.classList.add('onDeckGlow');
+      if ((isInSetup || isOnDeckTurn) && onAttachHandlers) onAttachHandlers(el, { type: 'deck', index: 0 });
       if (selected && selected.type === 'deck') {
         el.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
       }
     } else {
       const ord = uiToOrdinal[i];
-      if (isInSetup && onAttachHandlers) onAttachHandlers(el, { type: 'stash', index: ord });
+      if ((isInSetup || isOnDeckTurn) && onAttachHandlers) onAttachHandlers(el, { type: 'stash', index: ord });
       refs.stashSlots[ord] = { el, ordinal: ord };
       if (selected && selected.type === 'stash' && selected.index === ord) {
         el.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
@@ -135,7 +136,7 @@ export function renderStash({
       content.style.opacity = '0.5';
     }
     const el = makeSlot(x, y, false, false, content);
-    if (isInSetup && onAttachHandlers) onAttachHandlers(el, { type: 'stash', index: ord });
+    if ((isInSetup || isOnDeckTurn) && onAttachHandlers) onAttachHandlers(el, { type: 'stash', index: ord });
     refs.stashSlots[ord] = { el, ordinal: ord };
     if (selected && selected.type === 'stash' && selected.index === ord) {
       el.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
