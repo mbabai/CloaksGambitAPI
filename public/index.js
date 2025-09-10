@@ -602,6 +602,70 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       onAttachHandlers: (el, target) => attachInteractiveHandlers(el, target)
     });
 
+    // Challenge and Bomb buttons anchored to the stash area
+    (function renderStashButtons() {
+      const children = Array.from(stashRoot.children || []);
+      if (children.length === 0) {
+        renderGameButton({ id: 'challengeBtn', visible: false });
+        renderGameButton({ id: 'bombBtn', visible: false });
+        return;
+      }
+
+      let minLeft = Infinity;
+      let minTop = Infinity;
+      let maxRight = 0;
+      children.forEach(function(child) {
+        const l = parseInt(child.style.left, 10) || 0;
+        const t = parseInt(child.style.top, 10) || 0;
+        const w = (parseInt(child.style.width, 10) || child.offsetWidth || 0);
+        if (l < minLeft) minLeft = l;
+        if (t < minTop) minTop = t;
+        if (l + w > maxRight) maxRight = l + w;
+      });
+
+      const stashLeft = minLeft;
+      const stashTop = minTop;
+      const stashWidth = maxRight - minLeft;
+      const maxBtnW = Math.floor(stashWidth * 0.4);
+      const btnW = Math.min(160, maxBtnW);
+      const btnH = Math.floor(btnW * 0.6);
+      const fontSize = Math.max(12, Math.floor(btnH * (20 / 96)));
+
+      // Bomb button (upper left)
+      renderGameButton({
+        id: 'bombBtn',
+        root: playAreaRoot,
+        boardLeft: stashLeft + btnW / 2,
+        boardTop: stashTop + btnH / 2,
+        boardWidth: 0,
+        boardHeight: 0,
+        text: 'Bomb!',
+        background: '#7f1d1d',
+        visible: true,
+        onClick: () => alert('Bomb!'),
+        width: btnW,
+        height: btnH,
+        fontSize
+      });
+
+      // Challenge button (upper right)
+      renderGameButton({
+        id: 'challengeBtn',
+        root: playAreaRoot,
+        boardLeft: stashLeft + stashWidth - btnW / 2,
+        boardTop: stashTop + btnH / 2,
+        boardWidth: 0,
+        boardHeight: 0,
+        text: 'Challenge',
+        background: '#7b3aec',
+        visible: true,
+        onClick: () => alert('Challenge'),
+        width: btnW,
+        height: btnH,
+        fontSize
+      });
+    })();
+
     // After board render, apply any pending move overlay bubbles
     if (!isInSetup && postMoveOverlay && refs.boardCells) {
       const cellRef = refs.boardCells?.[postMoveOverlay.uiR]?.[postMoveOverlay.uiC];
