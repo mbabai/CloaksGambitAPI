@@ -643,7 +643,12 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         if (lastAction.type === ACTIONS.MOVE) {
           if (lastMove && lastMove.state === MOVE_STATES.PENDING && lastMove.player !== myColor) {
             canChallenge = true;
-            if (pendingCapture && pendingCapture.piece && pendingCapture.piece.color === myColor) {
+            if (
+              pendingCapture &&
+              pendingCapture.piece &&
+              pendingCapture.piece.color === myColor &&
+              lastMove.declaration !== Declaration.KING
+            ) {
               canBomb = true;
             }
           }
