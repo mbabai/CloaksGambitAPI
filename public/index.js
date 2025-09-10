@@ -629,7 +629,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const maxBtnW = Math.floor(stashWidth * 0.4);
       const btnW = Math.min(160, maxBtnW);
       const btnH = Math.floor(btnW * 0.6);
-      const fontSize = Math.max(12, Math.floor(btnH * (20 / 96)));
+      const fontSize = Math.max(18, Math.floor(btnH * (24 / 96)));
 
       // Bomb button (upper left)
       renderGameButton({
