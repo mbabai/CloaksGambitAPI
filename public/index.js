@@ -1115,6 +1115,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         rookSpeechLeft: 'BubbleSpeechLeftRook.svg',
         bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
         kingSpeechLeft: 'BubbleSpeechLeftKing.svg',
+        bombSpeechLeft: 'BubbleSpeechLeftBomb.svg',
         kingThoughtRight: 'BubbleThoughtRightKing.svg',
         bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
         rookThoughtLeft: 'BubbleThoughtLeftRook.svg',
@@ -1162,6 +1163,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       knightSpeechLeft: 'BubbleSpeechLeftKnight.svg',
       rookSpeechLeft: 'BubbleSpeechLeftRook.svg',
       bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
+      bombSpeechLeft: 'BubbleSpeechLeftBomb.svg',
       kingThoughtRight: 'BubbleThoughtRightKing.svg',
       bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
       rookThoughtLeft: 'BubbleThoughtLeftRook.svg',
@@ -1266,6 +1268,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function setStateFromServer(u) {
     try {
+      const prevPending = pendingCapture;
       // Avoid overwriting optimistic in-game moves while a drag or selection is active
       if (!dragging) {
         if (Array.isArray(u.board)) currentBoard = u.board; else if (u.board === null) currentBoard = null;
@@ -1299,13 +1302,23 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
               currentBoard[to.row][to.col] = moving || target;
               currentBoard[from.row][from.col] = null;
               pendingCapture = target ? { row: to.row, col: to.col, piece: target } : null;
+              if (lastAction && lastAction.type === ACTIONS.BOMB && prevPending && prevPending.row === to.row && prevPending.col === to.col) {
+                const movingPiece = pendingCapture ? pendingCapture.piece : null;
+                const capturedPiece = prevPending.piece;
+                currentBoard[to.row][to.col] = capturedPiece;
+                pendingCapture = { row: to.row, col: to.col, piece: movingPiece };
+              }
             }
           } catch (_) { pendingCapture = null; }
           try {
             const originUI = serverToUICoords(from.row, from.col);
             const destUI = serverToUICoords(to.row, to.col);
-            const types = bubbleTypesForMove(originUI, destUI, last.declaration);
-            postMoveOverlay = { uiR: destUI.uiR, uiC: destUI.uiC, types };
+            if (lastAction && lastAction.type === ACTIONS.BOMB) {
+              postMoveOverlay = { uiR: destUI.uiR, uiC: destUI.uiC, types: ['bombSpeechLeft'] };
+            } else {
+              const types = bubbleTypesForMove(originUI, destUI, last.declaration);
+              postMoveOverlay = { uiR: destUI.uiR, uiC: destUI.uiC, types };
+            }
           } catch (_) {}
         } else {
           postMoveOverlay = null;
