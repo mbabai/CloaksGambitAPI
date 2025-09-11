@@ -21,6 +21,7 @@ export function useGameClient() {
   const socketRef = useRef(null)
   const lastBannerGameIdRef = useRef(null)
   const [bothReady, setBothReady] = useState(false)
+  const colorRef = useRef(0)
 
   const API_ORIGIN = getApiOrigin()
 
@@ -51,7 +52,12 @@ export function useGameClient() {
           if (Array.isArray(games) && games.length > 0) {
             const g = games[0]
             const existingId = g.gameId || g._id
-            const colorIdx = g.players?.findIndex?.(p => p === userId) ?? 0
+            let colorIdx = colorRef.current
+            if (Array.isArray(g.players)) {
+              const idx = g.players.findIndex(p => p === userId)
+              if (idx !== -1) colorIdx = idx
+            }
+            colorRef.current = colorIdx
             setActiveGame({ id: existingId, color: colorIdx })
             setPerspective(colorIdx === 0 ? 'white' : 'black')
             lastBannerGameIdRef.current = existingId
@@ -68,7 +74,12 @@ export function useGameClient() {
         })
         socket.on('game:update', (payload) => {
           if (payload && payload.board) {
-            const colorIdx = payload.players?.findIndex?.(p => p === userId) ?? 0
+            let colorIdx = colorRef.current
+            if (Array.isArray(payload.players)) {
+              const idx = payload.players.findIndex(p => p === userId)
+              if (idx !== -1) colorIdx = idx
+            }
+            colorRef.current = colorIdx
             const nextGameId = payload.gameId
             const isNewGame = lastBannerGameIdRef.current !== nextGameId
             setActiveGame({ id: nextGameId, color: colorIdx })

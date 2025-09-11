@@ -1304,15 +1304,15 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
               currentBoard = currentBoard.map(row => row.slice());
               currentBoard[to.row] = currentBoard[to.row].slice();
               currentBoard[from.row] = currentBoard[from.row].slice();
-              currentBoard[to.row][to.col] = moving || target;
-              currentBoard[from.row][from.col] = null;
-              pendingCapture = target ? { row: to.row, col: to.col, piece: target } : null;
-              if (lastAction && lastAction.type === ACTIONS.BOMB && prevPending && prevPending.row === to.row && prevPending.col === to.col) {
-                const movingPiece = pendingCapture ? pendingCapture.piece : null;
-                const capturedPiece = prevPending.piece;
-                currentBoard[to.row][to.col] = capturedPiece;
-                pendingCapture = { row: to.row, col: to.col, piece: movingPiece };
+              if (lastAction && lastAction.type === ACTIONS.BOMB) {
+                const attackerPiece = moving || { color: last.player, identity: last.declaration };
+                currentBoard[to.row][to.col] = target || moving;
+                pendingCapture = attackerPiece ? { row: to.row, col: to.col, piece: attackerPiece } : null;
+              } else {
+                currentBoard[to.row][to.col] = moving || target;
+                pendingCapture = target ? { row: to.row, col: to.col, piece: target } : null;
               }
+              currentBoard[from.row][from.col] = null;
             }
           } catch (_) { pendingCapture = null; }
           try {
