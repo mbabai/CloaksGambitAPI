@@ -980,7 +980,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const verticalNudge = Math.max(2, Math.floor(0.04 * s));
     const yTop = yStart - verticalNudge;
 
-    // Make stash slots the same size as board squares so pieces (80% of slot) match board piece size
+    // Make stash slots the same size as board squares so pieces (90% of slot) match board piece size
     const slot = s;
     // Slight horizontal overlap (5%) to tighten spacing
     const overlapRatio = 0.05;
@@ -1101,7 +1101,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     } catch (_) {
       // Fallback to inline image if module import failed
       if (!piece) return null;
-      const size = Math.floor(target * 0.8);
+      const size = Math.floor(target * 0.9);
       const src = PIECE_IMAGES?.[piece.identity]?.[piece.color];
       if (!src) return null;
       const img = document.createElement('img');

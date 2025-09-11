@@ -94,11 +94,11 @@ export function renderBars({
     strip.style.gap = '0px';
     const pieces = (currentCaptured?.[colorIdx] || []);
     pieces.forEach((piece, idx) => {
-      const cap = Math.floor(0.7 * s);
+      const cap = Math.floor(0.6 * s);
       const img = makePieceGlyph(piece, cap, identityMap);
       if (img) {
         const wrap = document.createElement('div');
-        const overlap = Math.floor(0.2 * cap);
+        const overlap = Math.floor(0.1 * cap);
         wrap.style.width = cap + 'px';
         wrap.style.height = cap + 'px';
         wrap.style.display = 'flex';

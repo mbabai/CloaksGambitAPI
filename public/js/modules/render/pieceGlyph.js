@@ -1,6 +1,6 @@
 export function pieceGlyph(piece, targetSize, identityMap) {
   if (!piece) return null;
-  const size = Math.floor(targetSize * 0.8);
+  const size = Math.floor(targetSize * 0.9);
   const src = identityMap?.[piece.identity]?.[piece.color];
   if (!src) return null;
   const img = document.createElement('img');
