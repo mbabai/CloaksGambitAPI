@@ -114,6 +114,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let isQueuedServer = false;
   let pendingAction = null; // 'join' | 'leave' | null
 
+  function isBombActive() {
+    return lastAction && lastAction.type === ACTIONS.BOMB;
+  }
+
   function updateFindButton() {
     const showSearching = pendingAction === 'join' || isQueuedServer;
     console.log('[UI] updateFindButton', { showSearching, pendingAction, isQueuedServer });
@@ -1507,6 +1511,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (Date.now() < suppressMouseUntil) return;
       if (isInSetup) return; // not in setup
       if (currentOnDeckingPlayer !== null) return; // disable board moves during on-deck phase
+      if (isBombActive()) return; // lock movement during bomb
       const myColorIdx = currentIsWhite ? 0 : 1;
       const piece = getBoardPieceAtUI(uiR, uiC);
       // If user clicked a bubble overlay inside this cell, let it handle the click
@@ -1540,6 +1545,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     cell.addEventListener('touchstart', (e) => {
       if (isInSetup) return;
       if (currentOnDeckingPlayer !== null) return; // disable during on-deck phase
+      if (isBombActive()) return; // lock movement during bomb
       const myColorIdx = currentIsWhite ? 0 : 1;
       const piece = getBoardPieceAtUI(uiR, uiC);
       // Allow bubble overlay touches to pass through for tap/click handling
@@ -1585,6 +1591,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function handleGameClick(sourceTarget) {
+    if (isBombActive()) { selected = null; renderBoardAndBars(); return; }
     // Select/deselect and wait for second click to choose destination
     if (!selected) {
       const p = getBoardPieceAtUI(sourceTarget.uiR, sourceTarget.uiC);
@@ -1608,6 +1615,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function attemptInGameMove(origin, dest) {
     try {
+      if (isBombActive()) return false;
       if (!currentBoard) return false;
       if (currentOnDeckingPlayer !== null) return false;
       const myColorIdx = currentIsWhite ? 0 : 1;
@@ -1775,6 +1783,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   // Commit from a post-move overlay click when we preserved origin/dest for choice UI
   async function commitMoveFromOverlay(declaration, ctx) {
     try {
+      if (isBombActive()) return;
       if (!ctx || !ctx.originUI || !ctx.destUI) return;
       const fromS = uiToServerCoords(ctx.originUI.uiR, ctx.originUI.uiC, currentRows, currentCols, currentIsWhite);
       const toS = uiToServerCoords(ctx.destUI.uiR, ctx.destUI.uiC, currentRows, currentCols, currentIsWhite);
