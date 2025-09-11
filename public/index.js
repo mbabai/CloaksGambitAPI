@@ -78,6 +78,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let pendingCapture = null; // { row, col, piece }
   let lastAction = null; // last action from server
   let lastMove = null;   // last move from server
+  let pendingMoveFrom = null; // server coords of last move origin when pending
   const BUBBLE_PRELOAD = {}; // type -> HTMLImageElement
   const PIECE_PRELOAD = {}; // identity -> { color -> HTMLImageElement }
   let dragPreviewImgs = []; // active floating preview images
@@ -558,7 +559,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         selected,
         isInSetup,
         workingRank,
-        pendingCapture
+        pendingCapture,
+        pendingMoveFrom
       },
       refs,
       identityMap: PIECE_IMAGES,
@@ -1297,6 +1299,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         if (last && last.state === MOVE_STATES.PENDING) {
           const from = last.from || {};
           const to = last.to || {};
+          pendingMoveFrom = from;
           try {
             const moving = currentBoard?.[from.row]?.[from.col] || null;
             const target = currentBoard?.[to.row]?.[to.col] || null;
@@ -1328,6 +1331,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         } else {
           postMoveOverlay = null;
           pendingCapture = null;
+          pendingMoveFrom = null;
         }
       }
     } catch (_) {}
