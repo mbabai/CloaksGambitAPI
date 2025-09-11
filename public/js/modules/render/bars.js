@@ -94,7 +94,7 @@ export function renderBars({
     strip.style.gap = '4px';
     const pieces = (currentCaptured?.[colorIdx] || []);
     pieces.forEach(piece => {
-      const cap = Math.floor(0.365 * s);
+      const cap = Math.floor(0.7 * s);
       const img = makePieceGlyph(piece, cap, identityMap);
       if (img) {
         const wrap = document.createElement('div');
