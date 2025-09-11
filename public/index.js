@@ -79,6 +79,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let lastAction = null; // last action from server
   let lastMove = null;   // last move from server
   const BUBBLE_PRELOAD = {}; // type -> HTMLImageElement
+  const PIECE_PRELOAD = {}; // identity -> { color -> HTMLImageElement }
   let dragPreviewImgs = []; // active floating preview images
   let lastChoiceOrigin = null; // remember origin for two-option choice
 
@@ -338,6 +339,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     try {
       userId = await ensureUserId();
       console.log('[init] userId', userId);
+      preloadPieceImages();
       preloadBubbleImages();
       socket = io('/', { auth: { userId } });
       wireSocket();
@@ -1140,6 +1142,19 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       img.src = (BUBBLE_PRELOAD[type] && BUBBLE_PRELOAD[type].src) || ('/assets/images/UI/' + srcName);
       return img;
     } catch (_) { return null; }
+  }
+
+  function preloadPieceImages() {
+    Object.keys(PIECE_IMAGES || {}).forEach(function(id){
+      PIECE_PRELOAD[id] = {};
+      Object.keys(PIECE_IMAGES[id] || {}).forEach(function(color){
+        const src = PIECE_IMAGES[id][color];
+        const img = new Image();
+        img.draggable = false; img.decoding = 'async';
+        img.src = src;
+        PIECE_PRELOAD[id][color] = img;
+      });
+    });
   }
 
   function preloadBubbleImages() {

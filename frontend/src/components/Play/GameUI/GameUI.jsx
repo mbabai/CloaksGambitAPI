@@ -26,7 +26,7 @@ const MOVE_STATES = {
   PENDING: 0
 }
 
-// Map piece identity and color to image paths located in public/assets/images/Pieces
+// Map piece identity and color to image paths served from /assets/images/Pieces
 const PIECE_IMAGES = {
   0: {
     0: '/assets/images/Pieces/PawnWhiteUnknown.svg',
