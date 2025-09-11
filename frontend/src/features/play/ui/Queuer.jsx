@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react'
+import Button from '../../../shared/ui/Button.jsx'
 
 export default function Queuer({ sizes, positions, mode, isSearching, onToggleSearch, onChangeMode }) {
-
   const wrapperStyle = useMemo(() => ({
     position: 'absolute',
     left: `${positions.queuer.left}px`,
@@ -21,10 +21,7 @@ export default function Queuer({ sizes, positions, mode, isSearching, onToggleSe
     borderRadius: '18px',
     background: isSearching ? '#7c3aed' : '#5b21b6',
     color: '#ffffff',
-    fontWeight: 'bold',
     fontSize: 'calc(var(--font-size-action-button) * 1.5)',
-    cursor: 'pointer',
-    transition: 'background 0.2s ease',
     boxShadow: '0 2px 0 rgba(255,255,255,0.4) inset, 0 6px 16px rgba(0,0,0,0.25)'
   }), [sizes, isSearching])
 
@@ -71,9 +68,9 @@ export default function Queuer({ sizes, positions, mode, isSearching, onToggleSe
 
   return (
     <div style={wrapperStyle}>
-      <button style={baseButtonStyle} onClick={handleToggleSearch}>
+      <Button style={baseButtonStyle} onClick={handleToggleSearch}>
         {isSearching ? 'Searching...' : 'Find Game'}
-      </button>
+      </Button>
       <div style={selectWrapperStyle}>
         <select style={selectStyle} value={mode} onChange={handleChange} disabled={isSearching}>
           <option value="quickplay">Quickplay</option>
@@ -86,5 +83,3 @@ export default function Queuer({ sizes, positions, mode, isSearching, onToggleSe
     </div>
   )
 }
-
-

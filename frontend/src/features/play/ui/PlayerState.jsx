@@ -1,13 +1,12 @@
 import React, { useMemo } from 'react'
 import Piece from './Piece.jsx'
+import Token from '../../../shared/ui/Token.jsx'
 
 // New PlayerState bar positioned relative to the board (top or bottom)
 export default function PlayerState({ position, playerName, playerColor, sizes, positions, identityToImg, daggerCount = 0, capturedPieces = [] }) {
   const isTop = position === 'top'
-  const isSelf = position === 'bottom'
   const name = playerName || (playerColor === 0 ? 'White' : 'Black')
 
-  // Container spans board width and sits above or below the board
   const nameBarHeight = sizes.squareSize * 0.7
   const rowHeight = sizes.squareSize * 0.7
   const containerHeight = nameBarHeight + rowHeight + 6
@@ -32,7 +31,6 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
     color: '#fff'
   }
 
-  // Second row layout: captures | daggers + clock (bottom), inverted for top
   const rowStyle = {
     height: `${rowHeight}px`,
     display: 'flex',
@@ -61,32 +59,10 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
     gap: '8px'
   }
 
-  const daggerToken = (i) => {
-    const tokenSize = rowHeight
-    return (
-      <div
-        key={i}
-        style={{
-          width: `${tokenSize}px`,
-          height: `${tokenSize}px`,
-          background: '#dc2626',
-          border: '2px solid #ffffff',
-          borderRadius: '50%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#fff',
-          fontSize: 'var(--font-size-dagger-token)',
-          fontWeight: 'bold',
-          flexShrink: 0
-        }}
-      >
-        ⚔
-      </div>
-    )
-  }
+  const daggerToken = (i) => (
+    <Token key={i} style={{ width: `${rowHeight}px`, height: `${rowHeight}px` }}>⚔</Token>
+  )
 
-  // Render provided capturedPieces as images
   const capturedToShow = useMemo(() => Array.isArray(capturedPieces) ? capturedPieces : [], [capturedPieces])
 
   const capturedStrip = (
@@ -157,4 +133,3 @@ export default function PlayerState({ position, playerName, playerColor, sizes, 
     </div>
   )
 }
-
