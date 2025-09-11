@@ -1,0 +1,12 @@
+:root {
+  --font-size-player-name: 24px;
+  --font-size-player-clock: 30px;
+  --font-size-dagger-token: 14px;
+  --font-size-captured-piece: 18px;
+  --font-size-board-square: 12px;
+  --font-size-board-piece: 14px;
+  --font-size-stash-slot: 12px;
+  --font-size-stash-piece: 12px;
+  --font-size-action-button: 16px;
+  --font-size-notation: 12px;
+}

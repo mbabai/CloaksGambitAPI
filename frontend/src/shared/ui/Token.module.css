@@ -1,0 +1,12 @@
+.token {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #dc2626;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  color: #fff;
+  font-size: var(--font-size-dagger-token);
+  font-weight: bold;
+  flex-shrink: 0;
+}

@@ -1,0 +1,30 @@
+.button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--font-size-action-button) * 1.5);
+  font-weight: bold;
+  color: #ffffff;
+  background: #4815be;
+  border: 2px solid #fbbf24;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.button:hover {
+  background: #7c3aed;
+  border-color: #f59e0b;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+.button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.button.bomb {
+  background: #850202;
+}
+.button.bomb:hover {
+  background: #b91c1c;
+  border-color: #f59e0b;
+}
