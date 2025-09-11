@@ -91,18 +91,22 @@ export function renderBars({
     const strip = document.createElement('div');
     strip.style.display = 'flex';
     strip.style.alignItems = 'center';
-    strip.style.gap = '4px';
+    strip.style.gap = '0px';
     const pieces = (currentCaptured?.[colorIdx] || []);
-    pieces.forEach(piece => {
+    pieces.forEach((piece, idx) => {
       const cap = Math.floor(0.7 * s);
       const img = makePieceGlyph(piece, cap, identityMap);
       if (img) {
         const wrap = document.createElement('div');
+        const overlap = Math.floor(0.1 * cap);
         wrap.style.width = cap + 'px';
         wrap.style.height = cap + 'px';
         wrap.style.display = 'flex';
         wrap.style.alignItems = 'center';
         wrap.style.justifyContent = 'center';
+        if (idx > 0) {
+          wrap.style.marginLeft = (-overlap) + 'px';
+        }
         wrap.appendChild(img);
         strip.appendChild(wrap);
       }
