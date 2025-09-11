@@ -139,6 +139,10 @@ router.post('/', async (req, res) => {
         game.board[from.row][from.col] = null;
         lastMove.state = config.moveStates.get('RESOLVED');
         wasSuccessful = true; // Challenger proved a lie
+
+        // Clear any existing on-deck requirement since the challenge
+        // succeeded and play should pass normally to the challenger.
+        game.onDeckingPlayer = null;
       } else {
         lastMove.state = config.moveStates.get('COMPLETED');
         game.daggers[normalizedColor] += 1;
@@ -228,6 +232,11 @@ router.post('/', async (req, res) => {
         game.board[from.row][from.col] = null;
         lastMove.state = config.moveStates.get('RESOLVED');
         wasSuccessful = true;
+
+        // A successful bomb challenge means no player needs to go on-deck.
+        // Explicitly clear any leftover on-deck state to ensure the
+        // challenger can move next.
+        game.onDeckingPlayer = null;
       } else {
         game.stashes[pieceTo.color].push(pieceTo);
         const deckPiece = game.onDecks[pieceTo.color];
@@ -285,9 +294,6 @@ router.post('/', async (req, res) => {
       challengeColor: normalizedColor
     });
 
-    // Save the game state after all board changes
-    await game.save();
-
     await game.addAction(
       config.actions.get('CHALLENGE'),
       normalizedColor,
@@ -296,6 +302,8 @@ router.post('/', async (req, res) => {
       }
     );
     game.movesSinceAction = 0;
+    // Persist challenge resolution and updated action log
+    await game.save();
 
     if (trueKing && game.isActive) {
       await game.endGame(lastMove.player, config.winReasons.get('TRUE_KING'));
