@@ -35,7 +35,11 @@ export function renderBoard({
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const light = ((r + c) % 2 === 1);
+      // Board colors should flip based on the current player's color. Without
+      // this adjustment both players would see a light square in the bottom
+      // left. By swapping the parity when viewing as black we ensure the
+      // checkered pattern is oriented correctly for each player.
+      const light = currentIsWhite ? ((r + c) % 2 === 1) : ((r + c) % 2 === 0);
       const cell = document.createElement('div');
       cell.style.width = squareSize + 'px';
       cell.style.height = squareSize + 'px';
