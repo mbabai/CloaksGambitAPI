@@ -1399,7 +1399,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         originPiece = currentOnDecks?.[myColorIdx] || null;
       }
       if (DRAG_DEBUG) console.log('[drag] mousedown', { suppressMouseUntil, now: Date.now(), originHasPiece: !!originPiece, target });
-      if (!originPiece && !(isOnDeckTurn && target.type === 'deck')) return;
+      // Allow clicks on empty targets when a piece is already selected
+      if (!originPiece && !selected && !(isOnDeckTurn && target.type === 'deck')) return;
       e.preventDefault();
       e.stopPropagation();
       const startX = e.clientX;
@@ -1409,7 +1410,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         if (dragStarted) return;
         const dx = Math.abs(ev.clientX - startX);
         const dy = Math.abs(ev.clientY - startY);
-        if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece && target.type === 'stash') {
+        if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece) {
           dragStarted = true;
           if (DRAG_DEBUG) console.log('[drag] start mouse', { target, x: ev.clientX, y: ev.clientY });
           startDrag(ev, target, originPiece);
@@ -1447,7 +1448,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       } else if (isOnDeckTurn && target.type === 'deck') {
         originPiece = currentOnDecks?.[myColorIdx] || null;
       }
-      if (!originPiece && !(isOnDeckTurn && target.type === 'deck')) return;
+      if (!originPiece && !selected && !(isOnDeckTurn && target.type === 'deck')) return;
       try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
       suppressMouseUntil = Date.now() + 500;
       const t = e.touches[0];
@@ -1458,7 +1459,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         const tt = ev.touches[0];
         const dx = Math.abs(tt.clientX - startX);
         const dy = Math.abs(tt.clientY - startY);
-        if ((dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) && originPiece && target.type === 'stash') {
+        if ((dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) && originPiece) {
           dragStarted = true;
           document.removeEventListener('touchmove', move);
           if (DRAG_DEBUG) console.log('[drag] start touch', { target, x: tt.clientX, y: tt.clientY });
