@@ -1145,6 +1145,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     } catch (_) { return null; }
   }
 
+  
   function preloadPieceImages() {
     Object.keys(PIECE_IMAGES || {}).forEach(function(id){
       PIECE_PRELOAD[id] = {};
