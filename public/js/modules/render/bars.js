@@ -98,7 +98,7 @@ export function renderBars({
       const img = makePieceGlyph(piece, cap, identityMap);
       if (img) {
         const wrap = document.createElement('div');
-        const overlap = Math.floor(0.1 * cap);
+        const overlap = Math.floor(0.2 * cap);
         wrap.style.width = cap + 'px';
         wrap.style.height = cap + 'px';
         wrap.style.display = 'flex';
