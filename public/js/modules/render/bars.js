@@ -13,7 +13,9 @@ export function renderBars({
     currentCaptured,
     currentDaggers,
     showChallengeTop = false,
-    showChallengeBottom = false
+    showChallengeBottom = false,
+    clockTop = '5:00',
+    clockBottom = '5:00'
   } = state;
 
   if (!topBar || !bottomBar) return;
@@ -74,7 +76,7 @@ export function renderBars({
     return row;
   }
 
-  function makeClock(colorIsWhite) {
+  function makeClock(colorIsWhite, text) {
     const box = document.createElement('div');
     box.style.width = Math.floor(2.9 * rowH) + 'px';
     box.style.height = rowH + 'px';
@@ -88,7 +90,7 @@ export function renderBars({
     box.style.color = colorIsWhite ? '#000' : '#fff';
     box.style.border = '2px solid #DAA520';
     box.style.borderRadius = '0px';
-    box.textContent = '5:00';
+    box.textContent = text;
     return box;
   }
 
@@ -175,7 +177,6 @@ export function renderBars({
     row.style.display = 'flex';
     row.style.alignItems = 'center';
     row.style.justifyContent = 'space-between';
-
     if (isTopBar) {
       const topColor = currentIsWhite ? 1 : 0;
       row.appendChild(makeCapturedForColor(topColor));
@@ -184,17 +185,20 @@ export function renderBars({
       right.style.alignItems = 'center';
       right.style.gap = '6px';
       right.appendChild(makeDaggers(currentDaggers?.[topColor] || 0));
-      right.appendChild(makeClock(topColor === 0));
+      const clock = makeClock(topColor === 0, clockTop);
+      right.appendChild(clock);
       row.appendChild(right);
       barEl.appendChild(nameRow);
       barEl.appendChild(row);
+      topClockEl = clock;
     } else {
       const bottomColor = currentIsWhite ? 0 : 1;
       const left = document.createElement('div');
       left.style.display = 'flex';
       left.style.alignItems = 'center';
       left.style.gap = '6px';
-      left.appendChild(makeClock(bottomColor === 0));
+      const clock = makeClock(bottomColor === 0, clockBottom);
+      left.appendChild(clock);
       left.appendChild(makeDaggers(currentDaggers?.[bottomColor] || 0));
       row.appendChild(left);
       row.appendChild(makeCapturedForColor(bottomColor));
@@ -203,11 +207,17 @@ export function renderBars({
       nameRow.style.marginTop = (-spacer) + 'px';
       barEl.appendChild(row);
       barEl.appendChild(nameRow);
+      bottomClockEl = clock;
     }
   }
 
+  let topClockEl = null;
+  let bottomClockEl = null;
+
   fillBar(topBar, true);
   fillBar(bottomBar, false);
+
+  return { topClockEl, bottomClockEl };
 }
 
 

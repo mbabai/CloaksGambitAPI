@@ -22,7 +22,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   // Cookie helpers moved to modules/utils/cookies.js
 
-  const ACTIONS = { MOVE: 1, CHALLENGE: 2, BOMB: 3, PASS: 4 };
+  const ACTIONS = { SETUP: 0, MOVE: 1, CHALLENGE: 2, BOMB: 3, PASS: 4 };
 
   // Ensure a valid Mongo user exists and get its _id
   async function ensureUserId() {
@@ -85,6 +85,19 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let dragPreviewImgs = []; // active floating preview images
   let lastChoiceOrigin = null; // remember origin for two-option choice
 
+  // Clock state
+  let timeControl = 0;
+  let increment = 0;
+  let gameStartTime = null; // ms timestamp
+  let actionHistory = [];
+  let whiteTimeMs = 0;
+  let blackTimeMs = 0;
+  let activeColor = null; // 0 white, 1 black
+  let lastClockUpdate = 0;
+  let clockInterval = null;
+  let topClockEl = null;
+  let bottomClockEl = null;
+
   // Pointer interaction thresholds
   const DRAG_PX_THRESHOLD = DRAG_PX_THRESHOLD_CFG; // from config import (kept names for legacy usage)
   const CLICK_TIME_MAX_MS = CLICK_TIME_MAX_MS_CFG;  // from config import
@@ -118,6 +131,138 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function isBombActive() {
     return lastAction && lastAction.type === ACTIONS.BOMB;
+  }
+
+  // Clock helpers
+  function formatClock(ms) {
+    ms = Math.max(0, ms);
+    if (ms >= 60000) {
+      const m = Math.floor(ms / 60000);
+      const s = Math.floor((ms % 60000) / 1000);
+      return m + ':' + String(s).padStart(2, '0');
+    } else {
+      const s = Math.floor(ms / 1000);
+      const h = Math.floor((ms % 1000) / 10);
+      return s + ':' + String(h).padStart(2, '0');
+    }
+  }
+
+  function updateClockDisplay() {
+    const topColor = currentIsWhite ? 1 : 0;
+    const bottomColor = currentIsWhite ? 0 : 1;
+    if (topClockEl) {
+      const ms = topColor === 0 ? whiteTimeMs : blackTimeMs;
+      topClockEl.textContent = formatClock(ms);
+    }
+    if (bottomClockEl) {
+      const ms = bottomColor === 0 ? whiteTimeMs : blackTimeMs;
+      bottomClockEl.textContent = formatClock(ms);
+    }
+  }
+
+  function tickClock() {
+    const now = Date.now();
+    const diff = now - lastClockUpdate;
+    lastClockUpdate = now;
+    if (!setupComplete[0] || !setupComplete[1]) {
+      if (!setupComplete[0]) whiteTimeMs -= diff;
+      if (!setupComplete[1]) blackTimeMs -= diff;
+    } else if (activeColor === 0) {
+      whiteTimeMs -= diff;
+    } else if (activeColor === 1) {
+      blackTimeMs -= diff;
+    }
+    updateClockDisplay();
+  }
+
+  function startClockInterval() {
+    if (clockInterval) clearInterval(clockInterval);
+    lastClockUpdate = Date.now();
+    clockInterval = setInterval(tickClock, 100);
+  }
+
+  function stopClockInterval() {
+    if (clockInterval) clearInterval(clockInterval);
+    clockInterval = null;
+  }
+
+  function recomputeClocksFromServer() {
+    if (!timeControl) return;
+    if (!gameStartTime) {
+      whiteTimeMs = timeControl;
+      blackTimeMs = timeControl;
+      activeColor = null;
+      stopClockInterval();
+      updateClockDisplay();
+      return;
+    }
+
+    let white = timeControl;
+    let black = timeControl;
+    let lastTs = gameStartTime;
+    const actions = (actionHistory || []).filter(a => new Date(a.timestamp).getTime() >= gameStartTime);
+    const setupFlags = [false, false];
+    let turn = null;
+    for (const act of actions) {
+      const ts = new Date(act.timestamp).getTime();
+      const delta = ts - lastTs;
+      if (!setupFlags[0] || !setupFlags[1]) {
+        if (!setupFlags[0]) white -= delta;
+        if (!setupFlags[1]) black -= delta;
+      } else if (turn === 0) {
+        white -= delta;
+      } else if (turn === 1) {
+        black -= delta;
+      }
+      lastTs = ts;
+      if (act.type === ACTIONS.SETUP) {
+        setupFlags[act.player] = true;
+        if (setupFlags[0] && setupFlags[1]) {
+          turn = 0; // white to move after both setups
+        }
+      } else {
+        if (turn === null) turn = 0;
+        if (act.player === 0) {
+          white += increment;
+          turn = 1;
+        } else {
+          black += increment;
+          turn = 0;
+        }
+      }
+    }
+    const now = Date.now();
+    const delta = now - lastTs;
+    if (!setupFlags[0] || !setupFlags[1]) {
+      if (!setupFlags[0]) white -= delta;
+      if (!setupFlags[1]) black -= delta;
+    } else if (turn === 0) {
+      white -= delta;
+    } else if (turn === 1) {
+      black -= delta;
+    }
+    whiteTimeMs = white;
+    blackTimeMs = black;
+    activeColor = (setupFlags[0] && setupFlags[1]) ? turn : null;
+    updateClockDisplay();
+    startClockInterval();
+  }
+
+  function applyLocalMoveClock() {
+    if (activeColor === null) return;
+    const now = Date.now();
+    const diff = now - lastClockUpdate;
+    if (activeColor === 0) {
+      whiteTimeMs -= diff;
+      whiteTimeMs += increment;
+      activeColor = 1;
+    } else {
+      blackTimeMs -= diff;
+      blackTimeMs += increment;
+      activeColor = 0;
+    }
+    lastClockUpdate = now;
+    updateClockDisplay();
   }
 
   function updateFindButton() {
@@ -583,7 +728,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     }
 
     // Use modular bars and stash renderers
-    renderBarsModule({
+    const topClr = currentIsWhite ? 1 : 0;
+    const bottomClr = currentIsWhite ? 0 : 1;
+    const topMs = topClr === 0 ? whiteTimeMs : blackTimeMs;
+    const bottomMs = bottomClr === 0 ? whiteTimeMs : blackTimeMs;
+    const bars = renderBarsModule({
       topBar,
       bottomBar,
       sizes: {
@@ -599,10 +748,15 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         currentCaptured,
         currentDaggers,
         showChallengeTop,
-        showChallengeBottom
+        showChallengeBottom,
+        clockTop: formatClock(topMs),
+        clockBottom: formatClock(bottomMs)
       },
       identityMap: PIECE_IMAGES
     });
+    topClockEl = bars.topClockEl;
+    bottomClockEl = bars.bottomClockEl;
+    updateClockDisplay();
 
     renderStashModule({
       container: stashRoot,
@@ -694,7 +848,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         text: 'Bomb!',
         background: '#7f1d1d',
         visible: canBomb,
-        onClick: () => { if (lastGameId) apiBomb(lastGameId, myColor).catch(err => console.error('Bomb failed', err)); },
+        onClick: () => {
+          if (!lastGameId) return;
+          applyLocalMoveClock();
+          apiBomb(lastGameId, myColor).catch(err => console.error('Bomb failed', err));
+        },
         width: btnW,
         height: btnH,
         fontSize
@@ -711,7 +869,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         text: 'Pass',
         background: '#7b3aec',
         visible: canPass,
-        onClick: () => { if (lastGameId) apiPass(lastGameId, myColor).catch(err => console.error('Pass failed', err)); },
+        onClick: () => {
+          if (!lastGameId) return;
+          applyLocalMoveClock();
+          apiPass(lastGameId, myColor).catch(err => console.error('Pass failed', err));
+        },
         width: btnW,
         height: btnH,
         fontSize
@@ -728,7 +890,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         text: 'Challenge',
         background: '#7b3aec',
         visible: canChallenge,
-        onClick: () => { if (lastGameId) apiChallenge(lastGameId, myColor).catch(err => console.error('Challenge failed', err)); },
+        onClick: () => {
+          if (!lastGameId) return;
+          applyLocalMoveClock();
+          apiChallenge(lastGameId, myColor).catch(err => console.error('Challenge failed', err));
+        },
         width: btnW,
         height: btnH,
         fontSize
@@ -782,6 +948,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           console.log('[client] setup response', res.status, json);
           if (!res.ok) return alert(json?.message || 'Setup failed');
           // Lock interactions; server will broadcast update
+          setupComplete[myColor] = true;
           isInSetup = false;
           selected = null; dragging = null;
           renderBoardAndBars();
@@ -1322,7 +1489,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         currentOnDeckingPlayer = u.onDeckingPlayer;
         if (currentOnDeckingPlayer !== null) selected = null;
       }
+      if (u.timeControlStart !== undefined) timeControl = u.timeControlStart;
+      if (u.increment !== undefined) increment = u.increment;
+      if (u.startTime) gameStartTime = new Date(u.startTime).getTime();
       if (Array.isArray(u.actions)) {
+        actionHistory = u.actions;
         lastAction = u.actions[u.actions.length - 1] || null;
       }
       if (Array.isArray(u.moves)) {
@@ -1384,6 +1555,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         }
       }
     } catch (_) {}
+    recomputeClocksFromServer();
   }
 
   // ---- Setup helpers ----
@@ -1715,6 +1887,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         try {
           console.log('[move] commit', { from, to, declaration: decl });
           const color = myColorIdx;
+          applyLocalMoveClock();
           await apiMove({ gameId: lastGameId, color, from, to, declaration: decl });
         } catch (e) { console.error('apiMove failed', e); }
         renderBoardAndBars();
@@ -1848,6 +2021,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration, { alwaysShow: true });
       try {
         console.log('[move] commit', { from, to, declaration });
+        applyLocalMoveClock();
         await apiMove({ gameId: lastGameId, color: myColorIdx, from, to, declaration });
       } catch (e) { console.error('apiMove failed', e); }
       renderBoardAndBars();
