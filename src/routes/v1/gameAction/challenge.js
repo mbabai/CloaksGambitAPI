@@ -309,8 +309,12 @@ router.post('/', async (req, res) => {
       await game.endGame(lastMove.player, config.winReasons.get('TRUE_KING'));
       // Check if game ended and return early
       if (!game.isActive) {
-        return res.json({ 
-          success: wasSuccessful, 
+        eventBus.emit('gameChanged', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: (game.players || []).map(p => p.toString()),
+        });
+        return res.json({
+          success: wasSuccessful,
           message: 'Game ended: True king victory',
           capturedPiece,
           captureBy,
@@ -327,8 +331,12 @@ router.post('/', async (req, res) => {
       await game.endGame(captureBy, config.winReasons.get('CAPTURED_KING'));
       // Check if game ended and return early
       if (!game.isActive) {
-        return res.json({ 
-          success: wasSuccessful, 
+        eventBus.emit('gameChanged', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: (game.players || []).map(p => p.toString()),
+        });
+        return res.json({
+          success: wasSuccessful,
           message: 'Game ended: King captured',
           capturedPiece,
           captureBy,
@@ -342,8 +350,12 @@ router.post('/', async (req, res) => {
       await game.endGame(winner, config.winReasons.get('DAGGERS'));
       // Check if game ended and return early
       if (!game.isActive) {
-        return res.json({ 
-          success: wasSuccessful, 
+        eventBus.emit('gameChanged', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: (game.players || []).map(p => p.toString()),
+        });
+        return res.json({
+          success: wasSuccessful,
           message: 'Game ended: Dagger victory',
           capturedPiece,
           captureBy,

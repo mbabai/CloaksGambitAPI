@@ -57,6 +57,10 @@ router.post('/', async (req, res) => {
       await game.endGame(normalizedColor, config.winReasons.get('CAPTURED_KING'));
       // Check if game ended and return early
       if (!game.isActive) {
+        eventBus.emit('gameChanged', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: (game.players || []).map(p => p.toString()),
+        });
         return res.json({ message: 'Game ended: King captured' });
       }
     }

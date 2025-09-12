@@ -29,15 +29,15 @@ router.post('/', async (req, res) => {
     // Set winner as the other color
     const winner = normalizedColor === 0 ? 1 : 0;
     
-    // End the game with resign reason
-    await game.endGame(winner, config.winReasons.get('RESIGN'));
-    
-    // Add resign action to game history
-    await game.addAction(
+    // Record the resign action before ending the game
+    game.addAction(
       config.actions.get('RESIGN'),
       normalizedColor,
       {}
     );
+
+    // End the game with resign reason and persist changes
+    await game.endGame(winner, config.winReasons.get('RESIGN'));
 
     eventBus.emit('gameChanged', {
       game: typeof game.toObject === 'function' ? game.toObject() : game,

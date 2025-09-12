@@ -53,6 +53,7 @@ const socket = io("http://localhost:3000", {
 - `queue:update` – Notifies the client when their queue status changes.
 - `match:found` – Sent when matchmaking creates a new match for the player.
 - `game:update` – Provides real-time game state updates.
+- `game:finished` – Broadcasts the final unmasked state when a game ends.
 
 ### Reconnection
 

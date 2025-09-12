@@ -117,6 +117,42 @@ function initSocket(httpServer) {
         startTime: game.startTime,
       });
     });
+
+    // If the game has ended, send the full unmasked state to both players
+    if (!game.isActive) {
+      players.forEach((playerId) => {
+        const socket = clients.get(playerId);
+        if (!socket) return;
+        socket.emit('game:finished', {
+          matchId,
+          gameId: gameIdStr,
+          board: game.board,
+          actions: game.actions,
+          moves: game.moves,
+          captured: game.captured,
+          stashes: game.stashes,
+          onDecks: game.onDecks,
+          players: (game.players || []).map(p => p.toString()),
+          daggers: game.daggers,
+          playerTurn: game.playerTurn,
+          onDeckingPlayer: game.onDeckingPlayer,
+          setupComplete: game.setupComplete,
+          isActive: game.isActive,
+          winner: game.winner,
+          winReason: game.winReason,
+          playersReady: game.playersReady,
+          startTime: game.startTime,
+        });
+      });
+
+      // Log final game details for debugging/analytics
+      console.log('Game finished:', {
+        gameId: gameIdStr,
+        winner: game.winner,
+        winReason: game.winReason,
+        game,
+      });
+    }
   });
 
   // Relay explicit both-ready signal to affected users

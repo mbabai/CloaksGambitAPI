@@ -62,6 +62,10 @@ socket.on("match:found", (match) => {
 socket.on("game:update", (game) => {
   // game: { matchId, gameId, board, actions }
 });
+
+socket.on("game:finished", (summary) => {
+  // summary: { gameId, winner, winReason, ...full state }
+});
 ```
 
 Socket.IO automatically attempts to reconnect when the connection drops.

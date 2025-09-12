@@ -114,6 +114,10 @@ router.post('/', async (req, res) => {
           earlyResolved = true;
           const gameEnded = await resolveMove(game, prevMove, config);
           if (gameEnded) {
+            eventBus.emit('gameChanged', {
+              game: typeof game.toObject === 'function' ? game.toObject() : game,
+              affectedUsers: (game.players || []).map(p => p.toString()),
+            });
             return res.json({ message: 'Game ended during move resolution' });
           }
           // Save the game state after resolving the move
@@ -212,6 +216,10 @@ router.post('/', async (req, res) => {
       if (prevMove.state === config.moveStates.get('PENDING')) {
         const gameEnded = await resolveMove(game, prevMove, config);
         if (gameEnded) {
+          eventBus.emit('gameChanged', {
+            game: typeof game.toObject === 'function' ? game.toObject() : game,
+            affectedUsers: (game.players || []).map(p => p.toString()),
+          });
           return res.json({ message: 'Game ended during move resolution' });
         }
       }

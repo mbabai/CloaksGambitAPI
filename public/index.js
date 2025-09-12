@@ -349,7 +349,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       } catch (_) {}
       },
       onQueueUpdate(payload) {
-      
+
       if (!payload) return;
       isQueuedServer = Boolean(payload.quickplay);
       pendingAction = null;
@@ -405,6 +405,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       } catch (e) {
         console.error('Error handling game:update', e);
       }
+      },
+      onGameFinished(payload) {
+        console.log('[socket] game:finished', payload);
       },
       async onBothReady(payload) {
         try {
