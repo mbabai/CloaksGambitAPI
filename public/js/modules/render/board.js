@@ -45,8 +45,8 @@ export function renderBoard({
       cell.style.height = squareSize + 'px';
       cell.style.boxSizing = 'border-box';
       cell.style.position = 'relative';
-      cell.style.border = '1px solid #9ca3af';
-      cell.style.background = light ? '#f7f7f7' : '#6b7280';
+      cell.style.border = '1px solid #707070ff';
+      cell.style.background = light ? '#f7f7f7' : '#444444ff';
 
       const { serverRow, serverCol } = serverCoordsForCell(r, c, rows, cols, currentIsWhite);
       // Store server-oriented coordinates for payload building
