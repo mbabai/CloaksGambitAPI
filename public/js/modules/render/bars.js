@@ -30,16 +30,39 @@ export function renderBars({
   const clockFont = Math.max(12, Math.floor(0.026 * H));
   const iconFont = Math.max(12, Math.floor(0.024 * H));
 
-  function makeNameRow(text, alignRight) {
+  function makeNameRow(text, isTopBar) {
     const row = document.createElement('div');
     row.style.height = nameBarH + 'px';
     row.style.display = 'flex';
     row.style.alignItems = 'center';
-    row.style.justifyContent = alignRight ? 'flex-end' : 'flex-start';
-    row.style.color = '#fff';
-    row.style.fontSize = nameFont + 'px';
-    row.style.fontWeight = 'bold';
-    row.textContent = text;
+    row.style.justifyContent = isTopBar ? 'flex-end' : 'flex-start';
+    row.style.position = 'relative';
+    row.style.width = '100%';
+
+    const nameWrap = document.createElement('div');
+    nameWrap.style.display = 'inline-block';
+    nameWrap.style.color = '#fff';
+    nameWrap.style.fontSize = nameFont + 'px';
+    nameWrap.style.fontWeight = 'bold';
+    nameWrap.style.zIndex = '0';
+    nameWrap.textContent = text;
+
+    const bubbleSize = 3 * nameBarH;
+    const bubble = document.createElement('img');
+    bubble.src = isTopBar
+      ? '/assets/images/UI/BubbleSpeechTopChallenge.svg'
+      : '/assets/images/UI/BubbleSpeechBottomChallenge.svg';
+    bubble.style.position = 'absolute';
+    bubble.style.left = '50%';
+    bubble.style.top = '50%';
+    bubble.style.transform = `translate(-50%, -50%) translateY(${isTopBar ? '60%' : '-30%'})`;
+    bubble.style.width = bubbleSize + 'px';
+    bubble.style.height = bubbleSize + 'px';
+    bubble.style.zIndex = '1';
+    bubble.style.pointerEvents = 'none';
+
+    row.appendChild(nameWrap);
+    row.appendChild(bubble);
     return row;
   }
 
