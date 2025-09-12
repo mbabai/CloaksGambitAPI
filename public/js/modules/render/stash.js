@@ -59,8 +59,8 @@ export function renderStash({
     el.style.width = w + 'px';
     el.style.height = h + 'px';
     el.style.boxSizing = 'border-box';
-    el.style.border = isOnDeck ? '3px solid #DAA520' : '0px solid transparent';
-    el.style.background = isOnDeck ? '#3d2e88' : 'transparent';
+    el.style.border = isOnDeck ? '3px solid var(--CG-deep-gold)' : '0px solid transparent';
+    el.style.background = isOnDeck ? 'var(--CG-indigo)' : 'transparent';
     el.style.display = 'flex';
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';

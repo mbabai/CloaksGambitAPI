@@ -49,7 +49,7 @@ export function renderBars({
 
     const nameWrap = document.createElement('div');
     nameWrap.style.display = 'inline-block';
-    nameWrap.style.color = '#fff';
+    nameWrap.style.color = 'var(--CG-white)';
     nameWrap.style.fontSize = nameFont + 'px';
     nameWrap.style.fontWeight = 'bold';
     nameWrap.style.zIndex = '0';
@@ -87,9 +87,9 @@ export function renderBars({
     box.style.fontFamily = 'Courier New, monospace';
     box.style.fontWeight = 'bold';
     box.style.fontSize = clockFont + 'px';
-    box.style.background = colorIsWhite ? '#fff' : '#000';
-    box.style.color = colorIsWhite ? '#000' : '#fff';
-    box.style.border = '2px solid #DAA520';
+    box.style.background = colorIsWhite ? 'var(--CG-white)' : 'var(--CG-black)';
+    box.style.color = colorIsWhite ? 'var(--CG-black)' : 'var(--CG-white)';
+    box.style.border = '2px solid var(--CG-deep-gold)';
     box.style.borderRadius = '0px';
     box.textContent = text;
     return box;
@@ -106,10 +106,10 @@ export function renderBars({
       const sz = Math.floor(rowH);
       token.style.width = sz + 'px';
       token.style.height = sz + 'px';
-      token.style.border = '2px solid #fff';
+      token.style.border = '2px solid var(--CG-white)';
       token.style.borderRadius = '50%';
-      token.style.background = '#dc2626';
-      token.style.color = '#fff';
+      token.style.background = 'var(--CG-dark-red)';
+      token.style.color = 'var(--CG-white)';
       token.style.display = 'flex';
       token.style.alignItems = 'center';
       token.style.justifyContent = 'center';

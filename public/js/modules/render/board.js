@@ -37,7 +37,7 @@ export function renderBoard({
   texture.style.width = '100%';
   texture.style.height = '100%';
   texture.style.objectFit = 'cover';
-  texture.style.border = '1px solid #9ca3af';
+  texture.style.border = '1px solid var(--CG-gray-light)';
   texture.style.boxSizing = 'border-box';
   texture.style.opacity = '0.45';
   texture.style.zIndex = '1';
@@ -60,8 +60,8 @@ export function renderBoard({
       cell.style.height = squareSize + 'px';
       cell.style.boxSizing = 'border-box';
       cell.style.position = 'relative';
-      cell.style.border = '1px solid #707070ff';
-      cell.style.background = light ? '#ffffffff' : '#000000ff';
+      cell.style.border = '1px solid var(--CG-gray)';
+      cell.style.background = light ? 'var(--CG-white)' : 'var(--CG-black)';
 
       const { serverRow, serverCol } = serverCoordsForCell(r, c, rows, cols, currentIsWhite);
       // Store server-oriented coordinates for payload building
@@ -83,7 +83,7 @@ export function renderBoard({
           fileSpan.style.position = 'absolute';
           fileSpan.style.right = '3px';
           fileSpan.style.bottom = '2px';
-          fileSpan.style.color = '#000';
+          fileSpan.style.color = 'var(--CG-black)';
           fileSpan.style.fontWeight = '400';
           fileSpan.style.fontSize = (labelFont || 12) + 'px';
           fileSpan.style.lineHeight = '1';
@@ -102,7 +102,7 @@ export function renderBoard({
         rankSpan.style.position = 'absolute';
         rankSpan.style.left = '3px';
         rankSpan.style.top = '2px';
-        rankSpan.style.color = '#000';
+        rankSpan.style.color = 'var(--CG-black)';
         rankSpan.style.fontWeight = '400';
         rankSpan.style.fontSize = (labelFont || 12) + 'px';
         rankSpan.style.lineHeight = '1';

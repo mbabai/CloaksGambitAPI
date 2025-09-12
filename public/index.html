@@ -4,17 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cloaks Gambit – Queue</title>
+    <link rel="stylesheet" href="colors.css" />
     <style>
-      :root { --forest: #145a2a; --purple: #5b21b6; --purple-pressed: #7c3aed; }
+      :root { --forest: var(--CG-forest); --purple: var(--CG-purple); --purple-pressed: var(--CG-purple-pressed); }
       html, body { height: 100%; }
-      body { margin: 0; background: var(--forest); color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+      body { margin: 0; background: var(--forest); color: var(--CG-white); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
       .queuer { position: fixed; top: 16px; right: 16px; width: 280px; max-width: 50vw; display: flex; flex-direction: column; gap: 0; }
       .cta {
         height: 120px;
-        border: 2px solid #ffffff;
+        border: 2px solid var(--CG-white);
         border-radius: 18px;
         background: var(--purple);
-        color: #ffffff;
+        color: var(--CG-white);
         font-weight: 800;
         font-size: 28px;
         line-height: 1;
@@ -22,10 +23,10 @@
         box-shadow: 0 2px 0 rgba(255,255,255,0.45) inset, 0 8px 18px rgba(0,0,0,0.25);
       }
       .cta.searching { background: var(--purple-pressed); }
-      .selectWrap { position: relative; height: 46px; border: 2px solid #ffffff; border-radius: 0 0 12px 12px; background: var(--purple); display: flex; align-items: center; width: 75%; align-self: center; }
+      .selectWrap { position: relative; height: 46px; border: 2px solid var(--CG-white); border-radius: 0 0 12px 12px; background: var(--purple); display: flex; align-items: center; width: 75%; align-self: center; }
       .selectWrap.disabled { opacity: 0.7; }
-      select.mode { width: 100%; height: 100%; border: none; outline: none; background: transparent; color: #ffffff; font-weight: 700; font-size: 20px; padding: 0 34px 0 14px; appearance: none; cursor: pointer; }
-      select.mode option { background: var(--purple); color: #ffffff; }
+      select.mode { width: 100%; height: 100%; border: none; outline: none; background: transparent; color: var(--CG-white); font-weight: 700; font-size: 20px; padding: 0 34px 0 14px; appearance: none; cursor: pointer; }
+      select.mode option { background: var(--purple); color: var(--CG-white); }
       .caret { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; font-size: 22px; }
 
       /* Pulse glow for on-deck square */

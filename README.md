@@ -113,3 +113,6 @@ src/
 └── server.js       # Application entry point
 ```
 
+For game UI styling, see `docs/colors.md` for the centralized color palette. Always
+use the `CG-` variables instead of hard-coded color values.
+

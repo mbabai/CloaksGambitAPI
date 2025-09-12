@@ -20,9 +20,9 @@ export function renderReadyButton({
   btn.style.top = Math.floor(boardTop + (boardHeight / 2) - 48) + 'px';
   btn.style.width = '160px';
   btn.style.height = '96px';
-  btn.style.background = '#7c3aed';
-  btn.style.border = '3px solid #DAA520';
-  btn.style.color = '#fff';
+  btn.style.background = 'var(--CG-purple-pressed)';
+  btn.style.border = '3px solid var(--CG-deep-gold)';
+  btn.style.color = 'var(--CG-white)';
   btn.style.fontWeight = '800';
   btn.style.fontSize = '20px';
   btn.style.cursor = 'pointer';

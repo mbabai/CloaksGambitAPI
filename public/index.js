@@ -551,10 +551,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     card.style.height = '160px';
     card.style.padding = '18px 26px';
     card.style.borderRadius = '0';
-    card.style.borderTop = '2px solid #fbbf24';
-    card.style.borderBottom = '2px solid #fbbf24';
-    card.style.background = '#4c1d95';
-    card.style.color = '#ffffff';
+    card.style.borderTop = '2px solid var(--CG-deep-gold)';
+    card.style.borderBottom = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
     card.style.boxShadow = '0 10px 30px rgba(0,0,0,0.35)';
     card.style.textAlign = 'center';
 
@@ -934,7 +934,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         boardWidth: 0,
         boardHeight: 0,
         text: 'Bomb!',
-        background: '#7f1d1d',
+        background: 'var(--CG-dark-red)',
         visible: canBomb,
         onClick: () => {
           if (!lastGameId) return;
@@ -955,7 +955,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         boardWidth: 0,
         boardHeight: 0,
         text: 'Pass',
-        background: '#7b3aec',
+        background: 'var(--CG-purple-pressed)',
         visible: canPass,
         onClick: () => {
           if (!lastGameId) return;
@@ -976,7 +976,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         boardWidth: 0,
         boardHeight: 0,
         text: 'Challenge',
-        background: '#7b3aec',
+        background: 'var(--CG-purple-pressed)',
         visible: canChallenge,
         onClick: () => {
           if (!lastGameId) return;
@@ -1053,7 +1053,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       boardWidth: bW,
       boardHeight: bH,
       text: 'Random Setup',
-      background: '#7f1d1d',
+      background: 'var(--CG-dark-red)',
       visible: randomVisible,
       onClick: () => {
         const result = randomizeSetup({
@@ -1124,7 +1124,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       row.style.display = 'flex';
       row.style.alignItems = 'center';
       row.style.justifyContent = alignRight ? 'flex-end' : 'flex-start';
-      row.style.color = '#fff';
+      row.style.color = 'var(--CG-white)';
       row.style.fontSize = nameFont + 'px';
       row.style.fontWeight = 'bold';
       row.textContent = text;
@@ -1142,9 +1142,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       box.style.fontFamily = 'Courier New, monospace';
       box.style.fontWeight = 'bold';
       box.style.fontSize = clockFont + 'px';
-      box.style.background = colorIsWhite ? '#fff' : '#000';
-      box.style.color = colorIsWhite ? '#000' : '#fff';
-      box.style.border = '2px solid #DAA520';
+      box.style.background = colorIsWhite ? 'var(--CG-white)' : 'var(--CG-black)';
+      box.style.color = colorIsWhite ? 'var(--CG-black)' : 'var(--CG-white)';
+      box.style.border = '2px solid var(--CG-deep-gold)';
       // no rounded corners
       box.style.borderRadius = '0px';
       box.textContent = '5:00';
@@ -1163,10 +1163,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         const sz = Math.floor(rowH);
         token.style.width = sz + 'px';
         token.style.height = sz + 'px';
-        token.style.border = '2px solid #fff';
+        token.style.border = '2px solid var(--CG-white)';
         token.style.borderRadius = '50%';
-        token.style.background = '#dc2626';
-        token.style.color = '#fff';
+        token.style.background = 'var(--CG-dark-red)';
+        token.style.color = 'var(--CG-white)';
         token.style.display = 'flex';
         token.style.alignItems = 'center';
         token.style.justifyContent = 'center';
@@ -1298,8 +1298,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       el.style.width = w + 'px';
       el.style.height = h + 'px';
       el.style.boxSizing = 'border-box';
-      el.style.border = isOnDeck ? '3px solid #DAA520' : '0px solid transparent';
-      el.style.background = isOnDeck ? '#3d2e88' : 'transparent';
+      el.style.border = isOnDeck ? '3px solid var(--CG-deep-gold)' : '0px solid transparent';
+      el.style.background = isOnDeck ? 'var(--CG-indigo)' : 'transparent';
       el.style.display = 'flex';
       el.style.alignItems = 'center';
       el.style.justifyContent = 'center';

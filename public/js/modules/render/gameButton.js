@@ -26,8 +26,8 @@ export function renderGameButton({
   btn.style.width = width + 'px';
   btn.style.height = height + 'px';
   btn.style.background = background;
-  btn.style.border = '3px solid #DAA520';
-  btn.style.color = '#fff';
+  btn.style.border = '3px solid var(--CG-deep-gold)';
+  btn.style.color = 'var(--CG-white)';
   btn.style.fontWeight = '800';
   btn.style.fontSize = fontSize + 'px';
   btn.style.cursor = 'pointer';

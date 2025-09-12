@@ -1,0 +1,20 @@
+:root {
+  --CG-black: #000000;
+  --CG-white: #ffffff;
+
+  --CG-deep-green: #0b3d2e;
+  --CG-forest: #145a2a;
+
+  --CG-purple: #5b21b6;
+  --CG-purple-pressed: #7c3aed;
+  --CG-deep-purple: #3b0764;
+  --CG-indigo: #3d2e88;
+
+  --CG-dark-red: #7f1d1d;
+
+  --CG-deep-gold: #b8860b;
+  --CG-light-gold: #f5e6a7;
+
+  --CG-gray-light: #9ca3af;
+  --CG-gray: #707070;
+}
