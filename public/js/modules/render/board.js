@@ -17,7 +17,7 @@ export function renderBoard({
   fileLetters
 }) {
   const { rows, cols, squareSize, boardLeft, boardTop } = sizes;
-  const { currentBoard, currentIsWhite, selected, isInSetup, workingRank, pendingCapture, pendingMoveFrom } = state;
+  const { currentBoard, currentIsWhite, selected, isInSetup, workingRank, pendingCapture, pendingMoveFrom, challengeRemoved } = state;
 
   // Clear container and build grid
   container.style.width = (squareSize * cols) + 'px';
@@ -53,6 +53,9 @@ export function renderBoard({
       setCellNotation(cell, serverRow, serverCol);
       if (pendingMoveFrom && pendingMoveFrom.row === serverRow && pendingMoveFrom.col === serverCol) {
         cell.style.boxShadow = 'inset 0 0 0 9999px rgba(16,185,129,0.3)';
+      }
+      if (challengeRemoved && challengeRemoved.row === serverRow && challengeRemoved.col === serverCol) {
+        cell.style.boxShadow = 'inset 0 0 0 9999px rgba(239,68,68,0.4)';
       }
 
       // File label on UI bottom row (letters A..E oriented to player's perspective)

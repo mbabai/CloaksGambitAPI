@@ -79,6 +79,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let lastAction = null; // last action from server
   let lastMove = null;   // last move from server
   let pendingMoveFrom = null; // server coords of last move origin when pending
+  let challengeRemoved = null; // server coords of last piece removed by successful challenge
   const BUBBLE_PRELOAD = {}; // type -> HTMLImageElement
   const PIECE_PRELOAD = {}; // identity -> { color -> HTMLImageElement }
   let dragPreviewImgs = []; // active floating preview images
@@ -560,7 +561,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         isInSetup,
         workingRank,
         pendingCapture,
-        pendingMoveFrom
+        pendingMoveFrom,
+        challengeRemoved
       },
       refs,
       identityMap: PIECE_IMAGES,
@@ -1306,7 +1308,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function setStateFromServer(u) {
     try {
-      const prevPending = pendingCapture;
+      const prevLastMove = lastMove;
+      let prevToPiece = null;
+      try {
+        if (prevLastMove && currentBoard) {
+          prevToPiece = currentBoard?.[prevLastMove.to.row]?.[prevLastMove.to.col] || null;
+        }
+      } catch (_) {}
       // Avoid overwriting optimistic in-game moves while a drag or selection is active
       if (!dragging) {
         if (Array.isArray(u.board)) currentBoard = u.board; else if (u.board === null) currentBoard = null;
@@ -1363,6 +1371,35 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           postMoveOverlay = null;
           pendingCapture = null;
           pendingMoveFrom = null;
+        }
+      }
+
+      // Determine red tint square for successful challenges
+      challengeRemoved = null;
+      const prevAction = Array.isArray(u.actions) ? u.actions[u.actions.length - 2] : null;
+      if (
+        lastAction &&
+        lastAction.type === ACTIONS.CHALLENGE &&
+        lastAction.details &&
+        lastAction.details.outcome === 'SUCCESS'
+      ) {
+        if (prevAction && prevAction.type === ACTIONS.MOVE) {
+          const to = prevLastMove && prevLastMove.to;
+          if (to) {
+            challengeRemoved = { row: to.row, col: to.col };
+          }
+        } else if (prevAction && prevAction.type === ACTIONS.BOMB) {
+          const to = prevLastMove && prevLastMove.to;
+          if (to && prevToPiece) {
+            const newToPiece = currentBoard?.[to.row]?.[to.col] || null;
+            if (
+              !newToPiece ||
+              newToPiece.identity !== prevToPiece.identity ||
+              newToPiece.color !== prevToPiece.color
+            ) {
+              challengeRemoved = { row: to.row, col: to.col };
+            }
+          }
         }
       }
     } catch (_) {}
