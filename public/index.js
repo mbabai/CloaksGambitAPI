@@ -570,6 +570,16 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       fileLetters
     });
 
+    // Determine whether to show challenge bubbles on player bars
+    const topColor = currentIsWhite ? 1 : 0;
+    const bottomColor = currentIsWhite ? 0 : 1;
+    let showChallengeTop = false;
+    let showChallengeBottom = false;
+    if (lastAction && lastAction.type === ACTIONS.CHALLENGE) {
+      if (lastAction.player === topColor) showChallengeTop = true;
+      if (lastAction.player === bottomColor) showChallengeBottom = true;
+    }
+
     // Use modular bars and stash renderers
     renderBarsModule({
       topBar,
@@ -585,7 +595,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       state: {
         currentIsWhite,
         currentCaptured,
-        currentDaggers
+        currentDaggers,
+        showChallengeTop,
+        showChallengeBottom
       },
       identityMap: PIECE_IMAGES
     });

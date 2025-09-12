@@ -8,7 +8,13 @@ export function renderBars({
   identityMap
 }) {
   const { squareSize: s, boardWidth: bW, boardHeight: bH, boardLeft: leftPx, boardTop: topPx, playAreaHeight: H } = sizes;
-  const { currentIsWhite, currentCaptured, currentDaggers } = state;
+  const {
+    currentIsWhite,
+    currentCaptured,
+    currentDaggers,
+    showChallengeTop = false,
+    showChallengeBottom = false
+  } = state;
 
   if (!topBar || !bottomBar) return;
 
@@ -30,7 +36,7 @@ export function renderBars({
   const clockFont = Math.max(12, Math.floor(0.026 * H));
   const iconFont = Math.max(12, Math.floor(0.024 * H));
 
-  function makeNameRow(text, isTopBar) {
+  function makeNameRow(text, isTopBar, showChallengeBubble) {
     const row = document.createElement('div');
     row.style.height = nameBarH + 'px';
     row.style.display = 'flex';
@@ -46,23 +52,25 @@ export function renderBars({
     nameWrap.style.fontWeight = 'bold';
     nameWrap.style.zIndex = '0';
     nameWrap.textContent = text;
-
-    const bubbleSize = 3 * nameBarH;
-    const bubble = document.createElement('img');
-    bubble.src = isTopBar
-      ? '/assets/images/UI/BubbleSpeechTopChallenge.svg'
-      : '/assets/images/UI/BubbleSpeechBottomChallenge.svg';
-    bubble.style.position = 'absolute';
-    bubble.style.left = '50%';
-    bubble.style.top = '50%';
-    bubble.style.transform = `translate(-50%, -50%) translateY(${isTopBar ? '60%' : '-30%'})`;
-    bubble.style.width = bubbleSize + 'px';
-    bubble.style.height = bubbleSize + 'px';
-    bubble.style.zIndex = '1';
-    bubble.style.pointerEvents = 'none';
-
     row.appendChild(nameWrap);
-    row.appendChild(bubble);
+
+    if (showChallengeBubble) {
+      const bubbleSize = 3 * nameBarH;
+      const bubble = document.createElement('img');
+      bubble.src = isTopBar
+        ? '/assets/images/UI/BubbleSpeechTopChallenge.svg'
+        : '/assets/images/UI/BubbleSpeechBottomChallenge.svg';
+      bubble.style.position = 'absolute';
+      bubble.style.left = '50%';
+      bubble.style.top = '50%';
+      bubble.style.transform = `translate(-50%, -50%) translateY(${isTopBar ? '60%' : '-30%'})`;
+      bubble.style.width = bubbleSize + 'px';
+      bubble.style.height = bubbleSize + 'px';
+      bubble.style.zIndex = '1';
+      bubble.style.pointerEvents = 'none';
+      row.appendChild(bubble);
+    }
+
     return row;
   }
 
@@ -156,7 +164,12 @@ export function renderBars({
 
   function fillBar(barEl, isTopBar) {
     while (barEl.firstChild) barEl.removeChild(barEl.firstChild);
-    const nameRow = makeNameRow(isTopBar ? 'Opponent Name' : 'My Name', isTopBar);
+    const showBubble = isTopBar ? showChallengeTop : showChallengeBottom;
+    const nameRow = makeNameRow(
+      isTopBar ? 'Opponent Name' : 'My Name',
+      isTopBar,
+      showBubble
+    );
     const row = document.createElement('div');
     row.style.height = rowH + 'px';
     row.style.display = 'flex';
