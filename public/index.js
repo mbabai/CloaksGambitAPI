@@ -408,6 +408,37 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       },
       onGameFinished(payload) {
         console.log('[socket] game:finished', payload);
+        (async () => {
+          try {
+            const winnerIdx = payload?.winner;
+            if (winnerIdx !== 0 && winnerIdx !== 1) return;
+            const ids = Array.isArray(payload?.players) ? payload.players : [];
+            const winnerId = ids[winnerIdx];
+            let winnerName = 'Unknown Player';
+            if (winnerId) {
+              try {
+                const res = await fetch('/api/v1/users/getDetails', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ userId: winnerId })
+                });
+                if (res.ok) {
+                  const user = await res.json();
+                  if (user && user.username) winnerName = user.username;
+                }
+              } catch (e) {
+                console.error('Failed to fetch winner details', e);
+              }
+            }
+            showGameFinishedBanner({
+              winnerName,
+              winnerColor: winnerIdx,
+              didWin: winnerIdx === myColor
+            });
+          } catch (e) {
+            console.error('Error handling game:finished', e);
+          }
+        })();
       },
       async onBothReady(payload) {
         try {
@@ -548,6 +579,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function showMatchFoundBanner(startSeconds, onTick) {
     const el = ensureBannerEl();
+    el.style.alignItems = 'center';
     const countEl = el.querySelector('#matchFoundCount');
     let remaining = startSeconds;
     countEl.textContent = String(remaining);
@@ -567,6 +599,59 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       }
       countEl.textContent = remaining === 0 ? 'Go!' : String(remaining);
     }, 1000);
+  }
+
+  function showGameFinishedBanner({ winnerName, winnerColor, didWin }) {
+    const el = ensureBannerEl();
+    el.style.alignItems = 'flex-end';
+    while (el.firstChild) el.removeChild(el.firstChild);
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    const card = document.createElement('div');
+    card.style.width = '100%';
+    card.style.maxWidth = '100%';
+    card.style.height = '150px';
+    card.style.transform = 'translateY(-15%)';
+    card.style.padding = '18px 26px';
+    card.style.borderRadius = '0';
+    card.style.borderTop = '2px solid #fbbf24';
+    card.style.borderBottom = '2px solid #fbbf24';
+    card.style.background = didWin ? '#b91c1c' : '#000000';
+    card.style.color = '#ffffff';
+    card.style.boxShadow = '0 10px 30px rgba(0,0,0,0.35)';
+    card.style.textAlign = 'center';
+    card.style.position = 'relative';
+
+    const title = document.createElement('div');
+    title.textContent = didWin ? 'Victory' : 'Defeat';
+    title.style.fontSize = '32px';
+    title.style.fontWeight = '800';
+    title.style.marginBottom = '10px';
+
+    const desc = document.createElement('div');
+    const colorStr = winnerColor === 0 ? 'White' : 'Black';
+    desc.textContent = `${winnerName} (${colorStr}) won by capturing the king!`;
+    desc.style.fontSize = '20px';
+    desc.style.fontWeight = '500';
+
+    const btn = document.createElement('button');
+    btn.textContent = 'Next';
+    btn.style.position = 'absolute';
+    btn.style.bottom = '10px';
+    btn.style.right = '10px';
+    btn.style.background = '#7e22ce';
+    btn.style.color = '#fff';
+    btn.style.border = 'none';
+    btn.style.borderRadius = '4px';
+    btn.style.padding = '6px 12px';
+    btn.style.fontSize = '16px';
+    btn.style.cursor = 'pointer';
+    btn.addEventListener('click', () => { alert('Next'); el.style.display = 'none'; });
+
+    card.appendChild(title);
+    card.appendChild(desc);
+    card.appendChild(btn);
+    el.appendChild(card);
+    el.style.display = 'flex';
   }
 
   // ------- PlayArea & Board & Bars -------
