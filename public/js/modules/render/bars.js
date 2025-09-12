@@ -68,7 +68,8 @@ export function renderBars({
       bubble.style.transform = `translate(-50%, -50%) translateY(${isTopBar ? '60%' : '-30%'})`;
       bubble.style.width = bubbleSize + 'px';
       bubble.style.height = bubbleSize + 'px';
-      bubble.style.zIndex = '1';
+      // Ensure the challenge bubble appears above board pieces
+      bubble.style.zIndex = '20';
       bubble.style.pointerEvents = 'none';
       row.appendChild(bubble);
     }
