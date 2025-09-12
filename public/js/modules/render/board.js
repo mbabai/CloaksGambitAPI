@@ -25,9 +25,25 @@ export function renderBoard({
   container.style.left = boardLeft + 'px';
   container.style.top = boardTop + 'px';
   container.style.display = 'grid';
+  container.style.position = 'relative';
   container.style.gridTemplateColumns = `repeat(${cols}, ${squareSize}px)`;
   container.style.gridTemplateRows = `repeat(${rows}, ${squareSize}px)`;
   while (container.firstChild) container.removeChild(container.firstChild);
+
+  const texture = document.createElement('img');
+  texture.src = '/assets/images/MarbleTexture.svg';
+  texture.style.position = 'absolute';
+  texture.style.top = '0';
+  texture.style.left = '0';
+  texture.style.width = '100%';
+  texture.style.height = '100%';
+  texture.style.objectFit = 'cover';
+  texture.style.border = '1px solid #9ca3af';
+  texture.style.boxSizing = 'border-box';
+  texture.style.opacity = '0.45';
+  texture.style.zIndex = '1';
+  texture.style.pointerEvents = 'none';
+  container.appendChild(texture);
   // Prepare matrix for in-game hit-testing when not in setup
   if (!state.isInSetup) {
     refs.boardCells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null));
@@ -46,7 +62,7 @@ export function renderBoard({
       cell.style.boxSizing = 'border-box';
       cell.style.position = 'relative';
       cell.style.border = '1px solid #707070ff';
-      cell.style.background = light ? '#f7f7f7' : '#444444ff';
+      cell.style.background = light ? '#ffffffff' : '#000000ff';
 
       const { serverRow, serverCol } = serverCoordsForCell(r, c, rows, cols, currentIsWhite);
       // Store server-oriented coordinates for payload building
@@ -74,6 +90,7 @@ export function renderBoard({
           fileSpan.style.lineHeight = '1';
           fileSpan.style.userSelect = 'none';
           fileSpan.style.pointerEvents = 'none';
+          fileSpan.style.zIndex = '2';
           cell.appendChild(fileSpan);
         }
       }
@@ -92,6 +109,7 @@ export function renderBoard({
         rankSpan.style.lineHeight = '1';
         rankSpan.style.userSelect = 'none';
         rankSpan.style.pointerEvents = 'none';
+        rankSpan.style.zIndex = '2';
         cell.appendChild(rankSpan);
       }
 
@@ -118,6 +136,7 @@ export function renderBoard({
             movingImg.style.left = '50%';
             movingImg.style.top = '50%';
             movingImg.style.transform = 'translate(-50%, -50%)';
+            movingImg.style.zIndex = '3';
             if (selected && selected.type === 'board' && selected.index === c && isUiBottom) {
               movingImg.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
             }
@@ -136,15 +155,16 @@ export function renderBoard({
             // Tilt the captured piece 30° clockwise and drop it slightly for depth
             capturedImg.style.transform = 'translate(-50%, -30%) rotate(30deg)';
             capturedImg.style.clipPath = "inset(0% 20% 5% 13%)";
+            capturedImg.style.zIndex = '3';
           }
         }
         if (movingImg && capturedImg) {
           if (capturedPiece.color === myColorIdx) {
-            capturedImg.style.zIndex = '2';
-            movingImg.style.zIndex = '1';
+            capturedImg.style.zIndex = '4';
+            movingImg.style.zIndex = '3';
           } else {
-            movingImg.style.zIndex = '2';
-            capturedImg.style.zIndex = '1';
+            movingImg.style.zIndex = '4';
+            capturedImg.style.zIndex = '3';
           }
         }
         if (capturedImg) cell.appendChild(capturedImg);
@@ -165,5 +185,4 @@ export function renderBoard({
       container.appendChild(cell);
     }
   }
-
 }
