@@ -56,6 +56,13 @@ export async function apiBomb(gameId, color) {
   });
 }
 
+export async function apiPass(gameId, color) {
+  return fetch('/api/v1/gameAction/pass', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gameId, color })
+  });
+}
+
 export async function apiOnDeck(gameId, color, piece) {
   return fetch('/api/v1/gameAction/onDeck', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

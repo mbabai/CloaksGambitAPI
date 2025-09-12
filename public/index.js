@@ -5,7 +5,7 @@ import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove, apiChallenge, apiBomb, apiOnDeck } from '/js/modules/api/game.js';
+import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -22,7 +22,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   // Cookie helpers moved to modules/utils/cookies.js
 
-  const ACTIONS = { MOVE: 1, CHALLENGE: 2, BOMB: 3 };
+  const ACTIONS = { MOVE: 1, CHALLENGE: 2, BOMB: 3, PASS: 4 };
 
   // Ensure a valid Mongo user exists and get its _id
   async function ensureUserId() {
@@ -647,6 +647,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const isMyTurn = currentPlayerTurn === myColor && !isInSetup;
       let canChallenge = false;
       let canBomb = false;
+      let canPass = false;
       if (isMyTurn && lastAction) {
         if (lastAction.type === ACTIONS.MOVE) {
           if (lastMove && lastMove.state === MOVE_STATES.PENDING && lastMove.player !== myColor) {
@@ -663,6 +664,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         } else if (lastAction.type === ACTIONS.BOMB) {
           if (lastAction.player !== myColor && lastMove && lastMove.state === MOVE_STATES.PENDING) {
             canChallenge = true;
+            canPass = true;
           }
         }
       }
@@ -679,6 +681,23 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         background: '#7f1d1d',
         visible: canBomb,
         onClick: () => { if (lastGameId) apiBomb(lastGameId, myColor).catch(err => console.error('Bomb failed', err)); },
+        width: btnW,
+        height: btnH,
+        fontSize
+      });
+
+      // Pass button (uses challenge styling, upper left)
+      renderGameButton({
+        id: 'passBtn',
+        root: playAreaRoot,
+        boardLeft: stashLeft + btnW / 2,
+        boardTop: stashTop + btnH / 2,
+        boardWidth: 0,
+        boardHeight: 0,
+        text: 'Pass',
+        background: '#7b3aec',
+        visible: canPass,
+        onClick: () => { if (lastGameId) apiPass(lastGameId, myColor).catch(err => console.error('Pass failed', err)); },
         width: btnW,
         height: btnH,
         fontSize
