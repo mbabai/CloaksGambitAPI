@@ -70,4 +70,13 @@ export async function apiOnDeck(gameId, color, piece) {
   });
 }
 
+export async function apiGetMatchDetails(matchId) {
+  const res = await fetch('/api/v1/matches/getDetails', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ matchId })
+  });
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
 

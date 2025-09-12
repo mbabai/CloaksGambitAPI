@@ -5,7 +5,7 @@ import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass } from '/js/modules/api/game.js';
+import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiGetMatchDetails } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -430,10 +430,12 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
                 console.error('Failed to fetch winner details', e);
               }
             }
+            const match = await apiGetMatchDetails(payload.matchId);
             showGameFinishedBanner({
               winnerName,
               winnerColor: winnerIdx,
-              didWin: winnerIdx === myColor
+              didWin: winnerIdx === myColor,
+              match
             });
           } catch (e) {
             console.error('Error handling game:finished', e);
@@ -601,7 +603,47 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     }, 1000);
   }
 
-  function showGameFinishedBanner({ winnerName, winnerColor, didWin }) {
+  function createScoreboard(match) {
+    const p1Name = match?.player1?.username || 'Player 1';
+    const p2Name = match?.player2?.username || 'Player 2';
+    const p1Score = match?.player1Score || 0;
+    const p2Score = match?.player2Score || 0;
+    const finishedGames = Array.isArray(match?.games)
+      ? match.games.filter(g => !g.isActive).length
+      : 0;
+    const draws = Math.max(0, finishedGames - p1Score - p2Score);
+
+    const container = document.createElement('div');
+    container.style.display = 'grid';
+    container.style.gridTemplateColumns = '1fr 80px 1fr';
+    container.style.gap = '4px 0';
+    container.style.marginTop = '10px';
+
+    const name1 = document.createElement('div');
+    name1.textContent = p1Name;
+    name1.style.textAlign = 'center';
+    const drawsLabel = document.createElement('div');
+    drawsLabel.textContent = 'Draws';
+    drawsLabel.style.textAlign = 'center';
+    const name2 = document.createElement('div');
+    name2.textContent = p2Name;
+    name2.style.textAlign = 'center';
+
+    const score1 = document.createElement('div');
+    score1.textContent = p1Score;
+    score1.style.textAlign = 'center';
+    const drawCount = document.createElement('div');
+    drawCount.textContent = draws;
+    drawCount.style.textAlign = 'center';
+    const score2 = document.createElement('div');
+    score2.textContent = p2Score;
+    score2.style.textAlign = 'center';
+
+    container.append(name1, drawsLabel, name2, score1, drawCount, score2);
+    return container;
+  }
+
+  function showGameFinishedBanner({ winnerName, winnerColor, didWin, match }) {
     const el = ensureBannerEl();
     el.style.alignItems = 'flex-end';
     while (el.firstChild) el.removeChild(el.firstChild);
@@ -609,7 +651,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const card = document.createElement('div');
     card.style.width = '100%';
     card.style.maxWidth = '100%';
-    card.style.height = '150px';
+    card.style.height = '200px';
     card.style.transform = 'translateY(-15%)';
     card.style.padding = '18px 26px';
     card.style.borderRadius = '0';
@@ -633,22 +675,76 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     desc.style.fontSize = '20px';
     desc.style.fontWeight = '500';
 
+    const score = createScoreboard(match);
+
     const btn = document.createElement('button');
     btn.textContent = 'Next';
     btn.style.position = 'absolute';
     btn.style.bottom = '10px';
-    btn.style.right = '10px';
+    btn.style.left = '50%';
+    btn.style.transform = 'translateX(-50%)';
     btn.style.background = 'var(--CG-purple)';
     btn.style.color = 'var(--CG-white)';
+    btn.style.border = '2px solid #fbbf24';
+    btn.style.borderRadius = '6px';
+    btn.style.padding = '10px 22px';
+    btn.style.fontSize = '18px';
+    btn.style.cursor = 'pointer';
+    btn.addEventListener('click', async () => {
+      const nextGame = Array.isArray(match?.games) ? match.games.find(g => g.isActive) : null;
+      if (nextGame) {
+        try {
+          await apiReady(nextGame._id, 1 - myColor);
+          el.style.display = 'none';
+        } catch (e) { console.error('Failed to ready next game', e); }
+      } else {
+        showMatchSummary(match);
+      }
+    });
+
+    card.appendChild(title);
+    card.appendChild(desc);
+    card.appendChild(score);
+    card.appendChild(btn);
+    el.appendChild(card);
+    el.style.display = 'flex';
+  }
+
+  function showMatchSummary(match) {
+    const el = ensureBannerEl();
+    el.style.alignItems = 'center';
+    while (el.firstChild) el.removeChild(el.firstChild);
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    const card = document.createElement('div');
+    card.style.padding = '20px 30px';
+    card.style.borderRadius = '8px';
+    card.style.background = '#7e22ce';
+    card.style.color = '#ffffff';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 10px 30px rgba(0,0,0,0.35)';
+
+    const title = document.createElement('div');
+    title.textContent = 'Match Over';
+    title.style.fontSize = '32px';
+    title.style.fontWeight = '800';
+    title.style.marginBottom = '10px';
+
+    const score = createScoreboard(match);
+
+    const btn = document.createElement('button');
+    btn.textContent = 'Back to Lobby';
+    btn.style.marginTop = '15px';
+    btn.style.background = '#fff';
+    btn.style.color = '#7e22ce';
     btn.style.border = 'none';
     btn.style.borderRadius = '4px';
     btn.style.padding = '6px 12px';
     btn.style.fontSize = '16px';
     btn.style.cursor = 'pointer';
-    btn.addEventListener('click', () => { alert('Next'); el.style.display = 'none'; });
+    btn.addEventListener('click', () => { window.location.reload(); });
 
     card.appendChild(title);
-    card.appendChild(desc);
+    card.appendChild(score);
     card.appendChild(btn);
     el.appendChild(card);
     el.style.display = 'flex';
