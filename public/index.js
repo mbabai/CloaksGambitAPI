@@ -1308,13 +1308,6 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function setStateFromServer(u) {
     try {
-      const prevLastMove = lastMove;
-      let prevToPiece = null;
-      try {
-        if (prevLastMove && currentBoard) {
-          prevToPiece = currentBoard?.[prevLastMove.to.row]?.[prevLastMove.to.col] || null;
-        }
-      } catch (_) {}
       // Avoid overwriting optimistic in-game moves while a drag or selection is active
       if (!dragging) {
         if (Array.isArray(u.board)) currentBoard = u.board; else if (u.board === null) currentBoard = null;
@@ -1381,25 +1374,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         lastAction &&
         lastAction.type === ACTIONS.CHALLENGE &&
         lastAction.details &&
-        lastAction.details.outcome === 'SUCCESS'
+        lastAction.details.outcome === 'SUCCESS' &&
+        prevAction &&
+        (prevAction.type === ACTIONS.MOVE || prevAction.type === ACTIONS.BOMB)
       ) {
-        if (prevAction && prevAction.type === ACTIONS.MOVE) {
-          const to = prevLastMove && prevLastMove.to;
-          if (to) {
-            challengeRemoved = { row: to.row, col: to.col };
-          }
-        } else if (prevAction && prevAction.type === ACTIONS.BOMB) {
-          const to = prevLastMove && prevLastMove.to;
-          if (to && prevToPiece) {
-            const newToPiece = currentBoard?.[to.row]?.[to.col] || null;
-            if (
-              !newToPiece ||
-              newToPiece.identity !== prevToPiece.identity ||
-              newToPiece.color !== prevToPiece.color
-            ) {
-              challengeRemoved = { row: to.row, col: to.col };
-            }
-          }
+        const to = lastMove && lastMove.to;
+        if (to) {
+          challengeRemoved = { row: to.row, col: to.col };
         }
       }
     } catch (_) {}
