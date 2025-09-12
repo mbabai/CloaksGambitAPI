@@ -1641,7 +1641,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       } else if (isOnDeckTurn && target.type === 'deck') {
         originPiece = currentOnDecks?.[myColorIdx] || null;
       }
-      if (DRAG_DEBUG) console.log('[drag] mousedown', { suppressMouseUntil, now: Date.now(), originHasPiece: !!originPiece, target });
+      // if (DRAG_DEBUG) console.log('[drag] mousedown', { suppressMouseUntil, now: Date.now(), originHasPiece: !!originPiece, target });
       // Allow clicks on empty targets when a piece is already selected
       if (!originPiece && !selected && !(isOnDeckTurn && target.type === 'deck')) return;
       e.preventDefault();
@@ -1655,7 +1655,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         const dy = Math.abs(ev.clientY - startY);
         if ((dx > DRAG_PX_THRESHOLD || dy > DRAG_PX_THRESHOLD) && originPiece) {
           dragStarted = true;
-          if (DRAG_DEBUG) console.log('[drag] start mouse', { target, x: ev.clientX, y: ev.clientY });
+          // if (DRAG_DEBUG) console.log('[drag] start mouse', { target, x: ev.clientX, y: ev.clientY });
           startDrag(ev, target, originPiece);
           document.removeEventListener('mousemove', move);
         }
@@ -1705,7 +1705,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         if ((dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) && originPiece) {
           dragStarted = true;
           document.removeEventListener('touchmove', move);
-          if (DRAG_DEBUG) console.log('[drag] start touch', { target, x: tt.clientX, y: tt.clientY });
+          // if (DRAG_DEBUG) console.log('[drag] start touch', { target, x: tt.clientX, y: tt.clientY });
           startDrag({ clientX: tt.clientX, clientY: tt.clientY }, target, originPiece);
         }
       };
@@ -2044,7 +2044,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     }
     // Attempt move/swap to any destination (empty or filled) across board/stash/deck
     const moved = performMove(selected, target);
-    console.log('[setup] click move', { from: selected, to: target, moved });
+    // console.log('[setup] click move', { from: selected, to: target, moved });
     selected = null;
     renderBoardAndBars();
   }
@@ -2121,7 +2121,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     let originEl = dimOriginEl(origin, refs, 0.5);
     dragging = { piece, origin, ghostEl: ghost, originEl };
     suppressMouseUntil = Date.now() + 700; // extend suppression window during drag
-    if (DRAG_DEBUG) console.log('[drag] ghost init', { x: startCX, y: startCY, origin });
+    // if (DRAG_DEBUG) console.log('[drag] ghost init', { x: startCX, y: startCY, origin });
     // Do not re-render here; we dim the origin element directly to avoid disrupting touch event streams
     const move = (ev) => {
       if (!dragging) return;
@@ -2156,7 +2156,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       }
       if (DRAG_DEBUG) {
         const now = Date.now();
-        if (now - debugDragMoveLast > 80) { console.log('[drag] move', { x, y, type: ev.type, hasTouches: !!ev.touches }); debugDragMoveLast = now; }
+        // if (now - debugDragMoveLast > 80) { console.log('[drag] move', { x, y, type: ev.type, hasTouches: !!ev.touches }); debugDragMoveLast = now; }
       }
     };
     const up = (ev) => {
@@ -2170,13 +2170,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const cx = ev.clientX !== undefined ? ev.clientX : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientX);
       const cy = ev.clientY !== undefined ? ev.clientY : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientY);
       const dest = hitTestDrop(cx, cy);
-      if (DRAG_DEBUG) console.log('[drag] end', { x: cx, y: cy, dest });
+      // if (DRAG_DEBUG) console.log('[drag] end', { x: cx, y: cy, dest });
       // Clear preview overlays
       clearDragPreviewImgs();
       if (dest) {
         if (isInSetup) {
           const moved = performMove(dragging.origin, dest);
-          console.log('[setup] drop', { from: dragging.origin, to: dest, moved });
+          // console.log('[setup] drop', { from: dragging.origin, to: dest, moved });
         } else if (!isInSetup) {
           const myColorIdx = currentIsWhite ? 0 : 1;
           const isMyOnDeck = currentOnDeckingPlayer === myColorIdx;
