@@ -25,7 +25,6 @@ export function renderBoard({
   container.style.left = boardLeft + 'px';
   container.style.top = boardTop + 'px';
   container.style.display = 'grid';
-  container.style.position = 'relative';
   container.style.gridTemplateColumns = `repeat(${cols}, ${squareSize}px)`;
   container.style.gridTemplateRows = `repeat(${rows}, ${squareSize}px)`;
   while (container.firstChild) container.removeChild(container.firstChild);
