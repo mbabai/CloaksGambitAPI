@@ -26,6 +26,7 @@ export function renderReadyButton({
   btn.style.fontWeight = '800';
   btn.style.fontSize = '20px';
   btn.style.cursor = 'pointer';
+  btn.style.zIndex = '5';
   if (typeof onClick === 'function') btn.addEventListener('click', onClick);
   root.appendChild(btn);
 }
