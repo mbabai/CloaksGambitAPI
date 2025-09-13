@@ -563,11 +563,15 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
               }
             }
             const match = await apiGetMatchDetails(payload.matchId);
+            const loserIdx = winnerIdx === 0 ? 1 : 0;
+            const loserName = playerNames[loserIdx] || formatPlayerName(null, loserIdx);
             showGameFinishedBanner({
               winnerName,
+              loserName,
               winnerColor: winnerIdx,
               didWin: winnerIdx === myColor,
-              match
+              match,
+              winReason: payload.winReason
             });
           } catch (e) {
             console.error('Error handling game:finished', e);
@@ -849,7 +853,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     return container;
   }
 
-  function showGameFinishedBanner({ winnerName, winnerColor, didWin, match }) {
+  function showGameFinishedBanner({ winnerName, loserName, winnerColor, didWin, match, winReason }) {
     currentMatch = match;
     const el = ensureBannerEl();
     el.style.alignItems = 'flex-end';
@@ -878,7 +882,28 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
     const desc = document.createElement('div');
     const colorStr = winnerColor === 0 ? 'White' : 'Black';
-    desc.textContent = `${winnerName} (${colorStr}) won by capturing the king!`;
+    const reason = Number(winReason);
+    let descText;
+    switch (reason) {
+      case 0:
+        descText = `${winnerName} (${colorStr}) won by capturing ${loserName}'s king.`;
+        break;
+      case 1:
+        descText = `${winnerName} (${colorStr}) won by advancing their king to the final rank.`;
+        break;
+      case 2:
+        descText = `${winnerName} (${colorStr}) won because ${loserName} challenged the true king.`;
+        break;
+      case 3:
+        descText = `${winnerName} (${colorStr}) won because ${loserName} accumulated 3 dagger tokens.`;
+        break;
+      case 4:
+        descText = `${winnerName} (${colorStr}) won because ${loserName} ran out of time.`;
+        break;
+      default:
+        descText = `${winnerName} (${colorStr}) won.`;
+    }
+    desc.textContent = descText;
     desc.style.fontSize = '20px';
     desc.style.fontWeight = '500';
     desc.id = 'gameOverDesc';

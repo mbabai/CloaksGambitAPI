@@ -268,7 +268,8 @@ router.post('/', async (req, res) => {
           });
         }
 
-        game.daggers[lastMove.player] += 1;
+        // Failed bomb challenges penalize the challenger with a dagger token
+        game.daggers[normalizedColor] += 1;
         lastMove.state = config.moveStates.get('COMPLETED');
         wasSuccessful = false;
       }
@@ -346,7 +347,9 @@ router.post('/', async (req, res) => {
     }
 
     if (game.isActive && (game.daggers[0] >= 3 || game.daggers[1] >= 3)) {
-      const winner = game.daggers[0] >= 3 ? 0 : 1;
+      // The player who amasses three daggers loses
+      const loser = game.daggers[0] >= 3 ? 0 : 1;
+      const winner = 1 - loser;
       await game.endGame(winner, config.winReasons.get('DAGGERS'));
       // Check if game ended and return early
       if (!game.isActive) {
@@ -356,7 +359,7 @@ router.post('/', async (req, res) => {
         });
         return res.json({
           success: wasSuccessful,
-          message: 'Game ended: Dagger victory',
+          message: 'Game ended: dagger penalty',
           capturedPiece,
           captureBy,
           trueKing
