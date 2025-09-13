@@ -66,6 +66,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let currentCols = 0;
   let currentIsWhite = true;
 
+  // Player identity state
+  let playerNames = ['Anonymous0', 'Anonymous1'];
+  let currentPlayerIds = [];
+
   // Live game state (masked per player)
   let currentBoard = null;        // 2D array of cells
   let currentStashes = [[], []];  // [white[], black[]]
@@ -132,6 +136,34 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function isBombActive() {
     return lastAction && lastAction.type === ACTIONS.BOMB;
+  }
+
+  function formatPlayerName(username, idx) {
+    if (!username || String(username).startsWith('guest_')) {
+      return 'Anonymous' + idx;
+    }
+    return username;
+  }
+
+  async function loadPlayerNames(ids) {
+    if (!Array.isArray(ids)) return;
+    currentPlayerIds = ids.slice(0, 2);
+    playerNames = currentPlayerIds.map((_, idx) => 'Anonymous' + idx);
+    renderBoardAndBars();
+    await Promise.all(currentPlayerIds.map(async (id, idx) => {
+      try {
+        const res = await fetch('/api/v1/users/getDetails', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: id })
+        });
+        if (res.ok) {
+          const user = await res.json().catch(() => null);
+          playerNames[idx] = formatPlayerName(user?.username, idx);
+        }
+      } catch (_) {}
+    }));
+    renderBoardAndBars();
   }
 
   // Clock helpers
@@ -305,6 +337,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           hideQueuer();
           showPlayArea();
 
+          if (Array.isArray(latest?.players)) {
+            loadPlayerNames(latest.players);
+          }
+
           // If this player is not marked ready yet, send READY immediately
           try {
             const colorIdx = Array.isArray(latest?.players)
@@ -368,6 +404,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
         // As soon as we are in a game, hide the Find Game UI
         hideQueuer();
+        loadPlayerNames(payload.players);
         currentIsWhite = (color === 0);
 
           // If the server provided a board/state, adopt and render
@@ -406,7 +443,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
             if (winnerIdx !== 0 && winnerIdx !== 1) return;
             const ids = Array.isArray(payload?.players) ? payload.players : [];
             const winnerId = ids[winnerIdx];
-            let winnerName = 'Unknown Player';
+            let winnerName = playerNames[winnerIdx] || formatPlayerName(null, winnerIdx);
             if (winnerId) {
               try {
                 const res = await fetch('/api/v1/users/getDetails', {
@@ -416,10 +453,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
                 });
                 if (res.ok) {
                   const user = await res.json();
-                  if (user && user.username) winnerName = user.username;
+                  winnerName = formatPlayerName(user?.username, winnerIdx);
+                } else {
+                  winnerName = formatPlayerName(null, winnerIdx);
                 }
               } catch (e) {
                 console.error('Failed to fetch winner details', e);
+                winnerName = formatPlayerName(null, winnerIdx);
               }
             }
             const match = await apiGetMatchDetails(payload.matchId);
@@ -479,6 +519,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           const view = await apiGetDetails(gameId, colorIdx);
           if (!view) return;
           setStateFromServer(view);
+          if (Array.isArray(view.players)) {
+            loadPlayerNames(view.players);
+          }
           // Enter setup mode if our setup is not complete
           myColor = currentIsWhite ? 0 : 1;
           const serverSetup = Array.isArray(view?.setupComplete) ? view.setupComplete : setupComplete;
@@ -667,8 +710,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function createScoreboard(match) {
-    const p1Name = match?.player1?.username || 'Player 1';
-    const p2Name = match?.player2?.username || 'Player 2';
+    const p1Name = formatPlayerName(match?.player1?.username, 0);
+    const p2Name = formatPlayerName(match?.player2?.username, 1);
     const p1Score = match?.player1Score || 0;
     const p2Score = match?.player2Score || 0;
     const finishedGames = Array.isArray(match?.games)
@@ -1018,6 +1061,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const bottomClr = currentIsWhite ? 0 : 1;
     const topMs = topClr === 0 ? whiteTimeMs : blackTimeMs;
     const bottomMs = bottomClr === 0 ? whiteTimeMs : blackTimeMs;
+    const topIdx = currentIsWhite ? 1 : 0;
+    const bottomIdx = currentIsWhite ? 0 : 1;
     const bars = renderBarsModule({
       topBar,
       bottomBar,
@@ -1036,7 +1081,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         showChallengeTop,
         showChallengeBottom,
         clockTop: formatClock(topMs),
-        clockBottom: formatClock(bottomMs)
+        clockBottom: formatClock(bottomMs),
+        nameTop: playerNames[topIdx] || ('Anonymous' + topIdx),
+        nameBottom: playerNames[bottomIdx] || ('Anonymous' + bottomIdx)
       },
       identityMap: PIECE_IMAGES
     });
@@ -1401,7 +1448,12 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
     function fillBar(barEl, isTopBar) {
       while (barEl.firstChild) barEl.removeChild(barEl.firstChild);
-      const nameRow = makeNameRow(isTopBar ? 'Opponent Name' : 'My Name', isTopBar);
+      const topIdx = currentIsWhite ? 1 : 0;
+      const bottomIdx = currentIsWhite ? 0 : 1;
+      const name = isTopBar
+        ? (playerNames[topIdx] || ('Anonymous' + topIdx))
+        : (playerNames[bottomIdx] || ('Anonymous' + bottomIdx));
+      const nameRow = makeNameRow(name, isTopBar);
       const row = document.createElement('div');
       row.style.height = rowH + 'px';
       row.style.display = 'flex';
@@ -1441,8 +1493,6 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       }
     }
 
-    fillBar(topBar, true);
-    fillBar(bottomBar, false);
   }
 
   // Render staggered stash slots + on-deck below the bottom bar

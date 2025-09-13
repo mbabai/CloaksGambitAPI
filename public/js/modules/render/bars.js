@@ -15,7 +15,9 @@ export function renderBars({
     showChallengeTop = false,
     showChallengeBottom = false,
     clockTop = '5:00',
-    clockBottom = '5:00'
+    clockBottom = '5:00',
+    nameTop = 'Opponent Name',
+    nameBottom = 'My Name'
   } = state;
 
   if (!topBar || !bottomBar) return;
@@ -169,7 +171,7 @@ export function renderBars({
     while (barEl.firstChild) barEl.removeChild(barEl.firstChild);
     const showBubble = isTopBar ? showChallengeTop : showChallengeBottom;
     const nameRow = makeNameRow(
-      isTopBar ? 'Opponent Name' : 'My Name',
+      isTopBar ? nameTop : nameBottom,
       isTopBar,
       showBubble
     );
