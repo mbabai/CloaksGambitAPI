@@ -5,7 +5,7 @@ import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiGetMatchDetails } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiCheckTimeControl, apiGetMatchDetails } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -102,6 +102,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let clockInterval = null;
   let topClockEl = null;
   let bottomClockEl = null;
+  let timeExpiredSent = false;
 
   // Pointer interaction thresholds
   const DRAG_PX_THRESHOLD = DRAG_PX_THRESHOLD_CFG; // from config import (kept names for legacy usage)
@@ -206,6 +207,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       blackTimeMs -= diff;
     }
     updateClockDisplay();
+    if (!timeExpiredSent && (whiteTimeMs <= 0 || blackTimeMs <= 0) && lastGameId) {
+      timeExpiredSent = true;
+      apiCheckTimeControl(lastGameId).catch(err => console.error('checkTimeControl failed', err));
+    }
   }
 
   function startClockInterval() {
@@ -278,6 +283,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     blackTimeMs = black;
     activeColor = (setupFlags[0] && setupFlags[1]) ? turn : null;
     updateClockDisplay();
+    const expired = whiteTimeMs <= 0 || blackTimeMs <= 0;
+    if (expired && lastGameId && !timeExpiredSent) {
+      timeExpiredSent = true;
+      apiCheckTimeControl(lastGameId).catch(err => console.error('checkTimeControl failed', err));
+    } else if (!expired) {
+      timeExpiredSent = false;
+    }
     startClockInterval();
   }
 

@@ -15,12 +15,18 @@ router.post('/', async (req, res) => {
 
     // If game already ended just report true
     if (!game.isActive) {
-      return res.json({ gameOver: true });
+      return res.json({
+        gameOver: true,
+        winner: game.winner,
+        draw: game.winner == null,
+        winReason: game.winReason,
+      });
     }
 
     const config = new ServerConfig();
     const timeControl = game.timeControlStart;
     const increment = game.increment;
+    const winReason = config.winReasons.get('TIME_CONTROL');
     const now = Date.now();
     const elapsed = now - new Date(game.startTime).getTime();
 
@@ -30,21 +36,21 @@ router.post('/', async (req, res) => {
     if (!setup0 || !setup1) {
       if (elapsed > timeControl) {
         if (!setup0 && !setup1) {
-          await game.endGame(null, config.winReasons.get('TIME_CONTROL'));
+          await game.endGame(null, winReason);
           eventBus.emit('gameChanged', {
             game: typeof game.toObject === 'function' ? game.toObject() : game,
             affectedUsers: (game.players || []).map(p => p.toString()),
           });
-          return res.json({ gameOver: true, draw: true });
+          return res.json({ gameOver: true, draw: true, winReason });
         }
 
         const winnerColor = setup0 ? 0 : 1;
-        await game.endGame(winnerColor, config.winReasons.get('TIME_CONTROL'));
+        await game.endGame(winnerColor, winReason);
         eventBus.emit('gameChanged', {
           game: typeof game.toObject === 'function' ? game.toObject() : game,
           affectedUsers: (game.players || []).map(p => p.toString()),
         });
-        return res.json({ gameOver: true, winner: winnerColor });
+        return res.json({ gameOver: true, winner: winnerColor, winReason });
       }
 
       return res.json({ gameOver: false });
@@ -55,12 +61,12 @@ router.post('/', async (req, res) => {
     const actionsCount = game.actions.filter(a => a.player === turnPlayer).length;
     if (elapsed + actionsCount * increment > timeControl) {
       const winnerColor = turnPlayer === 0 ? 1 : 0;
-      await game.endGame(winnerColor, config.winReasons.get('TIME_CONTROL'));
+      await game.endGame(winnerColor, winReason);
       eventBus.emit('gameChanged', {
         game: typeof game.toObject === 'function' ? game.toObject() : game,
         affectedUsers: (game.players || []).map(p => p.toString()),
       });
-      return res.json({ gameOver: true, winner: winnerColor });
+      return res.json({ gameOver: true, winner: winnerColor, winReason });
     }
 
     return res.json({ gameOver: false });
@@ -69,4 +75,4 @@ router.post('/', async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;

@@ -317,6 +317,32 @@ function initSocket(httpServer) {
       });
 
       socket.emit('initialState', { queued, games: maskedGames });
+
+      const finishedGames = await Game.find({ players: userId, isActive: false }).lean();
+      finishedGames.forEach((game) => {
+        socket.emit('game:finished', {
+          matchId: game.match?.toString(),
+          gameId: game._id.toString(),
+          board: game.board,
+          actions: game.actions,
+          moves: game.moves,
+          captured: game.captured,
+          stashes: game.stashes,
+          onDecks: game.onDecks,
+          players: (game.players || []).map(p => p.toString()),
+          daggers: game.daggers,
+          playerTurn: game.playerTurn,
+          onDeckingPlayer: game.onDeckingPlayer,
+          setupComplete: game.setupComplete,
+          isActive: game.isActive,
+          winner: game.winner,
+          winReason: game.winReason,
+          playersReady: game.playersReady,
+          startTime: game.startTime,
+          timeControlStart: game.timeControlStart,
+          increment: game.increment,
+        });
+      });
     } catch (err) {
       console.error('Error fetching initial state:', err);
     }
