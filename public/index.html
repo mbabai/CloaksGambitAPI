@@ -8,7 +8,8 @@
     <style>
       :root { --forest: var(--CG-forest); --purple: var(--CG-purple); --purple-pressed: var(--CG-purple-pressed); }
       html, body { height: 100%; }
-      body { margin: 0; background: var(--forest) url('assets/images/Background.png') center/cover no-repeat; color: var(--CG-white); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+      body { margin: 0; background-color: var(--forest); color: var(--CG-white); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; position: relative; }
+      body::before { content: ""; position: fixed; inset: 0; background: url('assets/images/Background.png') center/cover no-repeat; filter: brightness(0.8) contrast(0.65); z-index: -1; }
       .queuer { position: fixed; top: 16px; right: 16px; width: 280px; max-width: 50vw; display: flex; flex-direction: column; gap: 0; }
       .cta {
         height: 120px;

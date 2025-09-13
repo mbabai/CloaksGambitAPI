@@ -12,7 +12,8 @@
         --deep-gold: var(--CG-deep-gold);
         --light-gold: var(--CG-light-gold);
       }
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 0; background: var(--deep-green) url('assets/images/Background.png') center/cover no-repeat; color: var(--light-gold); }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 0; background-color: var(--deep-green); color: var(--light-gold); position: relative; }
+      body::before { content: ""; position: fixed; inset: 0; background: url('assets/images/Background.png') center/cover no-repeat; filter: brightness(0.8) contrast(0.65); z-index: -1; }
       .container { padding: 24px; max-width: 1000px; margin: 0 auto; }
       h2 { margin: 0 0 16px; font-weight: 700; color: var(--light-gold); }
       .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
