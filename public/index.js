@@ -20,6 +20,94 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const modeSelect = document.getElementById('modeSelect');
   const selectWrap = document.getElementById('selectWrap');
 
+  const menuToggle = document.getElementById('menuToggle');
+  const menuContainer = document.getElementById('menuContainer');
+  const menuMain = document.getElementById('menuMain');
+  const accountBtn = document.getElementById('accountBtn');
+  const accountPanel = document.getElementById('menuAccountPanel');
+
+  let menuOpen = false;
+  const PANEL_WIDTH = 180;
+  const PANEL_MARGIN = 16; // keep gap from Find Game button
+
+  function adjustMenuBounds() {
+    const queueRect = queueBtn.getBoundingClientRect();
+    const availableWidth = Math.max(queueRect.left - PANEL_MARGIN, 0);
+    const mainWidth = Math.min(PANEL_WIDTH, availableWidth);
+    menuMain.style.width = mainWidth + 'px';
+
+    let totalWidth = mainWidth;
+
+    if (accountPanel.style.display === 'block') {
+      accountPanel.style.left = mainWidth + 'px';
+      accountPanel.style.width = PANEL_WIDTH + 'px';
+
+      const selectRect = selectWrap.getBoundingClientRect();
+      const maxHeight = Math.max(window.innerHeight - selectRect.bottom - PANEL_MARGIN, 0);
+      const desiredHeight = Math.min(window.innerHeight * 0.75, maxHeight);
+      accountPanel.style.height = desiredHeight + 'px';
+      totalWidth += PANEL_WIDTH;
+    }
+
+    menuContainer.style.width = totalWidth + 'px';
+  }
+
+  function closeAccountPanel() {
+    accountPanel.style.display = 'none';
+    accountBtn.classList.remove('active');
+    adjustMenuBounds();
+  }
+
+  function openAccountPanel() {
+    accountPanel.style.display = 'block';
+    accountBtn.classList.add('active');
+    adjustMenuBounds();
+  }
+
+  function openMenu() {
+    menuContainer.classList.add('open');
+    menuOpen = true;
+    adjustMenuBounds();
+  }
+
+  function closeMenu() {
+    menuOpen = false;
+    menuContainer.classList.remove('open');
+    closeAccountPanel();
+  }
+
+  menuToggle.addEventListener('click', ev => {
+    ev.stopPropagation();
+    if (menuOpen) closeMenu(); else openMenu();
+  });
+
+  accountBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    if (accountPanel.style.display === 'block') {
+      closeAccountPanel();
+    } else {
+      openAccountPanel();
+    }
+  });
+
+  document.addEventListener('click', ev => {
+    if (!menuOpen) return;
+    const target = ev.target;
+    if (!menuContainer.contains(target) && target !== menuToggle) {
+      closeMenu();
+    } else if (
+      accountPanel.style.display === 'block' &&
+      !accountPanel.contains(target) &&
+      target !== accountBtn
+    ) {
+      closeAccountPanel();
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    if (menuOpen) adjustMenuBounds();
+  });
+
   // Cookie helpers moved to modules/utils/cookies.js
 
   const ACTIONS = { SETUP: 0, MOVE: 1, CHALLENGE: 2, BOMB: 3, PASS: 4 };

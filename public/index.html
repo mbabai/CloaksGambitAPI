@@ -39,9 +39,85 @@
       .onDeckGlow {
         animation: onDeckPulse 1.5s infinite;
       }
+
+      /* Menu system */
+      .menu-toggle {
+        position: fixed;
+        top: 16px;
+        left: 16px;
+        width: 44px;
+        height: 44px;
+        background: none;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        z-index: 2000;
+      }
+      .menu-toggle img { width: 100%; height: 100%; }
+
+      .menu-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100%;
+        display: none;
+        z-index: 1500;
+      }
+      .menu-container.open { display: block; }
+      .menu-panel {
+        position: absolute;
+        top: 0;
+        height: 100%;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        background: var(--purple);
+        border: 2px solid var(--CG-deep-gold);
+        box-sizing: border-box;
+        width: 180px;
+      }
+      #menuAccountPanel {
+        background: var(--purple);
+        top: auto;
+        bottom: 0;
+        height: 75vh;
+      }
+      .menu-spacer {
+        flex: 0 0 60px;
+      }
+      .menu-buttons {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        flex: 1;
+      }
+      .menu-button {
+        background: none;
+        border: none;
+        color: var(--CG-white);
+        padding: 16px;
+        text-align: right;
+        font-size: 20px;
+        cursor: pointer;
+        width: 100%;
+      }
+      .menu-button.active { background: var(--purple-pressed); }
     </style>
   </head>
   <body>
+    <button id="menuToggle" class="menu-toggle"><img src="assets/images/UI/menuButton.svg" alt="Menu" /></button>
+    <div id="menuContainer" class="menu-container">
+      <nav id="menuMain" class="menu-panel">
+        <div class="menu-spacer"></div>
+        <div class="menu-buttons">
+          <button id="accountBtn" class="menu-button">Account</button>
+        </div>
+      </nav>
+      <div id="menuAccountPanel" class="menu-panel" style="display:none">
+        <div class="menu-spacer"></div>
+        <div class="menu-buttons"></div>
+      </div>
+    </div>
     <div class="queuer">
       <button id="queueBtn" class="cta">Find Game</button>
       <div class="selectWrap" id="selectWrap">
