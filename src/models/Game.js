@@ -100,6 +100,16 @@ const gameSchema = new mongoose.Schema({
             message: 'Players ready must contain exactly two boolean values'
         }
     },
+    playersNext: {
+        type: [Boolean],
+        default: [false, false],
+        validate: {
+            validator: function(v) {
+                return v.length === 2;
+            },
+            message: 'Players next must contain exactly two boolean values'
+        }
+    },
     playerTurn: {
         type: Number,
         default: null,

@@ -5,6 +5,13 @@ export async function apiReady(gameId, color) {
   });
 }
 
+export async function apiNext(gameId, color) {
+  return fetch('/api/v1/gameAction/next', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gameId, color })
+  });
+}
+
 export async function apiSetup(payload) {
   return fetch('/api/v1/gameAction/setup', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -30,6 +37,20 @@ export async function apiEnterQueue(userId) {
 
 export async function apiExitQueue(userId) {
   return fetch('/api/v1/lobby/exitQuickplay', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId })
+  });
+}
+
+export async function apiEnterRankedQueue(userId) {
+  return fetch('/api/v1/lobby/enterRanked', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId })
+  });
+}
+
+export async function apiExitRankedQueue(userId) {
+  return fetch('/api/v1/lobby/exitRanked', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId })
   });

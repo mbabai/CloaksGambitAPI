@@ -5,6 +5,7 @@ const Match = require('../../../models/Match');
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const User = require('../../../models/User');
 
 // Function to check and create matches
 async function checkAndCreateMatches() {
@@ -74,6 +75,11 @@ async function checkAndCreateMatches() {
           affectedUsers: [player1.toString(), player2.toString()],
         });
 
+        eventBus.emit('players:bothNext', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: [player1.toString(), player2.toString()],
+        });
+
         // Update match with game
         match.games.push(game._id);
         await match.save();
@@ -123,6 +129,11 @@ async function checkAndCreateMatches() {
       const player1 = lobby.rankedQueue[0];
       const player2 = lobby.rankedQueue[1];
 
+      const [p1User, p2User] = await Promise.all([
+        User.findById(player1).lean().catch(() => null),
+        User.findById(player2).lean().catch(() => null)
+      ]);
+
       console.log('Creating ranked match for players:', {
         player1: player1.toString(),
         player2: player2.toString()
@@ -136,7 +147,11 @@ async function checkAndCreateMatches() {
           type: config.gameModes.get('RANKED'),
           player1Score: 0,
           player2Score: 0,
-          games: []
+          games: [],
+          player1StartElo: p1User?.elo ?? 1000,
+          player2StartElo: p2User?.elo ?? 1000,
+          player1EndElo: p1User?.elo ?? 1000,
+          player2EndElo: p2User?.elo ?? 1000,
         });
 
         console.log('Match created:', match._id);
@@ -152,6 +167,11 @@ async function checkAndCreateMatches() {
         console.log('Game created:', game._id);
 
         eventBus.emit('gameChanged', {
+          game: typeof game.toObject === 'function' ? game.toObject() : game,
+          affectedUsers: [player1.toString(), player2.toString()],
+        });
+
+        eventBus.emit('players:bothNext', {
           game: typeof game.toObject === 'function' ? game.toObject() : game,
           affectedUsers: [player1.toString(), player2.toString()],
         });

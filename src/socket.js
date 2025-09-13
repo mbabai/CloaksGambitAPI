@@ -115,6 +115,8 @@ function initSocket(httpServer) {
         playersReady: game.playersReady,
         setupComplete: game.setupComplete,
         startTime: game.startTime,
+        timeControlStart: game.timeControlStart,
+        increment: game.increment,
       });
     });
 
@@ -142,6 +144,8 @@ function initSocket(httpServer) {
           winReason: game.winReason,
           playersReady: game.playersReady,
           startTime: game.startTime,
+          timeControlStart: game.timeControlStart,
+          increment: game.increment,
         });
       });
 
@@ -169,6 +173,40 @@ function initSocket(httpServer) {
       }
     })
   })
+
+  // Notify a single player that opponent clicked Next and countdown started
+  eventBus.on('nextCountdown', (payload) => {
+    const gameId = payload?.gameId?.toString?.() || payload?.gameId;
+    const color = payload?.color;
+    const seconds = payload?.seconds;
+    (payload?.affectedUsers || []).forEach(id => {
+      const socket = clients.get(id.toString());
+      if (socket) {
+        socket.emit('next:countdown', { gameId, color, seconds });
+      }
+    });
+  });
+
+  // Relay both-next signal to affected users with their color
+  eventBus.on('players:bothNext', async (payload) => {
+    let game = payload.game;
+    if (!game) {
+      const gameId = payload?.gameId;
+      if (gameId) {
+        try {
+          game = await Game.findById(gameId).lean();
+        } catch (_) {}
+      }
+    }
+    if (!game) return;
+    const gameIdStr = game._id.toString();
+    (payload?.affectedUsers || game.players || []).forEach((id, idx) => {
+      const socket = clients.get(id.toString());
+      if (socket) {
+        socket.emit('players:bothNext', { gameId: gameIdStr, color: idx });
+      }
+    });
+  });
 
   async function setupChangeStream(Model, streamName, pipeline, options, handler) {
     let resumeToken = await ChangeStreamToken.getToken(streamName);
@@ -273,6 +311,8 @@ function initSocket(httpServer) {
           players: game.players.map(p => p.toString()),
           playersReady: game.playersReady,
           startTime: game.startTime,
+          timeControlStart: game.timeControlStart,
+          increment: game.increment,
         };
       });
 

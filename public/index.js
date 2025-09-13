@@ -5,7 +5,7 @@ import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiGetMatchDetails } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiGetMatchDetails } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -55,6 +55,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let playAreaRoot = null;
   let isPlayAreaVisible = false;
   let queuerHidden = false;
+  let currentMatch = null;
 
   // Simple board + bars state (plain page)
   let boardRoot = null;
@@ -126,7 +127,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   // Track server truth and optimistic intent to avoid flicker
-  let isQueuedServer = false;
+  const queuedState = { quickplay: false, ranked: false };
   let pendingAction = null; // 'join' | 'leave' | null
 
   function isBombActive() {
@@ -266,8 +267,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function updateFindButton() {
-    const showSearching = pendingAction === 'join' || isQueuedServer;
-    console.log('[UI] updateFindButton', { showSearching, pendingAction, isQueuedServer });
+    const mode = modeSelect.value;
+    const isQueued = queuedState[mode];
+    const showSearching = pendingAction === 'join' || isQueued;
+    console.log('[UI] updateFindButton', { showSearching, pendingAction, isQueued });
     if (showSearching) {
       queueBtn.textContent = 'Searching...';
       queueBtn.classList.add('searching');
@@ -286,8 +289,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       onConnect() { console.log('[socket] connected'); },
       async onInitialState(payload) {
       console.log('[socket] initialState', payload);
-      const queued = payload && payload.queued && !!payload.queued.quickplay;
-      isQueuedServer = Boolean(queued);
+      queuedState.quickplay = Boolean(payload?.queued?.quickplay);
+      queuedState.ranked = Boolean(payload?.queued?.ranked);
       pendingAction = null;
       updateFindButton();
 
@@ -351,7 +354,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       onQueueUpdate(payload) {
 
       if (!payload) return;
-      isQueuedServer = Boolean(payload.quickplay);
+      queuedState.quickplay = Boolean(payload.quickplay);
+      queuedState.ranked = Boolean(payload.ranked);
       pendingAction = null;
       updateFindButton();
       },
@@ -389,19 +393,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           renderBoardAndBars();
         }
 
-        if (lastGameId === gameId) return; // already handled for this game (banner + auto ready)
         lastGameId = gameId;
-
-        showMatchFoundBanner(3, async function onTick(remaining) {
-          if (remaining === 0) {
-            try {
-              console.log('[game] sending READY at 0s', { gameId, color })
-                await apiReady(gameId, color);
-            } catch (e) {
-              console.error('Failed to send READY', e);
-            }
-          }
-        });
       } catch (e) {
         console.error('Error handling game:update', e);
       }
@@ -442,6 +434,41 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           }
         })();
       },
+      async onNextCountdown(payload) {
+        try {
+          const { gameId, color, seconds } = payload || {};
+          const desc = document.getElementById('gameOverDesc');
+          const btn = document.getElementById('gameOverNextBtn');
+          if (!desc) return;
+          let remaining = seconds || 5;
+          desc.textContent = `Opponent ready. Continuing in ${remaining}...`;
+          if (bannerInterval) clearInterval(bannerInterval);
+          bannerInterval = setInterval(async () => {
+            remaining -= 1;
+            if (remaining <= 0) {
+              clearInterval(bannerInterval);
+              bannerInterval = null;
+              try { await apiNext(gameId, color); } catch (e) { console.error('auto next failed', e); }
+              desc.textContent = 'Waiting for other player...';
+              if (btn) btn.style.display = 'none';
+            } else {
+              desc.textContent = `Opponent ready. Continuing in ${remaining}...`;
+            }
+          }, 1000);
+        } catch (e) { console.error('next countdown handler failed', e); }
+      },
+      async onBothNext(payload) {
+        try {
+          const { gameId, color } = payload || {};
+          if (!gameId) return;
+          lastGameId = gameId;
+          showMatchFoundBanner(3, async function(remaining) {
+            if (remaining === 0) {
+              try { await apiReady(gameId, color); } catch (e) { console.error('Failed to ready after next', e); }
+            }
+          });
+        } catch (e) { console.error('players:bothNext handler failed', e); }
+      },
       async onBothReady(payload) {
         try {
 
@@ -475,9 +502,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     });
   }
 
-  async function enterQueue() {
-    console.log('[action] enterQueue', { userId });
-    const res = await apiEnterQueue(userId);
+  async function enterQueue(mode) {
+    console.log('[action] enterQueue', { userId, mode });
+    const res = mode === 'ranked' ? await apiEnterRankedQueue(userId) : await apiEnterQueue(userId);
     console.log('[action] enterQueue response', res.status);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -485,9 +512,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     }
   }
 
-  async function exitQueue() {
-    console.log('[action] exitQueue', { userId });
-    const res = await apiExitQueue(userId);
+  async function exitQueue(mode) {
+    console.log('[action] exitQueue', { userId, mode });
+    const res = mode === 'ranked' ? await apiExitRankedQueue(userId) : await apiExitQueue(userId);
     console.log('[action] exitQueue response', res.status);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -497,20 +524,17 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   queueBtn.addEventListener('click', async function() {
     const mode = modeSelect.value;
-    console.log('[ui] click queueBtn', { mode, pendingAction, isQueuedServer });
-    if (!(pendingAction === 'join' || isQueuedServer) && mode !== 'quickplay') {
-      alert('This queue is still under construction!');
-      return;
-    }
+    const isQueued = queuedState[mode];
+    console.log('[ui] click queueBtn', { mode, pendingAction, isQueued });
     try {
-      if (!(pendingAction === 'join' || isQueuedServer)) {
+      if (!(pendingAction === 'join' || isQueued)) {
         pendingAction = 'join';
         updateFindButton();
-        await enterQueue();
+        await enterQueue(mode);
       } else {
         pendingAction = 'leave';
         updateFindButton();
-        await exitQueue();
+        await exitQueue(mode);
       }
     } catch (e) {
       console.error(e);
@@ -582,7 +606,46 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   function showMatchFoundBanner(startSeconds, onTick) {
     const el = ensureBannerEl();
     el.style.alignItems = 'center';
-    const countEl = el.querySelector('#matchFoundCount');
+    while (el.firstChild) el.removeChild(el.firstChild);
+
+    const card = document.createElement('div');
+    card.style.width = '100%';
+    card.style.maxWidth = '100%';
+    card.style.height = '160px';
+    card.style.padding = '18px 26px';
+    card.style.borderRadius = '0';
+    card.style.borderTop = '2px solid var(--CG-deep-gold)';
+    card.style.borderBottom = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.boxShadow = '0 10px 30px rgba(0,0,0,0.35)';
+    card.style.textAlign = 'center';
+
+    const title = document.createElement('div');
+    let titleText = 'Match Found';
+    if (currentMatch) {
+      const finishedGames = Array.isArray(currentMatch?.games)
+        ? currentMatch.games.filter(g => !g.isActive).length
+        : 0;
+      if (finishedGames > 0) {
+        titleText = `Game ${finishedGames + 1}`;
+      }
+    }
+    title.textContent = titleText;
+    title.style.fontSize = '32px';
+    title.style.fontWeight = '800';
+    title.style.marginBottom = '10px';
+
+    const countEl = document.createElement('div');
+    countEl.style.fontSize = '80px';
+    countEl.style.fontWeight = '900';
+    countEl.style.lineHeight = '1';
+    countEl.id = 'matchFoundCount';
+
+    card.appendChild(title);
+    card.appendChild(countEl);
+    el.appendChild(card);
+
     let remaining = startSeconds;
     countEl.textContent = String(remaining);
     el.style.display = 'flex';
@@ -644,6 +707,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function showGameFinishedBanner({ winnerName, winnerColor, didWin, match }) {
+    currentMatch = match;
     const el = ensureBannerEl();
     el.style.alignItems = 'flex-end';
     while (el.firstChild) el.removeChild(el.firstChild);
@@ -674,6 +738,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     desc.textContent = `${winnerName} (${colorStr}) won by capturing the king!`;
     desc.style.fontSize = '20px';
     desc.style.fontWeight = '500';
+    desc.id = 'gameOverDesc';
 
     const score = createScoreboard(match);
 
@@ -690,13 +755,16 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     btn.style.padding = '10px 22px';
     btn.style.fontSize = '18px';
     btn.style.cursor = 'pointer';
+    btn.id = 'gameOverNextBtn';
     btn.addEventListener('click', async () => {
       const nextGame = Array.isArray(match?.games) ? match.games.find(g => g.isActive) : null;
+      if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
       if (nextGame) {
         try {
-          await apiReady(nextGame._id, 1 - myColor);
-          el.style.display = 'none';
-        } catch (e) { console.error('Failed to ready next game', e); }
+          await apiNext(nextGame._id, 1 - myColor);
+          desc.textContent = 'Waiting for other player...';
+          btn.style.display = 'none';
+        } catch (e) { console.error('Failed to queue next game', e); }
       } else {
         showMatchSummary(match);
       }
@@ -711,20 +779,22 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function showMatchSummary(match) {
+    currentMatch = match;
     const el = ensureBannerEl();
     el.style.alignItems = 'center';
     while (el.firstChild) el.removeChild(el.firstChild);
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
     const card = document.createElement('div');
     card.style.padding = '20px 30px';
-    card.style.borderRadius = '8px';
-    card.style.background = '#7e22ce';
-    card.style.color = '#ffffff';
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.borderRadius = '0';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
     card.style.textAlign = 'center';
     card.style.boxShadow = '0 10px 30px rgba(0,0,0,0.35)';
 
     const title = document.createElement('div');
-    title.textContent = 'Match Over';
+    title.textContent = 'Match Complete';
     title.style.fontSize = '32px';
     title.style.fontWeight = '800';
     title.style.marginBottom = '10px';
@@ -734,14 +804,15 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const btn = document.createElement('button');
     btn.textContent = 'Back to Lobby';
     btn.style.marginTop = '15px';
-    btn.style.background = '#fff';
-    btn.style.color = '#7e22ce';
-    btn.style.border = 'none';
-    btn.style.borderRadius = '4px';
+    btn.style.background = 'var(--CG-dark-red)';
+    btn.style.color = 'var(--CG-white)';
+    btn.style.fontWeight = '700';
+    btn.style.border = '2px solid var(--CG-deep-gold)';
+    btn.style.borderRadius = '0';
     btn.style.padding = '6px 12px';
     btn.style.fontSize = '16px';
     btn.style.cursor = 'pointer';
-    btn.addEventListener('click', () => { window.location.reload(); });
+    btn.addEventListener('click', () => { returnToLobby(); });
 
     card.appendChild(title);
     card.appendChild(score);
@@ -854,6 +925,37 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       queuer.style.display = 'none';
       queuerHidden = true;
     }
+  }
+
+  function showQueuer() {
+    if (!queuerHidden) return;
+    const queuer = document.querySelector('.queuer');
+    if (queuer) {
+      queuer.style.display = 'flex';
+      queuerHidden = false;
+    }
+  }
+
+  function hidePlayArea() {
+    if (!isPlayAreaVisible) return;
+    if (playAreaRoot) playAreaRoot.style.display = 'none';
+    isPlayAreaVisible = false;
+  }
+
+  function returnToLobby() {
+    hidePlayArea();
+    showQueuer();
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    if (bannerEl) {
+      while (bannerEl.firstChild) bannerEl.removeChild(bannerEl.firstChild);
+      bannerEl.style.display = 'none';
+    }
+    queuedState.quickplay = false;
+    queuedState.ranked = false;
+    pendingAction = null;
+    stopClockInterval();
+    updateFindButton();
+    currentMatch = null;
   }
 
   function renderBoardAndBars() {
