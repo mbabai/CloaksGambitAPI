@@ -97,12 +97,27 @@
         border: none;
         color: var(--CG-white);
         padding: 16px;
-        text-align: right;
         font-size: 20px;
         cursor: pointer;
         width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        text-decoration: none;
+      }
+      .menu-button img {
+        width: 24px;
+        height: 24px;
       }
       .menu-button.active { background: var(--purple-pressed); }
+      .menu-footer {
+        padding: 16px;
+      }
+      .menu-footer img {
+        width: 80px;
+        height: auto;
+      }
     </style>
   </head>
   <body>
@@ -111,7 +126,13 @@
       <nav id="menuMain" class="menu-panel">
         <div class="menu-spacer"></div>
         <div class="menu-buttons">
-          <button id="accountBtn" class="menu-button">Account</button>
+          <button id="accountBtn" class="menu-button">Account <img src="assets/images/account.png" alt="Account" /></button>
+          <a class="menu-button" href="https://drive.google.com/file/d/172IyBX2voKSh7LqQnUWb4dsBzug69ong/view?usp=drive_link" target="_blank" rel="noopener">Rulebook <img src="assets/images/book.png" alt="Rulebook" /></a>
+          <a class="menu-button" href="#">Video Rules <img src="assets/images/youtube-icon.png" alt="Video Rules" /></a>
+          <a class="menu-button" href="https://forms.gle/72X9cXCe5BM4MN6S7" target="_blank" rel="noopener">Feedback <img src="assets/images/feedback.png" alt="Feedback" /></a>
+        </div>
+        <div class="menu-footer">
+          <a href="https://bymarcell.com" target="_blank" rel="noopener"><img src="assets/images/byMarcell.webp" alt="by Marcell" /></a>
         </div>
       </nav>
       <div id="menuAccountPanel" class="menu-panel" style="display:none">
