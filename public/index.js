@@ -177,6 +177,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const PIECE_PRELOAD = {}; // identity -> { color -> HTMLImageElement }
   let dragPreviewImgs = []; // active floating preview images
   let lastChoiceOrigin = null; // remember origin for two-option choice
+  let gameFinished = false; // true when the current game has concluded
 
   // Clock state
   let timeControl = 0;
@@ -302,6 +303,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function startClockInterval() {
+    if (gameFinished) return;
     if (clockInterval) clearInterval(clockInterval);
     lastClockUpdate = Date.now();
     clockInterval = setInterval(tickClock, 100);
@@ -502,6 +504,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         const color = payload.players.findIndex(p => p === userId);
         if (color !== 0 && color !== 1) return;
 
+        gameFinished = payload.winReason !== undefined && payload.winReason !== null;
+        if (gameFinished) {
+          stopClockInterval();
+          selected = null;
+          dragging = null;
+        }
+
         // As soon as we are in a game, hide the Find Game UI
         hideQueuer();
         loadPlayerNames(payload.players);
@@ -537,6 +546,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       },
       onGameFinished(payload) {
         console.log('[socket] game:finished', payload);
+        gameFinished = payload?.winReason !== undefined && payload?.winReason !== null;
+        stopClockInterval();
+        selected = null;
+        dragging = null;
+        renderBoardAndBars();
         (async () => {
           try {
             const winnerIdx = payload?.winner;
@@ -1122,6 +1136,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     queuedState.ranked = false;
     pendingAction = null;
     stopClockInterval();
+    gameFinished = false;
     updateFindButton();
     currentMatch = null;
   }
@@ -1235,7 +1250,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         currentOnDecks,
         currentOnDeckingPlayer,
         selected,
-        dragging
+        dragging,
+        gameFinished
       },
       refs,
       identityMap: PIECE_IMAGES,
@@ -2090,6 +2106,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     try { el.style.cursor = 'pointer'; } catch (_) {}
     // Mouse: threshold promotion to drag, otherwise click-to-move
     el.addEventListener('mousedown', (e) => {
+      if (gameFinished) return;
       if (Date.now() < suppressMouseUntil) return; // ignore synthetic mouse after touch
       const myColorIdx = currentIsWhite ? 0 : 1;
       const isOnDeckTurn = (!isInSetup && currentOnDeckingPlayer === myColorIdx);
@@ -2141,6 +2158,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     });
     // Touch: mirror behavior with slightly higher jitter tolerance
     el.addEventListener('touchstart', (e) => {
+      if (gameFinished) return;
       const myColorIdx = currentIsWhite ? 0 : 1;
       const isOnDeckTurn = (!isInSetup && currentOnDeckingPlayer === myColorIdx);
       if (!isInSetup && !isOnDeckTurn) return;
@@ -2194,6 +2212,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     try { cell.style.cursor = 'pointer'; } catch (_) {}
     const sourceTarget = { type: 'boardAny', uiR, uiC };
     cell.addEventListener('mousedown', (e) => {
+      if (gameFinished) return;
       if (Date.now() < suppressMouseUntil) return;
       if (isInSetup) return; // not in setup
       if (currentOnDeckingPlayer !== null) return; // disable board moves during on-deck phase
@@ -2229,6 +2248,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       document.addEventListener('mouseup', up);
     });
     cell.addEventListener('touchstart', (e) => {
+      if (gameFinished) return;
       if (isInSetup) return;
       if (currentOnDeckingPlayer !== null) return; // disable during on-deck phase
       if (isBombActive()) return; // lock movement during bomb
@@ -2558,6 +2578,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function startDrag(e, origin, piece) {
+    if (gameFinished) return;
     try { if (e && typeof e.preventDefault === 'function') e.preventDefault(); } catch (_) {}
     try { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); } catch (_) {}
     selected = { ...origin };

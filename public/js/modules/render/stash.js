@@ -9,7 +9,7 @@ export function renderStash({
   onAttachHandlers
 }) {
   const { squareSize: s, boardWidth: bW, boardHeight: bH, boardLeft: leftPx, boardTop: topPx, playAreaHeight: H } = sizes;
-  const { currentIsWhite, isInSetup, workingStash, workingOnDeck, currentStashes, currentOnDecks, selected, dragging, currentOnDeckingPlayer } = state;
+  const { currentIsWhite, isInSetup, workingStash, workingOnDeck, currentStashes, currentOnDecks, selected, dragging, currentOnDeckingPlayer, gameFinished } = state;
 
   if (!container) return;
 
@@ -104,7 +104,7 @@ export function renderStash({
     if (isOnDeck) {
       refs.deckEl = el;
       el.style.zIndex = '10'; // ensure on-deck sits above other stash slots/pieces
-      if (isOnDeckTurn) el.classList.add('onDeckGlow');
+      if (isOnDeckTurn && !gameFinished) el.classList.add('onDeckGlow');
       if ((isInSetup || isOnDeckTurn) && onAttachHandlers) onAttachHandlers(el, { type: 'deck', index: 0 });
       if (selected && selected.type === 'deck') {
         el.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
