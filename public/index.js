@@ -2083,14 +2083,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     for (let uiCol = 0; uiCol < 5; uiCol++) {
       const piece = workingRank[uiCol];
       if (!piece) continue;
-      // Derive server column from labeled bottom-row cell for robustness
-      // Find the bottom UI cell DIV corresponding to this uiCol and read its serverCol mapping
+      // Derive server column using cached bottom cell references
       let colServer = null;
       try {
-        const bottomRowIndex = currentRows - 1;
-        const boardChildrenIndex = bottomRowIndex * currentCols + uiCol; // grid order
-        const cellEl = boardRoot?.children?.[boardChildrenIndex];
-        const parsed = cellEl ? parseInt(cellEl?.dataset?.serverCol, 10) : NaN;
+        const cellRef = refs.bottomCells?.[uiCol];
+        const parsed = cellRef?.el ? parseInt(cellRef.el.dataset?.serverCol, 10) : NaN;
         if (!Number.isNaN(parsed)) colServer = parsed;
       } catch (_) {}
       if (colServer === null) {
