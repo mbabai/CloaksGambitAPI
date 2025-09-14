@@ -6,6 +6,7 @@ const userGetList = require('./users/getList');
 const userGetDetails = require('./users/getDetails');
 const userCreate = require('./users/create');
 const userUpdate = require('./users/update');
+const userPurge = require('./users/purge');
 
 // Match routes
 const matchGetList = require('./matches/getList');
@@ -44,6 +45,7 @@ router.use('/users/getList', userGetList);
 router.use('/users/getDetails', userGetDetails);
 router.use('/users/create', userCreate);
 router.use('/users/update', userUpdate);
+router.use('/users/purge', userPurge);
 
 // Match routes
 router.use('/matches/getList', matchGetList);

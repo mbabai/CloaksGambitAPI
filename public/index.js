@@ -25,6 +25,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const menuMain = document.getElementById('menuMain');
   const accountBtn = document.getElementById('accountBtn');
   const accountPanel = document.getElementById('menuAccountPanel');
+  const usernameDisplay = document.getElementById('usernameDisplay');
 
   let menuOpen = false;
   const PANEL_WIDTH = 180;
@@ -108,31 +109,23 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     if (menuOpen) adjustMenuBounds();
   });
 
+  function setUsernameDisplay() {
+    const name = localStorage.getItem('cg_username');
+    if (usernameDisplay) {
+      usernameDisplay.textContent = name || '';
+    }
+  }
+
+  setUsernameDisplay();
+
   // Cookie helpers moved to modules/utils/cookies.js
 
   const ACTIONS = { SETUP: 0, MOVE: 1, CHALLENGE: 2, BOMB: 3, PASS: 4 };
 
-  // Ensure a valid Mongo user exists and get its _id
+  // Retrieve stored user ID if present; server assigns one if missing
   async function ensureUserId() {
-    let id = getCookie('userId');
-    if (id) return id;
-
-    const nonce = Date.now().toString(36) + Math.random().toString(36).slice(2);
-    const username = 'guest_' + nonce;
-    const email = nonce + '@guest.local';
-    const res = await fetch('/api/v1/users/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email })
-    });
-    if (!res.ok) {
-      throw new Error('Failed to create guest user');
-    }
-    const user = await res.json();
-    id = user && user._id;
-    if (!id) throw new Error('Invalid user response');
-    setCookie('userId', id, 60 * 60 * 24 * 365); // 1 year
-    return id;
+    const id = getCookie('userId');
+    return id || null;
   }
 
   let socket;
@@ -229,7 +222,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function formatPlayerName(username, idx) {
-    if (!username || String(username).startsWith('guest_')) {
+    if (!username) {
       return 'Anonymous' + idx;
     }
     return username;
@@ -660,6 +653,17 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         }
       },
       onDisconnect() { /* keep UI; server handles grace */ }
+    });
+    socket.on('user:init', (payload) => {
+      const newId = payload && payload.userId;
+      if (newId) {
+        userId = newId;
+        setCookie('userId', newId, 60 * 60 * 24 * 365);
+      }
+      if (payload && payload.username) {
+        localStorage.setItem('cg_username', payload.username);
+      }
+      setUsernameDisplay();
     });
   }
 

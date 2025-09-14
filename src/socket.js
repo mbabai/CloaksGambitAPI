@@ -4,6 +4,8 @@ const Game = require('./models/Game');
 const maskGameForColor = require('./utils/gameView');
 const eventBus = require('./eventBus');
 const ChangeStreamToken = require('./models/ChangeStreamToken');
+const ensureUser = require('./utils/ensureUser');
+const User = require('./models/User');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -60,12 +62,12 @@ function initSocket(httpServer) {
       }
     });
 
-    lobbyState.quickplayQueue = newQuick;
-    lobbyState.rankedQueue = newRanked;
+      lobbyState.quickplayQueue = newQuick;
+      lobbyState.rankedQueue = newRanked;
 
-		// Emit updated metrics to admin dashboard
-		emitAdminMetrics();
-  });
+      // Emit updated metrics to admin dashboard
+      emitAdminMetrics();
+    });
 
   eventBus.on('gameChanged', async (payload) => {
     let game;
@@ -280,15 +282,22 @@ function initSocket(httpServer) {
   eventBus.on('adminRefresh', () => emitAdminMetrics());
 
   io.on('connection', async (socket) => {
-    const { userId } = socket.handshake.auth;
-    if (userId) {
-      // If a user reconnects quickly, keep the most recent socket only
-      const prev = clients.get(userId)
-      if (prev && prev.id !== socket.id) {
-        try { prev.disconnect(true) } catch (_) {}
-      }
-      clients.set(userId, socket);
+    let { userId } = socket.handshake.auth || {};
+    let userInfo;
+    try {
+      userInfo = await ensureUser(userId);
+      userId = userInfo.userId;
+    } catch (err) {
+      console.error('Failed to ensure user account:', err);
+      return socket.disconnect(true);
     }
+    // If a user reconnects quickly, keep the most recent socket only
+    const prev = clients.get(userId);
+    if (prev && prev.id !== socket.id) {
+      try { prev.disconnect(true) } catch (_) {}
+    }
+    clients.set(userId, socket);
+    socket.emit('user:init', { userId, username: userInfo.username });
     console.log('Client connected', socket.id);
 
     // Emit updated metrics to admin dashboard on new connection
@@ -399,6 +408,20 @@ function initSocket(httpServer) {
         console.error('Error fetching active matches for admin metrics:', err);
       }
 
+      const allIds = new Set([
+        ...connectedIds,
+        ...lobbyState.quickplayQueue,
+        ...lobbyState.rankedQueue,
+        ...inGameIds,
+      ]);
+      const users = await User.find({ _id: { $in: Array.from(allIds) } })
+        .select('_id username')
+        .lean();
+      const usernames = {};
+      users.forEach(u => {
+        usernames[u._id.toString()] = u.username;
+      });
+
       adminNamespace.emit('admin:metrics', {
         connectedUsers: connectedIds.length,
         quickplayQueue: lobbyState.quickplayQueue.length,
@@ -410,6 +433,7 @@ function initSocket(httpServer) {
         inGameUserIds: inGameIds,
         games: gamesList,
         matches: matchesList,
+        usernames,
       });
     } catch (err) {
       console.error('Error emitting admin metrics:', err);

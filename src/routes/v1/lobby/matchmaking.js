@@ -6,6 +6,7 @@ const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 const User = require('../../../models/User');
+const ensureUser = require('../../../utils/ensureUser');
 
 // Function to check and create matches
 async function checkAndCreateMatches() {
@@ -32,9 +33,14 @@ async function checkAndCreateMatches() {
     });
 
     // Check quickplay queue first (since that's what we're using)
-    if (lobby.quickplayQueue.length >= 2) {
-      const player1 = lobby.quickplayQueue[0];
-      const player2 = lobby.quickplayQueue[1];
+      if (lobby.quickplayQueue.length >= 2) {
+        const player1 = lobby.quickplayQueue[0];
+        const player2 = lobby.quickplayQueue[1];
+
+        await Promise.all([
+          ensureUser(player1),
+          ensureUser(player2),
+        ]);
       
       // Additional safety check - ensure we have exactly 2 valid players
       if (!player1 || !player2) {
@@ -125,14 +131,19 @@ async function checkAndCreateMatches() {
     }
 
     // Check ranked queue
-    if (lobby.rankedQueue.length >= 2) {
-      const player1 = lobby.rankedQueue[0];
-      const player2 = lobby.rankedQueue[1];
+      if (lobby.rankedQueue.length >= 2) {
+        const player1 = lobby.rankedQueue[0];
+        const player2 = lobby.rankedQueue[1];
 
-      const [p1User, p2User] = await Promise.all([
-        User.findById(player1).lean().catch(() => null),
-        User.findById(player2).lean().catch(() => null)
-      ]);
+        await Promise.all([
+          ensureUser(player1),
+          ensureUser(player2),
+        ]);
+
+        const [p1User, p2User] = await Promise.all([
+          User.findById(player1).lean().catch(() => null),
+          User.findById(player2).lean().catch(() => null)
+        ]);
 
       console.log('Creating ranked match for players:', {
         player1: player1.toString(),

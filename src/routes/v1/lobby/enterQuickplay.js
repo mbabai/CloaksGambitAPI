@@ -5,16 +5,18 @@ const Match = require('../../../models/Match');
 const { checkAndCreateMatches } = require('./matchmaking');
 const eventBus = require('../../../eventBus');
 const mongoose = require('mongoose');
+const ensureUser = require('../../../utils/ensureUser');
 
 router.post('/', async (req, res) => {
   try {
-    const { userId } = req.body;
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID required' });
-    }
-    if (!mongoose.isValidObjectId(userId)) {
-      return res.status(400).json({ message: 'Invalid userId' });
-    }
+      let { userId } = req.body;
+      let userInfo;
+      if (!userId) {
+        userInfo = await ensureUser();
+      } else {
+        userInfo = await ensureUser(userId);
+      }
+      userId = userInfo.userId;
 
     let lobby = await Lobby.findOne();
     if (!lobby) {
@@ -74,15 +76,17 @@ router.post('/', async (req, res) => {
         ]
       }).sort({ createdAt: -1 }).lean();
 
-      return res.json({
-        status: 'matched',
-        matchId: match._id,
-        gameId: match.games[match.games.length - 1],
-        type: match.type
-      });
-    }
+        return res.json({
+          status: 'matched',
+          matchId: match._id,
+          gameId: match.games[match.games.length - 1],
+          type: match.type,
+          userId,
+          username: userInfo.username,
+        });
+      }
 
-    res.json({ status: 'queued' });
+      res.json({ status: 'queued', userId, username: userInfo.username });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

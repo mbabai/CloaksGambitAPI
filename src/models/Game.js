@@ -296,11 +296,14 @@ async function handleMatchUpdate(game) {
     const match = await Match.findById(game.match);
     if (!match) return;
 
-    // Update score when there is a winner
-    if (game.winner === 0) {
-        match.player1Score += 1;
-    } else if (game.winner === 1) {
-        match.player2Score += 1;
+    // Update score for the actual player who won
+    if (game.winner === 0 || game.winner === 1) {
+        const winnerId = game.players[game.winner]?.toString();
+        if (winnerId === match.player1.toString()) {
+            match.player1Score += 1;
+        } else if (winnerId === match.player2.toString()) {
+            match.player2Score += 1;
+        }
     }
 
     const config = new ServerConfig();

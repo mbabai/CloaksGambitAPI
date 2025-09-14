@@ -40,22 +40,27 @@
 
       <div class="grid" style="margin-top: 12px;">
         <div class="listCard">
-          <div class="title">Connected User IDs</div>
+          <div class="title">Connected Users</div>
           <div id="connectedUsersList" class="tableList" role="table"></div>
         </div>
         <div class="listCard">
-          <div class="title">Quickplay Queue User IDs</div>
+          <div class="title">Quickplay Queue</div>
           <div id="quickplayQueueList" class="tableList" role="table"></div>
         </div>
         <div class="listCard">
-          <div class="title">Ranked Queue User IDs</div>
+          <div class="title">Ranked Queue</div>
           <div id="rankedQueueList" class="tableList" role="table"></div>
+        </div>
+        <div class="listCard">
+          <div class="title">All User Accounts</div>
+          <div id="allUsersList" class="tableList" role="table"></div>
         </div>
       </div>
 
       <div style="margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap;">
         <button id="purgeGamesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Games</button>
         <button id="purgeMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Matches</button>
+        <button id="purgeUsersBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Accounts</button>
         <span style="opacity:0.85; font-size:12px; align-self:center;">Requires server `ADMIN_SECRET` header to authorize.</span>
       </div>
 

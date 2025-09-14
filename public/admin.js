@@ -6,14 +6,18 @@
 	var adminUserId = adminIdParam || localStorage.getItem('cg_userId') || null;
 	var connectedUsersEl = document.getElementById('connectedUsers');
 	var quickplayQueueEl = document.getElementById('quickplayQueue');
-	var rankedQueueEl = document.getElementById('rankedQueue');
-	var connectedUsersListEl = document.getElementById('connectedUsersList');
-	var quickplayQueueListEl = document.getElementById('quickplayQueueList');
-	var rankedQueueListEl = document.getElementById('rankedQueueList');
-	var gamesListEl = document.getElementById('gamesList');
-	var matchesListEl = document.getElementById('matchesList');
-	var purgeBtn = document.getElementById('purgeGamesBtn');
-	var purgeMatchesBtn = document.getElementById('purgeMatchesBtn');
+        var rankedQueueEl = document.getElementById('rankedQueue');
+        var connectedUsersListEl = document.getElementById('connectedUsersList');
+        var quickplayQueueListEl = document.getElementById('quickplayQueueList');
+        var rankedQueueListEl = document.getElementById('rankedQueueList');
+        var allUsersListEl = document.getElementById('allUsersList');
+        var gamesListEl = document.getElementById('gamesList');
+        var matchesListEl = document.getElementById('matchesList');
+        var purgeBtn = document.getElementById('purgeGamesBtn');
+        var purgeMatchesBtn = document.getElementById('purgeMatchesBtn');
+        var purgeUsersBtn = document.getElementById('purgeUsersBtn');
+        var usernameMap = {};
+        var latestMetrics = null;
 
 	function userIdToHexColor(id) {
 		// djb2 hash for stability
@@ -34,80 +38,120 @@
 		return '#' + toHex(r) + toHex(g) + toHex(b);
 	}
 
-	function renderList(targetEl, ids) {
-		if (!targetEl) return;
-		targetEl.innerHTML = '';
-		if (!Array.isArray(ids) || ids.length === 0) return;
-		var frag = document.createDocumentFragment();
-		ids.forEach(function (id) {
+        function renderList(targetEl, ids) {
+                if (!targetEl) return;
+                targetEl.innerHTML = '';
+                if (!Array.isArray(ids) || ids.length === 0) return;
+                var frag = document.createDocumentFragment();
+                ids.forEach(function (id) {
+                        var row = document.createElement('div');
+                        row.className = 'row';
+                        var swatch = document.createElement('span');
+                        swatch.className = 'swatch';
+                        swatch.style.backgroundColor = userIdToHexColor(id);
+                        var nameEl = document.createElement(adminUserId && id === adminUserId ? 'strong' : 'span');
+                        nameEl.textContent = usernameMap[id] || 'Unknown';
+                        var idEl = document.createElement(adminUserId && id === adminUserId ? 'strong' : 'span');
+                        idEl.textContent = id;
+                        idEl.style.opacity = '0.7';
+                        idEl.style.marginLeft = '4px';
+                        row.appendChild(swatch);
+                        row.appendChild(nameEl);
+                        row.appendChild(idEl);
+                        frag.appendChild(row);
+                });
+                targetEl.appendChild(frag);
+        }
+
+        async function fetchAllUsers() {
+                if (!allUsersListEl) return;
+                try {
+                        var res = await fetch('/api/v1/users/getList', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({})
+                        });
+                        if (!res.ok) {
+                                console.error('Failed to fetch user accounts:', res.status);
+                                return;
+                        }
+                        var data = await res.json();
+                        var ids = [];
+                        if (Array.isArray(data)) {
+                                data.forEach(function (u) {
+                                        var id = u._id ? u._id.toString() : '';
+                                        if (!id) return;
+                                usernameMap[id] = u.username || 'Unknown';
+                                ids.push(id);
+                        });
+                }
+                renderList(allUsersListEl, ids);
+                if (latestMetrics) {
+                        renderList(connectedUsersListEl, latestMetrics.connectedUserIds);
+                        renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
+                        renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
+                        renderGameOrMatchList(gamesListEl, latestMetrics.games);
+                        renderGameOrMatchList(matchesListEl, latestMetrics.matches);
+                }
+        } catch (err) {
+                console.error('Error fetching user accounts:', err);
+        }
+        }
+
+        function renderGameOrMatchList(targetEl, items) {
+                if (!targetEl) return;
+                targetEl.innerHTML = '';
+                if (!Array.isArray(items) || items.length === 0) return;
+                var frag = document.createDocumentFragment();
+                items.forEach(function (item) {
 			var row = document.createElement('div');
 			row.className = 'row';
-			var swatch = document.createElement('span');
-			swatch.className = 'swatch';
-			swatch.style.backgroundColor = userIdToHexColor(id);
-			if (adminUserId && id === adminUserId) {
-				var strong = document.createElement('strong');
-				strong.textContent = id;
-				row.appendChild(swatch);
-				row.appendChild(strong);
-			} else {
-				var span = document.createElement('span');
-				span.textContent = id;
-				row.appendChild(swatch);
-				row.appendChild(span);
-			}
-			frag.appendChild(row);
-		});
-		targetEl.appendChild(frag);
-	}
+                        var idSpan = document.createElement('span');
+                        idSpan.textContent = item.id;
+                        idSpan.style.opacity = '0.9';
+                        idSpan.style.marginRight = '12px';
+                        row.appendChild(idSpan);
+                        (item.players || []).forEach(function (pid) {
+                                var swatch = document.createElement('span');
+                                swatch.className = 'swatch';
+                                swatch.style.backgroundColor = userIdToHexColor(pid);
+                                row.appendChild(swatch);
+                                var nameEl = document.createElement(adminUserId && pid === adminUserId ? 'strong' : 'span');
+                                nameEl.textContent = usernameMap[pid] || pid;
+                                row.appendChild(nameEl);
+                                var idEl = document.createElement('span');
+                                idEl.textContent = pid;
+                                idEl.style.opacity = '0.7';
+                                idEl.style.marginRight = '10px';
+                                idEl.style.marginLeft = '4px';
+                                row.appendChild(idEl);
+                        });
+                        frag.appendChild(row);
+                });
+                targetEl.appendChild(frag);
+        }
 
-	function renderGameOrMatchList(targetEl, items) {
-		if (!targetEl) return;
-		targetEl.innerHTML = '';
-		if (!Array.isArray(items) || items.length === 0) return;
-		var frag = document.createDocumentFragment();
-		items.forEach(function (item) {
-			var row = document.createElement('div');
-			row.className = 'row';
-			var idSpan = document.createElement('span');
-			idSpan.textContent = item.id;
-			idSpan.style.opacity = '0.9';
-			idSpan.style.marginRight = '12px';
-			row.appendChild(idSpan);
-			(item.players || []).forEach(function (pid) {
-				var swatch = document.createElement('span');
-				swatch.className = 'swatch';
-				swatch.style.backgroundColor = userIdToHexColor(pid);
-				row.appendChild(swatch);
-				if (adminUserId && pid === adminUserId) {
-					var strong = document.createElement('strong');
-					strong.textContent = pid;
-					strong.style.marginRight = '10px';
-					row.appendChild(strong);
-				} else {
-					var span = document.createElement('span');
-					span.textContent = pid;
-					span.style.marginRight = '10px';
-					row.appendChild(span);
-				}
-			});
-			frag.appendChild(row);
-		});
-		targetEl.appendChild(frag);
-	}
-
-	socket.on('connect', function () { /* no-op */ });
-	socket.on('admin:metrics', function (payload) {
-		if (!payload) return;
-		connectedUsersEl.textContent = (payload.connectedUsers ?? 0);
-		quickplayQueueEl.textContent = (payload.quickplayQueue ?? 0);
-		rankedQueueEl.textContent = (payload.rankedQueue ?? 0);
-		renderList(connectedUsersListEl, payload.connectedUserIds);
-		renderList(quickplayQueueListEl, payload.quickplayQueueUserIds);
-		renderList(rankedQueueListEl, payload.rankedQueueUserIds);
-		renderGameOrMatchList(gamesListEl, payload.games);
-		renderGameOrMatchList(matchesListEl, payload.matches);
-	});
+        socket.on('connect', function () {
+                fetchAllUsers();
+        });
+        socket.on('admin:metrics', function (payload) {
+                if (!payload) return;
+                latestMetrics = payload;
+                if (payload.usernames) {
+                        Object.keys(payload.usernames).forEach(function (k) {
+                                usernameMap[k] = payload.usernames[k];
+                        });
+                }
+                connectedUsersEl.textContent = (payload.connectedUsers ?? 0);
+                quickplayQueueEl.textContent = (payload.quickplayQueue ?? 0);
+                rankedQueueEl.textContent = (payload.rankedQueue ?? 0);
+                renderList(connectedUsersListEl, payload.connectedUserIds);
+                renderList(quickplayQueueListEl, payload.quickplayQueueUserIds);
+                renderList(rankedQueueListEl, payload.rankedQueueUserIds);
+                renderGameOrMatchList(gamesListEl, payload.games);
+                renderGameOrMatchList(matchesListEl, payload.matches);
+                fetchAllUsers();
+        });
 
 	if (purgeBtn) {
 		purgeBtn.addEventListener('click', async function () {
@@ -134,29 +178,53 @@
 		});
 	}
 
-	if (purgeMatchesBtn) {
-		purgeMatchesBtn.addEventListener('click', async function () {
-			if (!confirm('Are you sure you want to purge ALL matches from the database? This cannot be undone.')) return;
-			try {
-				var res = await fetch('/api/v1/matches/purge', {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
-					}
-				});
-				if (!res.ok) {
-					alert('Failed to purge matches: ' + res.status);
-					return;
-				}
-				var data = await res.json();
-				alert('Purged matches: ' + (data.deleted || 0));
-			} catch (err) {
-				console.error(err);
-				alert('Error purging matches. Check console.');
-			}
-		});
-	}
+        if (purgeMatchesBtn) {
+                purgeMatchesBtn.addEventListener('click', async function () {
+                        if (!confirm('Are you sure you want to purge ALL matches from the database? This cannot be undone.')) return;
+                        try {
+                                var res = await fetch('/api/v1/matches/purge', {
+                                        method: 'POST',
+                                        headers: {
+                                                'Content-Type': 'application/json',
+                                                'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
+                                        }
+                                });
+                                if (!res.ok) {
+                                        alert('Failed to purge matches: ' + res.status);
+                                        return;
+                                }
+                                var data = await res.json();
+                                alert('Purged matches: ' + (data.deleted || 0));
+                        } catch (err) {
+                                console.error(err);
+                                alert('Error purging matches. Check console.');
+                        }
+                });
+        }
+
+        if (purgeUsersBtn) {
+                purgeUsersBtn.addEventListener('click', async function () {
+                        if (!confirm('Are you sure you want to purge ALL user accounts from the database? This cannot be undone.')) return;
+                        try {
+                                var res = await fetch('/api/v1/users/purge', {
+                                        method: 'POST',
+                                        headers: {
+                                                'Content-Type': 'application/json',
+                                                'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
+                                        }
+                                });
+                                if (!res.ok) {
+                                        alert('Failed to purge users: ' + res.status);
+                                        return;
+                                }
+                                var data = await res.json();
+                                alert('Purged users: ' + (data.deleted || 0));
+                        } catch (err) {
+                                console.error(err);
+                                alert('Error purging users. Check console.');
+                        }
+                });
+        }
 })();
 
 
