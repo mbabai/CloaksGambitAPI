@@ -32,9 +32,15 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const PANEL_MARGIN = 16; // keep gap from Find Game button
 
   function adjustMenuBounds() {
-    const queueRect = queueBtn.getBoundingClientRect();
-    const availableWidth = Math.max(queueRect.left - PANEL_MARGIN, 0);
-    const mainWidth = Math.min(PANEL_WIDTH, availableWidth);
+    // Default panel width if queue button isn't visible (e.g., during a game)
+    let mainWidth = PANEL_WIDTH;
+
+    if (queueBtn && queueBtn.offsetParent !== null) {
+      const queueRect = queueBtn.getBoundingClientRect();
+      const availableWidth = Math.max(queueRect.left - PANEL_MARGIN, 0);
+      mainWidth = Math.min(PANEL_WIDTH, availableWidth);
+    }
+
     menuMain.style.width = mainWidth + 'px';
 
     let totalWidth = mainWidth;
@@ -43,8 +49,14 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       accountPanel.style.left = mainWidth + 'px';
       accountPanel.style.width = PANEL_WIDTH + 'px';
 
-      const selectRect = selectWrap.getBoundingClientRect();
-      const maxHeight = Math.max(window.innerHeight - selectRect.bottom - PANEL_MARGIN, 0);
+      let maxHeight;
+      if (selectWrap && selectWrap.offsetParent !== null) {
+        const selectRect = selectWrap.getBoundingClientRect();
+        maxHeight = Math.max(window.innerHeight - selectRect.bottom - PANEL_MARGIN, 0);
+      } else {
+        maxHeight = Math.max(window.innerHeight - PANEL_MARGIN * 2, 0);
+      }
+
       const desiredHeight = Math.min(window.innerHeight * 0.75, maxHeight);
       accountPanel.style.height = desiredHeight + 'px';
       totalWidth += PANEL_WIDTH;
