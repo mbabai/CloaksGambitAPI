@@ -17,7 +17,9 @@ export function renderBars({
     clockTop = '5:00',
     clockBottom = '5:00',
     nameTop = 'Opponent Name',
-    nameBottom = 'My Name'
+    nameBottom = 'My Name',
+    winsTop = 0,
+    winsBottom = 0
   } = state;
 
   if (!topBar || !bottomBar) return;
@@ -40,7 +42,7 @@ export function renderBars({
   const clockFont = Math.max(12, Math.floor(0.026 * H));
   const iconFont = Math.max(12, Math.floor(0.024 * H));
 
-  function makeNameRow(text, isTopBar, showChallengeBubble) {
+  function makeNameRow(text, isTopBar, showChallengeBubble, winCount) {
     const row = document.createElement('div');
     row.style.height = nameBarH + 'px';
     row.style.display = 'flex';
@@ -56,7 +58,34 @@ export function renderBars({
     nameWrap.style.fontWeight = 'bold';
     nameWrap.style.zIndex = '0';
     nameWrap.textContent = text;
-    row.appendChild(nameWrap);
+
+    let winsWrap = null;
+    const nWins = Math.max(0, Number(winCount || 0));
+    if (nWins > 0) {
+      winsWrap = document.createElement('div');
+      winsWrap.style.display = 'flex';
+      winsWrap.style.alignItems = 'center';
+      winsWrap.style.gap = '2px';
+      const throneSize = Math.floor(nameBarH * 0.9);
+      for (let i = 0; i < nWins; i++) {
+        const img = document.createElement('img');
+        img.src = '/assets/images/GoldThrone.svg';
+        img.style.width = throneSize + 'px';
+        img.style.height = throneSize + 'px';
+        winsWrap.appendChild(img);
+      }
+      if (isTopBar) {
+        winsWrap.style.marginRight = '6px';
+        row.appendChild(winsWrap);
+        row.appendChild(nameWrap);
+      } else {
+        winsWrap.style.marginLeft = '6px';
+        row.appendChild(nameWrap);
+        row.appendChild(winsWrap);
+      }
+    } else {
+      row.appendChild(nameWrap);
+    }
 
     if (showChallengeBubble) {
       const bubbleSize = 3 * nameBarH;
@@ -173,7 +202,8 @@ export function renderBars({
     const nameRow = makeNameRow(
       isTopBar ? nameTop : nameBottom,
       isTopBar,
-      showBubble
+      showBubble,
+      isTopBar ? winsTop : winsBottom
     );
     const row = document.createElement('div');
     row.style.height = rowH + 'px';

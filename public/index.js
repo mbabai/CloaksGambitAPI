@@ -444,6 +444,15 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           hideQueuer();
           showPlayArea();
 
+          if (latest?.match) {
+            try {
+              currentMatch = await apiGetMatchDetails(latest.match);
+            } catch (e) {
+              console.error('Failed to fetch match details', e);
+              currentMatch = null;
+            }
+          }
+
           if (Array.isArray(latest?.players)) {
             loadPlayerNames(latest.players);
           }
@@ -549,6 +558,14 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         const gameId = payload.gameId;
         const color = payload.players.findIndex(p => p === userId);
         if (color !== 0 && color !== 1) return;
+
+        if (!currentMatch && payload.matchId) {
+          try {
+            currentMatch = await apiGetMatchDetails(payload.matchId);
+          } catch (e) {
+            console.error('Failed to fetch match details', e);
+          }
+        }
 
         gameFinished = payload.winReason !== undefined && payload.winReason !== null;
         if (gameFinished) {
@@ -933,7 +950,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const card = document.createElement('div');
     card.style.width = '100%';
     card.style.maxWidth = '100%';
-    card.style.height = '200px';
+    card.style.height = '160px';
     card.style.transform = 'translateY(-15%)';
     card.style.padding = '18px 26px';
     card.style.borderRadius = '0';
@@ -979,8 +996,6 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     desc.style.fontWeight = '500';
     desc.id = 'gameOverDesc';
 
-    const score = createScoreboard(match);
-
     const btn = document.createElement('button');
     btn.textContent = 'Next';
     btn.style.position = 'absolute';
@@ -1011,7 +1026,6 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
     card.appendChild(title);
     card.appendChild(desc);
-    card.appendChild(score);
     card.appendChild(btn);
     el.appendChild(card);
     el.style.display = 'flex';
@@ -1260,6 +1274,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const bottomMs = bottomClr === 0 ? whiteTimeMs : blackTimeMs;
     const topIdx = currentIsWhite ? 1 : 0;
     const bottomIdx = currentIsWhite ? 0 : 1;
+    const isRankedMatch = currentMatch && currentMatch.type === 'RANKED';
+    const p1Score = currentMatch?.player1Score || 0;
+    const p2Score = currentMatch?.player2Score || 0;
+    const winsTop = isRankedMatch ? (topClr === 0 ? p1Score : p2Score) : 0;
+    const winsBottom = isRankedMatch ? (bottomClr === 0 ? p1Score : p2Score) : 0;
     const bars = renderBarsModule({
       topBar,
       bottomBar,
@@ -1280,7 +1299,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         clockTop: formatClock(topMs),
         clockBottom: formatClock(bottomMs),
         nameTop: playerNames[topIdx] || ('Anonymous' + topIdx),
-        nameBottom: playerNames[bottomIdx] || ('Anonymous' + bottomIdx)
+        nameBottom: playerNames[bottomIdx] || ('Anonymous' + bottomIdx),
+        winsTop,
+        winsBottom
       },
       identityMap: PIECE_IMAGES
     });
