@@ -436,7 +436,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
             loadPlayerNames(latest.players);
           }
 
-          // If this player is not marked ready yet, send READY immediately
+          // If this player refreshed between games, treat it as pressing Next.
+          // Otherwise, auto-send READY if they had already pressed Next previously.
           try {
             const colorIdx = Array.isArray(latest?.players)
               ? latest.players.findIndex(function(p){ return p === userId; })
@@ -444,11 +445,51 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
             const isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
               ? Boolean(latest.playersReady[colorIdx])
               : false;
-            if (colorIdx > -1 && !isReady) {
-              console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
-                apiReady(latest._id, colorIdx).catch(function(err){ console.error('READY on reconnect failed', err); });
-            }
+            const isNext = Array.isArray(latest?.playersNext) && colorIdx > -1
+              ? Boolean(latest.playersNext[colorIdx])
+              : false;
             currentIsWhite = (colorIdx === 0);
+
+            if (colorIdx > -1 && !isNext) {
+              try {
+                const match = await apiGetMatchDetails(latest.match);
+                const prevGames = Array.isArray(match?.games)
+                  ? match.games.filter(function(g){ return !g.isActive && g._id?.toString() !== latest._id; })
+                  : [];
+                const prevGame = prevGames.length > 0 ? prevGames[prevGames.length - 1] : null;
+                if (prevGame) {
+                  const winnerIdx = prevGame.winner;
+                  const loserIdx = winnerIdx === 0 ? 1 : 0;
+                  const winnerName = playerNames[winnerIdx] || formatPlayerName(null, winnerIdx);
+                  const loserName = playerNames[loserIdx] || formatPlayerName(null, loserIdx);
+                  const prevColorIdx = Array.isArray(prevGame.players)
+                    ? prevGame.players.findIndex(function(p){ return p === userId; })
+                    : -1;
+                  showGameFinishedBanner({
+                    winnerName,
+                    loserName,
+                    winnerColor: winnerIdx,
+                    didWin: winnerIdx === prevColorIdx,
+                    match,
+                    winReason: prevGame.winReason
+                  });
+                }
+              } catch (err) {
+                console.error('Error showing banner on reconnect', err);
+              }
+              try {
+                await apiNext(latest._id, colorIdx);
+              } catch (err) {
+                console.error('NEXT on reconnect failed', err);
+              }
+              const desc = document.getElementById('gameOverDesc');
+              const btn = document.getElementById('gameOverNextBtn');
+              if (desc) desc.textContent = 'Waiting for other player...';
+              if (btn) btn.style.display = 'none';
+            } else if (colorIdx > -1 && !isReady) {
+              console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
+              apiReady(latest._id, colorIdx).catch(function(err){ console.error('READY on reconnect failed', err); });
+            }
           } catch (e) { console.error('Error evaluating reconnect ready state', e); }
 
             // Adopt masked state immediately if present, and enter setup if needed
