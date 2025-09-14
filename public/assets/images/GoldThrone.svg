@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   width="250mm"
+   height="250mm"
+   viewBox="0 0 250 250"
+   version="1.1"
+   id="svg936"
+   inkscape:version="0.92.4 (5da689c313, 2019-01-14)"
+   sodipodi:docname="GoldThrone.svg">
+  <defs
+     id="defs930" />
+  <sodipodi:namedview
+     id="base"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageopacity="0.0"
+     inkscape:pageshadow="2"
+     inkscape:zoom="0.49497475"
+     inkscape:cx="4.8910045"
+     inkscape:cy="524.94712"
+     inkscape:document-units="mm"
+     inkscape:current-layer="layer1"
+     showgrid="false"
+     inkscape:window-width="1920"
+     inkscape:window-height="1009"
+     inkscape:window-x="-8"
+     inkscape:window-y="303"
+     inkscape:window-maximized="1" />
+  <metadata
+     id="metadata933">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title></dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(0,-47)">
+    <path
+       inkscape:connector-curvature="0"
+       style="display:inline;fill:#b8860b;fill-opacity:1;stroke:none;stroke-width:0.4134115;stroke-opacity:1;enable-background:new"
+       d="M 124.52885,74.624877 79.240876,87.884112 V 177.5182 h 8.546889 v 14.51225 h 74.424915 v -14.51138 h 8.54734 L 170.7592,87.949492 124.52852,74.625337 Z M 54.832691,78.411298 V 177.5182 H 70.147234 V 78.410897 H 54.83269 Z m 125.020649,0 v 99.106922 h 15.31454 V 78.410897 H 179.85334 Z M 99.284239,90.352553 114.33976,104.36114 125.13722,90.598602 135.94935,104.36114 149.86478,91.322352 144.17691,117.6464 H 105.24588 L 99.284768,90.352962 Z M 38.04415,185.24634 v 14.17609 h 40.648772 v -14.17609 z m 133.26288,0 v 14.17609 h 40.64882 v -14.17609 z m -83.519265,14.51241 v 7.39151 h -8.471432 v 6.29402 l 91.366367,-8.4e-4 v -6.29318 h -8.47002 v -7.39112 H 87.787283 Z m -41.27319,7.39151 v 62.22486 l 23.708936,-8.7e-4 V 207.15108 H 46.514572 Z m 133.262825,0 v 62.22486 l 23.70897,-8.7e-4 -8.2e-4,-62.22399 z M 79.316911,221.17199 v 40.1776 h 91.366279 v -40.1776 z"
+       id="path2" />
+  </g>
+</svg>
