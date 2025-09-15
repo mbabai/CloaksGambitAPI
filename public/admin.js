@@ -7,10 +7,9 @@
 	var connectedUsersEl = document.getElementById('connectedUsers');
 	var quickplayQueueEl = document.getElementById('quickplayQueue');
         var rankedQueueEl = document.getElementById('rankedQueue');
-        var connectedUsersListEl = document.getElementById('connectedUsersList');
         var quickplayQueueListEl = document.getElementById('quickplayQueueList');
         var rankedQueueListEl = document.getElementById('rankedQueueList');
-        var allUsersListEl = document.getElementById('allUsersList');
+        var usersListEl = document.getElementById('usersList');
         var gamesListEl = document.getElementById('gamesList');
         var matchesListEl = document.getElementById('matchesList');
         var purgeBtn = document.getElementById('purgeGamesBtn');
@@ -18,25 +17,6 @@
         var purgeUsersBtn = document.getElementById('purgeUsersBtn');
         var usernameMap = {};
         var latestMetrics = null;
-
-	function userIdToHexColor(id) {
-		// djb2 hash for stability
-		var hash = 5381;
-		for (var i = 0; i < id.length; i++) {
-			hash = ((hash << 5) + hash) + id.charCodeAt(i); // hash * 33 + c
-		}
-		// Map to 24-bit color space and keep it vibrant but not too dark
-		var r = (hash & 0xFF0000) >> 16;
-		var g = (hash & 0x00FF00) >> 8;
-		var b = (hash & 0x0000FF);
-		// Normalize to avoid extremes: bring channel toward mid by mixing with 128
-		var mix = 0.5; // 0..1, mix toward 128
-		r = Math.round(r * (1 - mix) + 128 * mix);
-		g = Math.round(g * (1 - mix) + 128 * mix);
-		b = Math.round(b * (1 - mix) + 128 * mix);
-		var toHex = function (n) { var s = n.toString(16); return s.length === 1 ? '0' + s : s; };
-		return '#' + toHex(r) + toHex(g) + toHex(b);
-	}
 
         function renderList(targetEl, ids) {
                 if (!targetEl) return;
@@ -46,25 +26,59 @@
                 ids.forEach(function (id) {
                         var row = document.createElement('div');
                         row.className = 'row';
-                        var swatch = document.createElement('span');
-                        swatch.className = 'swatch';
-                        swatch.style.backgroundColor = userIdToHexColor(id);
                         var nameEl = document.createElement(adminUserId && id === adminUserId ? 'strong' : 'span');
                         nameEl.textContent = usernameMap[id] || 'Unknown';
-                        var idEl = document.createElement(adminUserId && id === adminUserId ? 'strong' : 'span');
-                        idEl.textContent = id;
-                        idEl.style.opacity = '0.7';
-                        idEl.style.marginLeft = '4px';
-                        row.appendChild(swatch);
+                        nameEl.title = id;
                         row.appendChild(nameEl);
-                        row.appendChild(idEl);
+                        frag.appendChild(row);
+                });
+                targetEl.appendChild(frag);
+        }
+
+        function renderUsersList(targetEl, users, connectedIds) {
+                if (!targetEl) return;
+                targetEl.innerHTML = '';
+                if (!Array.isArray(users) || users.length === 0) return;
+                var connectedSet = new Set(connectedIds || []);
+                users.sort(function (a, b) {
+                        return (connectedSet.has(b.id) - connectedSet.has(a.id)) || (a.username || '').localeCompare(b.username || '');
+                });
+                var frag = document.createDocumentFragment();
+                var header = document.createElement('div');
+                header.className = 'row headerRow';
+                var hName = document.createElement('span');
+                hName.textContent = 'Username';
+                var hConn = document.createElement('span');
+                hConn.textContent = 'Connected';
+                header.appendChild(hName);
+                header.appendChild(hConn);
+                frag.appendChild(header);
+                users.forEach(function (u) {
+                        var row = document.createElement('div');
+                        row.className = 'row';
+                        row.style.justifyContent = 'space-between';
+                        row.style.gap = '0';
+                        var nameEl = document.createElement(adminUserId && u.id === adminUserId ? 'strong' : 'span');
+                        nameEl.textContent = u.username || 'Unknown';
+                        nameEl.title = u.id;
+                        var connEl = document.createElement('span');
+                        if (connectedSet.has(u.id)) {
+                                var img = document.createElement('img');
+                                img.src = 'assets/images/GoldThrone.svg';
+                                img.alt = '';
+                                img.style.width = '16px';
+                                img.style.height = '16px';
+                                connEl.appendChild(img);
+                        }
+                        row.appendChild(nameEl);
+                        row.appendChild(connEl);
                         frag.appendChild(row);
                 });
                 targetEl.appendChild(frag);
         }
 
         async function fetchAllUsers() {
-                if (!allUsersListEl) return;
+                if (!usersListEl) return;
                 try {
                         var res = await fetch('/api/v1/users/getList', {
                                 method: 'POST',
@@ -76,26 +90,26 @@
                                 return;
                         }
                         var data = await res.json();
-                        var ids = [];
+                        var users = [];
                         if (Array.isArray(data)) {
                                 data.forEach(function (u) {
                                         var id = u._id ? u._id.toString() : '';
                                         if (!id) return;
-                                usernameMap[id] = u.username || 'Unknown';
-                                ids.push(id);
-                        });
+                                        var username = u.username || 'Unknown';
+                                        usernameMap[id] = username;
+                                        users.push({ id: id, username: username });
+                                });
+                        }
+                        renderUsersList(usersListEl, users, latestMetrics ? latestMetrics.connectedUserIds : []);
+                        if (latestMetrics) {
+                                renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
+                                renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
+                                renderGameOrMatchList(gamesListEl, latestMetrics.games);
+                                renderGameOrMatchList(matchesListEl, latestMetrics.matches);
+                        }
+                } catch (err) {
+                        console.error('Error fetching user accounts:', err);
                 }
-                renderList(allUsersListEl, ids);
-                if (latestMetrics) {
-                        renderList(connectedUsersListEl, latestMetrics.connectedUserIds);
-                        renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
-                        renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
-                        renderGameOrMatchList(gamesListEl, latestMetrics.games);
-                        renderGameOrMatchList(matchesListEl, latestMetrics.matches);
-                }
-        } catch (err) {
-                console.error('Error fetching user accounts:', err);
-        }
         }
 
         function renderGameOrMatchList(targetEl, items) {
@@ -112,19 +126,11 @@
                         idSpan.style.marginRight = '12px';
                         row.appendChild(idSpan);
                         (item.players || []).forEach(function (pid) {
-                                var swatch = document.createElement('span');
-                                swatch.className = 'swatch';
-                                swatch.style.backgroundColor = userIdToHexColor(pid);
-                                row.appendChild(swatch);
                                 var nameEl = document.createElement(adminUserId && pid === adminUserId ? 'strong' : 'span');
                                 nameEl.textContent = usernameMap[pid] || pid;
+                                nameEl.title = pid;
+                                nameEl.style.marginRight = '10px';
                                 row.appendChild(nameEl);
-                                var idEl = document.createElement('span');
-                                idEl.textContent = pid;
-                                idEl.style.opacity = '0.7';
-                                idEl.style.marginRight = '10px';
-                                idEl.style.marginLeft = '4px';
-                                row.appendChild(idEl);
                         });
                         frag.appendChild(row);
                 });
@@ -145,7 +151,6 @@
                 connectedUsersEl.textContent = (payload.connectedUsers ?? 0);
                 quickplayQueueEl.textContent = (payload.quickplayQueue ?? 0);
                 rankedQueueEl.textContent = (payload.rankedQueue ?? 0);
-                renderList(connectedUsersListEl, payload.connectedUserIds);
                 renderList(quickplayQueueListEl, payload.quickplayQueueUserIds);
                 renderList(rankedQueueListEl, payload.rankedQueueUserIds);
                 renderGameOrMatchList(gamesListEl, payload.games);

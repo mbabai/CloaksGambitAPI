@@ -25,8 +25,8 @@
       .listCard .title { color: var(--light-gold); font-size: 14px; margin: 0 0 8px; font-weight: 700; }
       .tableList { height: 200px; overflow: auto; border: 1px solid rgba(184,134,11,0.55); border-radius: 4px; background: transparent; }
       .tableList .row { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; word-break: break-all; display: flex; align-items: center; gap: 8px; }
-      .tableList .swatch { width: 14px; height: 14px; border-radius: 2px; border: 1px solid rgba(184,134,11,0.8); flex: none; }
       .tableList .row:last-child { border-bottom: 0; }
+      .tableList .headerRow { font-weight: 700; justify-content: space-between; gap: 0; }
     </style>
   </head>
   <body>
@@ -40,10 +40,6 @@
 
       <div class="grid" style="margin-top: 12px;">
         <div class="listCard">
-          <div class="title">Connected Users</div>
-          <div id="connectedUsersList" class="tableList" role="table"></div>
-        </div>
-        <div class="listCard">
           <div class="title">Quickplay Queue</div>
           <div id="quickplayQueueList" class="tableList" role="table"></div>
         </div>
@@ -51,9 +47,9 @@
           <div class="title">Ranked Queue</div>
           <div id="rankedQueueList" class="tableList" role="table"></div>
         </div>
-        <div class="listCard">
-          <div class="title">All User Accounts</div>
-          <div id="allUsersList" class="tableList" role="table"></div>
+        <div class="listCard" style="grid-column: span 2;">
+          <div class="title">Users</div>
+          <div id="usersList" class="tableList" role="table"></div>
         </div>
       </div>
 
