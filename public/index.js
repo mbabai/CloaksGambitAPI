@@ -29,6 +29,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const accountPanelContent = document.getElementById('accountPanelContent');
   const accountBtnImg = accountBtn.querySelector('img');
 
+  const ACCOUNT_ICON_SRC = 'assets/images/account.png';
+  const LOGGED_IN_AVATAR_SRC = 'assets/images/cloakHood.jpg';
+
   let menuOpen = false;
   const PANEL_WIDTH = 180;
   const PANEL_MARGIN = 16; // keep gap from Find Game button
@@ -248,115 +251,82 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function updateAccountPanel() {
     const name = getCookie('username');
-    const photo = getCookie('photo');
     if (name) {
       accountPanelContent.innerHTML = `
         <div class="menu-button"><span id="accountUsername">${name}</span><button id="editUsername" style="background:none;border:none;color:inherit;cursor:pointer;padding:0;">✎</button></div>
         <button id="statsBtn" class="menu-button">Stats</button>
+        <button id="logoutBtn" class="menu-button">Logout</button>
       `;
-      if (photo) {
-        accountBtnImg.src = photo;
-      } else {
-        accountBtnImg.src = 'assets/images/account.png';
-      }
+      accountBtnImg.src = LOGGED_IN_AVATAR_SRC;
+      setCookie('photo', LOGGED_IN_AVATAR_SRC, 60 * 60 * 24 * 365);
       usernameDisplay.textContent = name;
       document.getElementById('statsBtn').addEventListener('click', () => alert('stats'));
-      document.getElementById('editUsername').addEventListener('click', ev => {
+      document.getElementById('editUsername').addEventListener('click', async ev => {
         ev.stopPropagation();
+        const userIdCookie = getCookie('userId');
+        if (!userIdCookie) {
+          alert('Unable to update username: user session not found.');
+          return;
+        }
         const newName = prompt('Enter new username', name);
-        if (newName) {
-          setCookie('username', newName, 60 * 60 * 24 * 365);
+        if (!newName) return;
+        const trimmed = newName.trim();
+        if (trimmed.length < 3 || trimmed.length > 18) {
+          alert('Username must be between 3 and 18 characters.');
+          return;
+        }
+        try {
+          const res = await fetch('/api/v1/users/update', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: userIdCookie, username: trimmed })
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.message || 'Failed to update username.');
+            return;
+          }
+          const updated = await res.json();
+          const updatedName = updated?.username || trimmed;
+          setCookie('username', updatedName, 60 * 60 * 24 * 365);
+          localStorage.setItem('cg_username', updatedName);
+          const playerIdx = currentPlayerIds.findIndex(id => id && id.toString() === userIdCookie);
+          if (playerIdx !== -1) {
+            playerNames[playerIdx] = updatedName;
+            renderBoardAndBars();
+          }
           setUsernameDisplay();
           updateAccountPanel();
+        } catch (error) {
+          console.error('Failed to update username', error);
+          alert('Failed to update username. Please try again.');
         }
+      });
+      document.getElementById('logoutBtn').addEventListener('click', ev => {
+        ev.stopPropagation();
+        setCookie('username', '', 0);
+        setCookie('photo', '', 0);
+        setCookie('userId', '', 0);
+        localStorage.removeItem('cg_username');
+        window.location.reload();
       });
     } else {
       accountPanelContent.innerHTML = `
         <button id="googleLoginBtn" class="menu-button"><img src="assets/images/google-icon.png" alt="Google" /> Sign in with Google</button>
         <div class="menu-message">Log in to see account history, statistics, elo, and participate in ranked matches.</div>
       `;
-      accountBtnImg.src = 'assets/images/account.png';
+      accountBtnImg.src = ACCOUNT_ICON_SRC;
       usernameDisplay.textContent = '';
       const loginBtn = document.getElementById('googleLoginBtn');
       if (loginBtn) {
         loginBtn.addEventListener('click', () => {
-          window.location.href = '/auth/google';
+          window.location.href = '/api/auth/google';
         });
       }
     }
   }
 
   updateAccountPanel();
-
-  // username edit flow
-  let usernameEditBtn = document.getElementById('usernameEditBtn');
-  const usernameInput = document.createElement('input');
-  usernameInput.type = 'text';
-  usernameInput.minLength = 3;
-  usernameInput.maxLength = 18;
-  usernameInput.style.display = 'none';
-
-  if (usernameDisplay && !usernameEditBtn) {
-    usernameEditBtn = document.createElement('button');
-    usernameEditBtn.id = 'usernameEditBtn';
-    usernameEditBtn.textContent = '✎';
-    usernameEditBtn.style.marginLeft = '6px';
-    usernameEditBtn.style.cursor = 'pointer';
-    usernameEditBtn.style.pointerEvents = 'auto';
-    usernameDisplay.insertAdjacentElement('afterend', usernameEditBtn);
-  }
-
-  if (usernameEditBtn) {
-    usernameEditBtn.insertAdjacentElement('afterend', usernameInput);
-
-    function closeUsernameEdit() {
-      usernameInput.style.display = 'none';
-      usernameDisplay.style.display = '';
-      usernameEditBtn.style.display = '';
-    }
-
-    usernameEditBtn.addEventListener('click', () => {
-      usernameInput.value = localStorage.getItem('cg_username') || '';
-      usernameInput.style.display = 'inline';
-      usernameDisplay.style.display = 'none';
-      usernameEditBtn.style.display = 'none';
-      usernameInput.focus();
-    });
-
-    usernameInput.addEventListener('keydown', async ev => {
-      if (ev.key === 'Enter') {
-        const newName = usernameInput.value.trim();
-        if (newName.length < 3 || newName.length > 18) {
-          alert('Username must be between 3 and 18 characters');
-          return;
-        }
-        try {
-          const id = userId || await ensureUserId();
-          const resp = await fetch('/api/v1/users/update', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: id, username: newName })
-          });
-          const data = await resp.json();
-          if (!resp.ok) {
-            alert(data.message || 'Failed to update username');
-            return;
-          }
-          localStorage.setItem('cg_username', data.username);
-          usernameDisplay.textContent = data.username;
-          closeUsernameEdit();
-        } catch (err) {
-          console.error(err);
-        }
-      } else if (ev.key === 'Escape') {
-        closeUsernameEdit();
-      }
-    });
-
-    usernameInput.addEventListener('blur', () => {
-      closeUsernameEdit();
-    });
-  }
 
   // Cookie helpers moved to modules/utils/cookies.js
 
@@ -1093,9 +1063,14 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         userId = newId;
         setCookie('userId', newId, 60 * 60 * 24 * 365);
       }
-      if (payload && payload.username) {
+      if (payload && payload.username && !payload.guest) {
         localStorage.setItem('cg_username', payload.username);
         setCookie('username', payload.username, 60 * 60 * 24 * 365);
+        setCookie('photo', LOGGED_IN_AVATAR_SRC, 60 * 60 * 24 * 365);
+      } else {
+        localStorage.removeItem('cg_username');
+        setCookie('username', '', 0);
+        setCookie('photo', '', 0);
       }
       updateAccountPanel();
     });

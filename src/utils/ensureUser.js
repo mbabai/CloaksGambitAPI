@@ -8,7 +8,7 @@ const User = require('../models/User');
  * Returns the user's ID and username.
  *
  * @param {string|mongoose.Types.ObjectId|undefined} providedId
- * @returns {Promise<{ userId: string, username: string }>} Resolved user info
+ * @returns {Promise<{ userId: string, username: string, isGuest: boolean }>} Resolved user info
  */
 async function ensureUser(providedId) {
   let id = providedId;
@@ -17,7 +17,11 @@ async function ensureUser(providedId) {
       const existing = await User.findById(id);
       if (existing) {
         if (existing.username) {
-          return { userId: existing._id.toString(), username: existing.username };
+          return {
+            userId: existing._id.toString(),
+            username: existing.username,
+            isGuest: (existing.email || '').endsWith('@guest.local')
+          };
         }
 
         let attempt = await User.countDocuments() + 1;
@@ -30,7 +34,11 @@ async function ensureUser(providedId) {
           }
           try {
             const saved = await existing.save();
-            return { userId: saved._id.toString(), username: saved.username };
+            return {
+              userId: saved._id.toString(),
+              username: saved.username,
+              isGuest: (saved.email || '').endsWith('@guest.local')
+            };
           } catch (err) {
             if (err.code === 11000 && err.keyPattern && err.keyPattern.username) {
               attempt += 1;
@@ -54,7 +62,11 @@ async function ensureUser(providedId) {
       }
       try {
         const user = await User.create(data);
-        return { userId: user._id.toString(), username: user.username };
+        return {
+          userId: user._id.toString(),
+          username: user.username,
+          isGuest: (user.email || '').endsWith('@guest.local')
+        };
       } catch (err) {
         if (err.code === 11000 && err.keyPattern && err.keyPattern.username) {
           attempt += 1;

@@ -5,7 +5,12 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
-require('dotenv').config();
+
+// Load environment variables from a file based on NODE_ENV. Default to
+// `.env.development` so local development has Google OAuth credentials
+// without needing to manually copy them to `.env`.
+const envFile = `.env.${process.env.NODE_ENV || 'development'}`;
+require('dotenv').config({ path: path.resolve(__dirname, '..', envFile) });
 
 const app = express();
 

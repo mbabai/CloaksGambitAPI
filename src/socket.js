@@ -598,7 +598,7 @@ function initSocket(httpServer) {
     }
     clients.set(userId, socket);
     markPlayerConnectedToAllMatches(userId);
-    socket.emit('user:init', { userId, username: userInfo.username });
+    socket.emit('user:init', { userId, username: userInfo.username, guest: userInfo.isGuest });
     console.log('Client connected', socket.id);
 
     // Emit updated metrics to admin dashboard on new connection
