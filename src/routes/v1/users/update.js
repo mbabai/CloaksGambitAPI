@@ -11,7 +11,19 @@ router.patch('/', async (req, res) => {
     }
 
     const update = {};
-    if (username) update.username = username;
+
+    if (username !== undefined) {
+      const trimmed = String(username).trim();
+      if (trimmed.length < 3 || trimmed.length > 18) {
+        return res.status(400).json({ message: 'Username must be between 3 and 18 characters' });
+      }
+      const existing = await User.findOne({ username: trimmed });
+      if (existing && existing._id.toString() !== userId) {
+        return res.status(409).json({ message: 'Username already taken' });
+      }
+      update.username = trimmed;
+    }
+
     if (email) update.email = email;
 
     if (Object.keys(update).length === 0) {
