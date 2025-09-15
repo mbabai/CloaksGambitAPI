@@ -130,6 +130,76 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   setUsernameDisplay();
 
+  // username edit flow
+  let usernameEditBtn = document.getElementById('usernameEditBtn');
+  const usernameInput = document.createElement('input');
+  usernameInput.type = 'text';
+  usernameInput.minLength = 3;
+  usernameInput.maxLength = 18;
+  usernameInput.style.display = 'none';
+
+  if (usernameDisplay && !usernameEditBtn) {
+    usernameEditBtn = document.createElement('button');
+    usernameEditBtn.id = 'usernameEditBtn';
+    usernameEditBtn.textContent = '✎';
+    usernameEditBtn.style.marginLeft = '6px';
+    usernameEditBtn.style.cursor = 'pointer';
+    usernameEditBtn.style.pointerEvents = 'auto';
+    usernameDisplay.insertAdjacentElement('afterend', usernameEditBtn);
+  }
+
+  if (usernameEditBtn) {
+    usernameEditBtn.insertAdjacentElement('afterend', usernameInput);
+
+    function closeUsernameEdit() {
+      usernameInput.style.display = 'none';
+      usernameDisplay.style.display = '';
+      usernameEditBtn.style.display = '';
+    }
+
+    usernameEditBtn.addEventListener('click', () => {
+      usernameInput.value = localStorage.getItem('cg_username') || '';
+      usernameInput.style.display = 'inline';
+      usernameDisplay.style.display = 'none';
+      usernameEditBtn.style.display = 'none';
+      usernameInput.focus();
+    });
+
+    usernameInput.addEventListener('keydown', async ev => {
+      if (ev.key === 'Enter') {
+        const newName = usernameInput.value.trim();
+        if (newName.length < 3 || newName.length > 18) {
+          alert('Username must be between 3 and 18 characters');
+          return;
+        }
+        try {
+          const id = userId || await ensureUserId();
+          const resp = await fetch('/api/v1/users/update', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: id, username: newName })
+          });
+          const data = await resp.json();
+          if (!resp.ok) {
+            alert(data.message || 'Failed to update username');
+            return;
+          }
+          localStorage.setItem('cg_username', data.username);
+          usernameDisplay.textContent = data.username;
+          closeUsernameEdit();
+        } catch (err) {
+          console.error(err);
+        }
+      } else if (ev.key === 'Escape') {
+        closeUsernameEdit();
+      }
+    });
+
+    usernameInput.addEventListener('blur', () => {
+      closeUsernameEdit();
+    });
+  }
+
   // Cookie helpers moved to modules/utils/cookies.js
 
   const ACTIONS = { SETUP: 0, MOVE: 1, CHALLENGE: 2, BOMB: 3, PASS: 4 };
