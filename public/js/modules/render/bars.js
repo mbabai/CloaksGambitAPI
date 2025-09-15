@@ -1,4 +1,5 @@
 import { pieceGlyph as makePieceGlyph } from './pieceGlyph.js';
+import { createEloBadge } from './eloBadge.js';
 
 export function renderBars({
   topBar,
@@ -21,7 +22,10 @@ export function renderBars({
     winsTop = 0,
     winsBottom = 0,
     connectionTop = null,
-    connectionBottom = null
+    connectionBottom = null,
+    isRankedMatch = false,
+    eloTop = null,
+    eloBottom = null
   } = state;
 
   if (!topBar || !bottomBar) return;
@@ -44,7 +48,7 @@ export function renderBars({
   const clockFont = Math.max(12, Math.floor(0.026 * H));
   const iconFont = Math.max(12, Math.floor(0.024 * H));
 
-  function makeNameRow(text, isTopBar, showChallengeBubble, winCount, connection) {
+  function makeNameRow({ text, isTopBar, showChallengeBubble, winCount, connection, elo }) {
     const row = document.createElement('div');
     row.style.height = nameBarH + 'px';
     row.style.display = 'flex';
@@ -65,7 +69,24 @@ export function renderBars({
     nameContent.style.display = 'flex';
     nameContent.style.alignItems = 'center';
     nameContent.style.gap = '6px';
-    nameContent.appendChild(nameWrap);
+
+    let badge = null;
+    if (isRankedMatch) {
+      const badgeSize = Math.max(16, Math.floor(nameBarH * 0.9));
+      badge = createEloBadge({ elo, size: badgeSize });
+    }
+
+    if (badge) {
+      if (isTopBar) {
+        nameContent.appendChild(nameWrap);
+        nameContent.appendChild(badge);
+      } else {
+        nameContent.appendChild(badge);
+        nameContent.appendChild(nameWrap);
+      }
+    } else {
+      nameContent.appendChild(nameWrap);
+    }
 
     if (connection && Number.isFinite(connection.displaySeconds)) {
       const indicator = document.createElement('div');
@@ -233,13 +254,14 @@ export function renderBars({
   function fillBar(barEl, isTopBar) {
     while (barEl.firstChild) barEl.removeChild(barEl.firstChild);
     const showBubble = isTopBar ? showChallengeTop : showChallengeBottom;
-    const nameRow = makeNameRow(
-      isTopBar ? nameTop : nameBottom,
+    const nameRow = makeNameRow({
+      text: isTopBar ? nameTop : nameBottom,
       isTopBar,
-      showBubble,
-      isTopBar ? winsTop : winsBottom,
-      isTopBar ? connectionTop : connectionBottom
-    );
+      showChallengeBubble: showBubble,
+      winCount: isTopBar ? winsTop : winsBottom,
+      connection: isTopBar ? connectionTop : connectionBottom,
+      elo: isTopBar ? eloTop : eloBottom
+    });
     const row = document.createElement('div');
     row.style.height = rowH + 'px';
     row.style.display = 'flex';

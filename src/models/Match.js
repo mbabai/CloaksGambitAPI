@@ -1,6 +1,9 @@
 const mongoose = require('mongoose');
 const ServerConfig = require('./ServerConfig');
 const eventBus = require('../eventBus');
+const User = require('./User');
+
+const DEFAULT_ELO = 800;
 
 // Get default config to access the values
 const defaultConfig = new ServerConfig();
@@ -120,6 +123,73 @@ matchSchema.methods.endMatch = async function(winnerId) {
     this.winner = winnerId;
     this.endTime = new Date();
     this.isActive = false;
+
+    const rankedMode = defaultConfig.gameModes.get('RANKED');
+    if (this.type === rankedMode) {
+        let player1Start = Number.isFinite(this.player1StartElo) ? this.player1StartElo : null;
+        let player2Start = Number.isFinite(this.player2StartElo) ? this.player2StartElo : null;
+
+        const [player1User, player2User] = await Promise.all([
+            User.findById(this.player1).catch(() => null),
+            User.findById(this.player2).catch(() => null)
+        ]);
+
+        if (!Number.isFinite(player1Start)) {
+            player1Start = Number.isFinite(player1User?.elo) ? player1User.elo : DEFAULT_ELO;
+            this.player1StartElo = player1Start;
+        }
+
+        if (!Number.isFinite(player2Start)) {
+            player2Start = Number.isFinite(player2User?.elo) ? player2User.elo : DEFAULT_ELO;
+            this.player2StartElo = player2Start;
+        }
+
+        const winnerStr = winnerId ? winnerId.toString() : null;
+        let player1Score = 0.5;
+        if (winnerStr) {
+            if (winnerStr === this.player1.toString()) {
+                player1Score = 1;
+            } else if (winnerStr === this.player2.toString()) {
+                player1Score = 0;
+            }
+        }
+        const player2Score = 1 - player1Score;
+
+        const expected1 = 1 / (1 + Math.pow(10, (player2Start - player1Start) / 400));
+        const K_FACTOR = 32;
+        const delta1 = Math.round(K_FACTOR * (player1Score - expected1));
+        const delta2 = -delta1;
+        const player1End = Math.max(0, Math.round(player1Start + delta1));
+        const player2End = Math.max(0, Math.round(player2Start + delta2));
+
+        this.player1EndElo = player1End;
+        this.player2EndElo = player2End;
+
+        const updates = [];
+        if (player1User) {
+            player1User.elo = player1End;
+            updates.push(player1User.save().catch(err => {
+                console.error('Failed to update player1 elo', err);
+            }));
+        } else {
+            updates.push(User.updateOne({ _id: this.player1 }, { $set: { elo: player1End } }).catch(err => {
+                console.error('Failed to upsert player1 elo', err);
+            }));
+        }
+
+        if (player2User) {
+            player2User.elo = player2End;
+            updates.push(player2User.save().catch(err => {
+                console.error('Failed to update player2 elo', err);
+            }));
+        } else {
+            updates.push(User.updateOne({ _id: this.player2 }, { $set: { elo: player2End } }).catch(err => {
+                console.error('Failed to upsert player2 elo', err);
+            }));
+        }
+
+        await Promise.all(updates);
+    }
 
     const saved = await this.save();
 

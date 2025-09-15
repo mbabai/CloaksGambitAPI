@@ -2,6 +2,8 @@ import { pieceGlyph as modulePieceGlyph } from '/js/modules/render/pieceGlyph.js
 import { renderBoard } from '/js/modules/render/board.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
+import { createEloBadge } from '/js/modules/render/eloBadge.js';
+import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
@@ -251,26 +253,123 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     }
   }
 
-  function updateAccountPanel() {
+  async function updateAccountPanel() {
     const name = getCookie('username');
     if (name) {
-      accountPanelContent.innerHTML = `
-        <div class="menu-button"><span id="accountUsername">${name}</span><button id="editUsername" style="background:none;border:none;color:inherit;cursor:pointer;padding:0;">✎</button></div>
-        <button id="statsBtn" class="menu-button">Stats</button>
-        <button id="logoutBtn" class="menu-button">Logout</button>
-      `;
+      const userIdCookie = getCookie('userId');
+      let userDetails = null;
+      if (userIdCookie) {
+        try {
+          const res = await fetch('/api/v1/users/getDetails', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: userIdCookie })
+          });
+          if (res.ok) {
+            userDetails = await res.json().catch(() => null);
+          }
+        } catch (err) {
+          console.error('Failed to fetch user details', err);
+        }
+      }
+
+      const displayName = userDetails?.username || name;
+      const eloValue = Number.isFinite(userDetails?.elo) ? userDetails.elo : null;
+
+      accountPanelContent.innerHTML = '';
+      accountPanelContent.style.alignItems = 'stretch';
+      accountPanelContent.style.gap = '6px';
+
+      const usernameRow = document.createElement('div');
+      usernameRow.className = 'menu-button';
+      usernameRow.style.display = 'flex';
+      usernameRow.style.alignItems = 'center';
+      usernameRow.style.justifyContent = 'space-between';
+      usernameRow.style.gap = '12px';
+      usernameRow.style.width = '100%';
+      usernameRow.style.cursor = 'default';
+
+      const usernameSpan = document.createElement('span');
+      usernameSpan.id = 'accountUsername';
+      usernameSpan.textContent = displayName;
+      usernameSpan.title = displayName;
+      usernameSpan.style.flex = '1';
+      usernameSpan.style.textAlign = 'left';
+      usernameSpan.style.fontWeight = '600';
+      usernameSpan.style.fontSize = '20px';
+      usernameSpan.style.whiteSpace = 'nowrap';
+      usernameSpan.style.overflow = 'hidden';
+      usernameSpan.style.textOverflow = 'ellipsis';
+      const editBtn = document.createElement('button');
+      editBtn.id = 'editUsername';
+      editBtn.textContent = '✎';
+      editBtn.style.background = 'none';
+      editBtn.style.border = 'none';
+      editBtn.style.color = 'inherit';
+      editBtn.style.cursor = 'pointer';
+      editBtn.style.padding = '0';
+      editBtn.style.fontSize = '18px';
+      editBtn.style.lineHeight = '1';
+      editBtn.style.marginLeft = 'auto';
+      usernameRow.appendChild(usernameSpan);
+      usernameRow.appendChild(editBtn);
+
+      const statsBtn = document.createElement('button');
+      statsBtn.id = 'statsBtn';
+      statsBtn.className = 'menu-button';
+      statsBtn.style.display = 'flex';
+      statsBtn.style.alignItems = 'center';
+      statsBtn.style.justifyContent = 'space-between';
+      statsBtn.style.width = '100%';
+      statsBtn.style.gap = '12px';
+      const statsLabel = document.createElement('span');
+      statsLabel.textContent = 'Stats';
+      statsLabel.style.flex = '1';
+      statsLabel.style.textAlign = 'left';
+      const statsBadge = createEloBadge({ elo: eloValue, size: 32, alt: 'Player Elo' });
+      statsBadge.style.pointerEvents = 'none';
+      statsBtn.appendChild(statsLabel);
+      statsBtn.appendChild(statsBadge);
+
+      const logoutBtn = document.createElement('button');
+      logoutBtn.id = 'logoutBtn';
+      logoutBtn.className = 'menu-button';
+      logoutBtn.style.display = 'flex';
+      logoutBtn.style.alignItems = 'center';
+      logoutBtn.style.justifyContent = 'space-between';
+      logoutBtn.style.width = '100%';
+      logoutBtn.style.gap = '12px';
+      const googleImg = document.createElement('img');
+      googleImg.src = 'assets/images/google-icon.png';
+      googleImg.alt = 'Google';
+      googleImg.style.width = '18px';
+      googleImg.style.height = '18px';
+      googleImg.style.objectFit = 'contain';
+      const logoutLabel = document.createElement('span');
+      logoutLabel.textContent = 'Logout';
+      logoutLabel.style.flex = '1';
+      logoutLabel.style.textAlign = 'left';
+      googleImg.style.marginLeft = 'auto';
+      logoutBtn.appendChild(logoutLabel);
+      logoutBtn.appendChild(googleImg);
+
+      accountPanelContent.appendChild(usernameRow);
+      accountPanelContent.appendChild(statsBtn);
+      accountPanelContent.appendChild(logoutBtn);
+
       accountBtnImg.src = LOGGED_IN_AVATAR_SRC;
       setCookie('photo', LOGGED_IN_AVATAR_SRC, 60 * 60 * 24 * 365);
-      usernameDisplay.textContent = name;
-      document.getElementById('statsBtn').addEventListener('click', () => alert('stats'));
-      document.getElementById('editUsername').addEventListener('click', async ev => {
+      usernameDisplay.textContent = displayName;
+
+      statsBtn.addEventListener('click', () => alert('stats'));
+      editBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
-        const userIdCookie = getCookie('userId');
-        if (!userIdCookie) {
+        const currentUserId = getCookie('userId');
+        if (!currentUserId) {
           alert('Unable to update username: user session not found.');
           return;
         }
-        const newName = prompt('Enter new username', name);
+        const newName = prompt('Enter new username', displayName);
         if (!newName) return;
         const trimmed = newName.trim();
         if (trimmed.length < 3 || trimmed.length > 18) {
@@ -281,7 +380,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           const res = await fetch('/api/v1/users/update', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: userIdCookie, username: trimmed })
+            body: JSON.stringify({ userId: currentUserId, username: trimmed })
           });
           if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -292,7 +391,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           const updatedName = updated?.username || trimmed;
           setCookie('username', updatedName, 60 * 60 * 24 * 365);
           localStorage.setItem('cg_username', updatedName);
-          const playerIdx = currentPlayerIds.findIndex(id => id && id.toString() === userIdCookie);
+          const playerIdx = currentPlayerIds.findIndex(id => id && id.toString() === currentUserId);
           if (playerIdx !== -1) {
             playerNames[playerIdx] = updatedName;
             renderBoardAndBars();
@@ -304,7 +403,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           alert('Failed to update username. Please try again.');
         }
       });
-      document.getElementById('logoutBtn').addEventListener('click', ev => {
+      logoutBtn.addEventListener('click', ev => {
         ev.stopPropagation();
         setCookie('username', '', 0);
         setCookie('photo', '', 0);
@@ -313,6 +412,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         window.location.reload();
       });
     } else {
+      accountPanelContent.style.alignItems = 'flex-end';
+      accountPanelContent.style.gap = '';
       accountPanelContent.innerHTML = `
         <button id="googleLoginBtn" class="menu-button"><img src="assets/images/google-icon.png" alt="Google" /> Sign in with Google</button>
         <div class="menu-message">Log in to see account history, statistics, elo, and participate in ranked matches.</div>
@@ -363,6 +464,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   // Player identity state
   let playerNames = ['Anonymous0', 'Anonymous1'];
+  let playerElos = [null, null];
   let currentPlayerIds = [];
   const connectionStatusByPlayer = new Map();
 
@@ -450,6 +552,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     if (!Array.isArray(ids)) return;
     currentPlayerIds = ids.slice(0, 2);
     playerNames = currentPlayerIds.map((_, idx) => 'Anonymous' + idx);
+    playerElos = currentPlayerIds.map(() => null);
     renderBoardAndBars();
     await Promise.all(currentPlayerIds.map(async (id, idx) => {
       try {
@@ -461,10 +564,55 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         if (res.ok) {
           const user = await res.json().catch(() => null);
           playerNames[idx] = formatPlayerName(user?.username, idx);
+          playerElos[idx] = Number.isFinite(user?.elo) ? user.elo : null;
         }
       } catch (_) {}
     }));
     renderBoardAndBars();
+  }
+
+  function syncPlayerElosFromMatch(match) {
+    if (!match || typeof match !== 'object') return false;
+    const matchType = typeof match.type === 'string' ? match.type.toUpperCase() : '';
+    if (matchType !== 'RANKED') return false;
+
+    const toIdString = (value) => {
+      if (!value) return '';
+      if (typeof value === 'string' || typeof value === 'number') {
+        return String(value);
+      }
+      if (typeof value === 'object') {
+        if (value._id !== undefined) {
+          return toIdString(value._id);
+        }
+        if (typeof value.toHexString === 'function') {
+          return value.toHexString();
+        }
+        if (typeof value.toString === 'function') {
+          const str = value.toString();
+          return str === '[object Object]' ? '' : str;
+        }
+      }
+      return '';
+    };
+
+    const matchIds = [match.player1, match.player2].map(toIdString);
+    const endElos = [match.player1EndElo, match.player2EndElo];
+    let updated = false;
+
+    matchIds.forEach((idStr, idx) => {
+      if (!idStr) return;
+      const newElo = endElos[idx];
+      if (!Number.isFinite(newElo)) return;
+      const targetIdx = currentPlayerIds.findIndex(playerId => toIdString(playerId) === idStr);
+      if (targetIdx === -1) return;
+      if (!Number.isFinite(playerElos[targetIdx]) || playerElos[targetIdx] !== newElo) {
+        playerElos[targetIdx] = newElo;
+        updated = true;
+      }
+    });
+
+    return updated;
   }
 
   function updateConnectionStatus(payload) {
@@ -776,6 +924,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
               if (currentMatch?._id) {
                 activeMatchId = String(currentMatch._id);
               }
+              syncPlayerElosFromMatch(currentMatch);
             } catch (e) {
               console.error('Failed to fetch match details', e);
               currentMatch = null;
@@ -1002,6 +1151,17 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
                 winnerName = formatPlayerName(null, winnerIdx);
               }
             }
+            if (payload?.matchId) {
+              activeMatchId = String(payload.matchId);
+            }
+            const match = await apiGetMatchDetails(payload.matchId);
+            if (match?._id) {
+              activeMatchId = String(match._id);
+            }
+            const updatedElos = syncPlayerElosFromMatch(match);
+            if (updatedElos) {
+              renderBoardAndBars();
+            }
             const loserIdx = winnerIdx === 0 ? 1 : 0;
             const loserName = playerNames[loserIdx] || formatPlayerName(null, loserIdx);
             showGameFinishedBanner({
@@ -1013,6 +1173,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
               winReason: payload.winReason,
               players: ids
             });
+            await updateAccountPanel();
           } catch (e) {
             console.error('Error handling game:finished', e);
           }
@@ -1517,14 +1678,125 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function createScoreboard(match) {
+    const formatId = (value) => {
+      if (!value) return null;
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') {
+        if (typeof value.toString === 'function') {
+          const str = value.toString();
+          if (str !== '[object Object]') return str;
+        }
+        if (value._id) return formatId(value._id);
+      }
+      return null;
+    };
+
     const p1Name = formatPlayerName(match?.player1?.username, 0);
     const p2Name = formatPlayerName(match?.player2?.username, 1);
-    const p1Score = match?.player1Score || 0;
-    const p2Score = match?.player2Score || 0;
+    const p1Score = Number(match?.player1Score || 0);
+    const p2Score = Number(match?.player2Score || 0);
     const finishedGames = Array.isArray(match?.games)
       ? match.games.filter(g => !g.isActive).length
       : 0;
     const draws = Math.max(0, finishedGames - p1Score - p2Score);
+    const isRanked = match?.type === 'RANKED';
+
+    const player1Id = formatId(match?.player1);
+    const player2Id = formatId(match?.player2);
+    const winnerId = formatId(match?.winner);
+
+    const player1StartElo = isRanked && Number.isFinite(match?.player1StartElo) ? match.player1StartElo : null;
+    const player2StartElo = isRanked && Number.isFinite(match?.player2StartElo) ? match.player2StartElo : null;
+    const player1EndElo = isRanked && Number.isFinite(match?.player1EndElo) ? match.player1EndElo : player1StartElo;
+    const player2EndElo = isRanked && Number.isFinite(match?.player2EndElo) ? match.player2EndElo : player2StartElo;
+    const player1Delta = (player1StartElo !== null && player1EndElo !== null)
+      ? Math.round(player1EndElo - player1StartElo)
+      : null;
+    const player2Delta = (player2StartElo !== null && player2EndElo !== null)
+      ? Math.round(player2EndElo - player2StartElo)
+      : null;
+
+    let player1Status = 'draw';
+    let player2Status = 'draw';
+    if (winnerId && player1Id && player2Id) {
+      if (winnerId === player1Id) {
+        player1Status = 'winner';
+        player2Status = 'loser';
+      } else if (winnerId === player2Id) {
+        player1Status = 'loser';
+        player2Status = 'winner';
+      }
+    } else if (p1Score !== p2Score) {
+      if (p1Score > p2Score) {
+        player1Status = 'winner';
+        player2Status = 'loser';
+      } else {
+        player1Status = 'loser';
+        player2Status = 'winner';
+      }
+    }
+
+    const createDaggerToken = (size) => {
+      const token = document.createElement('div');
+      token.style.width = size + 'px';
+      token.style.height = size + 'px';
+      token.style.border = '2px solid var(--CG-white)';
+      token.style.borderRadius = '50%';
+      token.style.background = 'var(--CG-dark-red)';
+      token.style.color = 'var(--CG-white)';
+      token.style.display = 'flex';
+      token.style.alignItems = 'center';
+      token.style.justifyContent = 'center';
+      token.style.fontWeight = 'bold';
+      token.style.fontSize = Math.max(10, Math.floor(size * 0.45)) + 'px';
+      token.textContent = '⚔';
+      return token;
+    };
+
+    const createScoreCell = ({ score, status, delta }) => {
+      const cell = document.createElement('div');
+      cell.style.display = 'flex';
+      cell.style.alignItems = 'center';
+      cell.style.justifyContent = 'center';
+      cell.style.gap = '6px';
+
+      const iconSize = 26;
+      if (status === 'winner') {
+        const icon = document.createElement('img');
+        icon.src = '/assets/images/GoldThrone.svg';
+        icon.alt = 'Match winner';
+        icon.style.width = iconSize + 'px';
+        icon.style.height = iconSize + 'px';
+        icon.style.objectFit = 'contain';
+        cell.appendChild(icon);
+      } else if (status === 'loser') {
+        const dagger = createDaggerToken(iconSize);
+        cell.appendChild(dagger);
+      }
+
+      const scoreSpan = document.createElement('span');
+      scoreSpan.textContent = String(score);
+      scoreSpan.style.fontWeight = '700';
+      cell.appendChild(scoreSpan);
+
+      if (isRanked && delta !== null) {
+        const change = document.createElement('span');
+        const sign = delta >= 0 ? '+' : '';
+        change.textContent = `(${sign}${delta})`;
+        change.style.fontWeight = '700';
+        change.style.marginLeft = '2px';
+        if (status === 'winner') {
+          change.style.color = '#34d399';
+        } else if (status === 'loser') {
+          change.style.color = '#f87171';
+        } else {
+          change.style.color = 'var(--CG-white)';
+        }
+        cell.appendChild(change);
+      }
+
+      return cell;
+    };
 
     const container = document.createElement('div');
     container.style.display = 'grid';
@@ -1542,15 +1814,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     name2.textContent = p2Name;
     name2.style.textAlign = 'center';
 
-    const score1 = document.createElement('div');
-    score1.textContent = p1Score;
-    score1.style.textAlign = 'center';
+    const score1 = createScoreCell({ score: p1Score, status: player1Status, delta: player1Delta });
     const drawCount = document.createElement('div');
     drawCount.textContent = draws;
     drawCount.style.textAlign = 'center';
-    const score2 = document.createElement('div');
-    score2.textContent = p2Score;
-    score2.style.textAlign = 'center';
+    const score2 = createScoreCell({ score: p2Score, status: player2Status, delta: player2Delta });
 
     container.append(name1, drawsLabel, name2, score1, drawCount, score2);
     return container;
@@ -1701,6 +1969,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     currentMatch = match;
     if (match?._id) {
       activeMatchId = String(match._id);
+    }
+    const refreshedElos = syncPlayerElosFromMatch(match);
+    if (refreshedElos) {
+      renderBoardAndBars();
     }
     connectionStatusByPlayer.clear();
     const el = ensureBannerEl();
@@ -2006,6 +2278,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const bottomPlayerId = currentPlayerIds[bottomIdx];
     const connectionTop = getConnectionDisplayForPlayer(topPlayerId, topPlayerId && topPlayerId !== userId);
     const connectionBottom = getConnectionDisplayForPlayer(bottomPlayerId, bottomPlayerId && bottomPlayerId !== userId);
+    const eloTop = playerElos[topIdx];
+    const eloBottom = playerElos[bottomIdx];
     const bars = renderBarsModule({
       topBar,
       bottomBar,
@@ -2030,7 +2304,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         winsTop,
         winsBottom,
         connectionTop,
-        connectionBottom
+        connectionBottom,
+        isRankedMatch,
+        eloTop,
+        eloBottom
       },
       identityMap: PIECE_IMAGES
     });

@@ -8,6 +8,8 @@ const eventBus = require('../../../eventBus');
 const User = require('../../../models/User');
 const ensureUser = require('../../../utils/ensureUser');
 
+const DEFAULT_ELO = 800;
+
 // Function to check and create matches
 async function checkAndCreateMatches() {
   try {
@@ -165,10 +167,10 @@ async function checkAndCreateMatches() {
           player1Score: 0,
           player2Score: 0,
           games: [],
-          player1StartElo: p1User?.elo ?? 1000,
-          player2StartElo: p2User?.elo ?? 1000,
-          player1EndElo: p1User?.elo ?? 1000,
-          player2EndElo: p2User?.elo ?? 1000,
+          player1StartElo: p1User?.elo ?? DEFAULT_ELO,
+          player2StartElo: p2User?.elo ?? DEFAULT_ELO,
+          player1EndElo: p1User?.elo ?? DEFAULT_ELO,
+          player2EndElo: p2User?.elo ?? DEFAULT_ELO,
         });
 
         console.log('Match created:', match._id);

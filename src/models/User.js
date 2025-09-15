@@ -22,7 +22,7 @@ const userSchema = new mongoose.Schema({
   },
   elo: {
     type: Number,
-    default: 1000,
+    default: 800,
     min: 0
   },
   createdAt: {
