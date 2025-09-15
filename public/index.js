@@ -1598,8 +1598,42 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const isRankedMatch = currentMatch && currentMatch.type === 'RANKED';
     const p1Score = currentMatch?.player1Score || 0;
     const p2Score = currentMatch?.player2Score || 0;
-    const winsTop = isRankedMatch ? (topClr === 0 ? p1Score : p2Score) : 0;
-    const winsBottom = isRankedMatch ? (bottomClr === 0 ? p1Score : p2Score) : 0;
+    let winsTop = 0;
+    let winsBottom = 0;
+    if (isRankedMatch) {
+      const toIdString = (value) => {
+        if (!value) return '';
+        if (typeof value === 'string' || typeof value === 'number') {
+          return String(value);
+        }
+        if (typeof value === 'object') {
+          if (value._id !== undefined) {
+            return toIdString(value._id);
+          }
+          if (typeof value.toHexString === 'function') {
+            return value.toHexString();
+          }
+          if (typeof value.toString === 'function') {
+            const str = value.toString();
+            return str === '[object Object]' ? '' : str;
+          }
+        }
+        return '';
+      };
+
+      const matchPlayer1IdStr = toIdString(currentMatch?.player1?._id ?? currentMatch?.player1);
+      const matchPlayer2IdStr = toIdString(currentMatch?.player2?._id ?? currentMatch?.player2);
+      const resolveWins = (playerId) => {
+        const idStr = toIdString(playerId);
+        if (!idStr) return 0;
+        if (matchPlayer1IdStr && idStr === matchPlayer1IdStr) return p1Score;
+        if (matchPlayer2IdStr && idStr === matchPlayer2IdStr) return p2Score;
+        return 0;
+      };
+
+      winsTop = resolveWins(currentPlayerIds?.[topIdx]);
+      winsBottom = resolveWins(currentPlayerIds?.[bottomIdx]);
+    }
     const bars = renderBarsModule({
       topBar,
       bottomBar,
