@@ -26,6 +26,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const accountBtn = document.getElementById('accountBtn');
   const accountPanel = document.getElementById('menuAccountPanel');
   const usernameDisplay = document.getElementById('usernameDisplay');
+  const accountPanelContent = document.getElementById('accountPanelContent');
+  const accountBtnImg = accountBtn.querySelector('img');
 
   let menuOpen = false;
   const PANEL_WIDTH = 180;
@@ -122,13 +124,53 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   });
 
   function setUsernameDisplay() {
-    const name = localStorage.getItem('cg_username');
+    const name = getCookie('username') || localStorage.getItem('cg_username');
     if (usernameDisplay) {
       usernameDisplay.textContent = name || '';
     }
   }
 
-  setUsernameDisplay();
+  function updateAccountPanel() {
+    const name = getCookie('username');
+    const photo = getCookie('photo');
+    if (name) {
+      accountPanelContent.innerHTML = `
+        <div class="menu-button"><span id="accountUsername">${name}</span><button id="editUsername" style="background:none;border:none;color:inherit;cursor:pointer;padding:0;">✎</button></div>
+        <button id="statsBtn" class="menu-button">Stats</button>
+      `;
+      if (photo) {
+        accountBtnImg.src = photo;
+      } else {
+        accountBtnImg.src = 'assets/images/account.png';
+      }
+      usernameDisplay.textContent = name;
+      document.getElementById('statsBtn').addEventListener('click', () => alert('stats'));
+      document.getElementById('editUsername').addEventListener('click', ev => {
+        ev.stopPropagation();
+        const newName = prompt('Enter new username', name);
+        if (newName) {
+          setCookie('username', newName, 60 * 60 * 24 * 365);
+          setUsernameDisplay();
+          updateAccountPanel();
+        }
+      });
+    } else {
+      accountPanelContent.innerHTML = `
+        <button id="googleLoginBtn" class="menu-button"><img src="assets/images/google-icon.png" alt="Google" /> Sign in with Google</button>
+        <div class="menu-message">Log in to see account history, statistics, elo, and participate in ranked matches.</div>
+      `;
+      accountBtnImg.src = 'assets/images/account.png';
+      usernameDisplay.textContent = '';
+      const loginBtn = document.getElementById('googleLoginBtn');
+      if (loginBtn) {
+        loginBtn.addEventListener('click', () => {
+          window.location.href = '/auth/google';
+        });
+      }
+    }
+  }
+
+  updateAccountPanel();
 
   // Cookie helpers moved to modules/utils/cookies.js
 
@@ -732,8 +774,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       }
       if (payload && payload.username) {
         localStorage.setItem('cg_username', payload.username);
+        setCookie('username', payload.username, 60 * 60 * 24 * 365);
       }
-      setUsernameDisplay();
+      updateAccountPanel();
     });
   }
 
