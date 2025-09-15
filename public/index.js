@@ -33,6 +33,33 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const PANEL_WIDTH = 180;
   const PANEL_MARGIN = 16; // keep gap from Find Game button
 
+  let queueStartTime = null;
+  let queueTimerInterval = null;
+  let queueTimerEl = null;
+
+  function updateQueueTimer() {
+    if (!queueStartTime || !queueTimerEl) return;
+    const elapsed = Date.now() - queueStartTime;
+    const totalSeconds = Math.floor(elapsed / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    queueTimerEl.textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  function startQueueTimer() {
+    queueStartTime = Date.now();
+    updateQueueTimer();
+    queueTimerInterval = setInterval(updateQueueTimer, 1000);
+  }
+
+  function stopQueueTimer() {
+    if (queueTimerInterval) {
+      clearInterval(queueTimerInterval);
+      queueTimerInterval = null;
+    }
+    queueStartTime = null;
+  }
+
   function adjustMenuBounds() {
     // Default panel width if queue button isn't visible (e.g., during a game)
     let mainWidth = PANEL_WIDTH;
@@ -523,15 +550,21 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const showSearching = pendingAction === 'join' || isQueued;
     console.log('[UI] updateFindButton', { showSearching, pendingAction, isQueued });
     if (showSearching) {
-      queueBtn.textContent = 'Searching...';
       queueBtn.classList.add('searching');
       modeSelect.disabled = true;
       selectWrap.classList.add('disabled');
+      if (!queueStartTime) {
+        queueBtn.innerHTML = 'Searching...<div class="queue-timer" id="queueTimer"></div>';
+        queueTimerEl = document.getElementById('queueTimer');
+        startQueueTimer();
+      }
     } else {
       queueBtn.textContent = 'Find Game';
       queueBtn.classList.remove('searching');
       modeSelect.disabled = false;
       selectWrap.classList.remove('disabled');
+      stopQueueTimer();
+      queueTimerEl = null;
     }
   }
 
