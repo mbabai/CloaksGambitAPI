@@ -184,4 +184,28 @@ export function renderBoard({
       container.appendChild(cell);
     }
   }
+
+  // Overlay gold lines indicating deployment zones
+  const lineThickness = 4;
+  const topLine = document.createElement('div');
+  topLine.style.position = 'absolute';
+  topLine.style.left = '0';
+  topLine.style.top = (squareSize - lineThickness / 2) + 'px';
+  topLine.style.width = '100%';
+  topLine.style.height = lineThickness + 'px';
+  topLine.style.background = 'var(--CG-deep-gold)';
+  topLine.style.zIndex = '5';
+  topLine.style.pointerEvents = 'none';
+  container.appendChild(topLine);
+
+  const bottomLine = document.createElement('div');
+  bottomLine.style.position = 'absolute';
+  bottomLine.style.left = '0';
+  bottomLine.style.top = (squareSize * (rows - 1) - lineThickness / 2) + 'px';
+  bottomLine.style.width = '100%';
+  bottomLine.style.height = lineThickness + 'px';
+  bottomLine.style.background = 'var(--CG-deep-gold)';
+  bottomLine.style.zIndex = '5';
+  bottomLine.style.pointerEvents = 'none';
+  container.appendChild(bottomLine);
 }
