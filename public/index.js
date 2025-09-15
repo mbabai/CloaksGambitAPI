@@ -5,7 +5,7 @@ import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiCheckTimeControl, apiGetMatchDetails } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiCheckTimeControl, apiGetMatchDetails } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -1061,6 +1061,100 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     return bannerEl;
   }
 
+  function showResignConfirm() {
+    if (!lastGameId || gameFinished) return;
+    const el = ensureBannerEl();
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    while (el.firstChild) el.removeChild(el.firstChild);
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+
+    const card = document.createElement('div');
+    card.style.padding = '22px 28px';
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '360px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = '18px';
+
+    const message = document.createElement('div');
+    message.textContent = 'Are you sure you wish to resign this game?';
+    message.style.fontSize = '20px';
+    message.style.fontWeight = '600';
+    message.style.lineHeight = '1.4';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.gap = '12px';
+    buttons.style.justifyContent = 'center';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.flex = '1';
+    cancelBtn.style.minWidth = '0';
+    cancelBtn.style.background = 'var(--CG-forest)';
+    cancelBtn.style.color = 'var(--CG-white)';
+    cancelBtn.style.border = '2px solid var(--CG-deep-gold)';
+    cancelBtn.style.padding = '10px 16px';
+    cancelBtn.style.fontSize = '18px';
+    cancelBtn.style.fontWeight = '700';
+    cancelBtn.style.cursor = 'pointer';
+
+    const resignBtn = document.createElement('button');
+    resignBtn.textContent = 'Resign';
+    resignBtn.style.flex = '1';
+    resignBtn.style.minWidth = '0';
+    resignBtn.style.background = 'var(--CG-dark-red)';
+    resignBtn.style.color = 'var(--CG-white)';
+    resignBtn.style.border = '2px solid var(--CG-deep-gold)';
+    resignBtn.style.padding = '10px 16px';
+    resignBtn.style.fontSize = '18px';
+    resignBtn.style.fontWeight = '700';
+    resignBtn.style.cursor = 'pointer';
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(resignBtn);
+    card.appendChild(message);
+    card.appendChild(buttons);
+    el.appendChild(card);
+    el.style.display = 'flex';
+
+    function closeBanner() {
+      if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+      while (el.firstChild) el.removeChild(el.firstChild);
+      el.style.display = 'none';
+    }
+
+    cancelBtn.addEventListener('click', () => {
+      closeBanner();
+    });
+
+    resignBtn.addEventListener('click', async () => {
+      if (!lastGameId) return;
+      cancelBtn.disabled = true;
+      resignBtn.disabled = true;
+      cancelBtn.style.opacity = '0.7';
+      resignBtn.style.opacity = '0.7';
+      resignBtn.textContent = 'Resigning…';
+      try {
+        await apiResign(lastGameId, myColor);
+        closeBanner();
+      } catch (err) {
+        console.error('Resign failed', err);
+        cancelBtn.disabled = false;
+        resignBtn.disabled = false;
+        cancelBtn.style.opacity = '1';
+        resignBtn.style.opacity = '1';
+        resignBtn.textContent = 'Resign';
+      }
+    });
+  }
+
   function showMatchFoundBanner(startSeconds, onTick) {
     const el = ensureBannerEl();
     el.style.alignItems = 'center';
@@ -1210,6 +1304,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         break;
       case 4:
         descText = `${winnerName} (${colorStr}) won because ${loserName} ran out of time.`;
+        break;
+      case 6:
+        descText = `${winnerName} (${colorStr}) won because ${loserName} resigned.`;
         break;
       default:
         descText = `${winnerName} (${colorStr}) won.`;
@@ -1566,24 +1663,30 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (children.length === 0) {
         renderGameButton({ id: 'challengeBtn', visible: false });
         renderGameButton({ id: 'bombBtn', visible: false });
+        renderGameButton({ id: 'passBtn', visible: false });
+        renderGameButton({ id: 'resignBtn', visible: false });
         return;
       }
 
       let minLeft = Infinity;
       let minTop = Infinity;
       let maxRight = 0;
+      let maxBottom = 0;
       children.forEach(function(child) {
         const l = parseInt(child.style.left, 10) || 0;
         const t = parseInt(child.style.top, 10) || 0;
         const w = (parseInt(child.style.width, 10) || child.offsetWidth || 0);
+        const h = (parseInt(child.style.height, 10) || child.offsetHeight || 0);
         if (l < minLeft) minLeft = l;
         if (t < minTop) minTop = t;
         if (l + w > maxRight) maxRight = l + w;
+        if (t + h > maxBottom) maxBottom = t + h;
       });
 
       const stashLeft = minLeft;
       const stashTop = minTop;
       const stashWidth = maxRight - minLeft;
+      const stashBottom = maxBottom;
       const maxBtnW = Math.floor(stashWidth * 0.4);
       const btnW = Math.min(160, maxBtnW);
       const btnH = Math.floor(btnW * 0.6);
@@ -1592,6 +1695,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       let canChallenge = false;
       let canBomb = false;
       let canPass = false;
+      const bothSetupDone = setupComplete && setupComplete.length >= 2 && Boolean(setupComplete[0]) && Boolean(setupComplete[1]);
       if (isMyTurn && lastAction) {
         if (lastAction.type === ACTIONS.MOVE) {
           if (lastMove && lastMove.state === MOVE_STATES.PENDING && lastMove.player !== myColor) {
@@ -1674,6 +1778,42 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         width: btnW,
         height: btnH,
         fontSize
+      });
+
+      const deckEl = refs.deckEl;
+      const fallbackDeckSize = Math.max(1, currentSquareSize || btnW);
+      const deckWidth = deckEl ? (parseInt(deckEl.style.width, 10) || deckEl.offsetWidth || fallbackDeckSize) : fallbackDeckSize;
+      const deckHeight = deckEl ? (parseInt(deckEl.style.height, 10) || deckEl.offsetHeight || fallbackDeckSize) : fallbackDeckSize;
+      const deckLeft = deckEl
+        ? (parseInt(deckEl.style.left, 10) || deckEl.offsetLeft || (stashLeft + stashWidth / 2 - deckWidth / 2))
+        : (stashLeft + stashWidth / 2 - deckWidth / 2);
+      const deckTop = deckEl ? (parseInt(deckEl.style.top, 10) || deckEl.offsetTop || stashTop) : stashTop;
+      const deckCenterX = deckLeft + deckWidth / 2;
+      const deckBottom = deckTop + deckHeight;
+      const gapBelowDeck = Math.max(6, Math.round(deckHeight * 0.1));
+      const resignTop = deckBottom + gapBelowDeck;
+      const resignW = Math.max(1, Math.round(btnW * 0.65));
+      const resignH = Math.max(1, Math.round(btnH * 0.5));
+      const resignFontSize = Math.max(14, Math.floor(resignH * (24 / 96)));
+      const canResign = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId);
+
+      renderGameButton({
+        id: 'resignBtn',
+        root: playAreaRoot,
+        boardLeft: deckCenterX,
+        boardTop: resignTop + resignH / 2,
+        boardWidth: 0,
+        boardHeight: 0,
+        text: 'Resign',
+        background: 'var(--CG-black)',
+        visible: canResign,
+        onClick: () => {
+          if (!canResign) return;
+          showResignConfirm();
+        },
+        width: resignW,
+        height: resignH,
+        fontSize: resignFontSize
       });
     })();
 
