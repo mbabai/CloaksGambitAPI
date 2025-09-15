@@ -172,6 +172,69 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     if (menuOpen) adjustMenuBounds();
   });
 
+  document.addEventListener('keydown', handleGlobalKeyDown);
+
+  function handleGlobalKeyDown(ev) {
+    if (typeof bannerKeyListener === 'function') {
+      const handled = bannerKeyListener(ev);
+      if (handled === true) return;
+      if (isBannerVisible()) return;
+    } else if (isBannerVisible()) {
+      return;
+    }
+
+    if (ev.defaultPrevented) return;
+    if (ev.repeat) return;
+
+    const activeEl = document.activeElement;
+    if (shouldIgnoreShortcutTarget(ev.target) || shouldIgnoreShortcutTarget(activeEl)) return;
+
+    const key = ev.key;
+    if (!key) return;
+
+    if (key === 'c' || key === 'C') {
+      if (clickButtonIfVisible('challengeBtn')) {
+        ev.preventDefault();
+      }
+    } else if (key === 'b' || key === 'B') {
+      if (clickButtonIfVisible('bombBtn')) {
+        ev.preventDefault();
+      }
+    } else if (key === 'v' || key === 'V') {
+      if (clickButtonIfVisible('passBtn')) {
+        ev.preventDefault();
+      }
+    }
+  }
+
+  function isBannerVisible() {
+    return Boolean(bannerEl && bannerEl.style.display !== 'none');
+  }
+
+  function shouldIgnoreShortcutTarget(el) {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'textarea' || tag === 'select') return true;
+    if (tag === 'input') {
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (!type || type === 'text' || type === 'search' || type === 'email' || type === 'password' || type === 'number') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function clickButtonIfVisible(id) {
+    const btn = document.getElementById(id);
+    if (!btn) return false;
+    if (btn.disabled) return false;
+    const style = window.getComputedStyle(btn);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    btn.click();
+    return true;
+  }
+
   function setUsernameDisplay() {
     const name = getCookie('username') || localStorage.getItem('cg_username');
     if (usernameDisplay) {
@@ -306,6 +369,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let lastGameId = null;
   let bannerInterval = null;
   let bannerEl = null;
+  let bannerKeyListener = null;
   let playAreaRoot = null;
   let isPlayAreaVisible = false;
   let queuerHidden = false;
@@ -1061,9 +1125,14 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     return bannerEl;
   }
 
+  function setBannerKeyListener(listener) {
+    bannerKeyListener = typeof listener === 'function' ? listener : null;
+  }
+
   function showResignConfirm() {
     if (!lastGameId || gameFinished) return;
     const el = ensureBannerEl();
+    setBannerKeyListener(null);
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
     while (el.firstChild) el.removeChild(el.firstChild);
     el.style.alignItems = 'center';
@@ -1344,6 +1413,18 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       }
     });
 
+    setBannerKeyListener(ev => {
+      const key = ev.key;
+      if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar' || ev.code === 'Space') {
+        const style = window.getComputedStyle(btn);
+        if (style.display === 'none' || btn.disabled) return false;
+        ev.preventDefault();
+        btn.click();
+        return true;
+      }
+      return false;
+    });
+
     card.appendChild(title);
     card.appendChild(desc);
     card.appendChild(btn);
@@ -1386,6 +1467,18 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     btn.style.fontSize = '16px';
     btn.style.cursor = 'pointer';
     btn.addEventListener('click', () => { returnToLobby(); });
+
+    setBannerKeyListener(ev => {
+      const key = ev.key;
+      if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar' || ev.code === 'Space') {
+        const style = window.getComputedStyle(btn);
+        if (style.display === 'none' || btn.disabled) return false;
+        ev.preventDefault();
+        btn.click();
+        return true;
+      }
+      return false;
+    });
 
     card.appendChild(title);
     card.appendChild(score);
@@ -1518,6 +1611,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   function returnToLobby() {
     hidePlayArea();
     showQueuer();
+    setBannerKeyListener(null);
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
     if (bannerEl) {
       while (bannerEl.firstChild) bannerEl.removeChild(bannerEl.firstChild);
