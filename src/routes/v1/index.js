@@ -13,6 +13,7 @@ const matchGetList = require('./matches/getList');
 const matchGetDetails = require('./matches/getDetails');
 const matchCreate = require('./matches/create');
 const matchPurge = require('./matches/purge');
+const matchPurgeActive = require('./matches/purgeActive');
 
 // Game routes
 const gameGetList = require('./games/getList');
@@ -53,6 +54,7 @@ router.use('/matches/getList', matchGetList);
 router.use('/matches/getDetails', matchGetDetails);
 router.use('/matches/create', matchCreate);
 router.use('/matches/purge', matchPurge);
+router.use('/matches/purge-active', matchPurgeActive);
 
 // Game routes
 router.use('/games/getList', gameGetList);

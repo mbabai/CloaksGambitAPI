@@ -12,7 +12,7 @@
         var usersListEl = document.getElementById('usersList');
         var gamesListEl = document.getElementById('gamesList');
         var matchesListEl = document.getElementById('matchesList');
-        var purgeBtn = document.getElementById('purgeGamesBtn');
+        var purgeActiveMatchesBtn = document.getElementById('purgeActiveMatchesBtn');
         var purgeMatchesBtn = document.getElementById('purgeMatchesBtn');
         var purgeUsersBtn = document.getElementById('purgeUsersBtn');
         var usernameMap = {};
@@ -258,30 +258,32 @@
                 fetchAllUsers();
         });
 
-	if (purgeBtn) {
-		purgeBtn.addEventListener('click', async function () {
-			if (!confirm('Are you sure you want to purge ALL games from the database? This cannot be undone.')) return;
-			try {
-				var res = await fetch('/api/v1/games/purge', {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						// Optionally provide ADMIN_SECRET via prompt if not in env for local testing
-						'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
-					}
-				});
-				if (!res.ok) {
-					alert('Failed to purge games: ' + res.status);
-					return;
-				}
-				var data = await res.json();
-				alert('Purged games: ' + (data.deleted || 0));
-			} catch (err) {
-				console.error(err);
-				alert('Error purging games. Check console.');
-			}
-		});
-	}
+        if (purgeActiveMatchesBtn) {
+                purgeActiveMatchesBtn.addEventListener('click', async function () {
+                        if (!confirm('Are you sure you want to purge all ACTIVE matches from the database? This cannot be undone.')) return;
+                        try {
+                                var res = await fetch('/api/v1/matches/purge-active', {
+                                        method: 'POST',
+                                        headers: {
+                                                'Content-Type': 'application/json',
+                                                // Optionally provide ADMIN_SECRET via prompt if not in env for local testing
+                                                'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
+                                        }
+                                });
+                                if (!res.ok) {
+                                        alert('Failed to purge active matches: ' + res.status);
+                                        return;
+                                }
+                                var data = await res.json();
+                                var matchCount = data && typeof data.deletedMatches === 'number' ? data.deletedMatches : (data && data.deleted) || 0;
+                                var gameCount = data && typeof data.deletedGames === 'number' ? data.deletedGames : 0;
+                                alert('Purged active matches: ' + matchCount + ' (games removed: ' + gameCount + ')');
+                        } catch (err) {
+                                console.error(err);
+                                alert('Error purging active matches. Check console.');
+                        }
+                });
+        }
 
         if (purgeMatchesBtn) {
                 purgeMatchesBtn.addEventListener('click', async function () {
