@@ -41,6 +41,18 @@ const actionSchema = new mongoose.Schema({
     }
 }, { _id: false });
 
+const drawOfferSchema = new mongoose.Schema({
+    player: {
+        type: Number,
+        enum: [0, 1],
+        required: true
+    },
+    createdAt: {
+        type: Date,
+        default: Date.now
+    }
+}, { _id: false });
+
 // Move Schema
 const moveSchema = new mongoose.Schema({
     player: {
@@ -286,6 +298,20 @@ const gameSchema = new mongoose.Schema({
             },
             message: 'onDeckingPlayer must be null, 0, or 1'
         }
+    },
+    drawOffer: {
+        type: drawOfferSchema,
+        default: null
+    },
+    drawOfferCooldowns: {
+        type: [Date],
+        default: [null, null],
+        validate: {
+            validator: function(v) {
+                return Array.isArray(v) && v.length === 2;
+            },
+            message: 'Draw offer cooldowns must contain exactly two entries'
+        }
     }
 });
 
@@ -355,6 +381,10 @@ gameSchema.methods.endGame = async function(winner, winReason) {
     this.winReason = winReason;
     this.endTime = new Date();
     this.isActive = false;
+    this.drawOffer = null;
+    this.drawOfferCooldowns = [null, null];
+    this.markModified('drawOffer');
+    this.markModified('drawOfferCooldowns');
     await this.save();
 
     await handleMatchUpdate(this);

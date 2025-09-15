@@ -3,9 +3,9 @@ import { renderBoard } from '/js/modules/render/board.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
-import { PIECE_IMAGES, KING_ID, MOVE_STATES } from '/js/modules/constants.js';
+import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiCheckTimeControl, apiGetMatchDetails } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -16,6 +16,8 @@ import { Declaration, uiToServerCoords, isWithinPieceRange, isPathClear } from '
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
 (function() {
+  const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
   const queueBtn = document.getElementById('queueBtn');
   const modeSelect = document.getElementById('modeSelect');
   const selectWrap = document.getElementById('selectWrap');
@@ -384,6 +386,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let dragPreviewImgs = []; // active floating preview images
   let lastChoiceOrigin = null; // remember origin for two-option choice
   let gameFinished = false; // true when the current game has concluded
+  let currentDrawOffer = null; // { player, createdAt }
+  let drawOfferCooldowns = [null, null]; // ms timestamps when players may re-offer
+  let drawCooldownTimeout = null;
 
   // Clock state
   let timeControl = 0;
@@ -504,6 +509,33 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       remainingSeconds: base,
       cumulativeSeconds: status.cumulativeSeconds,
     };
+  }
+
+  function clearDrawCooldownTimeout() {
+    if (drawCooldownTimeout) {
+      clearTimeout(drawCooldownTimeout);
+      drawCooldownTimeout = null;
+    }
+  }
+
+  function scheduleDrawCooldownCheck() {
+    clearDrawCooldownTimeout();
+    if (!Array.isArray(drawOfferCooldowns)) return;
+    const now = Date.now();
+    const future = drawOfferCooldowns
+      .map((ts) => {
+        if (typeof ts === 'number') return ts;
+        if (!ts) return null;
+        const parsed = typeof ts === 'string' ? Date.parse(ts) : (ts instanceof Date ? ts.getTime() : Number(ts));
+        return Number.isFinite(parsed) ? parsed : null;
+      })
+      .filter((ts) => Number.isFinite(ts) && ts > now);
+    if (future.length === 0) return;
+    const next = Math.min(...future);
+    drawCooldownTimeout = setTimeout(() => {
+      drawCooldownTimeout = null;
+      renderBoardAndBars();
+    }, Math.max(0, next - now));
   }
 
   // Clock helpers
@@ -921,12 +953,35 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         stopClockInterval();
         selected = null;
         dragging = null;
+        currentDrawOffer = null;
+        drawOfferCooldowns = [null, null];
+        clearDrawCooldownTimeout();
         renderBoardAndBars();
         (async () => {
           try {
             const winnerIdx = payload?.winner;
-            if (winnerIdx !== 0 && winnerIdx !== 1) return;
             const ids = Array.isArray(payload?.players) ? payload.players : [];
+            if (payload?.matchId) {
+              activeMatchId = String(payload.matchId);
+            }
+            const match = await apiGetMatchDetails(payload.matchId);
+            if (match?._id) {
+              activeMatchId = String(match._id);
+            }
+            const isDraw = winnerIdx !== 0 && winnerIdx !== 1;
+            if (isDraw) {
+              showGameFinishedBanner({
+                winnerName: null,
+                loserName: null,
+                winnerColor: null,
+                didWin: false,
+                match,
+                winReason: payload.winReason,
+                players: ids
+              });
+              return;
+            }
+
             const winnerId = ids[winnerIdx];
             let winnerName = playerNames[winnerIdx] || formatPlayerName(null, winnerIdx);
             if (winnerId) {
@@ -947,13 +1002,6 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
                 winnerName = formatPlayerName(null, winnerIdx);
               }
             }
-            if (payload?.matchId) {
-              activeMatchId = String(payload.matchId);
-            }
-            const match = await apiGetMatchDetails(payload.matchId);
-            if (match?._id) {
-              activeMatchId = String(match._id);
-            }
             const loserIdx = winnerIdx === 0 ? 1 : 0;
             const loserName = playerNames[loserIdx] || formatPlayerName(null, loserIdx);
             showGameFinishedBanner({
@@ -962,7 +1010,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
               winnerColor: winnerIdx,
               didWin: winnerIdx === myColor,
               match,
-              winReason: payload.winReason
+              winReason: payload.winReason,
+              players: ids
             });
           } catch (e) {
             console.error('Error handling game:finished', e);
@@ -1202,8 +1251,14 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';
 
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
     const card = document.createElement('div');
-    card.style.padding = '22px 28px';
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
     card.style.border = '2px solid var(--CG-deep-gold)';
     card.style.background = 'var(--CG-deep-purple)';
     card.style.color = 'var(--CG-white)';
@@ -1213,7 +1268,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     card.style.width = '90%';
     card.style.display = 'flex';
     card.style.flexDirection = 'column';
-    card.style.gap = '18px';
+    card.style.gap = cardGap + 'px';
 
     const message = document.createElement('div');
     message.textContent = 'Are you sure you wish to resign this game?';
@@ -1284,6 +1339,116 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         cancelBtn.style.opacity = '1';
         resignBtn.style.opacity = '1';
         resignBtn.textContent = 'Resign';
+      }
+    });
+  }
+
+  function showDrawConfirm() {
+    if (!lastGameId || gameFinished) return;
+    const el = ensureBannerEl();
+    setBannerKeyListener(null);
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    while (el.firstChild) el.removeChild(el.firstChild);
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const card = document.createElement('div');
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '360px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = cardGap + 'px';
+
+    const message = document.createElement('div');
+    message.textContent = 'Confirm offer draw?';
+    message.style.fontSize = clamp(Math.round(20 * modalScale), 14, 20) + 'px';
+    message.style.fontWeight = '600';
+    message.style.lineHeight = '1.4';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
+    buttons.style.justifyContent = 'center';
+
+    const btnPadY = clamp(Math.round(10 * modalScale), 6, 10);
+    const btnPadX = clamp(Math.round(16 * modalScale), 10, 16);
+    const btnFontSize = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.flex = '1';
+    cancelBtn.style.minWidth = '0';
+    cancelBtn.style.background = 'var(--CG-forest)';
+    cancelBtn.style.color = 'var(--CG-white)';
+    cancelBtn.style.border = '2px solid var(--CG-deep-gold)';
+    cancelBtn.style.padding = `${btnPadY}px ${btnPadX}px`;
+    cancelBtn.style.fontSize = btnFontSize + 'px';
+    cancelBtn.style.fontWeight = '700';
+    cancelBtn.style.cursor = 'pointer';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.textContent = 'Yes';
+    confirmBtn.style.flex = '1';
+    confirmBtn.style.minWidth = '0';
+    confirmBtn.style.background = 'var(--CG-gray)';
+    confirmBtn.style.color = 'var(--CG-white)';
+    confirmBtn.style.border = '2px solid var(--CG-deep-gold)';
+    confirmBtn.style.padding = `${btnPadY}px ${btnPadX}px`;
+    confirmBtn.style.fontSize = btnFontSize + 'px';
+    confirmBtn.style.fontWeight = '700';
+    confirmBtn.style.cursor = 'pointer';
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(confirmBtn);
+    card.appendChild(message);
+    card.appendChild(buttons);
+    el.appendChild(card);
+    el.style.display = 'flex';
+
+    function closeBanner() {
+      if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+      while (el.firstChild) el.removeChild(el.firstChild);
+      el.style.display = 'none';
+    }
+
+    cancelBtn.addEventListener('click', () => {
+      closeBanner();
+    });
+
+    confirmBtn.addEventListener('click', async () => {
+      if (!lastGameId) return;
+      cancelBtn.disabled = true;
+      confirmBtn.disabled = true;
+      cancelBtn.style.opacity = '0.7';
+      confirmBtn.style.opacity = '0.7';
+      confirmBtn.textContent = 'Sending…';
+      try {
+        const res = await apiDraw(lastGameId, myColor, 'offer');
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err?.message || 'Failed to offer draw');
+        }
+        closeBanner();
+      } catch (err) {
+        console.error('Draw offer failed', err);
+        alert(err?.message || 'Failed to offer draw');
+        cancelBtn.disabled = false;
+        confirmBtn.disabled = false;
+        cancelBtn.style.opacity = '1';
+        confirmBtn.style.opacity = '1';
+        confirmBtn.textContent = 'Yes';
       }
     });
   }
@@ -1391,7 +1556,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     return container;
   }
 
-  function showGameFinishedBanner({ winnerName, loserName, winnerColor, didWin, match, winReason }) {
+  function showGameFinishedBanner({ winnerName, loserName, winnerColor, didWin, match, winReason, players = [] }) {
     currentMatch = match;
     if (match?._id) {
       activeMatchId = String(match._id);
@@ -1409,14 +1574,15 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     card.style.borderRadius = '0';
     card.style.borderTop = '2px solid var(--CG-deep-gold)';
     card.style.borderBottom = '2px solid var(--CG-deep-gold)';
-    card.style.background = didWin ? 'var(--CG-dark-red)' : 'var(--CG-black)';
+    const isDraw = winnerColor !== 0 && winnerColor !== 1;
+    card.style.background = isDraw ? 'var(--CG-gray)' : (didWin ? 'var(--CG-dark-red)' : 'var(--CG-black)');
     card.style.color = 'var(--CG-white)';
     card.style.boxShadow = '0 10px 30px var(--CG-black)';
     card.style.textAlign = 'center';
     card.style.position = 'relative';
 
     const title = document.createElement('div');
-    title.textContent = didWin ? 'Victory' : 'Defeat';
+    title.textContent = isDraw ? 'Draw' : (didWin ? 'Victory' : 'Defeat');
     title.style.fontSize = '32px';
     title.style.fontWeight = '800';
     title.style.marginBottom = '10px';
@@ -1429,24 +1595,36 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       : false;
     let summaryTimeout = null;
     let descText;
-    switch (reason) {
-      case 0:
-        descText = `${winnerName} (${colorStr}) won by capturing ${loserName}'s king.`;
-        break;
-      case 1:
-        descText = `${winnerName} (${colorStr}) won by advancing their king to the final rank.`;
-        break;
-      case 2:
-        descText = `${winnerName} (${colorStr}) won because ${loserName} challenged the true king.`;
-        break;
-      case 3:
-        descText = `${winnerName} (${colorStr}) won because ${loserName} accumulated 3 dagger tokens.`;
-        break;
-      case 4:
-        descText = `${winnerName} (${colorStr}) won because ${loserName} ran out of time.`;
-        break;
-      default:
-        descText = `${winnerName} (${colorStr}) won.`;
+    if (isDraw || reason === WIN_REASONS.DRAW) {
+      const whiteName = playerNames[0] || formatPlayerName(null, 0);
+      const blackName = playerNames[1] || formatPlayerName(null, 1);
+      descText = `${whiteName} and ${blackName} agreed to a draw.`;
+    } else {
+      switch (reason) {
+        case 0:
+          descText = `${winnerName} (${colorStr}) won by capturing ${loserName}'s king.`;
+          break;
+        case 1:
+          descText = `${winnerName} (${colorStr}) won by advancing their king to the final rank.`;
+          break;
+        case 2:
+          descText = `${winnerName} (${colorStr}) won because ${loserName} challenged the true king.`;
+          break;
+        case 3:
+          descText = `${winnerName} (${colorStr}) won because ${loserName} accumulated 3 dagger tokens.`;
+          break;
+        case 4:
+          descText = `${winnerName} (${colorStr}) won because ${loserName} ran out of time.`;
+          break;
+        case 5:
+          descText = `${winnerName} (${colorStr}) won because ${loserName} disconnected.`;
+          break;
+        case 6:
+          descText = `${winnerName} (${colorStr}) won by resignation.`;
+          break;
+        default:
+          descText = `${winnerName} (${colorStr}) won.`;
+      }
     }
     desc.textContent = descText;
     desc.style.fontSize = '20px';
@@ -1454,7 +1632,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     desc.id = 'gameOverDesc';
 
     const btn = document.createElement('button');
-    btn.textContent = hasNextGame ? 'Next' : 'View Match Summary';
+    btn.textContent = 'Next';
     btn.style.position = 'absolute';
     btn.style.bottom = '10px';
     btn.style.left = '50%';
@@ -1718,6 +1896,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     currentMatch = null;
     activeMatchId = null;
     connectionStatusByPlayer.clear();
+    currentDrawOffer = null;
+    drawOfferCooldowns = [null, null];
+    clearDrawCooldownTimeout();
   }
 
   function renderBoardAndBars() {
@@ -1857,6 +2038,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     bottomClockEl = bars.bottomClockEl;
     updateClockDisplay();
 
+    renderDrawOfferPrompt();
+
     renderStashModule({
       container: stashRoot,
       sizes: {
@@ -1892,6 +2075,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         renderGameButton({ id: 'bombBtn', visible: false });
         renderGameButton({ id: 'passBtn', visible: false });
         renderGameButton({ id: 'resignBtn', visible: false });
+        renderGameButton({ id: 'drawBtn', visible: false });
         return;
       }
 
@@ -1917,12 +2101,17 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const maxBtnW = Math.floor(stashWidth * 0.4);
       const btnW = Math.min(160, maxBtnW);
       const btnH = Math.floor(btnW * 0.6);
-      const fontSize = Math.max(18, Math.floor(btnH * (24 / 96)));
+      const fontSize = clamp(Math.round(btnH * 0.28), 13, 22);
       const isMyTurn = currentPlayerTurn === myColor && !isInSetup;
       let canChallenge = false;
       let canBomb = false;
       let canPass = false;
       const bothSetupDone = setupComplete && setupComplete.length >= 2 && Boolean(setupComplete[0]) && Boolean(setupComplete[1]);
+      const selfIdx = currentIsWhite ? 0 : 1;
+      const now = Date.now();
+      const cooldownUntil = Array.isArray(drawOfferCooldowns) ? drawOfferCooldowns[selfIdx] : null;
+      const cooldownActive = Number.isFinite(cooldownUntil) && cooldownUntil > now;
+      const hasPendingDrawOffer = Boolean(currentDrawOffer && currentDrawOffer.player !== undefined && currentDrawOffer.player !== null);
       if (isMyTurn && lastAction) {
         if (lastAction.type === ACTIONS.MOVE) {
           if (lastMove && lastMove.state === MOVE_STATES.PENDING && lastMove.player !== myColor) {
@@ -2021,8 +2210,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       const resignTop = deckBottom + gapBelowDeck;
       const resignW = Math.max(1, Math.round(btnW * 0.65));
       const resignH = Math.max(1, Math.round(btnH * 0.5));
-      const resignFontSize = Math.max(14, Math.floor(resignH * (24 / 96)));
+      const resignFontSize = clamp(Math.round(resignH * 0.32), 12, 18);
       const canResign = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId);
+      const canOfferDraw = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId) && !hasPendingDrawOffer && !cooldownActive;
 
       renderGameButton({
         id: 'resignBtn',
@@ -2041,6 +2231,29 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         width: resignW,
         height: resignH,
         fontSize: resignFontSize
+      });
+
+      const drawGap = Math.max(4, Math.round(resignH * 0.25));
+      const drawTop = resignTop + resignH + drawGap;
+      const drawFontSize = resignFontSize;
+
+      renderGameButton({
+        id: 'drawBtn',
+        root: playAreaRoot,
+        boardLeft: deckCenterX,
+        boardTop: drawTop + resignH / 2,
+        boardWidth: 0,
+        boardHeight: 0,
+        text: 'Draw',
+        background: 'var(--CG-gray)',
+        visible: canOfferDraw,
+        onClick: () => {
+          if (!canOfferDraw) return;
+          showDrawConfirm();
+        },
+        width: resignW,
+        height: resignH,
+        fontSize: drawFontSize
       });
     })();
 
@@ -2123,6 +2336,112 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         renderBoardAndBars();
       }
     });
+  }
+
+  function renderDrawOfferPrompt() {
+    if (!topBar) return;
+    if (gameFinished) return;
+    const offer = currentDrawOffer;
+    if (!offer || offer.player === undefined || offer.player === null) return;
+    const selfIdx = currentIsWhite ? 0 : 1;
+    if (offer.player === selfIdx) return;
+    if (!lastGameId) return;
+
+    const overlay = document.createElement('div');
+    overlay.style.position = 'absolute';
+    overlay.style.left = '0';
+    overlay.style.top = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.background = 'rgba(0, 0, 0, 0.78)';
+    overlay.style.display = 'flex';
+    overlay.style.flexDirection = 'column';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.zIndex = '25';
+    overlay.style.boxSizing = 'border-box';
+    overlay.style.border = '2px solid var(--CG-deep-gold)';
+
+    const barHeight = topBar.clientHeight || parseInt(topBar.style.height, 10) || 0;
+    const barWidth = topBar.clientWidth || parseInt(topBar.style.width, 10) || 0;
+    const sizeRef = barHeight || Math.min(barWidth, 260) || 0;
+    const scale = clamp(sizeRef ? sizeRef / 90 : 1, 0.6, 1);
+    const overlayPadding = clamp(Math.round(12 * scale), 6, 12);
+    const overlayGap = clamp(Math.round(12 * scale), 6, 12);
+    overlay.style.padding = overlayPadding + 'px';
+    overlay.style.gap = overlayGap + 'px';
+
+    const text = document.createElement('div');
+    text.textContent = 'Accept Draw?';
+    text.style.fontSize = clamp(Math.round(20 * scale), 13, 20) + 'px';
+    text.style.fontWeight = '700';
+    text.style.color = 'var(--CG-white)';
+
+    const buttonRow = document.createElement('div');
+    buttonRow.style.display = 'flex';
+    const buttonGap = clamp(Math.round(10 * scale), 6, 10);
+    buttonRow.style.gap = buttonGap + 'px';
+    buttonRow.style.flexWrap = 'wrap';
+    buttonRow.style.justifyContent = 'center';
+
+    const acceptBtn = document.createElement('button');
+    acceptBtn.textContent = 'Accept';
+    acceptBtn.style.background = 'var(--CG-forest)';
+    acceptBtn.style.color = 'var(--CG-white)';
+    acceptBtn.style.border = '2px solid var(--CG-deep-gold)';
+    const btnPadY = clamp(Math.round(8 * scale), 4, 8);
+    const btnPadX = clamp(Math.round(18 * scale), 8, 18);
+    const btnFontSize = clamp(Math.round(16 * scale), 11, 16);
+    acceptBtn.style.padding = `${btnPadY}px ${btnPadX}px`;
+    acceptBtn.style.fontSize = btnFontSize + 'px';
+    acceptBtn.style.fontWeight = '700';
+    acceptBtn.style.cursor = 'pointer';
+
+    const declineBtn = document.createElement('button');
+    declineBtn.textContent = 'Decline';
+    declineBtn.style.background = 'var(--CG-dark-red)';
+    declineBtn.style.color = 'var(--CG-white)';
+    declineBtn.style.border = '2px solid var(--CG-deep-gold)';
+    declineBtn.style.padding = `${btnPadY}px ${btnPadX}px`;
+    declineBtn.style.fontSize = btnFontSize + 'px';
+    declineBtn.style.fontWeight = '700';
+    declineBtn.style.cursor = 'pointer';
+
+    buttonRow.appendChild(acceptBtn);
+    buttonRow.appendChild(declineBtn);
+    overlay.appendChild(text);
+    overlay.appendChild(buttonRow);
+    topBar.appendChild(overlay);
+
+    const handleDecision = async (decision) => {
+      if (!lastGameId) return;
+      const targetBtn = decision === 'accept' ? acceptBtn : declineBtn;
+      const otherBtn = decision === 'accept' ? declineBtn : acceptBtn;
+      const originalText = targetBtn.textContent;
+      targetBtn.disabled = true;
+      otherBtn.disabled = true;
+      targetBtn.style.opacity = '0.7';
+      otherBtn.style.opacity = '0.7';
+      targetBtn.textContent = decision === 'accept' ? 'Accepting…' : 'Declining…';
+      try {
+        const res = await apiDraw(lastGameId, myColor, decision);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err?.message || 'Failed to submit draw response');
+        }
+      } catch (err) {
+        console.error('Draw response failed', err);
+        alert(err?.message || 'Failed to submit draw response');
+        targetBtn.disabled = false;
+        otherBtn.disabled = false;
+        targetBtn.style.opacity = '1';
+        otherBtn.style.opacity = '1';
+        targetBtn.textContent = originalText;
+      }
+    };
+
+    acceptBtn.addEventListener('click', () => handleDecision('accept'));
+    declineBtn.addEventListener('click', () => handleDecision('decline'));
   }
 
   function renderBars(s, bW, bH, leftPx, topPx) {
@@ -2634,6 +2953,27 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (u.onDeckingPlayer !== undefined) {
         currentOnDeckingPlayer = u.onDeckingPlayer;
         if (currentOnDeckingPlayer !== null) selected = null;
+      }
+      if (Object.prototype.hasOwnProperty.call(u, 'drawOffer')) {
+        const offer = u.drawOffer;
+        if (offer && typeof offer.player === 'string') {
+          offer.player = parseInt(offer.player, 10);
+        }
+        currentDrawOffer = offer || null;
+      }
+      if (Object.prototype.hasOwnProperty.call(u, 'drawOfferCooldowns')) {
+        if (Array.isArray(u.drawOfferCooldowns)) {
+          drawOfferCooldowns = u.drawOfferCooldowns.map((value) => {
+            if (!value && value !== 0) return null;
+            if (typeof value === 'number') return value;
+            if (value instanceof Date) return value.getTime();
+            const parsed = Date.parse(value);
+            return Number.isNaN(parsed) ? null : parsed;
+          });
+        } else {
+          drawOfferCooldowns = [null, null];
+        }
+        scheduleDrawCooldownCheck();
       }
       if (u.timeControlStart !== undefined) timeControl = u.timeControlStart;
       if (u.increment !== undefined) increment = u.increment;

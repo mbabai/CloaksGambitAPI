@@ -34,4 +34,15 @@ export const MOVE_STATES = {
   RESOLVED: 2
 };
 
+export const WIN_REASONS = {
+  CAPTURED_KING: 0,
+  THRONE: 1,
+  TRUE_KING: 2,
+  DAGGERS: 3,
+  TIME_CONTROL: 4,
+  DISCONNECT: 5,
+  RESIGN: 6,
+  DRAW: 7
+};
+
 

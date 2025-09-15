@@ -29,6 +29,7 @@ const gameActionBomb = require('./gameAction/bomb');
 const gameActionOnDeck = require('./gameAction/onDeck');
 const gameActionPass = require('./gameAction/pass');
 const gameActionResign = require('./gameAction/resign');
+const gameActionDraw = require('./gameAction/draw');
 const gameActionReady = require('./gameAction/ready');
 const gameActionNext = require('./gameAction/next');
 
@@ -68,6 +69,7 @@ router.use('/gameAction/bomb', gameActionBomb);
 router.use('/gameAction/onDeck', gameActionOnDeck);
 router.use('/gameAction/pass', gameActionPass);
 router.use('/gameAction/resign', gameActionResign);
+router.use('/gameAction/draw', gameActionDraw);
 router.use('/gameAction/ready', gameActionReady);
 router.use('/gameAction/next', gameActionNext);
 
