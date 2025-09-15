@@ -35,33 +35,107 @@
                 targetEl.appendChild(frag);
         }
 
-        function renderUsersList(targetEl, users, connectedIds) {
+        function renderUsersList(targetEl, users, connectedIds, matches) {
                 if (!targetEl) return;
                 targetEl.innerHTML = '';
                 if (!Array.isArray(users) || users.length === 0) return;
                 var connectedSet = new Set(connectedIds || []);
+                var inMatchSet = new Set();
+                if (Array.isArray(matches)) {
+                        matches.forEach(function (match) {
+                                (match && Array.isArray(match.players) ? match.players : []).forEach(function (pid) {
+                                        if (pid) inMatchSet.add(pid);
+                                });
+                        });
+                }
                 users.sort(function (a, b) {
                         return (connectedSet.has(b.id) - connectedSet.has(a.id)) || (a.username || '').localeCompare(b.username || '');
                 });
                 var frag = document.createDocumentFragment();
+                var matchCells = [];
+                var connCells = [];
                 var header = document.createElement('div');
                 header.className = 'row headerRow';
+                header.style.display = 'flex';
+                header.style.alignItems = 'center';
+                header.style.justifyContent = 'flex-start';
+                header.style.gap = '12px';
                 var hName = document.createElement('span');
                 hName.textContent = 'Username';
+                hName.style.flex = '1 1 auto';
+                hName.style.minWidth = '0';
+                var hMatch = document.createElement('span');
+                hMatch.textContent = 'In Match';
+                hMatch.style.display = 'inline-flex';
+                hMatch.style.justifyContent = 'center';
+                hMatch.style.alignItems = 'center';
+                hMatch.style.whiteSpace = 'nowrap';
+                hMatch.style.wordBreak = 'keep-all';
                 var hConn = document.createElement('span');
                 hConn.textContent = 'Connected';
+                hConn.style.display = 'inline-flex';
+                hConn.style.justifyContent = 'center';
+                hConn.style.alignItems = 'center';
+                hConn.style.whiteSpace = 'nowrap';
+                hConn.style.wordBreak = 'keep-all';
                 header.appendChild(hName);
+                header.appendChild(hMatch);
                 header.appendChild(hConn);
+                matchCells.push(hMatch);
+                connCells.push(hConn);
                 frag.appendChild(header);
+                function createDaggerTokenIcon() {
+                        var token = document.createElement('div');
+                        var size = 18;
+                        token.style.width = size + 'px';
+                        token.style.height = size + 'px';
+                        token.style.borderRadius = '50%';
+                        token.style.border = '2px solid var(--CG-white)';
+                        token.style.background = 'var(--CG-dark-red)';
+                        token.style.display = 'flex';
+                        token.style.alignItems = 'center';
+                        token.style.justifyContent = 'center';
+                        token.style.color = 'var(--CG-white)';
+                        token.style.fontWeight = 'bold';
+                        token.style.fontSize = '12px';
+                        token.style.lineHeight = '1';
+                        token.textContent = '⚔';
+                        token.setAttribute('aria-hidden', 'true');
+                        return token;
+                }
                 users.forEach(function (u) {
                         var row = document.createElement('div');
                         row.className = 'row';
-                        row.style.justifyContent = 'space-between';
-                        row.style.gap = '0';
+                        row.style.display = 'flex';
+                        row.style.alignItems = 'center';
+                        row.style.justifyContent = 'flex-start';
+                        row.style.gap = '12px';
                         var nameEl = document.createElement(adminUserId && u.id === adminUserId ? 'strong' : 'span');
                         nameEl.textContent = u.username || 'Unknown';
                         nameEl.title = u.id;
+                        nameEl.style.flex = '1 1 auto';
+                        nameEl.style.minWidth = '0';
+                        var matchEl = document.createElement('span');
+                        matchEl.style.display = 'inline-flex';
+                        matchEl.style.justifyContent = 'center';
+                        matchEl.style.alignItems = 'center';
+                        matchEl.style.whiteSpace = 'nowrap';
+                        matchEl.style.wordBreak = 'keep-all';
+                        matchEl.style.padding = '0 2px';
+                        if (inMatchSet.has(u.id)) {
+                                matchEl.appendChild(createDaggerTokenIcon());
+                                matchEl.title = 'Player is in an active match';
+                                matchEl.setAttribute('aria-label', 'In active match');
+                        } else {
+                                matchEl.setAttribute('aria-label', 'Not in active match');
+                        }
                         var connEl = document.createElement('span');
+                        connEl.style.display = 'inline-flex';
+                        connEl.style.justifyContent = 'center';
+                        connEl.style.alignItems = 'center';
+                        connEl.style.whiteSpace = 'nowrap';
+                        connEl.style.wordBreak = 'keep-all';
+                        connEl.style.padding = '0 2px';
                         if (connectedSet.has(u.id)) {
                                 var img = document.createElement('img');
                                 img.src = 'assets/images/GoldThrone.svg';
@@ -71,10 +145,31 @@
                                 connEl.appendChild(img);
                         }
                         row.appendChild(nameEl);
+                        row.appendChild(matchEl);
                         row.appendChild(connEl);
+                        matchCells.push(matchEl);
+                        connCells.push(connEl);
                         frag.appendChild(row);
                 });
                 targetEl.appendChild(frag);
+                var matchWidth = 0;
+                var connWidth = 0;
+                matchCells.forEach(function (cell) {
+                        matchWidth = Math.max(matchWidth, Math.ceil(cell.getBoundingClientRect().width));
+                });
+                connCells.forEach(function (cell) {
+                        connWidth = Math.max(connWidth, Math.ceil(cell.getBoundingClientRect().width));
+                });
+                var setColumnWidth = function (cells, width) {
+                        if (!width) return;
+                        cells.forEach(function (cell) {
+                                cell.style.flex = '0 0 ' + width + 'px';
+                                cell.style.maxWidth = width + 'px';
+                                cell.style.minWidth = width + 'px';
+                        });
+                };
+                setColumnWidth(matchCells, matchWidth);
+                setColumnWidth(connCells, connWidth);
         }
 
         async function fetchAllUsers() {
@@ -100,7 +195,12 @@
                                         users.push({ id: id, username: username });
                                 });
                         }
-                        renderUsersList(usersListEl, users, latestMetrics ? latestMetrics.connectedUserIds : []);
+                        renderUsersList(
+                                usersListEl,
+                                users,
+                                latestMetrics ? latestMetrics.connectedUserIds : [],
+                                latestMetrics ? latestMetrics.matches : []
+                        );
                         if (latestMetrics) {
                                 renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
                                 renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
