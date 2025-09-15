@@ -204,6 +204,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (clickButtonIfVisible('passBtn')) {
         ev.preventDefault();
       }
+    } else if (key === 'f' || key === 'F') {
+      if (clickButtonIfVisible('queueBtn')) {
+        ev.preventDefault();
+      }
     }
   }
 
