@@ -33,9 +33,27 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   const PANEL_WIDTH = 180;
   const PANEL_MARGIN = 16; // keep gap from Find Game button
 
-  let queueStartTime = null;
+  const QUEUE_START_TIME_KEY = 'cg_queueStartTime';
+  const QUEUE_START_MODE_KEY = 'cg_queueStartMode';
+  let queueStartTime = Number(localStorage.getItem(QUEUE_START_TIME_KEY)) || null;
+  let queueStartMode = localStorage.getItem(QUEUE_START_MODE_KEY);
+  if (queueStartMode !== 'quickplay' && queueStartMode !== 'ranked') {
+    queueStartMode = null;
+    localStorage.removeItem(QUEUE_START_MODE_KEY);
+  }
   let queueTimerInterval = null;
   let queueTimerEl = null;
+  let queueStatusKnown = false;
+
+  function persistQueueMode(mode) {
+    if (mode === 'quickplay' || mode === 'ranked') {
+      queueStartMode = mode;
+      localStorage.setItem(QUEUE_START_MODE_KEY, queueStartMode);
+    } else {
+      queueStartMode = null;
+      localStorage.removeItem(QUEUE_START_MODE_KEY);
+    }
+  }
 
   function updateQueueTimer() {
     if (!queueStartTime || !queueTimerEl) return;
@@ -46,8 +64,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     queueTimerEl.textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
   }
 
-  function startQueueTimer() {
-    queueStartTime = Date.now();
+  function startQueueTimer(startTime = Date.now(), mode = queueStartMode || modeSelect.value) {
+    queueStartTime = startTime;
+    localStorage.setItem(QUEUE_START_TIME_KEY, String(queueStartTime));
+    persistQueueMode(mode);
     updateQueueTimer();
     queueTimerInterval = setInterval(updateQueueTimer, 1000);
   }
@@ -58,6 +78,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       queueTimerInterval = null;
     }
     queueStartTime = null;
+    localStorage.removeItem(QUEUE_START_TIME_KEY);
+    persistQueueMode(null);
   }
 
   function adjustMenuBounds() {
@@ -545,25 +567,63 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   function updateFindButton() {
-    const mode = modeSelect.value;
+    const awaitingServerQueueState = !queueStatusKnown && queueStartTime != null;
+    const anyQueued = queuedState.quickplay || queuedState.ranked;
+    let mode = modeSelect.value;
+    const activeMode = queueStatusKnown
+      ? (queuedState.quickplay ? 'quickplay' : queuedState.ranked ? 'ranked' : null)
+      : null;
+    const preferredMode = activeMode || queueStartMode;
+
+    if ((awaitingServerQueueState || anyQueued) && preferredMode && mode !== preferredMode) {
+      mode = preferredMode;
+      modeSelect.value = preferredMode;
+    }
+
+    if (activeMode && queueStartMode !== activeMode) {
+      persistQueueMode(activeMode);
+    }
+
     const isQueued = queuedState[mode];
-    const showSearching = pendingAction === 'join' || isQueued;
-    console.log('[UI] updateFindButton', { showSearching, pendingAction, isQueued });
+    const showSearching =
+      pendingAction === 'join' ||
+      isQueued ||
+      awaitingServerQueueState ||
+      (queueStatusKnown && anyQueued);
+
+    console.log('[UI] updateFindButton', {
+      showSearching,
+      pendingAction,
+      isQueued,
+      queueStatusKnown,
+      anyQueued,
+      mode,
+      activeMode
+    });
+
     if (showSearching) {
       queueBtn.classList.add('searching');
       modeSelect.disabled = true;
       selectWrap.classList.add('disabled');
-      if (!queueStartTime) {
+      if (!queueTimerEl) {
         queueBtn.innerHTML = 'Searching...<div class="queue-timer" id="queueTimer"></div>';
         queueTimerEl = document.getElementById('queueTimer');
-        startQueueTimer();
+      }
+      if (!queueTimerInterval) {
+        const timerMode =
+          pendingAction === 'join'
+            ? mode
+            : (activeMode || queueStartMode || mode);
+        startQueueTimer(queueStartTime != null ? queueStartTime : Date.now(), timerMode);
       }
     } else {
       queueBtn.textContent = 'Find Game';
       queueBtn.classList.remove('searching');
       modeSelect.disabled = false;
       selectWrap.classList.remove('disabled');
-      stopQueueTimer();
+      if (queueStatusKnown) {
+        stopQueueTimer();
+      }
       queueTimerEl = null;
     }
   }
@@ -575,7 +635,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       console.log('[socket] initialState', payload);
       queuedState.quickplay = Boolean(payload?.queued?.quickplay);
       queuedState.ranked = Boolean(payload?.queued?.ranked);
+      queueStatusKnown = true;
       pendingAction = null;
+      if (!(queuedState.quickplay || queuedState.ranked)) {
+        stopQueueTimer();
+      }
       updateFindButton();
 
       // Reconnect flow: if server says we already have an active game, show play area now
@@ -694,6 +758,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       if (!payload) return;
       queuedState.quickplay = Boolean(payload.quickplay);
       queuedState.ranked = Boolean(payload.ranked);
+      queueStatusKnown = true;
       pendingAction = null;
       updateFindButton();
       },
@@ -904,22 +969,34 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   }
 
   queueBtn.addEventListener('click', async function() {
-    const mode = modeSelect.value;
+    let mode = modeSelect.value;
+    const awaitingServerQueueState = !queueStatusKnown && queueStartTime != null;
+    if (awaitingServerQueueState && queueStartMode && mode !== queueStartMode) {
+      mode = queueStartMode;
+      modeSelect.value = queueStartMode;
+    }
     const isQueued = queuedState[mode];
-    console.log('[ui] click queueBtn', { mode, pendingAction, isQueued });
+    const currentlyQueued = isQueued || (awaitingServerQueueState && (!queueStartMode || queueStartMode === mode));
+    const actionMode = currentlyQueued && queueStartMode ? queueStartMode : mode;
+    console.log('[ui] click queueBtn', { mode, pendingAction, isQueued, awaitingServerQueueState, currentlyQueued, actionMode });
     try {
-      if (!(pendingAction === 'join' || isQueued)) {
+      if (!(pendingAction === 'join' || currentlyQueued)) {
         pendingAction = 'join';
         updateFindButton();
-        await enterQueue(mode);
+        await enterQueue(actionMode);
       } else {
         pendingAction = 'leave';
         updateFindButton();
-        await exitQueue(mode);
+        await exitQueue(actionMode);
       }
     } catch (e) {
       console.error(e);
+      const failedAction = pendingAction;
       pendingAction = null;
+      if (failedAction === 'join') {
+        queueStatusKnown = true;
+        stopQueueTimer();
+      }
       updateFindButton();
     }
   });
@@ -1352,6 +1429,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     queuedState.quickplay = false;
     queuedState.ranked = false;
     pendingAction = null;
+    queueStatusKnown = true;
     stopClockInterval();
     gameFinished = false;
     updateFindButton();
