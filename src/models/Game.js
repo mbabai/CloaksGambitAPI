@@ -296,6 +296,10 @@ async function handleMatchUpdate(game) {
     const match = await Match.findById(game.match);
     if (!match) return;
 
+    if (!match.isActive) {
+        return;
+    }
+
     // Update score for the actual player who won
     if (game.winner === 0 || game.winner === 1) {
         const winnerId = game.players[game.winner]?.toString();

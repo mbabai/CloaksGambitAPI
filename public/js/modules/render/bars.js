@@ -19,7 +19,9 @@ export function renderBars({
     nameTop = 'Opponent Name',
     nameBottom = 'My Name',
     winsTop = 0,
-    winsBottom = 0
+    winsBottom = 0,
+    connectionTop = null,
+    connectionBottom = null
   } = state;
 
   if (!topBar || !bottomBar) return;
@@ -42,7 +44,7 @@ export function renderBars({
   const clockFont = Math.max(12, Math.floor(0.026 * H));
   const iconFont = Math.max(12, Math.floor(0.024 * H));
 
-  function makeNameRow(text, isTopBar, showChallengeBubble, winCount) {
+  function makeNameRow(text, isTopBar, showChallengeBubble, winCount, connection) {
     const row = document.createElement('div');
     row.style.height = nameBarH + 'px';
     row.style.display = 'flex';
@@ -58,6 +60,38 @@ export function renderBars({
     nameWrap.style.fontWeight = 'bold';
     nameWrap.style.zIndex = '0';
     nameWrap.textContent = text;
+
+    const nameContent = document.createElement('div');
+    nameContent.style.display = 'flex';
+    nameContent.style.alignItems = 'center';
+    nameContent.style.gap = '6px';
+    nameContent.appendChild(nameWrap);
+
+    if (connection && Number.isFinite(connection.displaySeconds)) {
+      const indicator = document.createElement('div');
+      indicator.style.display = 'flex';
+      indicator.style.alignItems = 'center';
+      indicator.style.gap = '4px';
+
+      const indicatorSize = Math.max(12, Math.floor(nameBarH * 0.75));
+      const img = document.createElement('img');
+      img.src = '/assets/images/loading.gif';
+      img.alt = 'Opponent reconnecting';
+      img.style.width = indicatorSize + 'px';
+      img.style.height = indicatorSize + 'px';
+      img.style.objectFit = 'contain';
+
+      const countdown = document.createElement('span');
+      countdown.textContent = String(Math.max(0, connection.displaySeconds)).padStart(2, '0');
+      countdown.style.fontFamily = 'Courier New, monospace';
+      countdown.style.fontWeight = 'bold';
+      countdown.style.fontSize = Math.max(12, Math.floor(nameFont * 0.9)) + 'px';
+      countdown.style.color = 'var(--CG-white)';
+
+      indicator.appendChild(img);
+      indicator.appendChild(countdown);
+      nameContent.appendChild(indicator);
+    }
 
     let winsWrap = null;
     const nWins = Math.max(0, Number(winCount || 0));
@@ -77,14 +111,14 @@ export function renderBars({
       if (isTopBar) {
         winsWrap.style.marginRight = '6px';
         row.appendChild(winsWrap);
-        row.appendChild(nameWrap);
+        row.appendChild(nameContent);
       } else {
         winsWrap.style.marginLeft = '6px';
-        row.appendChild(nameWrap);
+        row.appendChild(nameContent);
         row.appendChild(winsWrap);
       }
     } else {
-      row.appendChild(nameWrap);
+      row.appendChild(nameContent);
     }
 
     if (showChallengeBubble) {
@@ -203,7 +237,8 @@ export function renderBars({
       isTopBar ? nameTop : nameBottom,
       isTopBar,
       showBubble,
-      isTopBar ? winsTop : winsBottom
+      isTopBar ? winsTop : winsBottom,
+      isTopBar ? connectionTop : connectionBottom
     );
     const row = document.createElement('div');
     row.style.height = rowH + 'px';

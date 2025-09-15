@@ -91,6 +91,12 @@ async function checkAndCreateMatches() {
         await match.save();
         console.log('Match after saving game:', await Match.findById(match._id).lean());
 
+        eventBus.emit('match:created', {
+          matchId: match._id.toString(),
+          players: [player1.toString(), player2.toString()],
+          type: match.type,
+        });
+
         // Update lobby - use atomic operation to prevent race conditions
         const updateResult = await Lobby.updateOne(
           { _id: lobby._id },
@@ -191,6 +197,12 @@ async function checkAndCreateMatches() {
         match.games.push(game._id);
         await match.save();
         console.log('Match after saving game:', await Match.findById(match._id).lean());
+
+        eventBus.emit('match:created', {
+          matchId: match._id.toString(),
+          players: [player1.toString(), player2.toString()],
+          type: match.type,
+        });
 
         // Update lobby - use atomic operation to prevent race conditions
         const updateResult = await Lobby.updateOne(

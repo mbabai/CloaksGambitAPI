@@ -378,6 +378,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let isPlayAreaVisible = false;
   let queuerHidden = false;
   let currentMatch = null;
+  let activeMatchId = null;
 
   // Simple board + bars state (plain page)
   let boardRoot = null;
@@ -391,6 +392,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   // Player identity state
   let playerNames = ['Anonymous0', 'Anonymous1'];
   let currentPlayerIds = [];
+  const connectionStatusByPlayer = new Map();
 
   // Live game state (masked per player)
   let currentBoard = null;        // 2D array of cells
@@ -488,6 +490,50 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       } catch (_) {}
     }));
     renderBoardAndBars();
+  }
+
+  function updateConnectionStatus(payload) {
+    if (!payload) return;
+    const playerId = payload.playerId ? String(payload.playerId) : null;
+    if (!playerId) return;
+    if (!payload.isDisconnected) {
+      connectionStatusByPlayer.delete(playerId);
+      return;
+    }
+    const matchId = payload.matchId ? String(payload.matchId) : null;
+    const rawRemaining = Number(payload.remainingSeconds);
+    const rawCumulative = Number(payload.cumulativeSeconds);
+    connectionStatusByPlayer.set(playerId, {
+      matchId,
+      isDisconnected: true,
+      remainingSeconds: Number.isFinite(rawRemaining) ? rawRemaining : null,
+      cumulativeSeconds: Number.isFinite(rawCumulative) ? rawCumulative : null,
+      lastUpdated: Date.now(),
+    });
+  }
+
+  function getActiveMatchId() {
+    return activeMatchId ? String(activeMatchId) : null;
+  }
+
+  function getConnectionDisplayForPlayer(playerId, shouldShow = true) {
+    const pid = playerId ? String(playerId) : null;
+    if (!pid || !shouldShow) return null;
+    const status = connectionStatusByPlayer.get(pid);
+    if (!status || !status.isDisconnected) return null;
+    const currentMatchId = getActiveMatchId();
+    if (currentMatchId && status.matchId && status.matchId !== currentMatchId) {
+      return null;
+    }
+    const base = status.remainingSeconds;
+    if (!Number.isFinite(base)) return null;
+    const elapsed = (Date.now() - (status.lastUpdated || 0)) / 1000;
+    const displaySeconds = Math.max(0, Math.ceil(base - elapsed));
+    return {
+      displaySeconds,
+      remainingSeconds: base,
+      cumulativeSeconds: status.cumulativeSeconds,
+    };
   }
 
   // Clock helpers
@@ -722,8 +768,12 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           showPlayArea();
 
           if (latest?.match) {
+            activeMatchId = String(latest.match);
             try {
               currentMatch = await apiGetMatchDetails(latest.match);
+              if (currentMatch?._id) {
+                activeMatchId = String(currentMatch._id);
+              }
             } catch (e) {
               console.error('Failed to fetch match details', e);
               currentMatch = null;
@@ -751,6 +801,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
             if (colorIdx > -1 && !isNext) {
               try {
                 const match = await apiGetMatchDetails(latest.match);
+                if (match?._id) {
+                  activeMatchId = String(match._id);
+                }
                 const prevGames = Array.isArray(match?.games)
                   ? match.games.filter(function(g){ return !g.isActive && g._id?.toString() !== latest._id; })
                   : [];
@@ -837,9 +890,16 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         const color = payload.players.findIndex(p => p === userId);
         if (color !== 0 && color !== 1) return;
 
+        if (payload.matchId) {
+          activeMatchId = String(payload.matchId);
+        }
+
         if (!currentMatch && payload.matchId) {
           try {
             currentMatch = await apiGetMatchDetails(payload.matchId);
+            if (currentMatch?._id) {
+              activeMatchId = String(currentMatch._id);
+            }
           } catch (e) {
             console.error('Failed to fetch match details', e);
           }
@@ -917,7 +977,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
                 winnerName = formatPlayerName(null, winnerIdx);
               }
             }
+            if (payload?.matchId) {
+              activeMatchId = String(payload.matchId);
+            }
             const match = await apiGetMatchDetails(payload.matchId);
+            if (match?._id) {
+              activeMatchId = String(match._id);
+            }
             const loserIdx = winnerIdx === 0 ? 1 : 0;
             const loserName = playerNames[loserIdx] || formatPlayerName(null, loserIdx);
             showGameFinishedBanner({
@@ -960,18 +1026,30 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         try {
           const { gameId, color } = payload || {};
           if (!gameId) return;
-          lastGameId = gameId;
+
+          const nextGameId = typeof gameId === 'string' ? gameId : String(gameId);
+          const hasLiveBoard = Array.isArray(currentBoard) && currentBoard.length > 0;
+          const isCurrentActiveGame =
+            nextGameId === (typeof lastGameId === 'string' ? lastGameId : String(lastGameId || '')) &&
+            hasLiveBoard &&
+            !gameFinished;
+
+          if (isCurrentActiveGame) {
+            // Suppress countdown banner if this is simply a reconnect to the current live game.
+            return;
+          }
+
+          lastGameId = nextGameId;
           showMatchFoundBanner(3, async function(remaining) {
             if (remaining === 0) {
-              try { await apiReady(gameId, color); } catch (e) { console.error('Failed to ready after next', e); }
+              try { await apiReady(nextGameId, color); } catch (e) { console.error('Failed to ready after next', e); }
             }
           });
         } catch (e) { console.error('players:bothNext handler failed', e); }
       },
       async onBothReady(payload) {
         try {
-
-      showPlayArea();
+          showPlayArea();
           const gameId = payload?.gameId || lastGameId;
           if (!gameId) return;
           const colorIdx = currentIsWhite ? 0 : 1;
@@ -985,7 +1063,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
           myColor = currentIsWhite ? 0 : 1;
           const serverSetup = Array.isArray(view?.setupComplete) ? view.setupComplete : setupComplete;
           const myDone = Boolean(serverSetup?.[myColor]);
-          
+
           if (!myDone) {
             bootstrapWorkingStateFromServer(view);
             isInSetup = true;
@@ -999,6 +1077,13 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         } catch (e) {
           console.error('players:bothReady handler failed', e);
         }
+      },
+      onConnectionStatus(payload) {
+        if (payload?.matchId) {
+          activeMatchId = String(payload.matchId);
+        }
+        updateConnectionStatus(payload);
+        renderBoardAndBars();
       },
       onDisconnect() { /* keep UI; server handles grace */ }
     });
@@ -1333,6 +1418,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function showGameFinishedBanner({ winnerName, loserName, winnerColor, didWin, match, winReason }) {
     currentMatch = match;
+    if (match?._id) {
+      activeMatchId = String(match._id);
+    }
     const el = ensureBannerEl();
     el.style.alignItems = 'flex-end';
     while (el.firstChild) el.removeChild(el.firstChild);
@@ -1361,6 +1449,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     const desc = document.createElement('div');
     const colorStr = winnerColor === 0 ? 'White' : 'Black';
     const reason = Number(winReason);
+    const hasNextGame = Array.isArray(match?.games)
+      ? match.games.some(g => g && g.isActive)
+      : false;
+    let summaryTimeout = null;
     let descText;
     switch (reason) {
       case 0:
@@ -1378,9 +1470,6 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       case 4:
         descText = `${winnerName} (${colorStr}) won because ${loserName} ran out of time.`;
         break;
-      case 6:
-        descText = `${winnerName} (${colorStr}) won because ${loserName} resigned.`;
-        break;
       default:
         descText = `${winnerName} (${colorStr}) won.`;
     }
@@ -1390,7 +1479,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     desc.id = 'gameOverDesc';
 
     const btn = document.createElement('button');
-    btn.textContent = 'Next';
+    btn.textContent = hasNextGame ? 'Next' : 'View Match Summary';
     btn.style.position = 'absolute';
     btn.style.bottom = '10px';
     btn.style.left = '50%';
@@ -1404,7 +1493,11 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     btn.style.cursor = 'pointer';
     btn.id = 'gameOverNextBtn';
     btn.addEventListener('click', async () => {
-      const nextGame = Array.isArray(match?.games) ? match.games.find(g => g.isActive) : null;
+      if (summaryTimeout) {
+        clearTimeout(summaryTimeout);
+        summaryTimeout = null;
+      }
+      const nextGame = Array.isArray(match?.games) ? match.games.find(g => g && g.isActive) : null;
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
       if (nextGame) {
         try {
@@ -1416,6 +1509,21 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         showMatchSummary(match);
       }
     });
+
+    if (!hasNextGame) {
+      summaryTimeout = setTimeout(() => {
+        try {
+          const currentId = currentMatch?._id ? String(currentMatch._id) : null;
+          const incomingId = match?._id ? String(match._id) : null;
+          if (incomingId && currentId && incomingId !== currentId) {
+            return;
+          }
+          showMatchSummary(match);
+        } catch (err) {
+          console.error('Failed to auto show match summary', err);
+        }
+      }, 4000);
+    }
 
     setBannerKeyListener(ev => {
       const key = ev.key;
@@ -1438,6 +1546,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
   function showMatchSummary(match) {
     currentMatch = match;
+    if (match?._id) {
+      activeMatchId = String(match._id);
+    }
+    connectionStatusByPlayer.clear();
     const el = ensureBannerEl();
     el.style.alignItems = 'center';
     while (el.firstChild) el.removeChild(el.firstChild);
@@ -1629,6 +1741,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     gameFinished = false;
     updateFindButton();
     currentMatch = null;
+    activeMatchId = null;
+    connectionStatusByPlayer.clear();
   }
 
   function renderBoardAndBars() {
@@ -1732,6 +1846,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       winsTop = resolveWins(currentPlayerIds?.[topIdx]);
       winsBottom = resolveWins(currentPlayerIds?.[bottomIdx]);
     }
+    const topPlayerId = currentPlayerIds[topIdx];
+    const bottomPlayerId = currentPlayerIds[bottomIdx];
+    const connectionTop = getConnectionDisplayForPlayer(topPlayerId, topPlayerId && topPlayerId !== userId);
+    const connectionBottom = getConnectionDisplayForPlayer(bottomPlayerId, bottomPlayerId && bottomPlayerId !== userId);
     const bars = renderBarsModule({
       topBar,
       bottomBar,
@@ -1754,7 +1872,9 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         nameTop: playerNames[topIdx] || ('Anonymous' + topIdx),
         nameBottom: playerNames[bottomIdx] || ('Anonymous' + bottomIdx),
         winsTop,
-        winsBottom
+        winsBottom,
+        connectionTop,
+        connectionBottom
       },
       identityMap: PIECE_IMAGES
     });

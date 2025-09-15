@@ -1,11 +1,13 @@
 const { Server } = require('socket.io');
 const Lobby = require('./models/Lobby');
 const Game = require('./models/Game');
+const Match = require('./models/Match');
 const maskGameForColor = require('./utils/gameView');
 const eventBus = require('./eventBus');
 const ChangeStreamToken = require('./models/ChangeStreamToken');
 const ensureUser = require('./utils/ensureUser');
 const User = require('./models/User');
+const getServerConfig = require('./utils/getServerConfig');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -14,6 +16,294 @@ function initSocket(httpServer) {
     },
   });
   const clients = new Map();
+  const matchDisconnectState = new Map();
+  const playerMatches = new Map();
+  const DISCONNECT_LIMIT_MS = 30000;
+  const MIN_DISCONNECT_GRACE_MS = 10000;
+
+  function toId(value) {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    if (typeof value.toString === 'function') return value.toString();
+    return null;
+  }
+
+  function getMatchState(matchId) {
+    const id = toId(matchId);
+    if (!id) return null;
+    let state = matchDisconnectState.get(id);
+    if (!state) {
+      state = { players: {} };
+      matchDisconnectState.set(id, state);
+    }
+    return state;
+  }
+
+  function addPlayerMatch(playerId, matchId) {
+    const pid = toId(playerId);
+    const mid = toId(matchId);
+    if (!pid || !mid) return;
+    let set = playerMatches.get(pid);
+    if (!set) {
+      set = new Set();
+      playerMatches.set(pid, set);
+    }
+    set.add(mid);
+  }
+
+  function removePlayerMatch(playerId, matchId) {
+    const pid = toId(playerId);
+    const mid = toId(matchId);
+    if (!pid || !mid) return;
+    const set = playerMatches.get(pid);
+    if (!set) return;
+    set.delete(mid);
+    if (set.size === 0) {
+      playerMatches.delete(pid);
+    }
+  }
+
+  function cleanupMatchTracking(matchId) {
+    const mid = toId(matchId);
+    if (!mid) return;
+    const state = matchDisconnectState.get(mid);
+    if (!state) return;
+    Object.entries(state.players).forEach(([pid, info]) => {
+      if (info.timer) {
+        clearInterval(info.timer);
+        info.timer = null;
+      }
+      removePlayerMatch(pid, mid);
+    });
+    matchDisconnectState.delete(mid);
+  }
+
+  function computeElapsed(matchId, playerId) {
+    const state = matchDisconnectState.get(matchId);
+    if (!state) return null;
+    const playerState = state.players[playerId];
+    if (!playerState) return null;
+    const now = Date.now();
+    const disconnectedDuration = playerState.disconnectedSince ? (now - playerState.disconnectedSince) : 0;
+    const elapsedMs = Math.min(DISCONNECT_LIMIT_MS, playerState.cumulativeMs + disconnectedDuration);
+    const remainingSeconds = Math.max(0, Math.ceil((DISCONNECT_LIMIT_MS - elapsedMs) / 1000));
+    const cumulativeSeconds = Math.floor(elapsedMs / 1000);
+    return {
+      elapsedMs,
+      remainingSeconds,
+      cumulativeSeconds,
+      isDisconnected: Boolean(playerState.disconnectedSince),
+    };
+  }
+
+  function broadcastStatus(matchId, playerId) {
+    const mid = toId(matchId);
+    const pid = toId(playerId);
+    if (!mid || !pid) return;
+    const state = matchDisconnectState.get(mid);
+    if (!state) return;
+    const status = computeElapsed(mid, pid);
+    if (!status) return;
+    const payload = {
+      matchId: mid,
+      playerId: pid,
+      isDisconnected: status.isDisconnected,
+      remainingSeconds: status.remainingSeconds,
+      cumulativeSeconds: status.cumulativeSeconds,
+    };
+    Object.keys(state.players).forEach((otherId) => {
+      const socket = clients.get(otherId);
+      if (socket) {
+        socket.emit('match:connectionStatus', payload);
+      }
+    });
+  }
+
+  function stopDisconnectTimer(playerState) {
+    if (playerState?.timer) {
+      clearInterval(playerState.timer);
+      playerState.timer = null;
+    }
+  }
+
+  function markPlayerConnected(playerId, matchId, { broadcast = true } = {}) {
+    const mid = toId(matchId);
+    const pid = toId(playerId);
+    if (!mid || !pid) return;
+    const state = matchDisconnectState.get(mid);
+    if (!state) return;
+    const playerState = state.players[pid];
+    if (!playerState) return;
+    if (playerState.disconnectedSince) {
+      playerState.cumulativeMs = Math.min(
+        DISCONNECT_LIMIT_MS,
+        playerState.cumulativeMs + (Date.now() - playerState.disconnectedSince)
+      );
+      playerState.disconnectedSince = null;
+    }
+    playerState.handled = false;
+    stopDisconnectTimer(playerState);
+    if (broadcast) {
+      broadcastStatus(mid, pid);
+    }
+  }
+
+  function startDisconnectTimer(matchId, playerId) {
+    const state = matchDisconnectState.get(matchId);
+    if (!state) return;
+    const playerState = state.players[playerId];
+    if (!playerState) return;
+    if (playerState.timer) return;
+    playerState.timer = setInterval(() => {
+      checkDisconnectStatus(matchId, playerId).catch((err) => {
+        console.error('Error checking disconnect timeout', err);
+      });
+    }, 1000);
+    checkDisconnectStatus(matchId, playerId).catch((err) => {
+      console.error('Error checking disconnect timeout', err);
+    });
+  }
+
+  function markPlayerDisconnected(playerId, matchId, { broadcast = true } = {}) {
+    const mid = toId(matchId);
+    const pid = toId(playerId);
+    if (!mid || !pid) return;
+    const state = getMatchState(mid);
+    let playerState = state.players[pid];
+    if (!playerState) {
+      playerState = { cumulativeMs: 0, disconnectedSince: null, timer: null, handled: false };
+      state.players[pid] = playerState;
+    }
+    if (playerState.disconnectedSince) return;
+    const minGrace = Math.min(DISCONNECT_LIMIT_MS, MIN_DISCONNECT_GRACE_MS);
+    const targetCumulative = DISCONNECT_LIMIT_MS - minGrace;
+    if ((DISCONNECT_LIMIT_MS - playerState.cumulativeMs) < minGrace) {
+      playerState.cumulativeMs = Math.max(0, targetCumulative);
+    }
+    playerState.disconnectedSince = Date.now();
+    playerState.handled = false;
+    startDisconnectTimer(mid, pid);
+    if (broadcast) {
+      broadcastStatus(mid, pid);
+    }
+  }
+
+  function markPlayerConnectedToAllMatches(playerId) {
+    const pid = toId(playerId);
+    if (!pid) return;
+    const matches = playerMatches.get(pid);
+    if (!matches) return;
+    matches.forEach((matchId) => markPlayerConnected(pid, matchId));
+  }
+
+  function markPlayerDisconnectedFromAllMatches(playerId) {
+    const pid = toId(playerId);
+    if (!pid) return;
+    const matches = playerMatches.get(pid);
+    if (!matches) return;
+    matches.forEach((matchId) => markPlayerDisconnected(pid, matchId));
+  }
+
+  function registerMatch(matchId, players = []) {
+    const mid = toId(matchId);
+    if (!mid) return;
+    const state = getMatchState(mid);
+    players.forEach((player) => {
+      const pid = toId(player);
+      if (!pid) return;
+      if (!state.players[pid]) {
+        state.players[pid] = { cumulativeMs: 0, disconnectedSince: null, timer: null, handled: false };
+      }
+      addPlayerMatch(pid, mid);
+      if (clients.has(pid)) {
+        markPlayerConnected(pid, mid);
+      } else {
+        markPlayerDisconnected(pid, mid);
+      }
+    });
+  }
+
+  async function checkDisconnectStatus(matchId, playerId) {
+    const status = computeElapsed(matchId, playerId);
+    if (!status) return;
+    if (status.elapsedMs >= DISCONNECT_LIMIT_MS) {
+      await handleDisconnectTimeout(matchId, playerId);
+    } else {
+      broadcastStatus(matchId, playerId);
+    }
+  }
+
+  async function handleDisconnectTimeout(matchId, playerId) {
+    const state = matchDisconnectState.get(matchId);
+    if (!state) return;
+    const playerState = state.players[playerId];
+    if (!playerState || playerState.handled) return;
+    playerState.handled = true;
+    stopDisconnectTimer(playerState);
+    playerState.cumulativeMs = DISCONNECT_LIMIT_MS;
+
+    const loserId = toId(playerId);
+
+    try {
+      const match = await Match.findById(matchId);
+      if (!match || !match.isActive) {
+        cleanupMatchTracking(matchId);
+        return;
+      }
+
+      const config = await getServerConfig();
+      const winReasonValue = config?.winReasons?.get
+        ? config.winReasons.get('DISCONNECT')
+        : config?.winReasons?.DISCONNECT ?? 5;
+      const settings = config?.gameModeSettings?.get
+        ? config.gameModeSettings.get(match.type)
+        : config?.gameModeSettings?.[match.type];
+      const winScore = settings?.WIN_SCORE ?? 1;
+
+      const player1Id = match.player1?.toString();
+      const player2Id = match.player2?.toString();
+      const winnerId = player1Id === loserId ? player2Id : player1Id;
+
+      if (!winnerId) {
+        cleanupMatchTracking(matchId);
+        return;
+      }
+
+      if (winnerId === player1Id) {
+        match.player1Score = Math.max(match.player1Score || 0, winScore);
+      } else if (winnerId === player2Id) {
+        match.player2Score = Math.max(match.player2Score || 0, winScore);
+      }
+
+      const games = await Game.find({ match: match._id, isActive: true });
+
+      await match.endMatch(winnerId);
+
+      for (const game of games) {
+        const winnerIdx = game.players.findIndex(p => p.toString() === winnerId);
+        if (winnerIdx === -1) continue;
+        await game.endGame(winnerIdx, winReasonValue);
+        const updatedGame = await Game.findById(game._id).lean();
+        if (updatedGame) {
+          eventBus.emit('gameChanged', {
+            game: updatedGame,
+            affectedUsers: (updatedGame.players || []).map(id => id.toString()),
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error handling disconnect timeout', err);
+      playerState.handled = false;
+      if (!playerState.disconnectedSince) {
+        playerState.disconnectedSince = Date.now();
+      }
+      startDisconnectTimer(matchId, playerId);
+      return;
+    }
+
+    cleanupMatchTracking(matchId);
+  }
+
   // Admin namespace for dashboard metrics
   const adminNamespace = io.of('/admin');
 
@@ -68,6 +358,16 @@ function initSocket(httpServer) {
       // Emit updated metrics to admin dashboard
       emitAdminMetrics();
     });
+
+  eventBus.on('match:created', (payload) => {
+    if (!payload) return;
+    registerMatch(payload.matchId, payload.players || []);
+  });
+
+  eventBus.on('match:ended', (payload) => {
+    if (!payload) return;
+    cleanupMatchTracking(payload.matchId);
+  });
 
   eventBus.on('gameChanged', async (payload) => {
     let game;
@@ -297,6 +597,7 @@ function initSocket(httpServer) {
       try { prev.disconnect(true) } catch (_) {}
     }
     clients.set(userId, socket);
+    markPlayerConnectedToAllMatches(userId);
     socket.emit('user:init', { userId, username: userInfo.username });
     console.log('Client connected', socket.id);
 
@@ -311,6 +612,25 @@ function initSocket(httpServer) {
       };
 
       const games = await Game.find({ players: userId, isActive: true }).lean();
+
+      const matchPlayers = new Map();
+      games.forEach((game) => {
+        const matchId = toId(game?.match);
+        if (!matchId) return;
+        if (!matchPlayers.has(matchId)) {
+          matchPlayers.set(matchId, new Set());
+        }
+        (game.players || []).forEach((p) => {
+          const pid = toId(p);
+          if (pid) {
+            matchPlayers.get(matchId).add(pid);
+          }
+        });
+      });
+      matchPlayers.forEach((playersSet, matchId) => {
+        registerMatch(matchId, Array.from(playersSet));
+      });
+
       const maskedGames = games.map((game) => {
         const color = game.players.findIndex(p => p.toString() === userId);
         const masked = maskGameForColor(game, color);
@@ -340,8 +660,13 @@ function initSocket(httpServer) {
     socket.on('disconnect', async () => {
       console.log('Client disconnected', socket.id);
       if (userId) {
-        // Grace period: remove mapping now, but defer queue cleanup
-        clients.delete(userId);
+        const current = clients.get(userId);
+        const isCurrent = !current || current.id === socket.id;
+        if (isCurrent) {
+          // Grace period: remove mapping now, but defer queue cleanup
+          clients.delete(userId);
+          markPlayerDisconnectedFromAllMatches(userId);
+        }
         setTimeout(async () => {
           // If user reconnected, skip cleanup
           if (clients.has(userId)) return;

@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const ServerConfig = require('./ServerConfig');
+const eventBus = require('../eventBus');
 
 // Get default config to access the values
 const defaultConfig = new ServerConfig();
@@ -122,10 +123,19 @@ matchSchema.methods.endMatch = async function(winnerId) {
 
     const saved = await this.save();
 
+    try {
+        eventBus.emit('match:ended', {
+            matchId: this._id.toString(),
+            winner: this.winner ? this.winner.toString() : null,
+            players: [this.player1?.toString(), this.player2?.toString()].filter(Boolean),
+        });
+    } catch (err) {
+        console.error('Error emitting match:ended event:', err);
+    }
+
     // Ensure players are removed from lobby.inGame when a match ends
     try {
         const Lobby = require('./Lobby');
-        const eventBus = require('../eventBus');
         const updateResult = await Lobby.updateOne({}, {
             $pull: { inGame: { $in: [this.player1, this.player2] } }
         });

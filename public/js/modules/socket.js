@@ -8,7 +8,8 @@ export function wireSocket(socket, handlers) {
     onNextCountdown,
     onBothNext,
     onBothReady,
-    onDisconnect
+    onDisconnect,
+    onConnectionStatus
   } = handlers;
 
   socket.on('connect', () => { try { onConnect && onConnect(); } catch (_) {} });
@@ -19,6 +20,7 @@ export function wireSocket(socket, handlers) {
   socket.on('next:countdown', async (payload) => { try { await onNextCountdown?.(payload); } catch (_) {} });
   socket.on('players:bothNext', async (payload) => { try { await onBothNext?.(payload); } catch (_) {} });
   socket.on('players:bothReady', async (payload) => { try { await onBothReady?.(payload); } catch (_) {} });
+  socket.on('match:connectionStatus', async (payload) => { try { await onConnectionStatus?.(payload); } catch (_) {} });
   socket.on('disconnect', () => { try { onDisconnect && onDisconnect(); } catch (_) {} });
 }
 
