@@ -14,6 +14,10 @@ const userSchema = new mongoose.Schema({
     trim: true,
     lowercase: true
   },
+  photoUrl: {
+    type: String,
+    trim: true
+  },
   elo: {
     type: Number,
     default: 1000,
