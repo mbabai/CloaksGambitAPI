@@ -3,7 +3,6 @@ import { renderBoard } from '/js/modules/render/board.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
-import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
@@ -1154,7 +1153,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
             if (payload?.matchId) {
               activeMatchId = String(payload.matchId);
             }
-            const match = await apiGetMatchDetails(payload.matchId);
+            match = await apiGetMatchDetails(payload.matchId);
             if (match?._id) {
               activeMatchId = String(match._id);
             }
