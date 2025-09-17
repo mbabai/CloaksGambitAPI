@@ -1154,7 +1154,7 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
             if (payload?.matchId) {
               activeMatchId = String(payload.matchId);
             }
-            const match = await apiGetMatchDetails(payload.matchId);
+            let match = await apiGetMatchDetails(payload.matchId);
             if (match?._id) {
               activeMatchId = String(match._id);
             }
