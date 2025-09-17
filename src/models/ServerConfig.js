@@ -68,11 +68,11 @@ const serverConfigSchema = new mongoose.Schema({
     RANKED: {
       TIME_CONTROL: {
         type: Number,
-        default: 120000
+        default: 180000
       },
       WIN_SCORE: {
         type: Number,
-        default: 5
+        default: 3
       }
     },
     QUICKPLAY: {
