@@ -283,8 +283,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       usernameRow.className = 'menu-button';
       usernameRow.style.display = 'flex';
       usernameRow.style.alignItems = 'center';
-      usernameRow.style.justifyContent = 'space-between';
-      usernameRow.style.gap = '12px';
+      usernameRow.style.justifyContent = 'flex-start';
+      usernameRow.style.gap = '8px';
+      usernameRow.style.padding = '8px 4px 8px 16px';
+      usernameRow.style.boxSizing = 'border-box';
       usernameRow.style.width = '100%';
       usernameRow.style.cursor = 'default';
 
@@ -292,7 +294,8 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       usernameSpan.id = 'accountUsername';
       usernameSpan.textContent = displayName;
       usernameSpan.title = displayName;
-      usernameSpan.style.flex = '1';
+      usernameSpan.style.flex = '1 1 auto';
+      usernameSpan.style.minWidth = '0';
       usernameSpan.style.textAlign = 'left';
       usernameSpan.style.fontWeight = '600';
       usernameSpan.style.fontSize = '20px';
@@ -301,15 +304,54 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       usernameSpan.style.textOverflow = 'ellipsis';
       const editBtn = document.createElement('button');
       editBtn.id = 'editUsername';
-      editBtn.textContent = '✎';
+      editBtn.type = 'button';
+      editBtn.setAttribute('aria-label', 'Edit username');
+      editBtn.setAttribute('title', 'Edit username');
+      editBtn.innerHTML = `
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          width="18"
+          height="18"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16.862 4.487 1.651-1.652a1.875 1.875 0 0 1 2.652 2.652l-1.652 1.651m-2.651-2.651 2.651 2.651m-2.651-2.651-8.955 8.955a1.5 1.5 0 0 0-.383.65l-.547 2.188 2.188-.547a1.5 1.5 0 0 0 .65-.383l8.955-8.955m-2.651-2.651 2.651 2.651"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      `.trim();
       editBtn.style.background = 'none';
       editBtn.style.border = 'none';
-      editBtn.style.color = 'inherit';
+      editBtn.style.color = 'var(--CG-white)';
       editBtn.style.cursor = 'pointer';
-      editBtn.style.padding = '0';
-      editBtn.style.fontSize = '18px';
-      editBtn.style.lineHeight = '1';
+      editBtn.style.padding = '2px';
       editBtn.style.marginLeft = 'auto';
+      editBtn.style.marginRight = '0';
+      editBtn.style.borderRadius = '4px';
+      editBtn.style.transition = 'background-color 120ms ease-in-out';
+      editBtn.style.display = 'inline-flex';
+      editBtn.style.alignItems = 'center';
+      editBtn.style.justifyContent = 'center';
+      editBtn.style.flexShrink = '0';
+      editBtn.style.flexGrow = '0';
+      editBtn.style.flexBasis = 'auto';
+      editBtn.addEventListener('focusin', () => {
+        editBtn.style.backgroundColor = 'rgba(255, 255, 255, 0.12)';
+      });
+      editBtn.addEventListener('focusout', () => {
+        editBtn.style.backgroundColor = 'transparent';
+      });
+      editBtn.addEventListener('mouseenter', () => {
+        editBtn.style.backgroundColor = 'rgba(255, 255, 255, 0.12)';
+      });
+      editBtn.addEventListener('mouseleave', () => {
+        editBtn.style.backgroundColor = 'transparent';
+      });
       usernameRow.appendChild(usernameSpan);
       usernameRow.appendChild(editBtn);
 
