@@ -15,7 +15,7 @@
       }
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 0; background-color: var(--deep-green); color: var(--light-gold); position: relative; }
       body::before { content: ""; position: fixed; inset: 0; background: url('assets/images/Background.png') center/cover no-repeat; filter: brightness(0.8) contrast(0.65); z-index: -1; }
-      .container { padding: 24px; max-width: 1000px; margin: 0 auto; }
+      .container { padding: 24px; max-width: 1100px; margin: 0 auto; box-sizing: border-box; }
       h2 { margin: 0 0 16px; font-weight: 700; color: var(--light-gold); }
       .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
       .card { border: 4px solid var(--deep-gold); border-radius: 6px; padding: 16px; background: var(--deep-purple); }
@@ -27,53 +27,145 @@
       .tableList .row { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; word-break: break-all; display: flex; align-items: center; gap: 8px; }
       .tableList .row:last-child { border-bottom: 0; }
       .tableList .headerRow { font-weight: 700; justify-content: space-between; gap: 0; }
+
+      .tab-header { display: flex; gap: 12px; margin-bottom: 16px; border-bottom: 3px solid rgba(184,134,11,0.45); }
+      .tab-button { background: none; border: none; color: rgba(255,215,0,0.65); font-size: 22px; font-weight: 700; padding: 12px 16px; cursor: pointer; position: relative; transition: color 0.2s ease; }
+      .tab-button::after { content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 3px; background: transparent; transition: background 0.2s ease; }
+      .tab-button.active { color: var(--light-gold); }
+      .tab-button.active::after { background: var(--deep-gold); }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; }
+
+      .history-summary { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 16px; }
+      .history-card { border: 4px solid var(--deep-gold); border-radius: 6px; padding: 16px; background: rgba(38,17,58,0.85); display: flex; flex-direction: column; gap: 6px; }
+      .history-card .history-card-label { font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,215,0,0.8); }
+      .history-card .history-card-value { font-size: 30px; font-weight: 700; color: var(--light-gold); }
+      .history-card .history-card-sub { font-size: 13px; color: rgba(255,215,0,0.75); }
+
+      .history-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+      .history-filter-btn { border: 2px solid var(--deep-gold); background: rgba(38,17,58,0.6); color: var(--light-gold); padding: 8px 14px; border-radius: 999px; cursor: pointer; font-weight: 600; transition: background 0.2s ease, transform 0.15s ease; }
+      .history-filter-btn:hover { background: rgba(184,134,11,0.25); }
+      .history-filter-btn.active { background: var(--deep-gold); color: var(--deep-green); }
+
+      .history-matches { display: flex; flex-direction: column; gap: 12px; }
+      .history-row { border: 4px solid var(--deep-gold); border-radius: 8px; background: rgba(24,9,38,0.85); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+      .history-row-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .history-pill { padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(255,215,0,0.6); background: rgba(255,215,0,0.15); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+      .history-date { font-size: 12px; color: rgba(255,215,0,0.75); }
+      .history-player-name { font-weight: 700; min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .history-player-score { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .history-player-elo { font-size: 12px; color: rgba(255,215,0,0.75); }
+      .history-match-table { display: flex; flex-direction: column; gap: 12px; }
+      .history-match-row { display: grid; grid-template-columns: minmax(0, 280px) 1fr; gap: 16px; align-items: center; }
+      .history-match-player-info { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .history-match-player-details { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+      .history-player-label-row { display: flex; align-items: baseline; gap: 8px; }
+      .history-match-games { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; align-items: center; }
+      .history-match-games::-webkit-scrollbar { height: 6px; }
+      .history-match-games::-webkit-scrollbar-thumb { background: rgba(255,215,0,0.35); border-radius: 999px; }
+      .history-match-games::-webkit-scrollbar-track { background: transparent; }
+      .history-match-square { width: 34px; height: 34px; border: 3px solid var(--deep-gold); border-radius: 6px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.25); position: relative; flex: 0 0 auto; }
+      .history-match-square.color-white { background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,255,255,0.6)); }
+      .history-match-square.color-black { background: linear-gradient(135deg, rgba(10,10,10,0.9), rgba(40,40,40,0.9)); }
+      .history-match-square.color-unknown { background: rgba(0,0,0,0.35); }
+      .history-match-square img { width: 24px; height: 24px; object-fit: contain; }
+      .history-status-icon { pointer-events: none; }
+      .history-match-empty { font-size: 13px; color: rgba(255,215,0,0.75); white-space: nowrap; }
+
+      @media (max-width: 720px) {
+        .tab-header { flex-wrap: wrap; }
+        .history-match-row { grid-template-columns: minmax(0, 1fr); }
+        .history-match-games { flex-wrap: wrap; }
+      }
     </style>
   </head>
   <body>
     <div class="container">
-      <h2>Admin Dashboard</h2>
-      <div class="grid">
-        <div class="card"><div class="label">Connected Users</div><div id="connectedUsers" class="value">0</div></div>
-        <div class="card"><div class="label">Quickplay Queue</div><div id="quickplayQueue" class="value">0</div></div>
-        <div class="card"><div class="label">Ranked Queue</div><div id="rankedQueue" class="value">0</div></div>
+      <h1 style="margin: 0 0 16px; font-size: 32px; font-weight: 800; color: var(--light-gold);">Admin Dashboard</h1>
+      <div class="tab-header">
+        <button class="tab-button active" data-tab="live">Live</button>
+        <button class="tab-button" data-tab="history">History</button>
       </div>
 
-      <div class="grid" style="margin-top: 12px;">
-        <div class="listCard">
-          <div class="title">Quickplay Queue</div>
-          <div id="quickplayQueueList" class="tableList" role="table"></div>
+      <div id="adminLivePanel" class="tab-panel active" data-tab-panel="live">
+        <h2>Live</h2>
+        <div class="grid">
+          <div class="card"><div class="label">Connected Users</div><div id="connectedUsers" class="value">0</div></div>
+          <div class="card"><div class="label">Quickplay Queue</div><div id="quickplayQueue" class="value">0</div></div>
+          <div class="card"><div class="label">Ranked Queue</div><div id="rankedQueue" class="value">0</div></div>
         </div>
-        <div class="listCard">
-          <div class="title">Ranked Queue</div>
-          <div id="rankedQueueList" class="tableList" role="table"></div>
+
+        <div class="grid" style="margin-top: 12px;">
+          <div class="listCard">
+            <div class="title">Quickplay Queue</div>
+            <div id="quickplayQueueList" class="tableList" role="table"></div>
+          </div>
+          <div class="listCard">
+            <div class="title">Ranked Queue</div>
+            <div id="rankedQueueList" class="tableList" role="table"></div>
+          </div>
+          <div class="listCard" style="grid-column: span 2;">
+            <div class="title">Users</div>
+            <div id="usersList" class="tableList" role="table"></div>
+          </div>
         </div>
-        <div class="listCard" style="grid-column: span 2;">
-          <div class="title">Users</div>
-          <div id="usersList" class="tableList" role="table"></div>
+
+        <div style="margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap;">
+          <button id="purgeActiveMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge Active Matches</button>
+          <button id="purgeMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Matches</button>
+          <button id="purgeUsersBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Accounts</button>
+          <span style="opacity:0.85; font-size:12px; align-self:center;">Requires server `ADMIN_SECRET` header to authorize.</span>
+        </div>
+
+        <div class="grid" style="margin-top: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
+          <div class="listCard" style="grid-column: span 2;">
+            <div class="title">Active Games</div>
+            <div id="gamesList" class="tableList" role="table"></div>
+          </div>
+          <div class="listCard" style="grid-column: span 2;">
+            <div class="title">Active Matches</div>
+            <div id="matchesList" class="tableList" role="table"></div>
+          </div>
         </div>
       </div>
 
-      <div style="margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap;">
-        <button id="purgeActiveMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge Active Matches</button>
-        <button id="purgeMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Matches</button>
-        <button id="purgeUsersBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Accounts</button>
-        <span style="opacity:0.85; font-size:12px; align-self:center;">Requires server `ADMIN_SECRET` header to authorize.</span>
-      </div>
+      <div id="adminHistoryPanel" class="tab-panel" data-tab-panel="history">
+        <h2>History</h2>
+        <div class="history-summary">
+          <div class="history-card">
+            <div class="history-card-label">Total Games Played</div>
+            <div id="historyTotalGames" class="history-card-value">0</div>
+            <div id="historyTotalGamesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0</div>
+          </div>
+          <div class="history-card">
+            <div class="history-card-label">Total Matches Played</div>
+            <div id="historyTotalMatches" class="history-card-value">0</div>
+            <div id="historyTotalMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0%)</div>
+          </div>
+          <div class="history-card">
+            <div class="history-card-label">Quickplay Games</div>
+            <div id="historyQuickplayGames" class="history-card-value">0</div>
+            <div id="historyQuickplayGamesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0</div>
+          </div>
+          <div class="history-card">
+            <div class="history-card-label">Ranked Matches</div>
+            <div id="historyRankedMatches" class="history-card-value">0</div>
+            <div id="historyRankedMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0%)</div>
+          </div>
+        </div>
 
-      <div class="grid" style="margin-top: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
-        <div class="listCard" style="grid-column: span 2;">
-          <div class="title">Active Games</div>
-          <div id="gamesList" class="tableList" role="table"></div>
+        <div class="history-filters">
+          <button class="history-filter-btn active" data-history-filter="all">All</button>
+          <button class="history-filter-btn" data-history-filter="quickplay">Quickplay</button>
+          <button class="history-filter-btn" data-history-filter="ranked">Ranked</button>
         </div>
-        <div class="listCard" style="grid-column: span 2;">
-          <div class="title">Active Matches</div>
-          <div id="matchesList" class="tableList" role="table"></div>
-        </div>
+
+        <div id="historyMatchesList" class="history-matches" aria-live="polite"></div>
       </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/admin.js" defer></script>
+    <script type="module" src="/admin.js"></script>
   </body>
   </html>
 

@@ -15,6 +15,7 @@ import { DRAG_PX_THRESHOLD as DRAG_PX_THRESHOLD_CFG, DRAG_PX_THRESHOLD_TOUCH as 
 import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as performMoveM } from '/js/modules/state/moves.js';
 import { Declaration, uiToServerCoords, isWithinPieceRange, isPathClear } from '/js/modules/interactions/moveRules.js';
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
+import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
 
 (function() {
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -50,6 +51,22 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   let queueTimerInterval = null;
   let queueTimerEl = null;
   let queueStatusKnown = false;
+
+  let statsUserId = null;
+  let statsUserElo = null;
+  let statsHistoryMatches = [];
+  let statsHistoryGames = [];
+  let statsHistoryFilter = 'all';
+  let statsHistoryLoaded = false;
+  let statsOverlayFetching = false;
+  const statsHistoryGamesByMatch = new Map();
+  let statsUsernameMap = {};
+  let statsOverlayEl = null;
+  let statsOverlayMatchesEl = null;
+  let statsOverlaySummaryEls = null;
+  let statsOverlayFilterButtons = [];
+  let statsOverlayCloseBtn = null;
+  let statsOverlayEloValueEl = null;
 
   function persistQueueMode(mode) {
     if (mode === 'quickplay' || mode === 'ranked') {
@@ -146,6 +163,341 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
     closeAccountPanel();
   }
 
+  function ensureStatsOverlay() {
+    if (statsOverlayEl) return;
+
+    statsOverlayEl = document.createElement('div');
+    statsOverlayEl.className = 'history-overlay';
+    statsOverlayEl.id = 'historyOverlay';
+    statsOverlayEl.setAttribute('role', 'dialog');
+    statsOverlayEl.setAttribute('aria-modal', 'true');
+    statsOverlayEl.setAttribute('aria-hidden', 'true');
+
+    const modal = document.createElement('div');
+    modal.className = 'history-modal';
+
+    statsOverlayCloseBtn = document.createElement('button');
+    statsOverlayCloseBtn.type = 'button';
+    statsOverlayCloseBtn.className = 'history-close-btn';
+    statsOverlayCloseBtn.setAttribute('aria-label', 'Close history');
+    statsOverlayCloseBtn.textContent = '✕';
+    modal.appendChild(statsOverlayCloseBtn);
+
+    const heading = document.createElement('h2');
+    heading.textContent = 'Match History';
+    modal.appendChild(heading);
+
+    const eloRow = document.createElement('div');
+    eloRow.className = 'history-current-elo';
+    eloRow.innerHTML = 'Current ELO: <span id="historyCurrentEloValue">—</span>';
+    modal.appendChild(eloRow);
+
+    const summary = document.createElement('div');
+    summary.className = 'history-summary';
+    summary.innerHTML = `
+      <div class="history-card">
+        <div class="history-card-label">Total Games Played</div>
+        <div id="playerHistoryTotalGames" class="history-card-value">0</div>
+        <div id="playerHistoryTotalGamesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0</div>
+      </div>
+      <div class="history-card">
+        <div class="history-card-label">Total Matches Played</div>
+        <div id="playerHistoryTotalMatches" class="history-card-value">0</div>
+        <div id="playerHistoryTotalMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0% win)</div>
+      </div>
+      <div class="history-card">
+        <div class="history-card-label">Quickplay Games</div>
+        <div id="playerHistoryQuickplayGames" class="history-card-value">0</div>
+        <div id="playerHistoryQuickplayGamesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0</div>
+      </div>
+      <div class="history-card">
+        <div class="history-card-label">Ranked Matches</div>
+        <div id="playerHistoryRankedMatches" class="history-card-value">0</div>
+        <div id="playerHistoryRankedMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0% win)</div>
+      </div>`;
+    modal.appendChild(summary);
+
+    const filters = document.createElement('div');
+    filters.className = 'history-filters';
+    filters.innerHTML = `
+      <button class="history-filter-btn active" data-history-filter="all">All</button>
+      <button class="history-filter-btn" data-history-filter="quickplay">Quickplay</button>
+      <button class="history-filter-btn" data-history-filter="ranked">Ranked</button>`;
+    modal.appendChild(filters);
+
+    const content = document.createElement('div');
+    content.className = 'history-overlay-content';
+    content.id = 'historyOverlayContent';
+    const matches = document.createElement('div');
+    matches.className = 'history-matches';
+    matches.id = 'playerHistoryMatches';
+    content.appendChild(matches);
+    modal.appendChild(content);
+
+    statsOverlayEl.appendChild(modal);
+    document.body.appendChild(statsOverlayEl);
+
+    statsOverlayMatchesEl = matches;
+    statsOverlayFilterButtons = Array.from(filters.querySelectorAll('[data-history-filter]'));
+    statsOverlayEloValueEl = eloRow.querySelector('#historyCurrentEloValue');
+    statsOverlaySummaryEls = {
+      totalGames: summary.querySelector('#playerHistoryTotalGames'),
+      totalGamesBreakdown: summary.querySelector('#playerHistoryTotalGamesBreakdown'),
+      totalMatches: summary.querySelector('#playerHistoryTotalMatches'),
+      totalMatchesBreakdown: summary.querySelector('#playerHistoryTotalMatchesBreakdown'),
+      quickplayGames: summary.querySelector('#playerHistoryQuickplayGames'),
+      quickplayGamesBreakdown: summary.querySelector('#playerHistoryQuickplayGamesBreakdown'),
+      rankedMatches: summary.querySelector('#playerHistoryRankedMatches'),
+      rankedMatchesBreakdown: summary.querySelector('#playerHistoryRankedMatchesBreakdown')
+    };
+
+    statsOverlayCloseBtn.addEventListener('click', () => {
+      closeStatsOverlay();
+    });
+
+    statsOverlayFilterButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const filter = btn.dataset.historyFilter || 'all';
+        if (filter === statsHistoryFilter) return;
+        statsHistoryFilter = filter;
+        statsOverlayFilterButtons.forEach(b => b.classList.toggle('active', b === btn));
+        renderStatsHistoryMatches();
+      });
+    });
+  }
+
+  function isStatsOverlayOpen() {
+    return Boolean(statsOverlayEl && statsOverlayEl.classList.contains('open'));
+  }
+
+  function openStatsOverlay() {
+    if (!statsUserId) return;
+    ensureStatsOverlay();
+    if (!statsOverlayEl) return;
+    statsOverlayEl.classList.add('open');
+    statsOverlayEl.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('history-overlay-open');
+    if (statsOverlayEloValueEl) {
+      statsOverlayEloValueEl.textContent = Number.isFinite(statsUserElo) ? String(statsUserElo) : '—';
+    }
+    statsOverlayFilterButtons.forEach(btn => {
+      btn.classList.toggle('active', (btn.dataset.historyFilter || 'all') === statsHistoryFilter);
+    });
+    fetchStatsHistory();
+  }
+
+  function closeStatsOverlay() {
+    if (!statsOverlayEl) return;
+    statsOverlayEl.classList.remove('open');
+    statsOverlayEl.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('history-overlay-open');
+  }
+
+  function showStatsOverlayMessage(message) {
+    if (!statsOverlayMatchesEl) return;
+    statsOverlayMatchesEl.innerHTML = '';
+    const msg = document.createElement('div');
+    msg.textContent = message;
+    msg.style.padding = '12px 0';
+    msg.style.opacity = '0.85';
+    statsOverlayMatchesEl.appendChild(msg);
+  }
+
+  function updateStatsOverlaySummary() {
+    if (!statsOverlaySummaryEls) return;
+    const summary = computeHistorySummary(statsHistoryMatches, statsHistoryGames, { userId: statsUserId });
+    const games = summary.games;
+    const matches = summary.matches;
+    const quickplay = summary.quickplayGames;
+    const ranked = summary.rankedMatches;
+
+    statsOverlaySummaryEls.totalGames.textContent = games.total;
+    statsOverlaySummaryEls.totalGamesBreakdown.textContent = `Wins ${games.wins} • Draws ${games.draws} • Losses ${games.losses}`;
+    statsOverlaySummaryEls.totalMatches.textContent = matches.total;
+    statsOverlaySummaryEls.totalMatchesBreakdown.textContent = `Wins ${matches.wins} • Draws ${matches.draws} • Losses ${matches.losses} (${matches.winPct}% win)`;
+    statsOverlaySummaryEls.quickplayGames.textContent = quickplay.total;
+    statsOverlaySummaryEls.quickplayGamesBreakdown.textContent = `Wins ${quickplay.wins} • Draws ${quickplay.draws} • Losses ${quickplay.losses}`;
+    statsOverlaySummaryEls.rankedMatches.textContent = ranked.total;
+    statsOverlaySummaryEls.rankedMatchesBreakdown.textContent = `Wins ${ranked.wins} • Draws ${ranked.draws} • Losses ${ranked.losses} (${ranked.winPct}% win)`;
+  }
+
+  function formatMatchTypeLabel(type) {
+    if (!type) return 'Match';
+    const upper = type.toUpperCase();
+    if (upper === 'RANKED') return 'Ranked Match';
+    if (upper === 'QUICKPLAY') return 'Quickplay Match';
+    return `${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()} Match`;
+  }
+
+  function formatMatchDateLabel(match) {
+    const end = match?.endedAt instanceof Date ? match.endedAt : (match?.endTime ? new Date(match.endTime) : null);
+    const start = match?.startTime ? new Date(match.startTime) : null;
+    const date = end || start;
+    if (!date) return 'Unknown date';
+    try {
+      return date.toLocaleString();
+    } catch (err) {
+      return date.toISOString();
+    }
+  }
+
+  function renderStatsHistoryMatches() {
+    if (!statsOverlayMatchesEl) return;
+    statsOverlayMatchesEl.innerHTML = '';
+    const matches = Array.isArray(statsHistoryMatches) ? statsHistoryMatches.slice() : [];
+    matches.sort((a, b) => {
+      const aTime = new Date(a?.endTime || a?.startTime || 0).getTime();
+      const bTime = new Date(b?.endTime || b?.startTime || 0).getTime();
+      return bTime - aTime;
+    });
+    const filtered = matches.filter(match => {
+      if (!match || match.isActive) return false;
+      const type = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
+      if (statsHistoryFilter === 'quickplay') return type === 'QUICKPLAY';
+      if (statsHistoryFilter === 'ranked') return type === 'RANKED';
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      showStatsOverlayMessage('No matches recorded yet. Play some games to see your history.');
+      return;
+    }
+
+    const normalizedUserId = normalizeId(statsUserId);
+
+    filtered.forEach(match => {
+      const descriptor = describeMatch(match, {
+        usernameLookup: id => statsUsernameMap[id] || id,
+        userId: statsUserId
+      });
+
+      const row = document.createElement('div');
+      row.className = 'history-row';
+
+      const meta = document.createElement('div');
+      meta.className = 'history-row-top';
+      const pill = document.createElement('span');
+      pill.className = 'history-pill';
+      pill.textContent = formatMatchTypeLabel(descriptor.type);
+      meta.appendChild(pill);
+      const date = document.createElement('span');
+      date.className = 'history-date';
+      date.textContent = formatMatchDateLabel(descriptor);
+      meta.appendChild(date);
+      row.appendChild(meta);
+
+      const matchId = normalizeId(match?._id || match?.id || descriptor.id);
+      const games = matchId ? (statsHistoryGamesByMatch.get(matchId) || []) : [];
+      const matchForGrid = Object.assign({}, match, { games });
+      const table = buildMatchDetailGrid(matchForGrid, {
+        usernameLookup: id => {
+          const normalized = normalizeId(id);
+          const base = statsUsernameMap[id] || statsUsernameMap[normalized] || normalized || 'Unknown';
+          if (normalizedUserId && normalized && normalized === normalizedUserId) {
+            return `${base} (You)`;
+          }
+          return base;
+        }
+      });
+      row.appendChild(table);
+
+      statsOverlayMatchesEl.appendChild(row);
+    });
+  }
+
+  async function fetchStatsUsernames(ids) {
+    const unique = Array.from(new Set((ids || []).filter(Boolean)));
+    const missing = unique.filter(id => !statsUsernameMap[id]);
+    if (missing.length === 0) return;
+    await Promise.all(missing.map(async id => {
+      try {
+        const res = await fetch('/api/v1/users/getDetails', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: id })
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (data && data.username) {
+            statsUsernameMap[id] = data.username;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch username for history overlay', err);
+      }
+    }));
+  }
+
+  async function fetchStatsHistory() {
+    if (!statsUserId) return;
+    ensureStatsOverlay();
+    if (!statsOverlayMatchesEl) return;
+    if (statsOverlayFetching) return;
+    statsOverlayFetching = true;
+    showStatsOverlayMessage('Loading match history…');
+    try {
+      const [matchesRes, gamesRes] = await Promise.all([
+        fetch('/api/v1/matches/getList', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: statsUserId })
+        }),
+        fetch('/api/v1/games/getList', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: statsUserId })
+        })
+      ]);
+
+      statsHistoryMatches = matchesRes && matchesRes.ok ? await matchesRes.json().catch(() => []) : [];
+      statsHistoryGames = gamesRes && gamesRes.ok ? await gamesRes.json().catch(() => []) : [];
+
+      statsHistoryGamesByMatch.clear();
+      if (Array.isArray(statsHistoryGames)) {
+        statsHistoryGames.forEach(game => {
+          const matchId = normalizeId(game?.match);
+          if (!matchId) return;
+          if (!statsHistoryGamesByMatch.has(matchId)) {
+            statsHistoryGamesByMatch.set(matchId, []);
+          }
+          statsHistoryGamesByMatch.get(matchId).push(game);
+        });
+        statsHistoryGamesByMatch.forEach(list => {
+          list.sort((a, b) => {
+            const aTime = new Date(a?.endTime || a?.startTime || a?.createdAt || 0).getTime();
+            const bTime = new Date(b?.endTime || b?.startTime || b?.createdAt || 0).getTime();
+            return aTime - bTime;
+          });
+        });
+      }
+
+      const idsToFetch = [];
+      statsHistoryMatches.forEach(match => {
+        idsToFetch.push(normalizeId(match?.player1));
+        idsToFetch.push(normalizeId(match?.player2));
+        idsToFetch.push(normalizeId(match?.winner));
+      });
+      statsHistoryGames.forEach(game => {
+        if (Array.isArray(game?.players)) {
+          game.players.forEach(pid => idsToFetch.push(normalizeId(pid)));
+        }
+      });
+      await fetchStatsUsernames(idsToFetch);
+
+      statsHistoryLoaded = true;
+      updateStatsOverlaySummary();
+      renderStatsHistoryMatches();
+    } catch (err) {
+      console.error('Failed to load player history', err);
+      statsHistoryMatches = [];
+      statsHistoryGames = [];
+      statsHistoryGamesByMatch.clear();
+      showStatsOverlayMessage('Unable to load history right now. Please try again later.');
+    } finally {
+      statsOverlayFetching = false;
+    }
+  }
+
   menuToggle.addEventListener('click', ev => {
     ev.stopPropagation();
     if (menuOpen) closeMenu(); else openMenu();
@@ -181,6 +533,12 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
   document.addEventListener('keydown', handleGlobalKeyDown);
 
   function handleGlobalKeyDown(ev) {
+    if ((ev.key === 'Escape' || ev.key === 'Esc') && isStatsOverlayOpen()) {
+      ev.preventDefault();
+      closeStatsOverlay();
+      return;
+    }
+
     if (typeof bannerKeyListener === 'function') {
       const handled = bannerKeyListener(ev);
       if (handled === true) return;
@@ -274,6 +632,27 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
 
       const displayName = userDetails?.username || name;
       const eloValue = Number.isFinite(userDetails?.elo) ? userDetails.elo : null;
+
+      statsUserId = userIdCookie || null;
+      statsUserElo = eloValue;
+      statsUsernameMap = {};
+      if (statsUserId) {
+        statsUsernameMap[statsUserId] = displayName;
+      }
+      statsHistoryMatches = [];
+      statsHistoryGames = [];
+      statsHistoryFilter = 'all';
+      statsHistoryLoaded = false;
+      statsHistoryGamesByMatch.clear();
+      ensureStatsOverlay();
+      if (statsOverlayFilterButtons.length) {
+        statsOverlayFilterButtons.forEach(btn => {
+          btn.classList.toggle('active', (btn.dataset.historyFilter || 'all') === statsHistoryFilter);
+        });
+      }
+      if (statsOverlayEloValueEl) {
+        statsOverlayEloValueEl.textContent = Number.isFinite(statsUserElo) ? String(statsUserElo) : '—';
+      }
 
       accountPanelContent.innerHTML = '';
       accountPanelContent.style.alignItems = 'stretch';
@@ -402,7 +781,10 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
       setCookie('photo', LOGGED_IN_AVATAR_SRC, 60 * 60 * 24 * 365);
       usernameDisplay.textContent = displayName;
 
-      statsBtn.addEventListener('click', () => alert('stats'));
+      statsBtn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        openStatsOverlay();
+      });
       editBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
         const currentUserId = getCookie('userId');
@@ -453,6 +835,16 @@ import { wireSocket as bindSocket } from '/js/modules/socket.js';
         window.location.reload();
       });
     } else {
+      statsUserId = null;
+      statsUserElo = null;
+      statsHistoryMatches = [];
+      statsHistoryGames = [];
+      statsHistoryLoaded = false;
+      statsHistoryGamesByMatch.clear();
+      statsUsernameMap = {};
+      if (isStatsOverlayOpen()) {
+        closeStatsOverlay();
+      }
       accountPanelContent.style.alignItems = 'flex-end';
       accountPanelContent.style.gap = '';
       accountPanelContent.innerHTML = `
