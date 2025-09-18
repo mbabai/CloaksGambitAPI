@@ -1,0 +1,280 @@
+/* Shared UI component styles for overlays, buttons, banners, and icons */
+
+:root {
+  --cg-overlay-padding: 16px;
+  --cg-overlay-z-index: 2500;
+  --cg-overlay-dialog-max-height: 90vh;
+  --cg-overlay-content-gap: 12px;
+  --cg-button-border: 3px solid var(--CG-deep-gold);
+  --cg-button-background: var(--CG-purple-pressed);
+  --cg-button-color: var(--CG-white);
+  --cg-button-font-weight: 800;
+  --cg-icon-object-fit: contain;
+  --cg-icon-display: block;
+  --cg-clock-panel-border-width: 2px;
+}
+
+.cg-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: var(--cg-overlay-padding);
+  z-index: var(--cg-overlay-z-index);
+}
+
+.cg-overlay--open {
+  display: flex;
+}
+
+.cg-overlay__backdrop,
+.banner-overlay-backdrop,
+.history-overlay-backdrop {
+  position: absolute;
+  inset: 0;
+}
+
+.cg-overlay__backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.cg-overlay__dialog,
+.banner-overlay__dialog {
+  position: relative;
+  z-index: 1;
+  max-height: var(--cg-overlay-dialog-max-height);
+  outline: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.cg-overlay__content,
+.banner-overlay__content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cg-overlay-content-gap);
+}
+
+.cg-overlay__close,
+.banner-overlay__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+body.cg-overlay-open {
+  overflow: hidden;
+}
+
+body.history-overlay-open {
+  overflow: hidden;
+}
+
+.history-overlay {
+  --cg-overlay-padding: 24px;
+  --cg-overlay-z-index: 3000;
+}
+
+.history-overlay.cg-overlay--open,
+.history-overlay.open {
+  display: flex;
+}
+
+.history-overlay-backdrop {
+  background: rgba(7, 4, 12, 0.78);
+}
+
+.banner-overlay {
+  --cg-overlay-padding: 0;
+  --cg-overlay-z-index: 3200;
+}
+
+.banner-overlay-backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.banner-overlay__dialog {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.banner-overlay__content {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+.banner-overlay__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--CG-white);
+  background: rgba(0, 0, 0, 0.45);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.banner-overlay__close:hover {
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.cg-button {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: var(--cg-button-border);
+  background: var(--cg-button-background);
+  color: var(--cg-button-color);
+  font-weight: var(--cg-button-font-weight);
+  cursor: pointer;
+}
+
+.cg-button--primary {
+  --cg-button-background: var(--CG-purple-pressed);
+}
+
+.cg-button--danger {
+  --cg-button-background: var(--CG-dark-red);
+}
+
+.cg-button--neutral {
+  --cg-button-background: var(--CG-gray);
+}
+
+.cg-button--dark {
+  --cg-button-background: var(--CG-black);
+}
+
+.cg-icon {
+  display: var(--cg-icon-display);
+  object-fit: var(--cg-icon-object-fit);
+  pointer-events: none;
+}
+
+.cg-token {
+  border: 2px solid var(--CG-white);
+  border-radius: 50%;
+  background: var(--CG-dark-red);
+  color: var(--CG-white);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.cg-name-row {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  height: var(--cg-name-row-height, 24px);
+}
+
+.cg-name-row--top {
+  justify-content: flex-end;
+}
+
+.cg-name-row--bottom {
+  justify-content: flex-start;
+}
+
+.cg-name-row__content {
+  display: flex;
+  align-items: center;
+  gap: var(--cg-name-row-gap, 6px);
+}
+
+.cg-name-row__label {
+  display: inline-block;
+  color: var(--cg-name-row-color, var(--CG-white));
+  font-size: var(--cg-name-row-font-size, 16px);
+  font-weight: var(--cg-name-row-font-weight, 700);
+  white-space: nowrap;
+  z-index: 0;
+}
+
+.cg-name-row__connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cg-name-row__countdown {
+  font-family: var(--cg-name-row-countdown-font-family, 'Courier New, monospace');
+  font-weight: var(--cg-name-row-countdown-font-weight, bold);
+  font-size: var(--cg-name-row-countdown-font-size, 14px);
+  color: var(--cg-name-row-countdown-color, var(--CG-white));
+}
+
+.cg-name-row__wins {
+  display: flex;
+  align-items: center;
+  gap: var(--cg-name-row-wins-gap, 2px);
+}
+
+.cg-clock-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-family: 'Courier New, monospace';
+  font-weight: bold;
+  background: var(--cg-clock-panel-background, var(--CG-black));
+  color: var(--cg-clock-panel-color, var(--CG-white));
+  border-width: var(--cg-clock-panel-border-width, 2px);
+  border-style: solid;
+  border-color: var(--cg-clock-panel-border, var(--CG-deep-gold));
+  border-radius: 0;
+  pointer-events: none;
+  width: var(--cg-clock-panel-width, 200px);
+  height: var(--cg-clock-panel-height, 48px);
+  font-size: var(--cg-clock-panel-font-size, 18px);
+}
+
+.cg-dagger-counter {
+  display: flex;
+  align-items: center;
+  gap: var(--cg-dagger-counter-gap, 6px);
+}
+
+.cg-challenge-bubble {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) translateY(var(--cg-challenge-bubble-offset-y, 0));
+  z-index: var(--cg-challenge-bubble-z-index, 10);
+  pointer-events: none;
+}
+
+.cg-challenge-bubble img {
+  pointer-events: none;
+}
+

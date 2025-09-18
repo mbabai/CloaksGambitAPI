@@ -6,6 +6,7 @@
     <title>Cloaks Gambit – Queue</title>
     <link rel="icon" type="image/jpeg" href="assets/images/CloakHood.jpg" />
     <link rel="stylesheet" href="colors.css" />
+    <link rel="stylesheet" href="ui.css" />
     <style>
       :root { --forest: var(--CG-forest); --purple: var(--CG-purple); --purple-pressed: var(--CG-purple-pressed); }
       html, body { height: 100%; }
@@ -135,101 +136,6 @@
         height: auto;
       }
 
-      .cg-overlay {
-        position: fixed;
-        inset: 0;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-        z-index: 2500;
-      }
-      .cg-overlay--open { display: flex; }
-      .cg-overlay__backdrop {
-        position: absolute;
-        inset: 0;
-        background: rgba(0,0,0,0.6);
-      }
-      .cg-overlay__dialog {
-        position: relative;
-        z-index: 1;
-        max-height: 90vh;
-        outline: none;
-        display: flex;
-        flex-direction: column;
-      }
-      .cg-overlay__content {
-        position: relative;
-        z-index: 1;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-      .cg-overlay__close {
-        position: absolute;
-        top: 12px;
-        right: 12px;
-        background: none;
-        border: none;
-        color: inherit;
-        font-size: 18px;
-        cursor: pointer;
-      }
-      body.cg-overlay-open { overflow: hidden; }
-
-      .history-overlay {
-        padding: 24px;
-        z-index: 3000;
-      }
-      .history-overlay.open,
-      .history-overlay.cg-overlay--open { display: flex; }
-      .history-overlay .history-overlay-backdrop {
-        background: rgba(7, 4, 12, 0.78);
-      }
-      body.history-overlay-open { overflow: hidden; }
-
-      .banner-overlay {
-        padding: 0;
-        z-index: 3200;
-      }
-      .banner-overlay-backdrop {
-        background: rgba(0, 0, 0, 0.55);
-      }
-      .banner-overlay__dialog {
-        width: 100%;
-        height: 100%;
-        background: transparent;
-        border: none;
-        box-shadow: none;
-        padding: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-      }
-      .banner-overlay__content {
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 0;
-      }
-      .banner-overlay__close {
-        position: absolute;
-        top: 12px;
-        right: 12px;
-        background: rgba(0,0,0,0.45);
-        color: var(--CG-white);
-        border: none;
-        border-radius: 4px;
-        padding: 6px 10px;
-        font-size: 18px;
-        cursor: pointer;
-      }
-      .banner-overlay__close:hover {
-        background: rgba(0,0,0,0.65);
-      }
       .history-modal {
         background: rgba(24, 9, 38, 0.95);
         border: 4px solid var(--CG-deep-gold);

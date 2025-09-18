@@ -35,6 +35,7 @@ export function getBubbleAsset(type) {
 
 export function createEloBadgeIcon({ size, alt = 'Ranked Elo' } = {}) {
   const img = document.createElement('img');
+  img.classList.add('cg-icon');
   const src = getIconAsset('rank');
   if (src) {
     img.src = src;
@@ -43,14 +44,12 @@ export function createEloBadgeIcon({ size, alt = 'Ranked Elo' } = {}) {
   if (Number.isFinite(size)) {
     applySquareSize(img, size);
   }
-  img.style.display = 'block';
-  img.style.objectFit = 'contain';
-  img.style.pointerEvents = 'none';
   return img;
 }
 
 export function createThroneIcon({ size = 24, alt = 'Match winner', title } = {}) {
   const img = document.createElement('img');
+  img.classList.add('cg-icon');
   const src = getIconAsset('throne');
   if (src) {
     img.src = src;
@@ -60,23 +59,13 @@ export function createThroneIcon({ size = 24, alt = 'Match winner', title } = {}
     img.title = title;
   }
   applySquareSize(img, size);
-  img.style.display = 'block';
-  img.style.objectFit = 'contain';
-  img.style.pointerEvents = 'none';
   return img;
 }
 
 export function createDaggerToken({ size = 24, label = '⚔', alt = 'Loss', title } = {}) {
   const token = document.createElement('div');
+  token.classList.add('cg-token');
   applySquareSize(token, size);
-  token.style.border = '2px solid var(--CG-white, #fff)';
-  token.style.borderRadius = '50%';
-  token.style.background = 'var(--CG-dark-red, #7a1625)';
-  token.style.color = 'var(--CG-white, #fff)';
-  token.style.display = 'flex';
-  token.style.alignItems = 'center';
-  token.style.justifyContent = 'center';
-  token.style.fontWeight = '700';
   token.style.fontSize = Number.isFinite(size) ? `${Math.max(10, Math.floor(size * 0.45))}px` : '12px';
   token.textContent = label;
   if (alt) {
@@ -85,12 +74,12 @@ export function createDaggerToken({ size = 24, label = '⚔', alt = 'Loss', titl
   if (title) {
     token.title = title;
   }
-  token.style.pointerEvents = 'none';
   return token;
 }
 
 export function createReconnectSpinner({ size = 16, alt = 'Opponent reconnecting', title } = {}) {
   const img = document.createElement('img');
+  img.classList.add('cg-icon');
   const src = getIconAsset('loading');
   if (src) {
     img.src = src;
@@ -100,9 +89,6 @@ export function createReconnectSpinner({ size = 16, alt = 'Opponent reconnecting
     img.title = title;
   }
   applySquareSize(img, size);
-  img.style.display = 'block';
-  img.style.objectFit = 'contain';
-  img.style.pointerEvents = 'none';
   return img;
 }
 
@@ -110,10 +96,10 @@ export function createChallengeBubble({ position, size, alt } = {}) {
   const src = position ? getChallengeBubbleAsset(position) : null;
   if (!src) return null;
   const img = document.createElement('img');
+  img.classList.add('cg-icon');
   img.src = src;
   img.alt = alt || 'Challenge available';
   applySquareSize(img, size);
-  img.style.pointerEvents = 'none';
   return img;
 }
 

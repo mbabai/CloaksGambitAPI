@@ -2,6 +2,8 @@
 
 The shared button helpers exported from [`public/js/modules/ui/buttons.js`](../public/js/modules/ui/buttons.js) centralize layout math, palette management, and event wiring for overlay buttons.
 
+Every button receives the `.cg-button` class defined in [`public/ui.css`](../public/ui.css), plus a modifier such as `.cg-button--primary` when a named variant is supplied. The stylesheet handles borders, font weight, and cursor affordance so renderers only need to provide measurements and palette choices. Override the CSS custom properties `--cg-button-background`, `--cg-button-border`, or `--cg-button-color` in theme files to adjust the look without touching JavaScript. See [`docs/ui-components.md`](./ui-components.md) for the full catalog of hooks.
+
 ## API
 
 ### `renderButton(options)`
