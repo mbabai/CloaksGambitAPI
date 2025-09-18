@@ -1,5 +1,11 @@
 import { pieceGlyph as makePieceGlyph } from './pieceGlyph.js';
 import { createEloBadge } from './eloBadge.js';
+import {
+  createThroneIcon,
+  createDaggerToken,
+  createReconnectSpinner,
+  createChallengeBubble
+} from '../ui/icons.js';
 
 export function renderBars({
   topBar,
@@ -96,12 +102,7 @@ export function renderBars({
       indicator.style.gap = '4px';
 
       const indicatorSize = Math.max(12, Math.floor(nameBarH * 0.75));
-      const img = document.createElement('img');
-      img.src = '/assets/images/loading.gif';
-      img.alt = 'Opponent reconnecting';
-      img.style.width = indicatorSize + 'px';
-      img.style.height = indicatorSize + 'px';
-      img.style.objectFit = 'contain';
+      const spinner = createReconnectSpinner({ size: indicatorSize });
 
       const countdown = document.createElement('span');
       countdown.textContent = String(Math.max(0, connection.displaySeconds)).padStart(2, '0');
@@ -110,7 +111,7 @@ export function renderBars({
       countdown.style.fontSize = Math.max(12, Math.floor(nameFont * 0.9)) + 'px';
       countdown.style.color = 'var(--CG-white)';
 
-      indicator.appendChild(img);
+      indicator.appendChild(spinner);
       indicator.appendChild(countdown);
       nameContent.appendChild(indicator);
     }
@@ -124,11 +125,8 @@ export function renderBars({
       winsWrap.style.gap = '2px';
       const throneSize = Math.floor(nameBarH * 0.9);
       for (let i = 0; i < nWins; i++) {
-        const img = document.createElement('img');
-        img.src = '/assets/images/GoldThrone.svg';
-        img.style.width = throneSize + 'px';
-        img.style.height = throneSize + 'px';
-        winsWrap.appendChild(img);
+        const throne = createThroneIcon({ size: throneSize, alt: 'Match victory' });
+        winsWrap.appendChild(throne);
       }
       if (isTopBar) {
         winsWrap.style.marginRight = '6px';
@@ -145,20 +143,23 @@ export function renderBars({
 
     if (showChallengeBubble) {
       const bubbleSize = 3 * nameBarH;
-      const bubble = document.createElement('img');
-      bubble.src = isTopBar
-        ? '/assets/images/UI/BubbleSpeechTopChallenge.svg'
-        : '/assets/images/UI/BubbleSpeechBottomChallenge.svg';
-      bubble.style.position = 'absolute';
-      bubble.style.left = '50%';
-      bubble.style.top = '50%';
-      bubble.style.transform = `translate(-50%, -50%) translateY(${isTopBar ? '60%' : '-30%'})`;
-      bubble.style.width = bubbleSize + 'px';
-      bubble.style.height = bubbleSize + 'px';
-      // Ensure the challenge bubble appears above board pieces
-      bubble.style.zIndex = '20';
-      bubble.style.pointerEvents = 'none';
-      row.appendChild(bubble);
+      const bubble = createChallengeBubble({
+        position: isTopBar ? 'top' : 'bottom',
+        size: bubbleSize,
+        alt: 'Challenge available'
+      });
+      if (bubble) {
+        bubble.style.position = 'absolute';
+        bubble.style.left = '50%';
+        bubble.style.top = '50%';
+        bubble.style.transform = `translate(-50%, -50%) translateY(${isTopBar ? '60%' : '-30%'})`;
+        bubble.style.width = bubbleSize + 'px';
+        bubble.style.height = bubbleSize + 'px';
+        // Ensure the challenge bubble appears above board pieces
+        bubble.style.zIndex = '20';
+        bubble.style.pointerEvents = 'none';
+        row.appendChild(bubble);
+      }
     }
 
     return row;
@@ -192,20 +193,9 @@ export function renderBars({
     wrap.style.gap = '6px';
     const n = Math.max(0, Number(count || 0));
     for (let i = 0; i < n; i++) {
-      const token = document.createElement('div');
       const sz = Math.floor(rowH);
-      token.style.width = sz + 'px';
-      token.style.height = sz + 'px';
-      token.style.border = '2px solid var(--CG-white)';
-      token.style.borderRadius = '50%';
-      token.style.background = 'var(--CG-dark-red)';
-      token.style.color = 'var(--CG-white)';
-      token.style.display = 'flex';
-      token.style.alignItems = 'center';
-      token.style.justifyContent = 'center';
-      token.style.fontWeight = 'bold';
+      const token = createDaggerToken({ size: sz, alt: 'Dagger token' });
       token.style.fontSize = iconFont + 'px';
-      token.textContent = '⚔';
       wrap.appendChild(token);
     }
     return wrap;

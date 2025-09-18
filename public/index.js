@@ -16,6 +16,14 @@ import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as pe
 import { Declaration, uiToServerCoords, isWithinPieceRange, isPathClear } from '/js/modules/interactions/moveRules.js';
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
+import {
+  ASSET_MANIFEST,
+  getIconAsset,
+  getAvatarAsset,
+  getBubbleAsset,
+  createThroneIcon,
+  createDaggerToken as createDaggerTokenIcon
+} from '/js/modules/ui/icons.js';
 
 (function() {
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -33,8 +41,9 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
   const accountPanelContent = document.getElementById('accountPanelContent');
   const accountBtnImg = accountBtn.querySelector('img');
 
-  const ACCOUNT_ICON_SRC = 'assets/images/account.png';
-  const LOGGED_IN_AVATAR_SRC = 'assets/images/cloakHood.jpg';
+  const ACCOUNT_ICON_SRC = getAvatarAsset('account') || '/assets/images/account.png';
+  const LOGGED_IN_AVATAR_SRC = getAvatarAsset('loggedInDefault') || '/assets/images/cloakHood.jpg';
+  const GOOGLE_ICON_SRC = getIconAsset('google') || '/assets/images/google-icon.png';
 
   let menuOpen = false;
   const PANEL_WIDTH = 180;
@@ -760,7 +769,7 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
       logoutBtn.style.width = '100%';
       logoutBtn.style.gap = '12px';
       const googleImg = document.createElement('img');
-      googleImg.src = 'assets/images/google-icon.png';
+      googleImg.src = GOOGLE_ICON_SRC;
       googleImg.alt = 'Google';
       googleImg.style.width = '18px';
       googleImg.style.height = '18px';
@@ -848,7 +857,7 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
       accountPanelContent.style.alignItems = 'flex-end';
       accountPanelContent.style.gap = '';
       accountPanelContent.innerHTML = `
-        <button id="googleLoginBtn" class="menu-button"><img src="assets/images/google-icon.png" alt="Google" /> Sign in with Google</button>
+        <button id="googleLoginBtn" class="menu-button"><img src="${GOOGLE_ICON_SRC}" alt="Google" /> Sign in with Google</button>
         <div class="menu-message">Log in to see account history, statistics, elo, and participate in ranked matches.</div>
       `;
       accountBtnImg.src = ACCOUNT_ICON_SRC;
@@ -2288,23 +2297,6 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
       }
     }
 
-    const createDaggerToken = (size) => {
-      const token = document.createElement('div');
-      token.style.width = size + 'px';
-      token.style.height = size + 'px';
-      token.style.border = '2px solid var(--CG-white)';
-      token.style.borderRadius = '50%';
-      token.style.background = 'var(--CG-dark-red)';
-      token.style.color = 'var(--CG-white)';
-      token.style.display = 'flex';
-      token.style.alignItems = 'center';
-      token.style.justifyContent = 'center';
-      token.style.fontWeight = 'bold';
-      token.style.fontSize = Math.max(10, Math.floor(size * 0.45)) + 'px';
-      token.textContent = '⚔';
-      return token;
-    };
-
     const createScoreCell = ({ score, status, delta }) => {
       const cell = document.createElement('div');
       cell.style.display = 'flex';
@@ -2314,15 +2306,10 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
 
       const iconSize = 26;
       if (status === 'winner') {
-        const icon = document.createElement('img');
-        icon.src = '/assets/images/GoldThrone.svg';
-        icon.alt = 'Match winner';
-        icon.style.width = iconSize + 'px';
-        icon.style.height = iconSize + 'px';
-        icon.style.objectFit = 'contain';
+        const icon = createThroneIcon({ size: iconSize, alt: 'Match winner' });
         cell.appendChild(icon);
       } else if (status === 'loser') {
-        const dagger = createDaggerToken(iconSize);
+        const dagger = createDaggerTokenIcon({ size: iconSize, alt: 'Match loss' });
         cell.appendChild(dagger);
       }
 
@@ -3615,19 +3602,8 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
 
   function makeBubbleImg(type, square, opts) {
     try {
-      const map = {
-        knightSpeechLeft: 'BubbleSpeechLeftKnight.svg',
-        rookSpeechLeft: 'BubbleSpeechLeftRook.svg',
-        bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
-        kingSpeechLeft: 'BubbleSpeechLeftKing.svg',
-        bombSpeechLeft: 'BubbleSpeechLeftBomb.svg',
-        kingThoughtRight: 'BubbleThoughtRightKing.svg',
-        bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
-        rookThoughtLeft: 'BubbleThoughtLeftRook.svg',
-        knightThoughtLeft: 'BubbleThoughtLeftKnight.svg'
-      };
-      const srcName = map[type];
-      if (!srcName) return null;
+      const src = getBubbleAsset(type);
+      if (!src) return null;
       const img = document.createElement('img');
       img.dataset.bubble = '1';
       if (opts && opts.preview) img.dataset.preview = '1';
@@ -3645,7 +3621,7 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
       if (type.endsWith('Right')) { img.style.right = (-offsetX) + 'px'; img.style.left = 'auto'; }
       else { img.style.left = (-offsetX) + 'px'; img.style.right = 'auto'; }
       img.style.top = (-offsetY) + 'px';
-      img.src = (BUBBLE_PRELOAD[type] && BUBBLE_PRELOAD[type].src) || ('/assets/images/UI/' + srcName);
+      img.src = (BUBBLE_PRELOAD[type] && BUBBLE_PRELOAD[type].src) || src;
       return img;
     } catch (_) { return null; }
   }
@@ -3665,20 +3641,12 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
   }
 
   function preloadBubbleImages() {
-    const files = {
-      knightSpeechLeft: 'BubbleSpeechLeftKnight.svg',
-      rookSpeechLeft: 'BubbleSpeechLeftRook.svg',
-      bishopSpeechLeft: 'BubbleSpeechLeftBishop.svg',
-      bombSpeechLeft: 'BubbleSpeechLeftBomb.svg',
-      kingThoughtRight: 'BubbleThoughtRightKing.svg',
-      bishopThoughtLeft: 'BubbleThoughtLeftBishop.svg',
-      rookThoughtLeft: 'BubbleThoughtLeftRook.svg',
-      knightThoughtLeft: 'BubbleThoughtLeftKnight.svg'
-    };
-    Object.keys(files).forEach(function(k){
+    Object.keys(ASSET_MANIFEST?.bubbles || {}).forEach(function(k){
+      const src = getBubbleAsset(k);
+      if (!src) return;
       const img = new Image();
       img.draggable = false; img.decoding = 'async';
-      img.src = '/assets/images/UI/' + files[k];
+      img.src = src;
       BUBBLE_PRELOAD[k] = img;
     });
   }

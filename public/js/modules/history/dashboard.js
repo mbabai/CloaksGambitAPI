@@ -31,6 +31,8 @@ function formatWinReasonLabel(reason) {
   return WIN_REASON_LABELS[reason] || 'Unknown';
 }
 
+import { createThroneIcon, createDaggerToken } from '../ui/icons.js';
+
 function computeWinPercentage(wins, total) {
   if (!total) return 0;
   return Math.round((wins / total) * 100);
@@ -238,30 +240,13 @@ function computeHistorySummary(matches, games, { userId } = {}) {
 
 function createStatusIcon(status, { size = 20 } = {}) {
   if (status === 'win') {
-    const icon = document.createElement('img');
-    icon.src = '/assets/images/GoldThrone.svg';
-    icon.alt = 'Win';
-    icon.width = size;
-    icon.height = size;
+    const icon = createThroneIcon({ size, alt: 'Win' });
     icon.className = 'history-status-icon history-status-win';
     return icon;
   }
   if (status === 'loss') {
-    const token = document.createElement('div');
+    const token = createDaggerToken({ size, alt: 'Loss' });
     token.className = 'history-status-icon history-status-loss';
-    token.style.width = size + 'px';
-    token.style.height = size + 'px';
-    token.style.borderRadius = '50%';
-    token.style.border = '2px solid var(--CG-white, #fff)';
-    token.style.background = 'var(--CG-dark-red, #7a1625)';
-    token.style.display = 'flex';
-    token.style.alignItems = 'center';
-    token.style.justifyContent = 'center';
-    token.style.color = 'var(--CG-white, #fff)';
-    token.style.fontWeight = '700';
-    token.style.fontSize = Math.max(10, Math.floor(size * 0.5)) + 'px';
-    token.textContent = '⚔';
-    token.setAttribute('aria-label', 'Loss');
     return token;
   }
   return null;

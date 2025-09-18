@@ -1,7 +1,9 @@
+import { createEloBadgeIcon } from '../ui/icons.js';
+
 export function createEloBadge({
   elo,
   size = 24,
-  iconSrc = '/assets/images/rankIcon.png',
+  iconSrc = null,
   alt = 'Ranked Elo'
 } = {}) {
   const baseSize = Math.max(10, Number(size) || 24);
@@ -21,17 +23,23 @@ export function createEloBadge({
   wrapper.style.flexShrink = '0';
   wrapper.style.overflow = 'visible';
 
-  const img = document.createElement('img');
-  img.src = iconSrc;
-  img.alt = alt;
-  img.style.position = 'absolute';
-  img.style.width = `${Math.round(baseSize * 1.8)}px`;
-  img.style.height = `${Math.round(baseSize * 1.8)}px`;
-  img.style.display = 'block';
-  img.style.top = '50%';
-  img.style.left = '50%';
-  img.style.transform = 'translate(-50%, -50%)';
-  img.style.pointerEvents = 'none';
+  let icon = null;
+  if (iconSrc) {
+    icon = document.createElement('img');
+    icon.src = iconSrc;
+    icon.alt = alt;
+    icon.style.display = 'block';
+    icon.style.objectFit = 'contain';
+    icon.style.pointerEvents = 'none';
+  } else {
+    icon = createEloBadgeIcon({ alt });
+  }
+  icon.style.position = 'absolute';
+  icon.style.width = `${Math.round(baseSize * 1.8)}px`;
+  icon.style.height = `${Math.round(baseSize * 1.8)}px`;
+  icon.style.top = '50%';
+  icon.style.left = '50%';
+  icon.style.transform = 'translate(-50%, -50%)';
 
   const text = document.createElement('span');
   const hasNumericElo = Number.isFinite(elo);
@@ -49,7 +57,7 @@ export function createEloBadge({
   text.style.userSelect = 'none';
   text.style.pointerEvents = 'none';
 
-  wrapper.appendChild(img);
+  wrapper.appendChild(icon);
   wrapper.appendChild(text);
   return wrapper;
 }

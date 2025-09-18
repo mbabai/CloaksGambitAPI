@@ -1,0 +1,32 @@
+{
+  "avatars": {
+    "account": "/assets/images/account.png",
+    "loggedInDefault": "/assets/images/cloakHood.jpg"
+  },
+  "icons": {
+    "google": "/assets/images/google-icon.png",
+    "throne": "/assets/images/GoldThrone.svg",
+    "rank": "/assets/images/rankIcon.png",
+    "loading": "/assets/images/loading.gif"
+  },
+  "ui": {
+    "challengeBubbles": {
+      "top": "/assets/images/UI/BubbleSpeechTopChallenge.svg",
+      "bottom": "/assets/images/UI/BubbleSpeechBottomChallenge.svg"
+    }
+  },
+  "textures": {
+    "boardMarble": "/assets/images/MarbleTexture.svg"
+  },
+  "bubbles": {
+    "knightSpeechLeft": "/assets/images/UI/BubbleSpeechLeftKnight.svg",
+    "rookSpeechLeft": "/assets/images/UI/BubbleSpeechLeftRook.svg",
+    "bishopSpeechLeft": "/assets/images/UI/BubbleSpeechLeftBishop.svg",
+    "kingSpeechLeft": "/assets/images/UI/BubbleSpeechLeftKing.svg",
+    "bombSpeechLeft": "/assets/images/UI/BubbleSpeechLeftBomb.svg",
+    "kingThoughtRight": "/assets/images/UI/BubbleThoughtRightKing.svg",
+    "bishopThoughtLeft": "/assets/images/UI/BubbleThoughtLeftBishop.svg",
+    "rookThoughtLeft": "/assets/images/UI/BubbleThoughtLeftRook.svg",
+    "knightThoughtLeft": "/assets/images/UI/BubbleThoughtLeftKnight.svg"
+  }
+}

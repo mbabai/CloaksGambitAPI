@@ -1,6 +1,7 @@
 'use strict';
 
 const gameConstants = require('./game.json');
+const { ASSET_MANIFEST, avatars, icons, ui, textures, bubbles } = require('./assets.js');
 
 const deepFreeze = (object) => {
   if (object && typeof object === 'object' && !Object.isFrozen(object)) {
@@ -28,7 +29,14 @@ const exportsPayload = {
   gameModeSettings: GAME_CONSTANTS.gameModeSettings,
   gameViewStates: GAME_CONSTANTS.gameViewStates,
   winReasons: GAME_CONSTANTS.winReasons,
-  gameActionStates: GAME_CONSTANTS.gameActionStates
+  gameActionStates: GAME_CONSTANTS.gameActionStates,
+  ASSET_MANIFEST,
+  assetManifest: ASSET_MANIFEST,
+  avatars,
+  icons,
+  ui,
+  textures,
+  bubbles
 };
 
 module.exports = Object.freeze(exportsPayload);

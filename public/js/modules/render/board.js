@@ -1,3 +1,4 @@
+import { ASSET_MANIFEST } from '/js/shared/assetManifest.js';
 import { pieceGlyph as makePieceGlyph } from './pieceGlyph.js';
 import { serverCoordsForCell, setCellNotation } from './notation.js';
 
@@ -29,8 +30,9 @@ export function renderBoard({
   container.style.gridTemplateRows = `repeat(${rows}, ${squareSize}px)`;
   while (container.firstChild) container.removeChild(container.firstChild);
 
+  const BOARD_TEXTURE_SRC = (ASSET_MANIFEST?.textures && ASSET_MANIFEST.textures.boardMarble) || '/assets/images/MarbleTexture.svg';
   const texture = document.createElement('img');
-  texture.src = '/assets/images/MarbleTexture.svg';
+  texture.src = BOARD_TEXTURE_SRC;
   texture.style.position = 'absolute';
   texture.style.top = '0';
   texture.style.left = '0';
