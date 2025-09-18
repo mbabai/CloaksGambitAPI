@@ -2922,7 +2922,6 @@ import {
       const maxBtnW = Math.floor(stashWidth * 0.4);
       const btnW = Math.min(160, maxBtnW);
       const btnH = Math.floor(btnW * 0.6);
-      const fontSize = clamp(Math.round(btnH * 0.28), 13, 22);
       const isMyTurn = currentPlayerTurn === myColor && !isInSetup;
       let canChallenge = false;
       let canBomb = false;
@@ -2963,7 +2962,7 @@ import {
         boardWidth: 0,
         boardHeight: 0,
         text: 'Bomb!',
-        background: 'var(--CG-dark-red)',
+        variant: 'danger',
         visible: canBomb,
         onClick: () => {
           if (!lastGameId) return;
@@ -2971,8 +2970,7 @@ import {
           apiBomb(lastGameId, myColor).catch(err => console.error('Bomb failed', err));
         },
         width: btnW,
-        height: btnH,
-        fontSize
+        height: btnH
       });
 
       // Pass button (uses challenge styling, upper left)
@@ -2984,7 +2982,7 @@ import {
         boardWidth: 0,
         boardHeight: 0,
         text: 'Pass',
-        background: 'var(--CG-purple-pressed)',
+        variant: 'primary',
         visible: canPass,
         onClick: () => {
           if (!lastGameId) return;
@@ -2992,8 +2990,7 @@ import {
           apiPass(lastGameId, myColor).catch(err => console.error('Pass failed', err));
         },
         width: btnW,
-        height: btnH,
-        fontSize
+        height: btnH
       });
 
       // Challenge button (upper right)
@@ -3005,7 +3002,7 @@ import {
         boardWidth: 0,
         boardHeight: 0,
         text: 'Challenge',
-        background: 'var(--CG-purple-pressed)',
+        variant: 'primary',
         visible: canChallenge,
         onClick: () => {
           if (!lastGameId) return;
@@ -3013,8 +3010,7 @@ import {
           apiChallenge(lastGameId, myColor).catch(err => console.error('Challenge failed', err));
         },
         width: btnW,
-        height: btnH,
-        fontSize
+        height: btnH
       });
 
       const deckEl = refs.deckEl;
@@ -3031,7 +3027,6 @@ import {
       const resignTop = deckBottom + gapBelowDeck;
       const resignW = Math.max(1, Math.round(btnW * 0.65));
       const resignH = Math.max(1, Math.round(btnH * 0.5));
-      const resignFontSize = clamp(Math.round(resignH * 0.32), 12, 18);
       const canResign = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId);
       const canOfferDraw = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId) && !hasPendingDrawOffer && !cooldownActive;
 
@@ -3043,20 +3038,18 @@ import {
         boardWidth: 0,
         boardHeight: 0,
         text: 'Resign',
-        background: 'var(--CG-black)',
+        variant: 'dark',
         visible: canResign,
         onClick: () => {
           if (!canResign) return;
           showResignConfirm();
         },
         width: resignW,
-        height: resignH,
-        fontSize: resignFontSize
+        height: resignH
       });
 
       const drawGap = Math.max(4, Math.round(resignH * 0.25));
       const drawTop = resignTop + resignH + drawGap;
-      const drawFontSize = resignFontSize;
 
       renderGameButton({
         id: 'drawBtn',
@@ -3066,15 +3059,14 @@ import {
         boardWidth: 0,
         boardHeight: 0,
         text: 'Draw',
-        background: 'var(--CG-gray)',
+        variant: 'neutral',
         visible: canOfferDraw,
         onClick: () => {
           if (!canOfferDraw) return;
           showDrawConfirm();
         },
         width: resignW,
-        height: resignH,
-        fontSize: drawFontSize
+        height: resignH
       });
     })();
 
@@ -3142,7 +3134,7 @@ import {
       boardWidth: bW,
       boardHeight: bH,
       text: 'Random Setup',
-      background: 'var(--CG-dark-red)',
+      variant: 'danger',
       visible: randomVisible,
       onClick: () => {
         const result = randomizeSetup({
