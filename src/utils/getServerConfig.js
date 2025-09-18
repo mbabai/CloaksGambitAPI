@@ -1,14 +1,36 @@
 const ServerConfig = require('../models/ServerConfig');
-const { GAME_CONSTANTS: DEFAULT_CONFIG } = require('../../shared/constants');
+const { GAME_CONSTANTS } = require('../../shared/constants');
+
+const DEFAULT_CONFIG = GAME_CONSTANTS;
+
+const buildLegacySet = (values = []) => {
+  const entries = [];
+  values.forEach((value) => {
+    entries.push(value);
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      entries.push(String(value));
+    } else if (typeof value === 'string') {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) {
+        entries.push(numeric);
+      }
+    }
+  });
+  return new Set(entries);
+};
+
+const LEGACY_RANKED_TIME_CONTROLS = buildLegacySet(
+  DEFAULT_CONFIG.gameModeSettings?.RANKED?.LEGACY_TIME_CONTROLS
+);
+const LEGACY_RANKED_WIN_SCORE = buildLegacySet(
+  DEFAULT_CONFIG.gameModeSettings?.RANKED?.LEGACY_WIN_SCORES
+);
 
 function toNumber(value) {
   if (value === null || value === undefined) return NaN;
   const num = Number(value);
   return Number.isFinite(num) ? num : NaN;
 }
-
-const LEGACY_RANKED_TIME_CONTROLS = new Set([120000, '120000', 120, '120']);
-const LEGACY_RANKED_WIN_SCORE = new Set([2, '2']);
 
 async function getServerConfig() {
   try {
@@ -17,12 +39,21 @@ async function getServerConfig() {
       config = await ServerConfig.create(JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
     }
 
-    const settings = config.gameModeSettings || (config.gameModeSettings = {});
+    let settings = config.gameModeSettings;
+    let mutated = false;
+    if (settings?.get && typeof settings.get === 'function') {
+      settings = settings.toObject ? settings.toObject() : Object.fromEntries(settings);
+      config.gameModeSettings = settings;
+      mutated = true;
+    } else if (!settings) {
+      settings = {};
+      config.gameModeSettings = settings;
+      mutated = true;
+    }
     if (!settings.RANKED) {
       settings.RANKED = { ...DEFAULT_CONFIG.gameModeSettings.RANKED };
+      mutated = true;
     }
-
-    let mutated = false;
 
     const ranked = settings.RANKED;
     const rawTime = ranked.TIME_CONTROL;

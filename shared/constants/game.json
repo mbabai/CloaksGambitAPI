@@ -39,7 +39,14 @@
   "gameModeSettings": {
     "RANKED": {
       "TIME_CONTROL": 180000,
-      "WIN_SCORE": 3
+      "WIN_SCORE": 3,
+      "LEGACY_TIME_CONTROLS": [
+        120000,
+        120
+      ],
+      "LEGACY_WIN_SCORES": [
+        2
+      ]
     },
     "QUICKPLAY": {
       "TIME_CONTROL": 300000,

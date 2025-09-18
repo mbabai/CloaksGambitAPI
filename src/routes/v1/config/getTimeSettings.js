@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const getServerConfig = require('../../../utils/getServerConfig');
+const { GAME_CONSTANTS } = require('../../../../shared/constants');
 
 const DEFAULTS = {
-  quickplayMs: 300000,
-  rankedMs: 180000,
-  incrementMs: 3000,
+  quickplayMs: GAME_CONSTANTS.gameModeSettings.QUICKPLAY.TIME_CONTROL,
+  rankedMs: GAME_CONSTANTS.gameModeSettings.RANKED.TIME_CONTROL,
+  incrementMs: GAME_CONSTANTS.gameModeSettings.INCREMENT,
 };
 
 function toMilliseconds(value, fallback, { allowZero = false } = {}) {
@@ -23,16 +24,25 @@ router.get('/', async (req, res) => {
   try {
     const config = await getServerConfig();
 
+    const quickplaySettings = config?.gameModeSettings?.get
+      ? config.gameModeSettings.get('QUICKPLAY')
+      : config?.gameModeSettings?.QUICKPLAY;
+    const rankedSettings = config?.gameModeSettings?.get
+      ? config.gameModeSettings.get('RANKED')
+      : config?.gameModeSettings?.RANKED;
+
     const quickplayMs = toMilliseconds(
-      config?.gameModeSettings?.QUICKPLAY?.TIME_CONTROL,
+      quickplaySettings?.TIME_CONTROL,
       DEFAULTS.quickplayMs
     );
     const rankedMs = toMilliseconds(
-      config?.gameModeSettings?.RANKED?.TIME_CONTROL,
+      rankedSettings?.TIME_CONTROL,
       DEFAULTS.rankedMs
     );
     const incrementMs = toMilliseconds(
-      config?.gameModeSettings?.INCREMENT,
+      (config?.gameModeSettings?.get
+        ? config.gameModeSettings.get('INCREMENT')
+        : config?.gameModeSettings?.INCREMENT),
       DEFAULTS.incrementMs,
       { allowZero: true }
     );

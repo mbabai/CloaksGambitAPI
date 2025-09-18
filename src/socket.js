@@ -8,6 +8,7 @@ const ChangeStreamToken = require('./models/ChangeStreamToken');
 const ensureUser = require('./utils/ensureUser');
 const User = require('./models/User');
 const getServerConfig = require('./utils/getServerConfig');
+const { GAME_CONSTANTS } = require('../shared/constants');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -254,11 +255,14 @@ function initSocket(httpServer) {
       const config = await getServerConfig();
       const winReasonValue = config?.winReasons?.get
         ? config.winReasons.get('DISCONNECT')
-        : config?.winReasons?.DISCONNECT ?? 5;
+        : config?.winReasons?.DISCONNECT ?? GAME_CONSTANTS.winReasons.DISCONNECT;
       const settings = config?.gameModeSettings?.get
         ? config.gameModeSettings.get(match.type)
         : config?.gameModeSettings?.[match.type];
-      const winScore = settings?.WIN_SCORE ?? 1;
+      const defaultMatchSettings = GAME_CONSTANTS.gameModeSettings[match.type] || {};
+      const winScore = settings?.WIN_SCORE
+        ?? defaultMatchSettings.WIN_SCORE
+        ?? GAME_CONSTANTS.gameModeSettings.QUICKPLAY.WIN_SCORE;
 
       const player1Id = match.player1?.toString();
       const player2Id = match.player2?.toString();

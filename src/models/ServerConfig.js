@@ -1,84 +1,59 @@
 const mongoose = require('mongoose');
 const { GAME_CONSTANTS } = require('../../shared/constants');
 
+const toMapDefault = (source) => () => new Map(Object.entries(source));
+const cloneDeep = (value) => JSON.parse(JSON.stringify(value));
+
 const serverConfigSchema = new mongoose.Schema({
   gameModes: {
     type: Map,
     of: String,
-    default: () => ({ ...GAME_CONSTANTS.gameModes })
+    default: toMapDefault(GAME_CONSTANTS.gameModes)
   },
   colors: {
     type: Map,
     of: Number,
-    default: () => ({ ...GAME_CONSTANTS.colors })
+    default: toMapDefault(GAME_CONSTANTS.colors)
   },
   identities: {
     type: Map,
     of: Number,
-    default: () => ({ ...GAME_CONSTANTS.identities })
+    default: toMapDefault(GAME_CONSTANTS.identities)
   },
   actions: {
     type: Map,
     of: Number,
-    default: () => ({ ...GAME_CONSTANTS.actions })
+    default: toMapDefault(GAME_CONSTANTS.actions)
   },
   moveStates: {
     type: Map,
     of: Number,
-    default: () => ({ ...GAME_CONSTANTS.moveStates })
+    default: toMapDefault(GAME_CONSTANTS.moveStates)
   },
   boardDimensions: {
-    RANKS: {
-      type: Number,
-      default: GAME_CONSTANTS.boardDimensions.RANKS
-    },
-    FILES: {
-      type: Number,
-      default: GAME_CONSTANTS.boardDimensions.FILES
-    }
+    type: Object,
+    default: () => ({ ...GAME_CONSTANTS.boardDimensions })
   },
   gameModeSettings: {
-    RANKED: {
-      TIME_CONTROL: {
-        type: Number,
-        default: GAME_CONSTANTS.gameModeSettings.RANKED.TIME_CONTROL
-      },
-      WIN_SCORE: {
-        type: Number,
-        default: GAME_CONSTANTS.gameModeSettings.RANKED.WIN_SCORE
-      }
-    },
-    QUICKPLAY: {
-      TIME_CONTROL: {
-        type: Number,
-        default: GAME_CONSTANTS.gameModeSettings.QUICKPLAY.TIME_CONTROL
-      },
-      WIN_SCORE: {
-        type: Number,
-        default: GAME_CONSTANTS.gameModeSettings.QUICKPLAY.WIN_SCORE
-      }
-    },
-    INCREMENT: {
-      type: Number,
-      default: GAME_CONSTANTS.gameModeSettings.INCREMENT
-    }
+    type: Object,
+    default: () => cloneDeep(GAME_CONSTANTS.gameModeSettings)
   },
   gameViewStates: {
     type: Map,
     of: Number,
-    default: () => ({ ...GAME_CONSTANTS.gameViewStates })
+    default: toMapDefault(GAME_CONSTANTS.gameViewStates)
   },
   winReasons: {
     type: Map,
     of: Number,
-    default: () => ({ ...GAME_CONSTANTS.winReasons })
+    default: toMapDefault(GAME_CONSTANTS.winReasons)
   },
   gameActionStates: {
     type: Map,
     of: Number,
-    default: () => ({ ...GAME_CONSTANTS.gameActionStates })
+    default: toMapDefault(GAME_CONSTANTS.gameActionStates)
   }
-}, { 
+}, {
   timestamps: true,
   collection: 'serverconfig'
 });
