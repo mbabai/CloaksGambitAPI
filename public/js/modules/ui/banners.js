@@ -60,26 +60,20 @@ export function createNameRow({
 
   const row = doc.createElement('div');
   const resolvedHeight = Math.max(0, Math.round(clampNumber(height, 24)));
-  row.style.height = `${resolvedHeight}px`;
-  row.style.display = 'flex';
-  row.style.alignItems = 'center';
-  row.style.justifyContent = orientation === 'top' ? 'flex-end' : 'flex-start';
-  row.style.position = 'relative';
-  row.style.width = '100%';
+  row.classList.add('cg-name-row');
+  row.classList.add(orientation === 'top' ? 'cg-name-row--top' : 'cg-name-row--bottom');
+  row.style.setProperty('--cg-name-row-height', `${resolvedHeight}px`);
 
   const nameWrap = doc.createElement('div');
-  nameWrap.style.display = 'inline-block';
-  nameWrap.style.color = textColor;
-  nameWrap.style.fontSize = `${clampNumber(fontSize, 14)}px`;
-  nameWrap.style.fontWeight = fontWeight;
-  nameWrap.style.zIndex = '0';
-  nameWrap.style.whiteSpace = 'nowrap';
+  nameWrap.classList.add('cg-name-row__label');
+  nameWrap.style.setProperty('--cg-name-row-color', textColor);
+  nameWrap.style.setProperty('--cg-name-row-font-size', `${clampNumber(fontSize, 14)}px`);
+  nameWrap.style.setProperty('--cg-name-row-font-weight', fontWeight);
   nameWrap.textContent = name;
 
   const nameContent = doc.createElement('div');
-  nameContent.style.display = 'flex';
-  nameContent.style.alignItems = 'center';
-  nameContent.style.gap = `${clampNumber(gap, 6)}px`;
+  nameContent.classList.add('cg-name-row__content');
+  nameContent.style.setProperty('--cg-name-row-gap', `${clampNumber(gap, 6)}px`);
 
   let badge = null;
   if (isRankedMatch && typeof bannerAssets.createEloBadge === 'function') {
@@ -101,9 +95,7 @@ export function createNameRow({
 
   if (connection && Number.isFinite(connection.displaySeconds)) {
     const indicator = doc.createElement('div');
-    indicator.style.display = 'flex';
-    indicator.style.alignItems = 'center';
-    indicator.style.gap = '4px';
+    indicator.classList.add('cg-name-row__connection');
 
     const indicatorSize = Math.max(12, Math.floor(resolvedHeight * 0.75));
     if (typeof bannerAssets.createReconnectSpinner === 'function') {
@@ -121,10 +113,20 @@ export function createNameRow({
       ? connection.formatSeconds
       : value => String(value).padStart(2, '0');
     countdown.textContent = formatter(seconds);
-    countdown.style.fontFamily = connection.fontFamily || 'Courier New, monospace';
-    countdown.style.fontWeight = connection.fontWeight || 'bold';
-    countdown.style.fontSize = `${clampNumber(connection.fontSize, Math.max(12, Math.floor(fontSize * 0.9)))}`;
-    countdown.style.color = connection.color || textColor;
+    countdown.classList.add('cg-name-row__countdown');
+    countdown.style.setProperty(
+      '--cg-name-row-countdown-font-family',
+      connection.fontFamily || 'Courier New, monospace'
+    );
+    countdown.style.setProperty(
+      '--cg-name-row-countdown-font-weight',
+      connection.fontWeight || 'bold'
+    );
+    countdown.style.setProperty(
+      '--cg-name-row-countdown-font-size',
+      `${clampNumber(connection.fontSize, Math.max(12, Math.floor(fontSize * 0.9)))}`
+    );
+    countdown.style.setProperty('--cg-name-row-countdown-color', connection.color || textColor);
     indicator.appendChild(countdown);
 
     nameContent.appendChild(indicator);
@@ -133,9 +135,8 @@ export function createNameRow({
   const winsCount = Math.max(0, Number(wins.count || 0));
   if (winsCount > 0 && typeof bannerAssets.createThroneIcon === 'function') {
     const winsWrap = doc.createElement('div');
-    winsWrap.style.display = 'flex';
-    winsWrap.style.alignItems = 'center';
-    winsWrap.style.gap = `${clampNumber(wins.gap, 2)}px`;
+    winsWrap.classList.add('cg-name-row__wins');
+    winsWrap.style.setProperty('--cg-name-row-wins-gap', `${clampNumber(wins.gap, 2)}px`);
     const trophySize = Math.max(12, Math.floor(resolvedHeight * 0.9));
     for (let i = 0; i < winsCount; i += 1) {
       const throne = bannerAssets.createThroneIcon({
@@ -188,20 +189,19 @@ export function createClockPanel({
   const resolvedFontSize = clampNumber(fontSize, Math.max(12, Math.floor(resolvedHeight * 0.6)));
 
   const panel = doc.createElement('div');
-  panel.style.width = `${resolvedWidth}px`;
-  panel.style.height = `${resolvedHeight}px`;
-  panel.style.display = 'flex';
-  panel.style.alignItems = 'center';
-  panel.style.justifyContent = 'center';
-  panel.style.fontFamily = 'Courier New, monospace';
-  panel.style.fontWeight = 'bold';
-  panel.style.fontSize = `${resolvedFontSize}px`;
-  panel.style.background = isLight ? lightBackground : darkBackground;
-  panel.style.color = isLight ? lightText : darkText;
-  panel.style.border = `2px solid ${borderColor}`;
-  panel.style.borderRadius = '0';
-  panel.style.boxSizing = 'border-box';
-  panel.style.pointerEvents = 'none';
+  panel.classList.add('cg-clock-panel');
+  panel.style.setProperty('--cg-clock-panel-width', `${resolvedWidth}px`);
+  panel.style.setProperty('--cg-clock-panel-height', `${resolvedHeight}px`);
+  panel.style.setProperty('--cg-clock-panel-font-size', `${resolvedFontSize}px`);
+  panel.style.setProperty('--cg-clock-panel-border', borderColor);
+  panel.style.setProperty(
+    '--cg-clock-panel-background',
+    isLight ? lightBackground : darkBackground
+  );
+  panel.style.setProperty(
+    '--cg-clock-panel-color',
+    isLight ? lightText : darkText
+  );
   panel.textContent = text;
   if (label) {
     panel.title = label;
@@ -227,9 +227,8 @@ export function createDaggerCounter({
   const doc = createDocument(documentRef);
   const bannerAssets = resolveBannerAssets(assets);
   const wrapper = doc.createElement('div');
-  wrapper.style.display = 'flex';
-  wrapper.style.alignItems = 'center';
-  wrapper.style.gap = `${clampNumber(gap, 6)}px`;
+  wrapper.classList.add('cg-dagger-counter');
+  wrapper.style.setProperty('--cg-dagger-counter-gap', `${clampNumber(gap, 6)}px`);
 
   const total = Math.max(0, Number(count));
   if (!total || typeof bannerAssets.createDaggerToken !== 'function') {
@@ -269,13 +268,10 @@ export function createChallengeBubbleElement({
   if (!bubble) {
     return null;
   }
-  bubble.style.position = 'absolute';
-  bubble.style.left = '50%';
-  bubble.style.top = '50%';
-  const translate = offsetY ? ` translateY(${offsetY})` : '';
-  bubble.style.transform = `translate(-50%, -50%)${translate}`;
-  bubble.style.zIndex = String(zIndex);
-  bubble.style.pointerEvents = 'none';
+  bubble.classList.add('cg-challenge-bubble');
+  const offsetValue = typeof offsetY === 'number' ? `${offsetY}px` : offsetY || '0';
+  bubble.style.setProperty('--cg-challenge-bubble-offset-y', offsetValue);
+  bubble.style.setProperty('--cg-challenge-bubble-z-index', String(zIndex));
   if (Number.isFinite(size)) {
     bubble.style.width = `${Math.max(0, Math.round(size))}px`;
     bubble.style.height = `${Math.max(0, Math.round(size))}px`;

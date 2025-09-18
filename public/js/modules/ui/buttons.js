@@ -69,17 +69,21 @@ export function createButton({
   if (id) btn.id = id;
   btn.type = 'button';
   btn.textContent = label ?? '';
+  btn.classList.add('cg-button');
+  if (variant) {
+    btn.classList.add(`cg-button--${variant}`);
+  }
   btn.style.position = 'absolute';
   if (typeof left === 'number') btn.style.left = Math.floor(left) + 'px';
   if (typeof top === 'number') btn.style.top = Math.floor(top) + 'px';
   if (typeof width === 'number') btn.style.width = Math.round(width) + 'px';
   if (typeof height === 'number') btn.style.height = Math.round(height) + 'px';
-  btn.style.background = resolvePalette(variant, background);
-  btn.style.border = '3px solid var(--CG-deep-gold)';
-  btn.style.color = 'var(--CG-white)';
-  btn.style.fontWeight = '800';
+  const palette = resolvePalette(variant, background);
+  const hasVariant = Boolean(variant && PALETTE_VARIANTS[variant]);
+  if (!hasVariant || background) {
+    btn.style.setProperty('--cg-button-background', palette);
+  }
   if (typeof fontSize === 'number') btn.style.fontSize = Math.round(fontSize) + 'px';
-  btn.style.cursor = 'pointer';
   btn.style.zIndex = String(zIndex);
   btn.dataset.cgButtonVariant = variant || '';
   if (typeof onClick === 'function') btn.addEventListener('click', onClick);

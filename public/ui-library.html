@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cloaks Gambit UI Library</title>
+    <link rel="icon" type="image/jpeg" href="assets/images/CloakHood.jpg" />
+    <link rel="stylesheet" href="colors.css" />
+    <link rel="stylesheet" href="ui.css" />
+    <style>
+      :root {
+        --ui-page-background: rgba(6, 25, 19, 0.94);
+        --ui-card-background: rgba(12, 32, 24, 0.75);
+        --ui-border-color: rgba(245, 230, 167, 0.55);
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        color: var(--CG-white);
+        background: radial-gradient(circle at top, rgba(20, 90, 42, 0.85), var(--ui-page-background));
+      }
+      main.ui-library {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 32px 24px 64px;
+        display: flex;
+        flex-direction: column;
+        gap: 48px;
+      }
+      .ui-library__header h1 {
+        margin: 0 0 8px;
+        font-size: 36px;
+        letter-spacing: 0.02em;
+      }
+      .ui-library__header p {
+        margin: 0;
+        max-width: 720px;
+        color: rgba(255, 255, 255, 0.85);
+      }
+      section.ui-section {
+        background: var(--ui-card-background);
+        border: 1px solid var(--ui-border-color);
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      }
+      section.ui-section + section.ui-section {
+        margin-top: -12px;
+      }
+      section.ui-section h2 {
+        margin: 0 0 12px;
+        font-size: 26px;
+      }
+      section.ui-section > p {
+        margin: 0 0 20px;
+        color: rgba(255, 255, 255, 0.78);
+      }
+      .ui-grid {
+        display: grid;
+        gap: 20px;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      }
+      .ui-card {
+        background: rgba(0, 0, 0, 0.28);
+        border: 1px solid rgba(245, 230, 167, 0.3);
+        border-radius: 10px;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .ui-card h3 {
+        margin: 0;
+        font-size: 18px;
+      }
+      .ui-card p {
+        margin: 0;
+        font-size: 14px;
+        color: rgba(255, 255, 255, 0.75);
+      }
+      .ui-card__stage {
+        position: relative;
+        min-height: 120px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        border: 1px dashed rgba(245, 230, 167, 0.35);
+      }
+      .ui-button-stage {
+        position: relative;
+        width: 220px;
+        height: 120px;
+      }
+      .ui-banner-stage {
+        position: relative;
+        width: 100%;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        background: linear-gradient(135deg, rgba(19, 7, 30, 0.9), rgba(33, 12, 51, 0.85));
+        border-radius: 12px;
+        border: 1px solid rgba(245, 230, 167, 0.35);
+      }
+      .ui-banner-stage .cg-name-row {
+        background: rgba(255, 255, 255, 0.08);
+        padding: 6px 12px;
+        border-radius: 8px;
+      }
+      .ui-banner-clocks {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .ui-icons-grid {
+        display: flex;
+        gap: 18px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .ui-icon-swatch {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: center;
+      }
+      .ui-icon-swatch span {
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.7);
+      }
+      .ui-overlay-actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .ui-overlay-actions button {
+        padding: 10px 16px;
+        border-radius: 999px;
+        border: 1px solid rgba(245, 230, 167, 0.45);
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--CG-white);
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .ui-overlay-actions button:hover {
+        background: rgba(245, 230, 167, 0.2);
+        color: var(--CG-black);
+      }
+      .ui-overlay-body {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 18px;
+        background: rgba(24, 9, 38, 0.92);
+        border-radius: 8px;
+        border: 1px solid rgba(245, 230, 167, 0.35);
+      }
+      .ui-overlay-body h3 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .ui-overlay-body p {
+        margin: 0;
+        font-size: 14px;
+        color: rgba(255, 255, 255, 0.75);
+      }
+      @media (max-width: 720px) {
+        main.ui-library {
+          padding: 24px 16px 48px;
+        }
+        section.ui-section {
+          padding: 20px;
+        }
+        .ui-card__stage {
+          min-height: 140px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="ui-library">
+      <header class="ui-library__header">
+        <h1>Cloaks Gambit UI Library</h1>
+        <p>Sample renderings of our shared buttons, overlays, banners, and iconography. Inspect the generated DOM to review available classes and CSS custom properties before shipping UI refactors.</p>
+      </header>
+
+      <section class="ui-section" id="buttonsSection">
+        <h2>Buttons</h2>
+        <p>Buttons are generated by <code>createButton</code>/<code>renderButton</code> and styled via the <code>.cg-button</code> class with variant modifiers.</p>
+        <div class="ui-grid" id="buttonGrid"></div>
+      </section>
+
+      <section class="ui-section" id="bannersSection">
+        <h2>Banners &amp; Timers</h2>
+        <p>Banner primitives mix <code>.cg-name-row</code>, dagger counters, and clock panels to form the HUD.</p>
+        <div class="ui-card ui-card--wide">
+          <h3>Ranked Matchup</h3>
+          <div class="ui-banner-stage" id="bannerStage"></div>
+        </div>
+      </section>
+
+      <section class="ui-section" id="overlaysSection">
+        <h2>Overlays</h2>
+        <p>Use the triggers below to preview shared overlay chrome. The dialogs reuse <code>.cg-overlay</code> and palette-aware backdrop styles.</p>
+        <div class="ui-overlay-actions" id="overlayActions"></div>
+      </section>
+
+      <section class="ui-section" id="iconsSection">
+        <h2>Iconography</h2>
+        <p>Inline helpers emit <code>.cg-icon</code> and <code>.cg-token</code> elements sized through JavaScript.</p>
+        <div class="ui-card__stage">
+          <div class="ui-icons-grid" id="iconsGrid"></div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module">
+      import { renderButton } from './js/modules/ui/buttons.js';
+      import { createOverlay } from './js/modules/ui/overlays.js';
+      import {
+        createNameRow,
+        createClockPanel,
+        createDaggerCounter,
+        createChallengeBubbleElement,
+        createBannerAssets
+      } from './js/modules/ui/banners.js';
+      import {
+        createThroneIcon,
+        createDaggerToken,
+        createReconnectSpinner
+      } from './js/modules/ui/icons.js';
+
+      const buttonSamples = [
+        { label: 'Find Match', variant: 'primary', size: 'action', note: 'Primary palette with action preset.' },
+        { label: 'Resign', variant: 'danger', size: 'secondary', note: 'Danger palette for destructive actions.' },
+        { label: 'Offer Draw', variant: 'neutral', size: 'secondary', note: 'Neutral variant for follow-up options.' },
+        { label: 'Spectate', variant: 'dark', size: 'auto', note: 'Dark variant sized automatically.' },
+        { label: 'Custom Accent', background: 'linear-gradient(135deg, #5b21b6, #b8860b)', size: 'large', note: 'Custom background supplied via --cg-button-background.' }
+      ];
+
+      const buttonGrid = document.getElementById('buttonGrid');
+      buttonSamples.forEach((sample, index) => {
+        const card = document.createElement('article');
+        card.className = 'ui-card';
+
+        const title = document.createElement('h3');
+        title.textContent = sample.label;
+        card.appendChild(title);
+
+        const description = document.createElement('p');
+        description.textContent = sample.note;
+        card.appendChild(description);
+
+        const stageWrap = document.createElement('div');
+        stageWrap.className = 'ui-card__stage';
+        const stage = document.createElement('div');
+        stage.className = 'ui-button-stage';
+        stageWrap.appendChild(stage);
+        card.appendChild(stageWrap);
+        buttonGrid.appendChild(card);
+
+        renderButton({
+          id: `ui-demo-button-${index}`,
+          root: stage,
+          boardLeft: 0,
+          boardTop: 0,
+          boardWidth: stage.clientWidth || 220,
+          boardHeight: stage.clientHeight || 120,
+          label: sample.label,
+          variant: sample.variant,
+          background: sample.background,
+          size: sample.size
+        });
+      });
+
+      const bannerStage = document.getElementById('bannerStage');
+      const bannerAssets = createBannerAssets();
+
+      const topRow = createNameRow({
+        name: 'ArcanistOne',
+        orientation: 'top',
+        height: 36,
+        fontSize: 18,
+        isRankedMatch: true,
+        elo: 1482,
+        wins: { count: 2, gap: 4 },
+        connection: { displaySeconds: 12, color: 'var(--CG-light-gold)' },
+        assets: bannerAssets
+      });
+      const topBubble = createChallengeBubbleElement({
+        assets: bannerAssets,
+        position: 'top',
+        size: 56,
+        offsetY: '-85%'
+      });
+      if (topBubble) {
+        topRow.appendChild(topBubble);
+      }
+
+      const bottomRow = createNameRow({
+        name: 'StormCaller',
+        orientation: 'bottom',
+        height: 34,
+        fontSize: 18,
+        wins: { count: 1, gap: 6 },
+        assets: bannerAssets
+      });
+
+      const daggerCounter = createDaggerCounter({
+        assets: bannerAssets,
+        count: 3,
+        size: 24,
+        gap: 6
+      });
+
+      const clockRow = document.createElement('div');
+      clockRow.className = 'ui-banner-clocks';
+      const lightClock = createClockPanel({
+        text: '05:18',
+        height: 38,
+        fontSize: 20,
+        isLight: true
+      });
+      const darkClock = createClockPanel({
+        text: '12:34',
+        height: 38,
+        fontSize: 20,
+        isLight: false
+      });
+      clockRow.appendChild(lightClock);
+      clockRow.appendChild(darkClock);
+
+      bannerStage.appendChild(topRow);
+      bannerStage.appendChild(bottomRow);
+      bannerStage.appendChild(daggerCounter);
+      bannerStage.appendChild(clockRow);
+
+      const overlayActions = document.getElementById('overlayActions');
+      const overlaySamples = [
+        {
+          id: 'history-demo',
+          label: 'Open History Overlay',
+          options: {
+            baseClass: 'cg-overlay history-overlay',
+            openClass: 'cg-overlay--open',
+            bodyOpenClass: 'cg-overlay-open history-overlay-open',
+            backdropClass: 'cg-overlay__backdrop history-overlay-backdrop',
+            closeLabel: 'Close history sample'
+          },
+          buildContent: ({ content }) => {
+            content.innerHTML = '';
+            const panel = document.createElement('div');
+            panel.className = 'ui-overlay-body';
+            const heading = document.createElement('h3');
+            heading.textContent = 'Match History Snapshot';
+            const details = document.createElement('p');
+            details.textContent = 'Use this overlay for scrollable summaries. Padding and stacking come from the history overlay modifiers.';
+            panel.append(heading, details);
+            content.appendChild(panel);
+          }
+        },
+        {
+          id: 'banner-demo',
+          label: 'Open Banner Overlay',
+          options: {
+            baseClass: 'cg-overlay banner-overlay',
+            dialogClass: 'banner-overlay__dialog',
+            contentClass: 'banner-overlay__content',
+            backdropClass: 'cg-overlay__backdrop banner-overlay-backdrop',
+            closeButtonClass: 'banner-overlay__close',
+            closeText: '✕',
+            closeLabel: 'Close banner sample',
+            openClass: 'cg-overlay--open banner-overlay--open',
+            bodyOpenClass: 'cg-overlay-open',
+            closeOnBackdrop: false
+          },
+          buildContent: ({ content }) => {
+            content.innerHTML = '';
+            const panel = document.createElement('div');
+            panel.className = 'ui-overlay-body';
+            const heading = document.createElement('h3');
+            heading.textContent = 'Ready to Duel?';
+            const details = document.createElement('p');
+            details.textContent = 'Banner overlays stretch edge-to-edge and anchor confirmation buttons beneath this message.';
+            panel.append(heading, details);
+            content.appendChild(panel);
+          }
+        }
+      ];
+
+      overlaySamples.forEach((sample) => {
+        const overlay = createOverlay(sample.options);
+        sample.buildContent(overlay);
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.textContent = sample.label;
+        trigger.addEventListener('click', () => {
+          overlay.show();
+        });
+        overlayActions.appendChild(trigger);
+      });
+
+      const iconsGrid = document.getElementById('iconsGrid');
+      const iconSamples = [
+        { label: 'Victory Throne', element: createThroneIcon({ size: 40, title: 'Match winner' }) },
+        { label: 'Loss Dagger', element: createDaggerToken({ size: 32, label: '⚔', alt: 'Loss token' }) },
+        { label: 'Reconnect Spinner', element: createReconnectSpinner({ size: 32 }) }
+      ];
+
+      iconSamples.forEach((sample) => {
+        const swatch = document.createElement('div');
+        swatch.className = 'ui-icon-swatch';
+        if (sample.element) {
+          swatch.appendChild(sample.element);
+        }
+        const caption = document.createElement('span');
+        caption.textContent = sample.label;
+        swatch.appendChild(caption);
+        iconsGrid.appendChild(swatch);
+      });
+    </script>
+  </body>
+</html>
