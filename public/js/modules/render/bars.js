@@ -1,11 +1,10 @@
 import { pieceGlyph as makePieceGlyph } from './pieceGlyph.js';
-import { createEloBadge } from './eloBadge.js';
 import {
-  createThroneIcon,
-  createDaggerToken,
-  createReconnectSpinner,
-  createChallengeBubble
-} from '../ui/icons.js';
+  createNameRow,
+  createClockPanel,
+  createDaggerCounter,
+  createChallengeBubbleElement
+} from '../ui/banners.js';
 
 export function renderBars({
   topBar,
@@ -55,109 +54,38 @@ export function renderBars({
   const clockFont = Math.max(12, Math.floor(0.026 * H));
   const iconFont = Math.max(12, Math.floor(0.024 * H));
 
-  function makeNameRow({ text, isTopBar, showChallengeBubble, winCount, connection, elo }) {
-    const row = document.createElement('div');
-    row.style.height = nameBarH + 'px';
-    row.style.display = 'flex';
-    row.style.alignItems = 'center';
-    row.style.justifyContent = isTopBar ? 'flex-end' : 'flex-start';
-    row.style.position = 'relative';
-    row.style.width = '100%';
-
-    const nameWrap = document.createElement('div');
-    nameWrap.style.display = 'inline-block';
-    nameWrap.style.color = 'var(--CG-white)';
-    nameWrap.style.fontSize = nameFont + 'px';
-    nameWrap.style.fontWeight = 'bold';
-    nameWrap.style.zIndex = '0';
-    nameWrap.textContent = text;
-
-    const nameContent = document.createElement('div');
-    nameContent.style.display = 'flex';
-    nameContent.style.alignItems = 'center';
-    nameContent.style.gap = '6px';
-
-    let badge = null;
-    if (isRankedMatch) {
-      const badgeSize = Math.max(16, Math.floor(nameBarH * 0.9));
-      badge = createEloBadge({ elo, size: badgeSize });
-    }
-
-    if (badge) {
-      if (isTopBar) {
-        nameContent.appendChild(nameWrap);
-        nameContent.appendChild(badge);
-      } else {
-        nameContent.appendChild(badge);
-        nameContent.appendChild(nameWrap);
-      }
-    } else {
-      nameContent.appendChild(nameWrap);
-    }
-
-    if (connection && Number.isFinite(connection.displaySeconds)) {
-      const indicator = document.createElement('div');
-      indicator.style.display = 'flex';
-      indicator.style.alignItems = 'center';
-      indicator.style.gap = '4px';
-
-      const indicatorSize = Math.max(12, Math.floor(nameBarH * 0.75));
-      const spinner = createReconnectSpinner({ size: indicatorSize });
-
-      const countdown = document.createElement('span');
-      countdown.textContent = String(Math.max(0, connection.displaySeconds)).padStart(2, '0');
-      countdown.style.fontFamily = 'Courier New, monospace';
-      countdown.style.fontWeight = 'bold';
-      countdown.style.fontSize = Math.max(12, Math.floor(nameFont * 0.9)) + 'px';
-      countdown.style.color = 'var(--CG-white)';
-
-      indicator.appendChild(spinner);
-      indicator.appendChild(countdown);
-      nameContent.appendChild(indicator);
-    }
-
-    let winsWrap = null;
-    const nWins = Math.max(0, Number(winCount || 0));
-    if (nWins > 0) {
-      winsWrap = document.createElement('div');
-      winsWrap.style.display = 'flex';
-      winsWrap.style.alignItems = 'center';
-      winsWrap.style.gap = '2px';
-      const throneSize = Math.floor(nameBarH * 0.9);
-      for (let i = 0; i < nWins; i++) {
-        const throne = createThroneIcon({ size: throneSize, alt: 'Match victory' });
-        winsWrap.appendChild(throne);
-      }
-      if (isTopBar) {
-        winsWrap.style.marginRight = '6px';
-        row.appendChild(winsWrap);
-        row.appendChild(nameContent);
-      } else {
-        winsWrap.style.marginLeft = '6px';
-        row.appendChild(nameContent);
-        row.appendChild(winsWrap);
-      }
-    } else {
-      row.appendChild(nameContent);
-    }
+  function buildNameRow({ isTopBar, showChallengeBubble, winCount, connection, eloValue, nameText }) {
+    const row = createNameRow({
+      name: nameText,
+      orientation: isTopBar ? 'top' : 'bottom',
+      height: nameBarH,
+      fontSize: nameFont,
+      isRankedMatch,
+      elo: eloValue,
+      wins: {
+        count: winCount,
+        size: Math.floor(nameBarH * 0.9),
+        gap: 2,
+        margin: 6
+      },
+      connection: connection && Number.isFinite(connection.displaySeconds)
+        ? {
+            ...connection,
+            size: Math.max(12, Math.floor(nameBarH * 0.75)),
+            fontSize: Math.max(12, Math.floor(nameFont * 0.9)),
+            color: 'var(--CG-white)'
+          }
+        : null
+    });
 
     if (showChallengeBubble) {
-      const bubbleSize = 3 * nameBarH;
-      const bubble = createChallengeBubble({
+      const bubble = createChallengeBubbleElement({
         position: isTopBar ? 'top' : 'bottom',
-        size: bubbleSize,
-        alt: 'Challenge available'
+        size: 3 * nameBarH,
+        offsetY: isTopBar ? '60%' : '-30%',
+        zIndex: 20
       });
       if (bubble) {
-        bubble.style.position = 'absolute';
-        bubble.style.left = '50%';
-        bubble.style.top = '50%';
-        bubble.style.transform = `translate(-50%, -50%) translateY(${isTopBar ? '60%' : '-30%'})`;
-        bubble.style.width = bubbleSize + 'px';
-        bubble.style.height = bubbleSize + 'px';
-        // Ensure the challenge bubble appears above board pieces
-        bubble.style.zIndex = '20';
-        bubble.style.pointerEvents = 'none';
         row.appendChild(bubble);
       }
     }
@@ -165,40 +93,25 @@ export function renderBars({
     return row;
   }
 
-  function makeClock(colorIsWhite, text) {
-    const box = document.createElement('div');
-    box.style.width = Math.floor(2.9 * rowH) + 'px';
-    box.style.height = rowH + 'px';
-    box.style.display = 'flex';
-    box.style.alignItems = 'center';
-    box.style.justifyContent = 'center';
-    box.style.fontFamily = 'Courier New, monospace';
-    box.style.fontWeight = 'bold';
-    box.style.fontSize = clockFont + 'px';
-    box.style.background = colorIsWhite ? 'var(--CG-white)' : 'var(--CG-black)';
-    box.style.color = colorIsWhite ? 'var(--CG-black)' : 'var(--CG-white)';
-    box.style.border = '2px solid var(--CG-deep-gold)';
-    box.style.borderRadius = '0px';
-    box.textContent = text;
-    if (clockLabel) {
-      box.title = clockLabel;
-    }
-    return box;
+  function buildClock({ isWhite, text }) {
+    return createClockPanel({
+      text,
+      height: rowH,
+      fontSize: clockFont,
+      isLight: isWhite,
+      label: clockLabel
+    });
   }
 
-  function makeDaggers(count) {
-    const wrap = document.createElement('div');
-    wrap.style.display = 'flex';
-    wrap.style.alignItems = 'center';
-    wrap.style.gap = '6px';
-    const n = Math.max(0, Number(count || 0));
-    for (let i = 0; i < n; i++) {
-      const sz = Math.floor(rowH);
-      const token = createDaggerToken({ size: sz, alt: 'Dagger token' });
-      token.style.fontSize = iconFont + 'px';
-      wrap.appendChild(token);
-    }
-    return wrap;
+  function buildDaggers(count) {
+    const counter = createDaggerCounter({
+      count,
+      size: Math.floor(rowH),
+      gap: 6,
+      alt: 'Dagger token'
+    });
+    counter.style.fontSize = iconFont + 'px';
+    return counter;
   }
 
   function makeCapturedForColor(colorIdx) {
@@ -248,13 +161,13 @@ export function renderBars({
   function fillBar(barEl, isTopBar) {
     while (barEl.firstChild) barEl.removeChild(barEl.firstChild);
     const showBubble = isTopBar ? showChallengeTop : showChallengeBottom;
-    const nameRow = makeNameRow({
-      text: isTopBar ? nameTop : nameBottom,
+    const nameRow = buildNameRow({
       isTopBar,
       showChallengeBubble: showBubble,
       winCount: isTopBar ? winsTop : winsBottom,
       connection: isTopBar ? connectionTop : connectionBottom,
-      elo: isTopBar ? eloTop : eloBottom
+      eloValue: isTopBar ? eloTop : eloBottom,
+      nameText: isTopBar ? nameTop : nameBottom
     });
     const row = document.createElement('div');
     row.style.height = rowH + 'px';
@@ -268,13 +181,9 @@ export function renderBars({
       right.style.display = 'flex';
       right.style.alignItems = 'center';
       right.style.gap = '6px';
-      right.appendChild(makeDaggers(currentDaggers?.[topColor] || 0));
-      const clock = makeClock(topColor === 0, clockTop);
-      const clockWrap = document.createElement('div');
-      clockWrap.style.display = 'flex';
-      clockWrap.style.alignItems = 'center';
-      clockWrap.appendChild(clock);
-      right.appendChild(clockWrap);
+      right.appendChild(buildDaggers(currentDaggers?.[topColor] || 0));
+      const clock = buildClock({ isWhite: topColor === 0, text: clockTop });
+      right.appendChild(clock);
       row.appendChild(right);
       barEl.appendChild(nameRow);
       barEl.appendChild(row);
@@ -285,13 +194,9 @@ export function renderBars({
       left.style.display = 'flex';
       left.style.alignItems = 'center';
       left.style.gap = '6px';
-      const clock = makeClock(bottomColor === 0, clockBottom);
-      const clockWrap = document.createElement('div');
-      clockWrap.style.display = 'flex';
-      clockWrap.style.alignItems = 'center';
-      clockWrap.appendChild(clock);
-      left.appendChild(clockWrap);
-      left.appendChild(makeDaggers(currentDaggers?.[bottomColor] || 0));
+      const clock = buildClock({ isWhite: bottomColor === 0, text: clockBottom });
+      left.appendChild(clock);
+      left.appendChild(buildDaggers(currentDaggers?.[bottomColor] || 0));
       row.appendChild(left);
       row.appendChild(makeCapturedForColor(bottomColor));
       const spacer = Math.max(4, Math.floor(0.012 * H));

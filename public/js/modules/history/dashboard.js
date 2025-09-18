@@ -31,7 +31,8 @@ function formatWinReasonLabel(reason) {
   return WIN_REASON_LABELS[reason] || 'Unknown';
 }
 
-import { createThroneIcon, createDaggerToken } from '../ui/icons.js';
+import { createThroneIcon } from '../ui/icons.js';
+import { createDaggerCounter } from '../ui/banners.js';
 
 function computeWinPercentage(wins, total) {
   if (!total) return 0;
@@ -245,9 +246,9 @@ function createStatusIcon(status, { size = 20 } = {}) {
     return icon;
   }
   if (status === 'loss') {
-    const token = createDaggerToken({ size, alt: 'Loss' });
-    token.className = 'history-status-icon history-status-loss';
-    return token;
+    const tokenGroup = createDaggerCounter({ count: 1, size, gap: 0, alt: 'Loss' });
+    tokenGroup.className = 'history-status-icon history-status-loss';
+    return tokenGroup;
   }
   return null;
 }

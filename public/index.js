@@ -21,9 +21,9 @@ import {
   getIconAsset,
   getAvatarAsset,
   getBubbleAsset,
-  createThroneIcon,
-  createDaggerToken as createDaggerTokenIcon
+  createThroneIcon
 } from '/js/modules/ui/icons.js';
+import { createDaggerCounter } from '/js/modules/ui/banners.js';
 
 (function() {
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -2309,8 +2309,13 @@ import {
         const icon = createThroneIcon({ size: iconSize, alt: 'Match winner' });
         cell.appendChild(icon);
       } else if (status === 'loser') {
-        const dagger = createDaggerTokenIcon({ size: iconSize, alt: 'Match loss' });
-        cell.appendChild(dagger);
+        const daggerGroup = createDaggerCounter({
+          count: 1,
+          size: iconSize,
+          gap: 0,
+          alt: 'Match loss'
+        });
+        cell.appendChild(daggerGroup);
       }
 
       const scoreSpan = document.createElement('span');

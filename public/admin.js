@@ -1,4 +1,5 @@
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
+import { createDaggerCounter } from '/js/modules/ui/banners.js';
 
 (function () {
   const origin = window.location.origin.replace(/\/$/, '');
@@ -64,25 +65,6 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
       frag.appendChild(row);
     });
     targetEl.appendChild(frag);
-  }
-
-  function createDaggerTokenIcon(size = 18) {
-    const token = document.createElement('div');
-    token.style.width = `${size}px`;
-    token.style.height = `${size}px`;
-    token.style.borderRadius = '50%';
-    token.style.border = '2px solid var(--CG-white)';
-    token.style.background = 'var(--CG-dark-red)';
-    token.style.display = 'flex';
-    token.style.alignItems = 'center';
-    token.style.justifyContent = 'center';
-    token.style.color = 'var(--CG-white)';
-    token.style.fontWeight = 'bold';
-    token.style.fontSize = `${Math.max(10, Math.floor(size * 0.5))}px`;
-    token.style.lineHeight = '1';
-    token.textContent = '⚔';
-    token.setAttribute('aria-hidden', 'true');
-    return token;
   }
 
   function renderUsersList(targetEl, users, connectedIds, matches) {
@@ -155,7 +137,8 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
       matchEl.style.wordBreak = 'keep-all';
       matchEl.style.padding = '0 2px';
       if (inMatchSet.has(u.id)) {
-        matchEl.appendChild(createDaggerTokenIcon());
+        const daggers = createDaggerCounter({ count: 1, size: 18, gap: 0, alt: 'In active match' });
+        matchEl.appendChild(daggers);
         matchEl.title = 'Player is in an active match';
         matchEl.setAttribute('aria-label', 'In active match');
       } else {
