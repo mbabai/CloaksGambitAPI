@@ -85,3 +85,60 @@ Remove the preview nodes when finished:
 document.querySelectorAll('[id^="preview-"]').forEach(node => node.remove());
 previewRoot.remove();
 ```
+
+## Banner Primitives
+
+Player banners and score summaries share a consistent visual language (name row, dagger counters, challenge bubbles, and monospaced clocks). The helper module [`public/js/modules/ui/banners.js`](../public/js/modules/ui/banners.js) exports pure DOM factories so renderers can compose these pieces without duplicating markup.
+
+### `createNameRow(options)`
+
+Builds a flex row containing the player name, optional Elo badge, reconnect spinner, and victory thrones. Key options:
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `name` | `string` | Player label rendered in bold white text. |
+| `orientation` | `'top' \| 'bottom'` | Positions victory tokens before or after the name. |
+| `height` / `fontSize` | `number` | Explicit measurements in pixels. |
+| `isRankedMatch` | `boolean` | When `true`, injects an Elo badge using the supplied `elo` rating. |
+| `wins` | `object` | `{ count, size, gap, margin }` configure the throne icons. |
+| `connection` | `object` | `{ displaySeconds, size, fontSize, color }` draws a reconnect spinner + countdown when present. |
+| `assets` | `object` | Override icon factories (see below). |
+
+### `createClockPanel(options)`
+
+Returns a monospaced block representing the clock. Provide `text`, `height`, `fontSize`, and `isLight` to control output. Use the optional `label` for a tooltip.
+
+### `createDaggerCounter(options)`
+
+Creates a flex wrapper filled with dagger tokens. Pass `{ count, size, gap, alt }` to control the number of tokens, dimensions, and accessibility copy. A count of `0` returns an empty wrapper to preserve spacing.
+
+### `createChallengeBubbleElement(options)`
+
+Produces a positioned challenge bubble image ready to overlay on top of a name row. Useful options include `{ position, size, offsetY, zIndex }`.
+
+### `createBannerAssets(overrides)`
+
+Clones the default asset factories (which already read from `ASSET_MANIFEST`) and lets you override any of them. Pass the resulting object to the helpers via the `assets` option when you need to swap icon sets:
+
+```js
+import { createNameRow, createDaggerCounter, createBannerAssets } from '/js/modules/ui/banners.js';
+
+const assets = createBannerAssets();
+
+const nameRow = createNameRow({
+  name: 'Player One',
+  orientation: 'top',
+  height: 28,
+  fontSize: 16,
+  isRankedMatch: true,
+  elo: 1488,
+  wins: { count: 2, size: 24, margin: 6 },
+  assets
+});
+
+const daggers = createDaggerCounter({ count: 3, size: 20, gap: 4, assets });
+
+bannerContainer.append(nameRow, daggers);
+```
+
+Because every helper is pure, the nodes can be reused in tests or composed inside higher-level renderers (`render/bars`, scoreboard summaries, admin dashboards) without implicit DOM side effects.
