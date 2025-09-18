@@ -24,6 +24,7 @@ import {
   createThroneIcon
 } from '/js/modules/ui/icons.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
+import { createOverlay } from '/js/modules/ui/overlays.js';
 
 (function() {
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -70,11 +71,10 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   let statsOverlayFetching = false;
   const statsHistoryGamesByMatch = new Map();
   let statsUsernameMap = {};
-  let statsOverlayEl = null;
+  let statsOverlay = null;
   let statsOverlayMatchesEl = null;
   let statsOverlaySummaryEls = null;
   let statsOverlayFilterButtons = [];
-  let statsOverlayCloseBtn = null;
   let statsOverlayEloValueEl = null;
 
   function persistQueueMode(mode) {
@@ -173,33 +173,35 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   }
 
   function ensureStatsOverlay() {
-    if (statsOverlayEl) return;
+    if (statsOverlay) return statsOverlay;
 
-    statsOverlayEl = document.createElement('div');
-    statsOverlayEl.className = 'history-overlay';
-    statsOverlayEl.id = 'historyOverlay';
-    statsOverlayEl.setAttribute('role', 'dialog');
-    statsOverlayEl.setAttribute('aria-modal', 'true');
-    statsOverlayEl.setAttribute('aria-hidden', 'true');
+    statsOverlay = createOverlay({
+      baseClass: 'cg-overlay history-overlay',
+      dialogClass: 'history-modal',
+      contentClass: 'history-modal-content',
+      backdropClass: 'cg-overlay__backdrop history-overlay-backdrop',
+      closeButtonClass: 'history-close-btn',
+      closeLabel: 'Close history',
+      closeText: '✕',
+      openClass: 'open cg-overlay--open',
+      bodyOpenClass: 'history-overlay-open cg-overlay-open'
+    });
 
-    const modal = document.createElement('div');
-    modal.className = 'history-modal';
-
-    statsOverlayCloseBtn = document.createElement('button');
-    statsOverlayCloseBtn.type = 'button';
-    statsOverlayCloseBtn.className = 'history-close-btn';
-    statsOverlayCloseBtn.setAttribute('aria-label', 'Close history');
-    statsOverlayCloseBtn.textContent = '✕';
-    modal.appendChild(statsOverlayCloseBtn);
+    const { content, closeButton } = statsOverlay;
+    if (closeButton) {
+      closeButton.setAttribute('aria-label', 'Close history');
+    }
 
     const heading = document.createElement('h2');
     heading.textContent = 'Match History';
-    modal.appendChild(heading);
+    heading.id = 'historyOverlayTitle';
+    statsOverlay.setLabelledBy(heading.id);
+    content.appendChild(heading);
 
     const eloRow = document.createElement('div');
     eloRow.className = 'history-current-elo';
     eloRow.innerHTML = 'Current ELO: <span id="historyCurrentEloValue">—</span>';
-    modal.appendChild(eloRow);
+    content.appendChild(eloRow);
 
     const summary = document.createElement('div');
     summary.className = 'history-summary';
@@ -224,7 +226,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
         <div id="playerHistoryRankedMatches" class="history-card-value">0</div>
         <div id="playerHistoryRankedMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0% win)</div>
       </div>`;
-    modal.appendChild(summary);
+    content.appendChild(summary);
 
     const filters = document.createElement('div');
     filters.className = 'history-filters';
@@ -232,19 +234,16 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
       <button class="history-filter-btn active" data-history-filter="all">All</button>
       <button class="history-filter-btn" data-history-filter="quickplay">Quickplay</button>
       <button class="history-filter-btn" data-history-filter="ranked">Ranked</button>`;
-    modal.appendChild(filters);
+    content.appendChild(filters);
 
-    const content = document.createElement('div');
-    content.className = 'history-overlay-content';
-    content.id = 'historyOverlayContent';
+    const contentScroll = document.createElement('div');
+    contentScroll.className = 'history-overlay-content';
+    contentScroll.id = 'historyOverlayContent';
     const matches = document.createElement('div');
     matches.className = 'history-matches';
     matches.id = 'playerHistoryMatches';
-    content.appendChild(matches);
-    modal.appendChild(content);
-
-    statsOverlayEl.appendChild(modal);
-    document.body.appendChild(statsOverlayEl);
+    contentScroll.appendChild(matches);
+    content.appendChild(contentScroll);
 
     statsOverlayMatchesEl = matches;
     statsOverlayFilterButtons = Array.from(filters.querySelectorAll('[data-history-filter]'));
@@ -260,10 +259,6 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
       rankedMatchesBreakdown: summary.querySelector('#playerHistoryRankedMatchesBreakdown')
     };
 
-    statsOverlayCloseBtn.addEventListener('click', () => {
-      closeStatsOverlay();
-    });
-
     statsOverlayFilterButtons.forEach(btn => {
       btn.addEventListener('click', () => {
         const filter = btn.dataset.historyFilter || 'all';
@@ -273,33 +268,31 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
         renderStatsHistoryMatches();
       });
     });
+
+    return statsOverlay;
   }
 
   function isStatsOverlayOpen() {
-    return Boolean(statsOverlayEl && statsOverlayEl.classList.contains('open'));
+    return Boolean(statsOverlay && statsOverlay.isOpen());
   }
 
   function openStatsOverlay() {
     if (!statsUserId) return;
-    ensureStatsOverlay();
-    if (!statsOverlayEl) return;
-    statsOverlayEl.classList.add('open');
-    statsOverlayEl.setAttribute('aria-hidden', 'false');
-    document.body.classList.add('history-overlay-open');
+    const overlay = ensureStatsOverlay();
+    if (!overlay) return;
     if (statsOverlayEloValueEl) {
       statsOverlayEloValueEl.textContent = Number.isFinite(statsUserElo) ? String(statsUserElo) : '—';
     }
     statsOverlayFilterButtons.forEach(btn => {
       btn.classList.toggle('active', (btn.dataset.historyFilter || 'all') === statsHistoryFilter);
     });
+    overlay.show({ initialFocus: overlay.closeButton });
     fetchStatsHistory();
   }
 
   function closeStatsOverlay() {
-    if (!statsOverlayEl) return;
-    statsOverlayEl.classList.remove('open');
-    statsOverlayEl.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('history-overlay-open');
+    if (!statsOverlay) return;
+    statsOverlay.hide();
   }
 
   function showStatsOverlayMessage(message) {
@@ -542,9 +535,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   document.addEventListener('keydown', handleGlobalKeyDown);
 
   function handleGlobalKeyDown(ev) {
-    if ((ev.key === 'Escape' || ev.key === 'Esc') && isStatsOverlayOpen()) {
-      ev.preventDefault();
-      closeStatsOverlay();
+    if (isStatsOverlayOpen()) {
       return;
     }
 
@@ -585,7 +576,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   }
 
   function isBannerVisible() {
-    return Boolean(bannerEl && bannerEl.style.display !== 'none');
+    return Boolean(bannerOverlay && bannerOverlay.isOpen());
   }
 
   function shouldIgnoreShortcutTarget(el) {
@@ -887,7 +878,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   let userId;
   let lastGameId = null;
   let bannerInterval = null;
-  let bannerEl = null;
+  let bannerOverlay = null;
   let bannerKeyListener = null;
   let playAreaRoot = null;
   let isPlayAreaVisible = false;
@@ -1917,47 +1908,25 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   })();
 
   // ------- Match Found Banner helpers -------
-  function ensureBannerEl() {
-    if (bannerEl) return bannerEl;
-    bannerEl = document.createElement('div');
-    bannerEl.style.position = 'fixed';
-    bannerEl.style.inset = '0';
-    bannerEl.style.display = 'none';
-    bannerEl.style.alignItems = 'center';
-    bannerEl.style.justifyContent = 'center';
-    bannerEl.style.background = 'rgba(0,0,0,0.55)';
-    bannerEl.style.zIndex = '9999';
-
-    const card = document.createElement('div');
-    card.style.width = '100%';
-    card.style.maxWidth = '100%';
-    card.style.height = '160px';
-    card.style.padding = '18px 26px';
-    card.style.borderRadius = '0';
-    card.style.borderTop = '2px solid var(--CG-deep-gold)';
-    card.style.borderBottom = '2px solid var(--CG-deep-gold)';
-    card.style.background = 'var(--CG-deep-purple)';
-    card.style.color = 'var(--CG-white)';
-    card.style.boxShadow = '0 10px 30px rgba(0,0,0,0.35)';
-    card.style.textAlign = 'center';
-
-    const title = document.createElement('div');
-    title.textContent = 'Match Found';
-    title.style.fontSize = '32px';
-    title.style.fontWeight = '800';
-    title.style.marginBottom = '10px';
-
-    const count = document.createElement('div');
-    count.style.fontSize = '80px';
-    count.style.fontWeight = '900';
-    count.style.lineHeight = '1';
-    count.id = 'matchFoundCount';
-
-    card.appendChild(title);
-    card.appendChild(count);
-    bannerEl.appendChild(card);
-    document.body.appendChild(bannerEl);
-    return bannerEl;
+  function ensureBannerOverlay() {
+    if (bannerOverlay) return bannerOverlay;
+    bannerOverlay = createOverlay({
+      baseClass: 'cg-overlay banner-overlay',
+      dialogClass: 'banner-overlay__dialog',
+      contentClass: 'banner-overlay__content',
+      backdropClass: 'cg-overlay__backdrop banner-overlay-backdrop',
+      closeButtonClass: 'banner-overlay__close',
+      closeLabel: 'Close banner',
+      closeText: '✕',
+      closeOnBackdrop: false,
+      openClass: 'cg-overlay--open banner-overlay--open',
+      bodyOpenClass: 'cg-overlay-open',
+      trapFocus: true
+    });
+    if (bannerOverlay.closeButton) {
+      bannerOverlay.closeButton.setAttribute('aria-label', 'Close banner');
+    }
+    return bannerOverlay;
   }
 
   function setBannerKeyListener(listener) {
@@ -1966,12 +1935,17 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
 
   function showResignConfirm() {
     if (!lastGameId || gameFinished) return;
-    const el = ensureBannerEl();
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
     setBannerKeyListener(null);
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
-    while (el.firstChild) el.removeChild(el.firstChild);
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
+    content.innerHTML = '';
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => { closeBanner(); };
+    }
 
     const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
     const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
@@ -2031,13 +2005,14 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     buttons.appendChild(resignBtn);
     card.appendChild(message);
     card.appendChild(buttons);
-    el.appendChild(card);
-    el.style.display = 'flex';
+    content.appendChild(card);
+    overlay.show({ initialFocus: cancelBtn });
 
     function closeBanner() {
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
-      while (el.firstChild) el.removeChild(el.firstChild);
-      el.style.display = 'none';
+      content.innerHTML = '';
+      overlay.hide();
+      setBannerKeyListener(null);
     }
 
     cancelBtn.addEventListener('click', () => {
@@ -2067,12 +2042,17 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
 
   function showDrawConfirm() {
     if (!lastGameId || gameFinished) return;
-    const el = ensureBannerEl();
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
     setBannerKeyListener(null);
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
-    while (el.firstChild) el.removeChild(el.firstChild);
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
+    content.innerHTML = '';
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => { closeBanner(); };
+    }
 
     const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
     const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
@@ -2136,13 +2116,14 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     buttons.appendChild(confirmBtn);
     card.appendChild(message);
     card.appendChild(buttons);
-    el.appendChild(card);
-    el.style.display = 'flex';
+    content.appendChild(card);
+    overlay.show({ initialFocus: cancelBtn });
 
     function closeBanner() {
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
-      while (el.firstChild) el.removeChild(el.firstChild);
-      el.style.display = 'none';
+      content.innerHTML = '';
+      overlay.hide();
+      setBannerKeyListener(null);
     }
 
     cancelBtn.addEventListener('click', () => {
@@ -2176,9 +2157,15 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   }
 
   function showMatchFoundBanner(startSeconds, onTick) {
-    const el = ensureBannerEl();
-    el.style.alignItems = 'center';
-    while (el.firstChild) el.removeChild(el.firstChild);
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+    content.innerHTML = '';
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => { closeBanner(); };
+    }
 
     const card = document.createElement('div');
     card.style.width = '100%';
@@ -2216,11 +2203,17 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
 
     card.appendChild(title);
     card.appendChild(countEl);
-    el.appendChild(card);
+    content.appendChild(card);
+
+    function closeBanner() {
+      if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+      content.innerHTML = '';
+      overlay.hide();
+    }
 
     let remaining = startSeconds;
     countEl.textContent = String(remaining);
-    el.style.display = 'flex';
+    overlay.show({ initialFocus: closeButton && !closeButton.hidden ? closeButton : null });
 
     if (bannerInterval) clearInterval(bannerInterval);
     bannerInterval = setInterval(() => {
@@ -2231,7 +2224,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
       if (remaining < 0) {
         clearInterval(bannerInterval);
         bannerInterval = null;
-        el.style.display = 'none';
+        closeBanner();
         return;
       }
       countEl.textContent = remaining === 0 ? 'Go!' : String(remaining);
@@ -2374,10 +2367,22 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
       activeMatchId = String(match._id);
     }
     applyExpectedTimeSettingsForMatch(currentMatch);
-    const el = ensureBannerEl();
-    el.style.alignItems = 'flex-end';
-    while (el.firstChild) el.removeChild(el.firstChild);
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
+    dialog.style.alignItems = 'flex-end';
+    dialog.style.justifyContent = 'center';
+    content.innerHTML = '';
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    let summaryTimeout = null;
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => {
+        if (summaryTimeout) { clearTimeout(summaryTimeout); summaryTimeout = null; }
+        content.innerHTML = '';
+        overlay.hide();
+        setBannerKeyListener(null);
+      };
+    }
     const card = document.createElement('div');
     card.style.width = '100%';
     card.style.maxWidth = '100%';
@@ -2406,7 +2411,6 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     const hasNextGame = Array.isArray(match?.games)
       ? match.games.some(g => g && g.isActive)
       : false;
-    let summaryTimeout = null;
     let descText;
     if (isDraw || reason === WIN_REASONS.DRAW) {
       const whiteName = playerNames[0] || formatPlayerName(null, 0);
@@ -2506,8 +2510,8 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     card.appendChild(title);
     card.appendChild(desc);
     card.appendChild(btn);
-    el.appendChild(card);
-    el.style.display = 'flex';
+    content.appendChild(card);
+    overlay.show({ initialFocus: btn });
   }
 
   function showMatchSummary(match) {
@@ -2521,10 +2525,21 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
       renderBoardAndBars();
     }
     connectionStatusByPlayer.clear();
-    const el = ensureBannerEl();
-    el.style.alignItems = 'center';
-    while (el.firstChild) el.removeChild(el.firstChild);
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+    content.innerHTML = '';
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => {
+        content.innerHTML = '';
+        overlay.hide();
+        setBannerKeyListener(null);
+        returnToLobby();
+      };
+    }
     const card = document.createElement('div');
     card.style.padding = '20px 30px';
     card.style.border = '2px solid var(--CG-deep-gold)';
@@ -2570,8 +2585,8 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     card.appendChild(title);
     card.appendChild(score);
     card.appendChild(btn);
-    el.appendChild(card);
-    el.style.display = 'flex';
+    content.appendChild(card);
+    overlay.show({ initialFocus: btn });
   }
 
   // ------- PlayArea & Board & Bars -------
@@ -2700,9 +2715,9 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     showQueuer();
     setBannerKeyListener(null);
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
-    if (bannerEl) {
-      while (bannerEl.firstChild) bannerEl.removeChild(bannerEl.firstChild);
-      bannerEl.style.display = 'none';
+    if (bannerOverlay) {
+      bannerOverlay.content.innerHTML = '';
+      bannerOverlay.hide({ restoreFocus: false });
     }
     queuedState.quickplay = false;
     queuedState.ranked = false;
