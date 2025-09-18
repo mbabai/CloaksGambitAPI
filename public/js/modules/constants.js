@@ -1,3 +1,19 @@
+export {
+  GAME_CONSTANTS,
+  GAME_MODES,
+  COLORS,
+  IDENTITIES,
+  ACTIONS,
+  MOVE_STATES,
+  BOARD_DIMENSIONS,
+  GAME_MODE_SETTINGS,
+  GAME_VIEW_STATES,
+  WIN_REASONS,
+  GAME_ACTION_STATES
+} from '/js/shared/gameConstants.js';
+
+import { IDENTITIES } from '/js/shared/gameConstants.js';
+
 // Map piece identity and color to SVG assets served from /assets/images/Pieces
 export const PIECE_IMAGES = {
   0: {
@@ -26,23 +42,4 @@ export const PIECE_IMAGES = {
   }
 };
 
-export const KING_ID = 1;
-
-export const MOVE_STATES = {
-  PENDING: 0,
-  COMPLETED: 1,
-  RESOLVED: 2
-};
-
-export const WIN_REASONS = {
-  CAPTURED_KING: 0,
-  THRONE: 1,
-  TRUE_KING: 2,
-  DAGGERS: 3,
-  TIME_CONTROL: 4,
-  DISCONNECT: 5,
-  RESIGN: 6,
-  DRAW: 7
-};
-
-
+export const KING_ID = IDENTITIES.KING;
