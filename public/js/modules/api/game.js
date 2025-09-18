@@ -121,4 +121,10 @@ export async function apiGetMatchDetails(matchId) {
   return res.json().catch(() => null);
 }
 
+export async function apiGetTimeSettings() {
+  const res = await fetch('/api/v1/config/timeSettings');
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
 

@@ -8,6 +8,9 @@ const userCreate = require('./users/create');
 const userUpdate = require('./users/update');
 const userPurge = require('./users/purge');
 
+// Config routes
+const configTimeSettings = require('./config/getTimeSettings');
+
 // Match routes
 const matchGetList = require('./matches/getList');
 const matchGetDetails = require('./matches/getDetails');
@@ -48,6 +51,9 @@ router.use('/users/getDetails', userGetDetails);
 router.use('/users/create', userCreate);
 router.use('/users/update', userUpdate);
 router.use('/users/purge', userPurge);
+
+// Config routes
+router.use('/config/timeSettings', configTimeSettings);
 
 // Match routes
 router.use('/matches/getList', matchGetList);

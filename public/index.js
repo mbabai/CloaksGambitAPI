@@ -6,7 +6,7 @@ import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -925,6 +925,15 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
   let drawOfferCooldowns = [null, null]; // ms timestamps when players may re-offer
   let drawCooldownTimeout = null;
 
+  const DEFAULT_TIME_SETTINGS = {
+    quickplayMs: 300000,
+    rankedMs: 180000,
+    incrementMs: 3000,
+  };
+  let timeSettings = { ...DEFAULT_TIME_SETTINGS };
+  let expectedTimeControl = null;
+  let expectedIncrement = DEFAULT_TIME_SETTINGS.incrementMs;
+
   // Clock state
   let timeControl = 0;
   let increment = 0;
@@ -1133,15 +1142,101 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
     }
   }
 
+  function coerceMilliseconds(value, { allowZero = false } = {}) {
+    if (value === null || value === undefined) return null;
+    const num = Number(value);
+    if (!Number.isFinite(num)) return null;
+    if (!allowZero && num <= 0) return null;
+    if (allowZero && num < 0) return null;
+    return num;
+  }
+
+  function describeTimeControl(baseMs, incMs) {
+    const parts = [];
+    if (Number.isFinite(baseMs) && baseMs > 0) {
+      const minutes = Math.floor(baseMs / 60000);
+      const seconds = Math.round((baseMs % 60000) / 1000);
+      if (minutes > 0 && seconds > 0) {
+        parts.push(`${minutes}m ${seconds}s`);
+      } else if (minutes > 0) {
+        parts.push(`${minutes}m`);
+      } else if (seconds > 0) {
+        parts.push(`${seconds}s`);
+      }
+    }
+    if (Number.isFinite(incMs) && incMs > 0) {
+      const incSeconds = incMs / 1000;
+      const formatted = Number.isInteger(incSeconds) ? String(incSeconds) : incSeconds.toFixed(1);
+      parts.push(`+ ${formatted}s`);
+    }
+    if (parts.length === 0) return null;
+    return parts.join(' ');
+  }
+
+  function getClockLabel() {
+    const base = Number.isFinite(expectedTimeControl) && expectedTimeControl > 0
+      ? expectedTimeControl
+      : (Number.isFinite(timeControl) && timeControl > 0 ? timeControl : null);
+    const inc = Number.isFinite(expectedIncrement) && expectedIncrement >= 0
+      ? expectedIncrement
+      : (Number.isFinite(increment) && increment >= 0 ? increment : null);
+    return describeTimeControl(base, inc);
+  }
+
+  function getDisplayClockMsForColor(colorIdx) {
+    if (!gameStartTime && Number.isFinite(expectedTimeControl) && expectedTimeControl > 0) {
+      return expectedTimeControl;
+    }
+    if (colorIdx === 0) return whiteTimeMs;
+    if (colorIdx === 1) return blackTimeMs;
+    return 0;
+  }
+
+  function applyExpectedTimeSettingsForMatch(match) {
+    if (!match || typeof match !== 'object') {
+      expectedTimeControl = null;
+      expectedIncrement = timeSettings.incrementMs;
+      renderBoardAndBars();
+      updateClockDisplay();
+      return;
+    }
+
+    const type = typeof match.type === 'string' ? match.type.toUpperCase() : '';
+    if (type === 'QUICKPLAY') {
+      expectedTimeControl = timeSettings.quickplayMs;
+    } else if (type === 'RANKED') {
+      expectedTimeControl = timeSettings.rankedMs;
+    } else {
+      expectedTimeControl = null;
+    }
+    expectedIncrement = timeSettings.incrementMs;
+    renderBoardAndBars();
+    updateClockDisplay();
+  }
+
+  function updateTimeSettings(settings) {
+    if (!settings || typeof settings !== 'object') return;
+    const quick = coerceMilliseconds(settings.quickplayMs);
+    if (quick !== null) timeSettings.quickplayMs = quick;
+    const ranked = coerceMilliseconds(settings.rankedMs);
+    if (ranked !== null) timeSettings.rankedMs = ranked;
+    const inc = coerceMilliseconds(settings.incrementMs, { allowZero: true });
+    if (inc !== null) {
+      timeSettings.incrementMs = inc;
+      expectedIncrement = inc;
+    }
+    applyExpectedTimeSettingsForMatch(currentMatch);
+  }
+
   function updateClockDisplay() {
     const topColor = currentIsWhite ? 1 : 0;
     const bottomColor = currentIsWhite ? 0 : 1;
     if (topClockEl) {
-      const ms = topColor === 0 ? whiteTimeMs : blackTimeMs;
+      const ms = getDisplayClockMsForColor(topColor);
       topClockEl.textContent = formatClock(ms);
     }
     if (bottomClockEl) {
-      const ms = bottomColor === 0 ? whiteTimeMs : blackTimeMs;
+      const ms = getDisplayClockMsForColor(bottomColor);
       bottomClockEl.textContent = formatClock(ms);
     }
   }
@@ -1178,18 +1273,32 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
   }
 
   function recomputeClocksFromServer() {
-    if (!timeControl) return;
+    const baseTime = Number.isFinite(timeControl) && timeControl > 0
+      ? timeControl
+      : (Number.isFinite(expectedTimeControl) && expectedTimeControl > 0 ? expectedTimeControl : null);
+    if (!baseTime) {
+      updateClockDisplay();
+      return;
+    }
+
+    const incValue = Number.isFinite(increment) && increment >= 0
+      ? increment
+      : (Number.isFinite(expectedIncrement) && expectedIncrement >= 0 ? expectedIncrement : 0);
+    if (!Number.isFinite(increment) || increment < 0) {
+      increment = incValue;
+    }
+
     if (!gameStartTime) {
-      whiteTimeMs = timeControl;
-      blackTimeMs = timeControl;
+      whiteTimeMs = baseTime;
+      blackTimeMs = baseTime;
       activeColor = null;
       stopClockInterval();
       updateClockDisplay();
       return;
     }
 
-    let white = timeControl;
-    let black = timeControl;
+    let white = baseTime;
+    let black = baseTime;
     let lastTs = gameStartTime;
     const actions = (actionHistory || []).filter(a => new Date(a.timestamp).getTime() >= gameStartTime);
     const setupFlags = [false, false];
@@ -1214,10 +1323,10 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
       } else {
         if (turn === null) turn = 0;
         if (act.player === 0) {
-          white += increment;
+          white += incValue;
           turn = 1;
         } else {
-          black += increment;
+          black += incValue;
           turn = 0;
         }
       }
@@ -1357,10 +1466,12 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
               if (currentMatch?._id) {
                 activeMatchId = String(currentMatch._id);
               }
+              applyExpectedTimeSettingsForMatch(currentMatch);
               syncPlayerElosFromMatch(currentMatch);
             } catch (e) {
               console.error('Failed to fetch match details', e);
               currentMatch = null;
+              applyExpectedTimeSettingsForMatch(null);
             }
           }
 
@@ -1484,8 +1595,10 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
             if (currentMatch?._id) {
               activeMatchId = String(currentMatch._id);
             }
+            applyExpectedTimeSettingsForMatch(currentMatch);
           } catch (e) {
             console.error('Failed to fetch match details', e);
+            applyExpectedTimeSettingsForMatch(null);
           }
         }
 
@@ -1779,6 +1892,12 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
     try {
       userId = await ensureUserId();
       console.log('[init] userId', userId);
+      try {
+        const settings = await apiGetTimeSettings();
+        if (settings) updateTimeSettings(settings);
+      } catch (cfgErr) {
+        console.warn('Failed to load time settings', cfgErr);
+      }
       preloadPieceImages();
       preloadBubbleImages();
       socket = io('/', { auth: { userId } });
@@ -2262,6 +2381,7 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
     if (match?._id) {
       activeMatchId = String(match._id);
     }
+    applyExpectedTimeSettingsForMatch(currentMatch);
     const el = ensureBannerEl();
     el.style.alignItems = 'flex-end';
     while (el.firstChild) el.removeChild(el.firstChild);
@@ -2403,6 +2523,7 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
     if (match?._id) {
       activeMatchId = String(match._id);
     }
+    applyExpectedTimeSettingsForMatch(currentMatch);
     const refreshedElos = syncPlayerElosFromMatch(match);
     if (refreshedElos) {
       renderBoardAndBars();
@@ -2599,6 +2720,7 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
     gameFinished = false;
     updateFindButton();
     currentMatch = null;
+    applyExpectedTimeSettingsForMatch(null);
     activeMatchId = null;
     connectionStatusByPlayer.clear();
     currentDrawOffer = null;
@@ -2664,8 +2786,9 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
     // Use modular bars and stash renderers
     const topClr = currentIsWhite ? 1 : 0;
     const bottomClr = currentIsWhite ? 0 : 1;
-    const topMs = topClr === 0 ? whiteTimeMs : blackTimeMs;
-    const bottomMs = bottomClr === 0 ? whiteTimeMs : blackTimeMs;
+    const topMs = getDisplayClockMsForColor(topClr);
+    const bottomMs = getDisplayClockMsForColor(bottomClr);
+    const clockLabel = getClockLabel();
     const topIdx = currentIsWhite ? 1 : 0;
     const bottomIdx = currentIsWhite ? 0 : 1;
     const isRankedMatch = currentMatch && currentMatch.type === 'RANKED';
@@ -2732,6 +2855,7 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
         showChallengeBottom,
         clockTop: formatClock(topMs),
         clockBottom: formatClock(bottomMs),
+        clockLabel,
         nameTop: playerNames[topIdx] || ('Anonymous' + topIdx),
         nameBottom: playerNames[bottomIdx] || ('Anonymous' + bottomIdx),
         winsTop,
@@ -3685,8 +3809,20 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
         }
         scheduleDrawCooldownCheck();
       }
-      if (u.timeControlStart !== undefined) timeControl = u.timeControlStart;
-      if (u.increment !== undefined) increment = u.increment;
+      if (u.timeControlStart !== undefined) {
+        const parsedTime = coerceMilliseconds(u.timeControlStart);
+        if (parsedTime !== null) {
+          timeControl = parsedTime;
+          expectedTimeControl = parsedTime;
+        }
+      }
+      if (u.increment !== undefined) {
+        const parsedInc = coerceMilliseconds(u.increment, { allowZero: true });
+        if (parsedInc !== null) {
+          increment = parsedInc;
+          expectedIncrement = parsedInc;
+        }
+      }
       if (u.startTime) gameStartTime = new Date(u.startTime).getTime();
       if (Array.isArray(u.actions)) {
         actionHistory = u.actions;

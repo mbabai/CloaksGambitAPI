@@ -4,6 +4,15 @@ const ServerConfig = require('./ServerConfig');
 // Get default config to access the values
 const defaultConfig = new ServerConfig();
 
+async function getRuntimeConfig() {
+    try {
+        return await ServerConfig.getSingleton();
+    } catch (err) {
+        console.error('Failed to fetch server config for validation, falling back to defaults:', err);
+        return null;
+    }
+}
+
 // Piece Schema
 const pieceSchema = new mongoose.Schema({
     color: {
@@ -177,10 +186,10 @@ const gameSchema = new mongoose.Schema({
         type: Number,
         required: true,
         validate: {
-            validator: function(v) {
-                // Check if the time control matches either RANKED or QUICKPLAY settings
-                const rankedTime = defaultConfig.gameModeSettings.RANKED.TIME_CONTROL;
-                const quickplayTime = defaultConfig.gameModeSettings.QUICKPLAY.TIME_CONTROL;
+            validator: async function(v) {
+                const runtimeConfig = await getRuntimeConfig();
+                const rankedTime = runtimeConfig?.gameModeSettings?.RANKED?.TIME_CONTROL ?? defaultConfig.gameModeSettings.RANKED.TIME_CONTROL;
+                const quickplayTime = runtimeConfig?.gameModeSettings?.QUICKPLAY?.TIME_CONTROL ?? defaultConfig.gameModeSettings.QUICKPLAY.TIME_CONTROL;
                 return v === rankedTime || v === quickplayTime;
             },
             message: 'Time control must match either RANKED or QUICKPLAY settings from server config'
@@ -190,8 +199,10 @@ const gameSchema = new mongoose.Schema({
         type: Number,
         required: true,
         validate: {
-            validator: function(v) {
-                return v === defaultConfig.gameModeSettings.INCREMENT;
+            validator: async function(v) {
+                const runtimeConfig = await getRuntimeConfig();
+                const increment = runtimeConfig?.gameModeSettings?.INCREMENT ?? defaultConfig.gameModeSettings.INCREMENT;
+                return v === increment;
             },
             message: 'Increment must match the server config INCREMENT value'
         }

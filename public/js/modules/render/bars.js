@@ -17,6 +17,7 @@ export function renderBars({
     showChallengeBottom = false,
     clockTop = '5:00',
     clockBottom = '5:00',
+    clockLabel = null,
     nameTop = 'Opponent Name',
     nameBottom = 'My Name',
     winsTop = 0,
@@ -178,6 +179,9 @@ export function renderBars({
     box.style.border = '2px solid var(--CG-deep-gold)';
     box.style.borderRadius = '0px';
     box.textContent = text;
+    if (clockLabel) {
+      box.title = clockLabel;
+    }
     return box;
   }
 
@@ -276,7 +280,11 @@ export function renderBars({
       right.style.gap = '6px';
       right.appendChild(makeDaggers(currentDaggers?.[topColor] || 0));
       const clock = makeClock(topColor === 0, clockTop);
-      right.appendChild(clock);
+      const clockWrap = document.createElement('div');
+      clockWrap.style.display = 'flex';
+      clockWrap.style.alignItems = 'center';
+      clockWrap.appendChild(clock);
+      right.appendChild(clockWrap);
       row.appendChild(right);
       barEl.appendChild(nameRow);
       barEl.appendChild(row);
@@ -288,7 +296,11 @@ export function renderBars({
       left.style.alignItems = 'center';
       left.style.gap = '6px';
       const clock = makeClock(bottomColor === 0, clockBottom);
-      left.appendChild(clock);
+      const clockWrap = document.createElement('div');
+      clockWrap.style.display = 'flex';
+      clockWrap.style.alignItems = 'center';
+      clockWrap.appendChild(clock);
+      left.appendChild(clockWrap);
       left.appendChild(makeDaggers(currentDaggers?.[bottomColor] || 0));
       row.appendChild(left);
       row.appendChild(makeCapturedForColor(bottomColor));
