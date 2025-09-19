@@ -68,6 +68,10 @@ const GAME_CONSTANTS = deepFreeze({
       "TIME_CONTROL": 300000,
       "WIN_SCORE": 1
     },
+    "CUSTOM": {
+      "TIME_CONTROL": 300000,
+      "WIN_SCORE": 1
+    },
     "INCREMENT": 3000
   },
   "gameViewStates": {

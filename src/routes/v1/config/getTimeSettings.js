@@ -6,6 +6,7 @@ const { GAME_CONSTANTS } = require('../../../../shared/constants');
 const DEFAULTS = {
   quickplayMs: GAME_CONSTANTS.gameModeSettings.QUICKPLAY.TIME_CONTROL,
   rankedMs: GAME_CONSTANTS.gameModeSettings.RANKED.TIME_CONTROL,
+  customMs: GAME_CONSTANTS.gameModeSettings.CUSTOM.TIME_CONTROL,
   incrementMs: GAME_CONSTANTS.gameModeSettings.INCREMENT,
 };
 
@@ -39,6 +40,13 @@ router.get('/', async (req, res) => {
       rankedSettings?.TIME_CONTROL,
       DEFAULTS.rankedMs
     );
+    const customSettings = config?.gameModeSettings?.get
+      ? config.gameModeSettings.get('CUSTOM')
+      : config?.gameModeSettings?.CUSTOM;
+    const customMs = toMilliseconds(
+      customSettings?.TIME_CONTROL,
+      DEFAULTS.customMs
+    );
     const incrementMs = toMilliseconds(
       (config?.gameModeSettings?.get
         ? config.gameModeSettings.get('INCREMENT')
@@ -47,7 +55,7 @@ router.get('/', async (req, res) => {
       { allowZero: true }
     );
 
-    res.json({ quickplayMs, rankedMs, incrementMs });
+    res.json({ quickplayMs, rankedMs, customMs, incrementMs });
   } catch (err) {
     console.error('Error serving time settings:', err);
     res.status(500).json({ message: 'Failed to load time settings' });

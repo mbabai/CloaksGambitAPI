@@ -254,6 +254,11 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
         <div id="playerHistoryQuickplayGamesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0</div>
       </div>
       <div class="history-card">
+        <div class="history-card-label">Custom Matches</div>
+        <div id="playerHistoryCustomMatches" class="history-card-value">0</div>
+        <div id="playerHistoryCustomMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0% win)</div>
+      </div>
+      <div class="history-card">
         <div class="history-card-label">Ranked Matches</div>
         <div id="playerHistoryRankedMatches" class="history-card-value">0</div>
         <div id="playerHistoryRankedMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0% win)</div>
@@ -265,6 +270,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     filters.innerHTML = `
       <button class="history-filter-btn active" data-history-filter="all">All</button>
       <button class="history-filter-btn" data-history-filter="quickplay">Quickplay</button>
+      <button class="history-filter-btn" data-history-filter="custom">Custom</button>
       <button class="history-filter-btn" data-history-filter="ranked">Ranked</button>`;
     content.appendChild(filters);
 
@@ -287,6 +293,8 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       totalMatchesBreakdown: summary.querySelector('#playerHistoryTotalMatchesBreakdown'),
       quickplayGames: summary.querySelector('#playerHistoryQuickplayGames'),
       quickplayGamesBreakdown: summary.querySelector('#playerHistoryQuickplayGamesBreakdown'),
+      customMatches: summary.querySelector('#playerHistoryCustomMatches'),
+      customMatchesBreakdown: summary.querySelector('#playerHistoryCustomMatchesBreakdown'),
       rankedMatches: summary.querySelector('#playerHistoryRankedMatches'),
       rankedMatchesBreakdown: summary.querySelector('#playerHistoryRankedMatchesBreakdown')
     };
@@ -344,6 +352,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     const games = summary.games;
     const matches = summary.matches;
     const quickplay = summary.quickplayGames;
+    const custom = summary.customMatches;
     const ranked = summary.rankedMatches;
 
     statsOverlaySummaryEls.totalGames.textContent = games.total;
@@ -352,6 +361,10 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     statsOverlaySummaryEls.totalMatchesBreakdown.textContent = `Wins ${matches.wins} • Draws ${matches.draws} • Losses ${matches.losses} (${matches.winPct}% win)`;
     statsOverlaySummaryEls.quickplayGames.textContent = quickplay.total;
     statsOverlaySummaryEls.quickplayGamesBreakdown.textContent = `Wins ${quickplay.wins} • Draws ${quickplay.draws} • Losses ${quickplay.losses}`;
+    if (statsOverlaySummaryEls.customMatches && statsOverlaySummaryEls.customMatchesBreakdown) {
+      statsOverlaySummaryEls.customMatches.textContent = custom.total;
+      statsOverlaySummaryEls.customMatchesBreakdown.textContent = `Wins ${custom.wins} • Draws ${custom.draws} • Losses ${custom.losses} (${custom.winPct}% win)`;
+    }
     statsOverlaySummaryEls.rankedMatches.textContent = ranked.total;
     statsOverlaySummaryEls.rankedMatchesBreakdown.textContent = `Wins ${ranked.wins} • Draws ${ranked.draws} • Losses ${ranked.losses} (${ranked.winPct}% win)`;
   }
@@ -361,6 +374,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     const upper = type.toUpperCase();
     if (upper === 'RANKED') return 'Ranked Match';
     if (upper === 'QUICKPLAY') return 'Quickplay Match';
+    if (upper === 'CUSTOM') return 'Custom Match';
     return `${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()} Match`;
   }
 
@@ -389,6 +403,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       if (!match || match.isActive) return false;
       const type = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
       if (statsHistoryFilter === 'quickplay') return type === 'QUICKPLAY';
+      if (statsHistoryFilter === 'custom') return type === 'CUSTOM';
       if (statsHistoryFilter === 'ranked') return type === 'RANKED';
       return true;
     });
@@ -878,6 +893,9 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
           }
           setUsernameDisplay();
           updateAccountPanel();
+          if (socket && socket.connected) {
+            try { socket.emit('user:updateName', { username: updatedName }); } catch (_) {}
+          }
         } catch (error) {
           console.error('Failed to update username', error);
           alert('Failed to update username. Please try again.');
@@ -958,6 +976,10 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
   let playerElos = [null, null];
   let currentPlayerIds = [];
   const connectionStatusByPlayer = new Map();
+  let customInvitePrompt = null;
+  let activeIncomingInvite = null;
+  const pendingOutgoingInvites = new Map();
+  let lastInviteTargetName = null;
 
   // Live game state (masked per player)
   let currentBoard = null;        // 2D array of cells
@@ -986,6 +1008,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
   const DEFAULT_TIME_SETTINGS = {
     quickplayMs: 300000,
     rankedMs: 180000,
+    customMs: 300000,
     incrementMs: 3000,
   };
   let timeSettings = { ...DEFAULT_TIME_SETTINGS };
@@ -1264,6 +1287,8 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       expectedTimeControl = timeSettings.quickplayMs;
     } else if (type === 'RANKED') {
       expectedTimeControl = timeSettings.rankedMs;
+    } else if (type === 'CUSTOM') {
+      expectedTimeControl = timeSettings.customMs || timeSettings.quickplayMs;
     } else {
       expectedTimeControl = null;
     }
@@ -1278,6 +1303,8 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     if (quick !== null) timeSettings.quickplayMs = quick;
     const ranked = coerceMilliseconds(settings.rankedMs);
     if (ranked !== null) timeSettings.rankedMs = ranked;
+    const custom = coerceMilliseconds(settings.customMs);
+    if (custom !== null) timeSettings.customMs = custom;
     const inc = coerceMilliseconds(settings.incrementMs, { allowZero: true });
     if (inc !== null) {
       timeSettings.incrementMs = inc;
@@ -1869,6 +1896,15 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
         updateConnectionStatus(payload);
         renderBoardAndBars();
       },
+      onInviteRequest(payload) {
+        handleCustomInviteRequest(payload);
+      },
+      onInviteResult(payload) {
+        handleCustomInviteResult(payload);
+      },
+      onInviteCancel(payload) {
+        handleCustomInviteCancel(payload);
+      },
       onDisconnect() { /* keep UI; server handles grace */ }
     });
     socket.on('user:init', (payload) => {
@@ -1915,6 +1951,11 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
 
     if (mode === 'bots') {
       window.alert('Bots coming soon!');
+      return;
+    }
+
+    if (mode === 'custom') {
+      showCustomInvitePrompt();
       return;
     }
 
@@ -1996,6 +2037,489 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
 
   function setBannerKeyListener(listener) {
     bannerKeyListener = typeof listener === 'function' ? listener : null;
+  }
+
+  function showInviteDeclinedBanner(name, status = 'declined') {
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
+    setBannerKeyListener(null);
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    content.innerHTML = '';
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+
+    function closeBanner() {
+      content.innerHTML = '';
+      overlay.hide();
+      setBannerKeyListener(null);
+    }
+
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => { closeBanner(); };
+    }
+
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const card = document.createElement('div');
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '360px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = cardGap + 'px';
+
+    const safeName = name ? String(name) : 'opponent';
+    const message = document.createElement('div');
+    message.textContent = status === 'cancelled'
+      ? `Invite to ${safeName} cancelled.`
+      : `Invite to ${safeName} declined.`;
+    message.style.fontSize = clamp(Math.round(20 * modalScale), 14, 20) + 'px';
+    message.style.fontWeight = '600';
+    message.style.lineHeight = '1.4';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.justifyContent = 'center';
+    buttons.style.marginTop = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
+
+    const okBtn = document.createElement('button');
+    okBtn.textContent = 'OK';
+    okBtn.style.background = 'var(--CG-forest)';
+    okBtn.style.color = 'var(--CG-white)';
+    okBtn.style.border = '2px solid var(--CG-deep-gold)';
+    okBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(18 * modalScale), 12, 18)}px`;
+    okBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    okBtn.style.fontWeight = '700';
+    okBtn.style.cursor = 'pointer';
+    okBtn.style.minWidth = '120px';
+
+    buttons.appendChild(okBtn);
+    card.appendChild(message);
+    card.appendChild(buttons);
+    content.appendChild(card);
+
+    okBtn.addEventListener('click', () => { closeBanner(); });
+
+    overlay.show({ initialFocus: okBtn });
+  }
+
+  function showCustomInvitePrompt() {
+    if (!socket) {
+      window.alert('Unable to send invite right now. Please try again shortly.');
+      return;
+    }
+
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
+    setBannerKeyListener(null);
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    content.innerHTML = '';
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+
+    const prompt = {};
+
+    function closeBanner() {
+      content.innerHTML = '';
+      overlay.hide();
+      setBannerKeyListener(null);
+      if (customInvitePrompt === prompt) {
+        customInvitePrompt = null;
+      }
+    }
+
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => { closeBanner(); };
+    }
+
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const card = document.createElement('div');
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '400px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = cardGap + 'px';
+
+    const title = document.createElement('div');
+    title.textContent = 'Custom Game Invite';
+    title.style.fontSize = clamp(Math.round(24 * modalScale), 16, 24) + 'px';
+    title.style.fontWeight = '700';
+
+    const description = document.createElement('div');
+    description.textContent = 'Enter a username to send an invite.';
+    description.style.fontSize = clamp(Math.round(16 * modalScale), 12, 16) + 'px';
+    description.style.lineHeight = '1.4';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Username';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.style.padding = `${clamp(Math.round(10 * modalScale), 8, 12)}px ${clamp(Math.round(12 * modalScale), 10, 16)}px`;
+    input.style.border = '2px solid var(--CG-deep-gold)';
+    input.style.borderRadius = '4px';
+    input.style.fontSize = clamp(Math.round(18 * modalScale), 14, 18) + 'px';
+    input.style.fontWeight = '600';
+    input.style.background = 'var(--CG-white)';
+    input.style.color = 'var(--CG-black)';
+    input.value = lastInviteTargetName || '';
+
+    const statusEl = document.createElement('div');
+    statusEl.style.minHeight = clamp(Math.round(18 * modalScale), 14, 18) + 'px';
+    statusEl.style.fontSize = clamp(Math.round(14 * modalScale), 12, 14) + 'px';
+    statusEl.style.fontWeight = '600';
+    statusEl.style.color = 'var(--CG-light-gold)';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
+    buttons.style.justifyContent = 'center';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.flex = '1';
+    cancelBtn.style.minWidth = '0';
+    cancelBtn.style.background = 'var(--CG-dark-red)';
+    cancelBtn.style.color = 'var(--CG-white)';
+    cancelBtn.style.border = '2px solid var(--CG-deep-gold)';
+    cancelBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`;
+    cancelBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    cancelBtn.style.fontWeight = '700';
+    cancelBtn.style.cursor = 'pointer';
+
+    const sendBtn = document.createElement('button');
+    sendBtn.textContent = 'Send invite';
+    sendBtn.style.flex = '1';
+    sendBtn.style.minWidth = '0';
+    sendBtn.style.background = 'var(--CG-forest)';
+    sendBtn.style.color = 'var(--CG-white)';
+    sendBtn.style.border = '2px solid var(--CG-deep-gold)';
+    sendBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`;
+    sendBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    sendBtn.style.fontWeight = '700';
+    sendBtn.style.cursor = 'pointer';
+
+    function resetButtons() {
+      sendBtn.disabled = false;
+      cancelBtn.disabled = false;
+      sendBtn.textContent = 'Send invite';
+    }
+
+    function handleFailure(message) {
+      statusEl.textContent = message;
+      resetButtons();
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }
+
+    function sendInvite() {
+      const target = input.value.trim();
+      if (!target) {
+        statusEl.textContent = 'Please enter a username.';
+        input.focus();
+        return;
+      }
+      if (!socket || !socket.connected) {
+        window.alert('Unable to send invite right now. Please try again shortly.');
+        return;
+      }
+      sendBtn.disabled = true;
+      cancelBtn.disabled = true;
+      sendBtn.textContent = 'Sending…';
+      statusEl.textContent = 'Sending invite…';
+      statusEl.style.color = 'var(--CG-light-gold)';
+      prompt.pendingName = target;
+      lastInviteTargetName = target;
+      try {
+        socket.emit('custom:invite', { username: target });
+      } catch (err) {
+        console.error('Failed to emit custom invite', err);
+        handleFailure('Failed to send invite.');
+      }
+    }
+
+    cancelBtn.addEventListener('click', () => { closeBanner(); });
+    sendBtn.addEventListener('click', () => { sendInvite(); });
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        sendInvite();
+      }
+    });
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(sendBtn);
+
+    card.appendChild(title);
+    card.appendChild(description);
+    card.appendChild(input);
+    card.appendChild(statusEl);
+    card.appendChild(buttons);
+    content.appendChild(card);
+
+    prompt.overlay = overlay;
+    prompt.close = closeBanner;
+    prompt.input = input;
+    prompt.sendBtn = sendBtn;
+    prompt.cancelBtn = cancelBtn;
+    prompt.statusEl = statusEl;
+    prompt.pendingName = input.value.trim();
+    customInvitePrompt = prompt;
+
+    overlay.show({ initialFocus: input });
+    input.focus();
+    if (input.value) {
+      input.setSelectionRange(0, input.value.length);
+    }
+  }
+
+  function handleCustomInviteResult(payload) {
+    if (!payload) return;
+    const status = payload.status;
+    const inviteId = payload.inviteId;
+    const entry = inviteId ? pendingOutgoingInvites.get(inviteId) : null;
+    if (status === 'offline') {
+      if (customInvitePrompt) {
+        const { sendBtn, cancelBtn, statusEl, input } = customInvitePrompt;
+        if (statusEl) {
+          statusEl.textContent = 'User not online';
+          statusEl.style.color = 'var(--CG-light-gold)';
+        }
+        if (sendBtn) {
+          sendBtn.disabled = false;
+          sendBtn.textContent = 'Send invite';
+        }
+        if (cancelBtn) {
+          cancelBtn.disabled = false;
+        }
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }
+      window.alert('user not online');
+      return;
+    }
+
+    if (status === 'error') {
+      const message = payload.message || 'Failed to send invite.';
+      if (customInvitePrompt) {
+        const { statusEl, sendBtn, cancelBtn, input } = customInvitePrompt;
+        if (statusEl) {
+          statusEl.textContent = message;
+          statusEl.style.color = 'var(--CG-light-gold)';
+        }
+        if (sendBtn) {
+          sendBtn.disabled = false;
+          sendBtn.textContent = 'Send invite';
+        }
+        if (cancelBtn) {
+          cancelBtn.disabled = false;
+        }
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      } else {
+        window.alert(message);
+      }
+      if (inviteId && entry) {
+        pendingOutgoingInvites.delete(inviteId);
+      }
+      return;
+    }
+
+    if (status === 'pending') {
+      const resolvedName = payload.username || customInvitePrompt?.pendingName || entry?.username || lastInviteTargetName || '';
+      if (inviteId) {
+        pendingOutgoingInvites.set(inviteId, { username: resolvedName });
+      }
+      lastInviteTargetName = resolvedName || lastInviteTargetName;
+      if (customInvitePrompt && typeof customInvitePrompt.close === 'function') {
+        customInvitePrompt.close();
+      }
+      return;
+    }
+
+    if (status === 'accepted') {
+      if (inviteId) {
+        pendingOutgoingInvites.delete(inviteId);
+      }
+      return;
+    }
+
+    if (status === 'declined' || status === 'cancelled') {
+      const name = payload.username || entry?.username || lastInviteTargetName || 'opponent';
+      if (inviteId) {
+        pendingOutgoingInvites.delete(inviteId);
+      }
+      showInviteDeclinedBanner(name, status);
+      return;
+    }
+  }
+
+  function handleCustomInviteRequest(payload) {
+    if (!payload || !payload.inviteId) return;
+    const inviteId = payload.inviteId;
+    const fromUsername = payload.fromUsername || 'A player';
+    if (activeIncomingInvite && typeof activeIncomingInvite.close === 'function') {
+      activeIncomingInvite.close();
+    }
+
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
+    setBannerKeyListener(null);
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    content.innerHTML = '';
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+
+    let responded = false;
+
+    function closeBanner() {
+      content.innerHTML = '';
+      overlay.hide();
+      setBannerKeyListener(null);
+      if (activeIncomingInvite && activeIncomingInvite.inviteId === inviteId) {
+        activeIncomingInvite = null;
+      }
+    }
+
+    function emitResponse(accepted) {
+      if (responded) return;
+      responded = true;
+      if (socket && socket.connected) {
+        try { socket.emit('custom:inviteResponse', { inviteId, accepted }); } catch (err) { console.error('Failed to emit invite response', err); }
+      } else {
+        console.warn('Socket not ready to send invite response');
+      }
+    }
+
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => {
+        emitResponse(false);
+        closeBanner();
+      };
+    }
+
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const card = document.createElement('div');
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '400px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = cardGap + 'px';
+
+    const message = document.createElement('div');
+    message.textContent = `${fromUsername} has invited to play with you…`;
+    message.style.fontSize = clamp(Math.round(20 * modalScale), 14, 20) + 'px';
+    message.style.fontWeight = '600';
+    message.style.lineHeight = '1.4';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
+    buttons.style.justifyContent = 'center';
+
+    const declineBtn = document.createElement('button');
+    declineBtn.textContent = 'Decline';
+    declineBtn.style.flex = '1';
+    declineBtn.style.minWidth = '0';
+    declineBtn.style.background = 'var(--CG-dark-red)';
+    declineBtn.style.color = 'var(--CG-white)';
+    declineBtn.style.border = '2px solid var(--CG-deep-gold)';
+    declineBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`;
+    declineBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    declineBtn.style.fontWeight = '700';
+    declineBtn.style.cursor = 'pointer';
+
+    const acceptBtn = document.createElement('button');
+    acceptBtn.textContent = 'Accept';
+    acceptBtn.style.flex = '1';
+    acceptBtn.style.minWidth = '0';
+    acceptBtn.style.background = 'var(--CG-forest)';
+    acceptBtn.style.color = 'var(--CG-white)';
+    acceptBtn.style.border = '2px solid var(--CG-deep-gold)';
+    acceptBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`;
+    acceptBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    acceptBtn.style.fontWeight = '700';
+    acceptBtn.style.cursor = 'pointer';
+
+    acceptBtn.addEventListener('click', () => {
+      acceptBtn.disabled = true;
+      declineBtn.disabled = true;
+      acceptBtn.textContent = 'Accepting…';
+      emitResponse(true);
+      closeBanner();
+    });
+
+    declineBtn.addEventListener('click', () => {
+      declineBtn.disabled = true;
+      acceptBtn.disabled = true;
+      declineBtn.textContent = 'Declining…';
+      emitResponse(false);
+      closeBanner();
+    });
+
+    buttons.appendChild(declineBtn);
+    buttons.appendChild(acceptBtn);
+
+    card.appendChild(message);
+    card.appendChild(buttons);
+    content.appendChild(card);
+
+    activeIncomingInvite = { inviteId, close: closeBanner };
+
+    overlay.show({ initialFocus: acceptBtn });
+  }
+
+  function handleCustomInviteCancel(payload) {
+    const inviteId = payload?.inviteId;
+    if (!inviteId) return;
+    const current = activeIncomingInvite;
+    if (current && current.inviteId === inviteId) {
+      const close = current.close;
+      activeIncomingInvite = null;
+      if (typeof close === 'function') {
+        close();
+      }
+    }
   }
 
   function showResignConfirm() {

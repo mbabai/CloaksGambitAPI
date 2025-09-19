@@ -101,6 +101,7 @@ function computeHistorySummary(matches, games, { userId } = {}) {
     games: { total: 0, wins: 0, draws: 0, losses: 0 },
     quickplayGames: { total: 0, wins: 0, draws: 0, losses: 0 },
     matches: { total: 0, wins: 0, draws: 0, losses: 0, winPct: 0 },
+    customMatches: { total: 0, wins: 0, draws: 0, losses: 0, winPct: 0 },
     rankedMatches: { total: 0, wins: 0, draws: 0, losses: 0, winPct: 0 },
     matchIndex: new Map()
   };
@@ -128,6 +129,7 @@ function computeHistorySummary(matches, games, { userId } = {}) {
     const result = getMatchResult(match, normalizedUserId);
     const isDraw = result.player1Result === 'draw' && result.player2Result === 'draw';
     const isRanked = result.type === 'RANKED';
+    const isCustom = result.type === 'CUSTOM';
 
     if (normalizedUserId) {
       if (!result.userResult) return;
@@ -138,6 +140,16 @@ function computeHistorySummary(matches, games, { userId } = {}) {
         summary.matches.losses += 1;
       } else {
         summary.matches.draws += 1;
+      }
+      if (isCustom) {
+        summary.customMatches.total += 1;
+        if (result.userResult === 'win') {
+          summary.customMatches.wins += 1;
+        } else if (result.userResult === 'loss') {
+          summary.customMatches.losses += 1;
+        } else {
+          summary.customMatches.draws += 1;
+        }
       }
       if (isRanked) {
         summary.rankedMatches.total += 1;
@@ -164,6 +176,15 @@ function computeHistorySummary(matches, games, { userId } = {}) {
         } else {
           summary.rankedMatches.wins += 1;
           summary.rankedMatches.losses += 1;
+        }
+      }
+      if (isCustom) {
+        summary.customMatches.total += 1;
+        if (isDraw) {
+          summary.customMatches.draws += 1;
+        } else {
+          summary.customMatches.wins += 1;
+          summary.customMatches.losses += 1;
         }
       }
     }
@@ -234,6 +255,7 @@ function computeHistorySummary(matches, games, { userId } = {}) {
   });
 
   summary.matches.winPct = computeWinPercentage(summary.matches.wins, summary.matches.total);
+  summary.customMatches.winPct = computeWinPercentage(summary.customMatches.wins, summary.customMatches.total);
   summary.rankedMatches.winPct = computeWinPercentage(summary.rankedMatches.wins, summary.rankedMatches.total);
 
   return summary;

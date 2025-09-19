@@ -17,6 +17,9 @@ function initSocket(httpServer) {
     },
   });
   const clients = new Map();
+  const userIdToUsername = new Map();
+  const connectedUsernames = new Map();
+  const pendingCustomInvites = new Map();
   const matchDisconnectState = new Map();
   const playerMatches = new Map();
   const DISCONNECT_LIMIT_MS = 30000;
@@ -77,6 +80,182 @@ function initSocket(httpServer) {
       removePlayerMatch(pid, mid);
     });
     matchDisconnectState.delete(mid);
+  }
+
+  function normalizeUsername(name) {
+    if (typeof name !== 'string') return '';
+    return name.trim().toLowerCase();
+  }
+
+  function setConnectedUsername(userId, username) {
+    const pid = toId(userId);
+    if (!pid) return;
+    const previous = userIdToUsername.get(pid);
+    if (previous) {
+      const prevKey = normalizeUsername(previous);
+      const existing = connectedUsernames.get(prevKey);
+      if (existing === pid) {
+        connectedUsernames.delete(prevKey);
+      }
+    }
+    const normalized = normalizeUsername(username);
+    if (normalized) {
+      userIdToUsername.set(pid, username);
+      connectedUsernames.set(normalized, pid);
+    } else {
+      userIdToUsername.delete(pid);
+    }
+  }
+
+  function removeConnectedUsername(userId) {
+    const pid = toId(userId);
+    if (!pid) return;
+    const previous = userIdToUsername.get(pid);
+    if (previous) {
+      const prevKey = normalizeUsername(previous);
+      const existing = connectedUsernames.get(prevKey);
+      if (existing === pid) {
+        connectedUsernames.delete(prevKey);
+      }
+    }
+    userIdToUsername.delete(pid);
+  }
+
+  function resolveConnectedUserIdByName(username) {
+    const normalized = normalizeUsername(username);
+    if (!normalized) return null;
+    const id = connectedUsernames.get(normalized);
+    return id || null;
+  }
+
+  function generateInviteId() {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  async function ensureLobby() {
+    let lobby = await Lobby.findOne();
+    if (!lobby) {
+      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [], inGame: [] });
+    }
+    return lobby;
+  }
+
+  async function createCustomMatch(player1Id, player2Id) {
+    const players = [toId(player1Id), toId(player2Id)].filter(Boolean);
+    if (players.length !== 2) {
+      throw new Error('Two valid players are required for a custom match');
+    }
+
+    const config = await getServerConfig();
+    const lobby = await ensureLobby();
+
+    const customSettings = config?.gameModeSettings?.get
+      ? (config.gameModeSettings.get('CUSTOM') || config.gameModeSettings.get('QUICKPLAY') || {})
+      : (config?.gameModeSettings?.CUSTOM || config?.gameModeSettings?.QUICKPLAY || {});
+    const quickplaySettings = config?.gameModeSettings?.get
+      ? (config.gameModeSettings.get('QUICKPLAY') || {})
+      : (config?.gameModeSettings?.QUICKPLAY || {});
+    const fallbackBase = Number(quickplaySettings?.TIME_CONTROL) || 300000;
+    const timeControl = Number(customSettings?.TIME_CONTROL ?? fallbackBase) || fallbackBase;
+    const incrementSetting = customSettings?.INCREMENT ?? (config?.gameModeSettings?.get
+      ? config.gameModeSettings.get('INCREMENT')
+      : config?.gameModeSettings?.INCREMENT);
+    const increment = Number(incrementSetting) || 0;
+
+    const typeValue = config?.gameModes?.get
+      ? (config.gameModes.get('CUSTOM') || 'CUSTOM')
+      : (config?.gameModes?.CUSTOM || 'CUSTOM');
+
+    const lobbyQuickplay = lobby.quickplayQueue.map(id => id.toString());
+    const lobbyRanked = lobby.rankedQueue.map(id => id.toString());
+
+    let lobbyChanged = false;
+    const filteredQuick = lobbyQuickplay.filter(id => !players.includes(id));
+    if (filteredQuick.length !== lobbyQuickplay.length) {
+      lobby.quickplayQueue = filteredQuick;
+      lobbyChanged = true;
+    }
+    const filteredRanked = lobbyRanked.filter(id => !players.includes(id));
+    if (filteredRanked.length !== lobbyRanked.length) {
+      lobby.rankedQueue = filteredRanked;
+      lobbyChanged = true;
+    }
+
+    const inGameSet = new Set(lobby.inGame.map(id => id.toString()));
+    players.forEach((pid) => {
+      if (!inGameSet.has(pid)) {
+        lobby.inGame.push(pid);
+        inGameSet.add(pid);
+        lobbyChanged = true;
+      }
+    });
+
+    if (lobbyChanged) {
+      await lobby.save();
+      eventBus.emit('queueChanged', {
+        quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
+        rankedQueue: lobby.rankedQueue.map(id => id.toString()),
+        affectedUsers: players,
+      });
+    }
+
+    const match = await Match.create({
+      player1: players[0],
+      player2: players[1],
+      type: typeValue,
+      player1Score: 0,
+      player2Score: 0,
+      games: [],
+    });
+
+    const game = await Game.create({
+      players,
+      match: match._id,
+      timeControlStart: timeControl,
+      increment,
+    });
+
+    match.games.push(game._id);
+    await match.save();
+
+    const affected = players.map(id => id.toString());
+    eventBus.emit('gameChanged', {
+      game: typeof game.toObject === 'function' ? game.toObject() : game,
+      affectedUsers: affected,
+    });
+    eventBus.emit('players:bothNext', {
+      game: typeof game.toObject === 'function' ? game.toObject() : game,
+      affectedUsers: affected,
+    });
+    eventBus.emit('match:created', {
+      matchId: match._id.toString(),
+      players: affected,
+      type: match.type,
+    });
+
+    return { match, game };
+  }
+
+  function clearPendingInvitesForUser(userId, reason = 'disconnect') {
+    const pid = toId(userId);
+    if (!pid) return;
+    pendingCustomInvites.forEach((invite, inviteId) => {
+      if (invite.fromId !== pid && invite.toId !== pid) return;
+      pendingCustomInvites.delete(inviteId);
+      const otherId = invite.fromId === pid ? invite.toId : invite.fromId;
+      const otherSocket = clients.get(otherId);
+      if (!otherSocket) return;
+      if (invite.fromId === pid) {
+        otherSocket.emit('custom:inviteCancel', { inviteId });
+      } else {
+        otherSocket.emit('custom:inviteResult', {
+          inviteId,
+          status: 'cancelled',
+          username: userIdToUsername.get(pid) || null,
+          reason,
+        });
+      }
+    });
   }
 
   function computeElapsed(matchId, playerId) {
@@ -603,6 +782,7 @@ function initSocket(httpServer) {
       try { prev.disconnect(true) } catch (_) {}
     }
     clients.set(userId, socket);
+    setConnectedUsername(userId, userInfo.username);
     markPlayerConnectedToAllMatches(userId);
     socket.emit('user:init', { userId, username: userInfo.username, guest: userInfo.isGuest });
     console.log('Client connected', socket.id);
@@ -663,6 +843,132 @@ function initSocket(httpServer) {
       console.error('Error fetching initial state:', err);
     }
 
+    socket.on('user:updateName', (payload) => {
+      if (!payload) return;
+      const nextName = typeof payload === 'string' ? payload : payload.username;
+      if (typeof nextName !== 'string') return;
+      setConnectedUsername(userId, nextName);
+    });
+
+    socket.on('custom:invite', async (payload) => {
+      try {
+        if (!userId) return;
+        const targetName = typeof payload === 'string' ? payload : payload?.username || payload?.target;
+        const trimmed = typeof targetName === 'string' ? targetName.trim() : '';
+        if (!trimmed) {
+          socket.emit('custom:inviteResult', { status: 'error', message: 'Username is required.' });
+          return;
+        }
+        const targetId = resolveConnectedUserIdByName(trimmed);
+        if (!targetId || !clients.has(targetId)) {
+          socket.emit('custom:inviteResult', { status: 'offline', username: trimmed });
+          return;
+        }
+        const inviterId = toId(userId);
+        if (targetId === inviterId) {
+          socket.emit('custom:inviteResult', { status: 'error', message: 'You cannot invite yourself.' });
+          return;
+        }
+
+        for (const invite of pendingCustomInvites.values()) {
+          if (invite.fromId === inviterId && invite.status === 'pending') {
+            socket.emit('custom:inviteResult', { status: 'error', message: 'You already have a pending invite.' });
+            return;
+          }
+        }
+
+        const inviteId = generateInviteId();
+        pendingCustomInvites.set(inviteId, {
+          id: inviteId,
+          fromId: inviterId,
+          toId: targetId,
+          status: 'pending',
+          createdAt: Date.now(),
+        });
+
+        const targetSocket = clients.get(targetId);
+        const targetUsername = userIdToUsername.get(targetId) || trimmed;
+        const inviterName = userIdToUsername.get(inviterId) || userInfo.username;
+
+        socket.emit('custom:inviteResult', {
+          inviteId,
+          status: 'pending',
+          username: targetUsername,
+        });
+
+        if (targetSocket) {
+          targetSocket.emit('custom:inviteRequest', {
+            inviteId,
+            fromUserId: inviterId,
+            fromUsername: inviterName,
+          });
+        }
+      } catch (err) {
+        console.error('Failed to send custom invite:', err);
+        socket.emit('custom:inviteResult', { status: 'error', message: 'Failed to send invite.' });
+      }
+    });
+
+    socket.on('custom:inviteResponse', async (payload) => {
+      try {
+        const inviteId = payload?.inviteId;
+        if (!inviteId || typeof inviteId !== 'string') return;
+        const invite = pendingCustomInvites.get(inviteId);
+        if (!invite || invite.status !== 'pending') return;
+        const responderId = toId(userId);
+        if (invite.toId !== responderId) return;
+
+        pendingCustomInvites.delete(inviteId);
+
+        const inviterSocket = clients.get(invite.fromId);
+        const inviterName = userIdToUsername.get(invite.fromId) || null;
+        const inviteeName = userIdToUsername.get(invite.toId) || null;
+
+        const accepted = Boolean(payload?.accepted);
+        if (!accepted) {
+          if (inviterSocket) {
+            inviterSocket.emit('custom:inviteResult', {
+              inviteId,
+              status: 'declined',
+              username: inviteeName,
+            });
+          }
+          return;
+        }
+
+        try {
+          await createCustomMatch(invite.fromId, invite.toId);
+          if (inviterSocket) {
+            inviterSocket.emit('custom:inviteResult', {
+              inviteId,
+              status: 'accepted',
+              username: inviteeName,
+            });
+          }
+        } catch (matchErr) {
+          console.error('Failed to create custom match:', matchErr);
+          if (inviterSocket) {
+            inviterSocket.emit('custom:inviteResult', {
+              inviteId,
+              status: 'error',
+              message: 'Failed to start custom game.',
+              username: inviteeName,
+            });
+          }
+          const inviteeSocket = clients.get(invite.toId);
+          if (inviteeSocket) {
+            inviteeSocket.emit('custom:inviteResult', {
+              inviteId,
+              status: 'error',
+              message: 'Failed to start custom game.',
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Failed to process custom invite response:', err);
+      }
+    });
+
     socket.on('disconnect', async () => {
       console.log('Client disconnected', socket.id);
       if (userId) {
@@ -670,8 +976,10 @@ function initSocket(httpServer) {
         const isCurrent = !current || current.id === socket.id;
         if (isCurrent) {
           // Grace period: remove mapping now, but defer queue cleanup
+          clearPendingInvitesForUser(userId, 'disconnect');
           clients.delete(userId);
           markPlayerDisconnectedFromAllMatches(userId);
+          removeConnectedUsername(userId);
         }
         setTimeout(async () => {
           // If user reconnected, skip cleanup
