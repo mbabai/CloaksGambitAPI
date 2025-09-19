@@ -370,16 +370,24 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     const ranked = summary.rankedMatches;
 
     historySummaryEls.totalGames.textContent = games.total;
-    historySummaryEls.totalGamesBreakdown.textContent = `Wins ${games.wins} • Draws ${games.draws} • Losses ${games.losses}`;
+    if (historySummaryEls.totalGamesBreakdown) {
+      historySummaryEls.totalGamesBreakdown.textContent = '';
+    }
 
     historySummaryEls.totalMatches.textContent = matches.total;
-    historySummaryEls.totalMatchesBreakdown.textContent = `Wins ${matches.wins} • Draws ${matches.draws} • Losses ${matches.losses} (${matches.winPct}% win)`;
+    if (historySummaryEls.totalMatchesBreakdown) {
+      historySummaryEls.totalMatchesBreakdown.textContent = '';
+    }
 
     historySummaryEls.quickplayGames.textContent = quickplay.total;
-    historySummaryEls.quickplayGamesBreakdown.textContent = `Wins ${quickplay.wins} • Draws ${quickplay.draws} • Losses ${quickplay.losses}`;
+    if (historySummaryEls.quickplayGamesBreakdown) {
+      historySummaryEls.quickplayGamesBreakdown.textContent = '';
+    }
 
     historySummaryEls.rankedMatches.textContent = ranked.total;
-    historySummaryEls.rankedMatchesBreakdown.textContent = `Wins ${ranked.wins} • Draws ${ranked.draws} • Losses ${ranked.losses} (${ranked.winPct}% win)`;
+    if (historySummaryEls.rankedMatchesBreakdown) {
+      historySummaryEls.rankedMatchesBreakdown.textContent = '';
+    }
   }
 
   function formatMatchType(type) {
