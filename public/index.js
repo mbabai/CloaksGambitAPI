@@ -1854,6 +1854,12 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
 
   queueBtn.addEventListener('click', async function() {
     let mode = modeSelect.value;
+
+    if (mode === 'bots') {
+      window.alert('Bots coming soon!');
+      return;
+    }
+
     const awaitingServerQueueState = !queueStatusKnown && queueStartTime != null;
     if (awaitingServerQueueState && queueStartMode && mode !== queueStartMode) {
       mode = queueStartMode;
