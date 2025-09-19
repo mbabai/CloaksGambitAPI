@@ -31,7 +31,7 @@ function formatWinReasonLabel(reason) {
   return WIN_REASON_LABELS[reason] || 'Unknown';
 }
 
-import { createThroneIcon } from '../ui/icons.js';
+import { createThroneIcon, createDrawIcon } from '../ui/icons.js';
 import { createDaggerCounter } from '../ui/banners.js';
 
 function computeWinPercentage(wins, total) {
@@ -249,6 +249,11 @@ function createStatusIcon(status, { size = 20 } = {}) {
     const tokenGroup = createDaggerCounter({ count: 1, size, gap: 0, alt: 'Loss' });
     tokenGroup.className = 'history-status-icon history-status-loss';
     return tokenGroup;
+  }
+  if (status === 'draw') {
+    const icon = createDrawIcon({ size, alt: 'Draw' });
+    icon.className = 'history-status-icon history-status-draw';
+    return icon;
   }
   return null;
 }
@@ -484,11 +489,9 @@ function buildMatchDetailGrid(match, {
           status = 'draw';
         }
 
-        if (status === 'win' || status === 'loss') {
-          const icon = createStatusIcon(status, { size: gameIconSize });
-          if (icon) {
-            square.appendChild(icon);
-          }
+        const icon = createStatusIcon(status, { size: gameIconSize });
+        if (icon) {
+          square.appendChild(icon);
         }
 
         const hoverParts = [`Game ${index + 1}`];

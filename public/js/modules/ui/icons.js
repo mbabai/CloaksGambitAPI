@@ -62,6 +62,21 @@ export function createThroneIcon({ size = 24, alt = 'Match winner', title } = {}
   return img;
 }
 
+export function createDrawIcon({ size = 24, alt = 'Draw', title } = {}) {
+  const img = document.createElement('img');
+  img.classList.add('cg-icon');
+  const src = getIconAsset('draw');
+  if (src) {
+    img.src = src;
+  }
+  img.alt = alt;
+  if (title) {
+    img.title = title;
+  }
+  applySquareSize(img, size);
+  return img;
+}
+
 export function createDaggerToken({ size = 24, label = '⚔', alt = 'Loss', title } = {}) {
   const token = document.createElement('div');
   token.classList.add('cg-token');

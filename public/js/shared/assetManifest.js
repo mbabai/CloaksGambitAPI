@@ -22,6 +22,7 @@ const ASSET_MANIFEST = deepFreeze({
   "icons": {
     "google": "/assets/images/google-icon.png",
     "throne": "/assets/images/GoldThrone.svg",
+    "draw": "/assets/images/draw.png",
     "rank": "/assets/images/rankIcon.png",
     "loading": "/assets/images/loading.gif"
   },
