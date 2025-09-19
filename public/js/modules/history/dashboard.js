@@ -308,7 +308,8 @@ function describeMatch(match, { usernameLookup = id => id, userId } = {}) {
 function buildMatchDetailGrid(match, {
   usernameLookup = id => id,
   squareSize = 34,
-  iconSize = 24
+  iconSize = 24,
+  maxGameCount = null
 } = {}) {
   const lookupName = (id, fallback) => {
     if (!id) return fallback;
@@ -316,6 +317,11 @@ function buildMatchDetailGrid(match, {
     if (name && typeof name === 'string') return name;
     return fallback || id;
   };
+
+  const normalizedSquareSize = Number.isFinite(squareSize) ? Math.max(20, squareSize) : 34;
+  const minimumSquareSize = Math.max(16, Math.round(normalizedSquareSize * 0.6));
+  const gameIconSize = Math.max(12, Math.min(iconSize, Math.round(normalizedSquareSize * 0.7)));
+  const playerStatusIconSize = Math.max(24, Math.round(normalizedSquareSize * 0.75));
 
   const container = document.createElement('div');
   container.className = 'history-match-table';
@@ -376,7 +382,7 @@ function buildMatchDetailGrid(match, {
       info.setAttribute('aria-label', `${player.name} match summary`);
     }
 
-    const statusIcon = createStatusIcon(player.result, { size: Math.max(24, Math.round(squareSize * 0.75)) });
+    const statusIcon = createStatusIcon(player.result, { size: playerStatusIconSize });
     if (statusIcon) {
       info.appendChild(statusIcon);
     }
@@ -428,6 +434,15 @@ function buildMatchDetailGrid(match, {
       gamesWrap.setAttribute('aria-label', 'Game results');
     }
 
+    const totalGames = Math.max(1, games.length);
+    const maxSquares = Number.isFinite(maxGameCount) && maxGameCount > 0
+      ? Math.max(totalGames, Math.round(maxGameCount))
+      : totalGames;
+    gamesWrap.style.setProperty('--history-match-game-count', String(totalGames));
+    gamesWrap.style.setProperty('--history-match-max-game-count', String(maxSquares));
+    gamesWrap.style.setProperty('--history-match-square-base', `${normalizedSquareSize}px`);
+    gamesWrap.style.setProperty('--history-match-square-min', `${minimumSquareSize}px`);
+
     if (games.length === 0) {
       if (playerIndex === 0) {
         const empty = document.createElement('div');
@@ -439,8 +454,6 @@ function buildMatchDetailGrid(match, {
       games.forEach((game, index) => {
         const square = document.createElement('div');
         square.className = 'history-match-square';
-        square.style.width = `${squareSize}px`;
-        square.style.height = `${squareSize}px`;
 
         const playersInGame = Array.isArray(game?.players) ? game.players.map(normalizeId) : [];
         const colorByPlayer = new Map();
@@ -472,7 +485,7 @@ function buildMatchDetailGrid(match, {
         }
 
         if (status === 'win' || status === 'loss') {
-          const icon = createStatusIcon(status, { size: iconSize });
+          const icon = createStatusIcon(status, { size: gameIconSize });
           if (icon) {
             square.appendChild(icon);
           }

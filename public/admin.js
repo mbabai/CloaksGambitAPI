@@ -40,6 +40,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   let latestMetrics = null;
   let historyMatches = [];
   let historyGames = [];
+  let historyMaxGameCount = 1;
   let historyFilter = 'all';
   let historyLoaded = false;
   let isFetchingHistory = false;
@@ -314,6 +315,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
 
       historyMatches = matchesRes && matchesRes.ok ? await matchesRes.json().catch(() => []) : [];
       historyGames = gamesRes && gamesRes.ok ? await gamesRes.json().catch(() => []) : [];
+      historyMaxGameCount = 1;
 
       historyGamesByMatch.clear();
       if (Array.isArray(historyGames)) {
@@ -331,12 +333,28 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
             const bTime = new Date(b?.endTime || b?.startTime || b?.createdAt || 0).getTime();
             return aTime - bTime;
           });
+          const count = Array.isArray(list) ? list.length : 0;
+          if (count > historyMaxGameCount) {
+            historyMaxGameCount = count;
+          }
         });
       }
+
+      if (Array.isArray(historyMatches)) {
+        historyMatches.forEach(match => {
+          const inlineGames = Array.isArray(match?.games) ? match.games.length : 0;
+          if (inlineGames > historyMaxGameCount) {
+            historyMaxGameCount = inlineGames;
+          }
+        });
+      }
+
+      historyMaxGameCount = Math.max(1, Math.round(historyMaxGameCount));
     } catch (err) {
       console.error('Failed to fetch history data', err);
       historyMatches = [];
       historyGames = [];
+      historyMaxGameCount = 1;
       historyGamesByMatch.clear();
     }
     updateHistorySummary();
@@ -410,8 +428,16 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
       return;
     }
 
-    filtered.forEach(match => {
+    const matchEntries = filtered.map(match => {
       const descriptor = describeMatch(match, { usernameLookup: getUsername });
+      const matchId = normalizeId(match?._id || match?.id || descriptor.id);
+      const games = matchId ? (historyGamesByMatch.get(matchId) || []) : [];
+      return { match, descriptor, games };
+    });
+
+    const maxGameCount = Math.max(1, historyMaxGameCount);
+
+    matchEntries.forEach(({ match, descriptor, games }) => {
       const row = document.createElement('div');
       row.className = 'history-row';
       const meta = document.createElement('div');
@@ -426,10 +452,8 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
       meta.appendChild(date);
       row.appendChild(meta);
 
-      const matchId = normalizeId(match?._id || match?.id || descriptor.id);
-      const games = matchId ? (historyGamesByMatch.get(matchId) || []) : [];
       const matchForGrid = Object.assign({}, match, { games });
-      const table = buildMatchDetailGrid(matchForGrid, { usernameLookup: getUsername });
+      const table = buildMatchDetailGrid(matchForGrid, { usernameLookup: getUsername, maxGameCount });
       row.appendChild(table);
 
       historyMatchesListEl.appendChild(row);

@@ -66,6 +66,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
   let statsUserElo = null;
   let statsHistoryMatches = [];
   let statsHistoryGames = [];
+  let statsHistoryMaxGameCount = 1;
   let statsHistoryFilter = 'all';
   let statsHistoryLoaded = false;
   let statsOverlayFetching = false;
@@ -172,6 +173,30 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     closeAccountPanel();
   }
 
+  function getDesiredHistoryOverlayWidth() {
+    if (playAreaRoot && playAreaRoot.clientWidth > 0) {
+      return playAreaRoot.clientWidth;
+    }
+    const bounds = computePlayAreaBounds(window.innerWidth, window.innerHeight);
+    return Math.max(0, Math.floor(bounds?.width || 0));
+  }
+
+  function applyStatsOverlayWidth() {
+    if (!statsOverlay || !statsOverlay.dialog) return;
+    const width = getDesiredHistoryOverlayWidth();
+    if (width > 0) {
+      statsOverlay.dialog.style.width = width + 'px';
+      statsOverlay.dialog.style.maxWidth = width + 'px';
+    } else {
+      statsOverlay.dialog.style.removeProperty('width');
+      statsOverlay.dialog.style.removeProperty('max-width');
+    }
+  }
+
+  function handleStatsOverlayResize() {
+    applyStatsOverlayWidth();
+  }
+
   function ensureStatsOverlay() {
     if (statsOverlay) return statsOverlay;
 
@@ -184,7 +209,14 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       closeLabel: 'Close history',
       closeText: '✕',
       openClass: 'open cg-overlay--open',
-      bodyOpenClass: 'history-overlay-open cg-overlay-open'
+      bodyOpenClass: 'history-overlay-open cg-overlay-open',
+      onShow() {
+        applyStatsOverlayWidth();
+        window.addEventListener('resize', handleStatsOverlayResize);
+      },
+      onHide() {
+        window.removeEventListener('resize', handleStatsOverlayResize);
+      }
     });
 
     const { content, closeButton } = statsOverlay;
@@ -280,6 +312,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     if (!statsUserId) return;
     const overlay = ensureStatsOverlay();
     if (!overlay) return;
+    applyStatsOverlayWidth();
     if (statsOverlayEloValueEl) {
       statsOverlayEloValueEl.textContent = Number.isFinite(statsUserElo) ? String(statsUserElo) : '—';
     }
@@ -367,12 +400,19 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
 
     const normalizedUserId = normalizeId(statsUserId);
 
-    filtered.forEach(match => {
+    const matchEntries = filtered.map(match => {
       const descriptor = describeMatch(match, {
         usernameLookup: id => statsUsernameMap[id] || id,
         userId: statsUserId
       });
+      const matchId = normalizeId(match?._id || match?.id || descriptor.id);
+      const games = matchId ? (statsHistoryGamesByMatch.get(matchId) || []) : [];
+      return { match, descriptor, games };
+    });
 
+    const maxGameCount = Math.max(1, statsHistoryMaxGameCount);
+
+    matchEntries.forEach(({ match, descriptor, games }) => {
       const row = document.createElement('div');
       row.className = 'history-row';
 
@@ -388,8 +428,6 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       meta.appendChild(date);
       row.appendChild(meta);
 
-      const matchId = normalizeId(match?._id || match?.id || descriptor.id);
-      const games = matchId ? (statsHistoryGamesByMatch.get(matchId) || []) : [];
       const matchForGrid = Object.assign({}, match, { games });
       const table = buildMatchDetailGrid(matchForGrid, {
         usernameLookup: id => {
@@ -399,7 +437,8 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
             return `${base} (You)`;
           }
           return base;
-        }
+        },
+        maxGameCount
       });
       row.appendChild(table);
 
@@ -453,6 +492,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
 
       statsHistoryMatches = matchesRes && matchesRes.ok ? await matchesRes.json().catch(() => []) : [];
       statsHistoryGames = gamesRes && gamesRes.ok ? await gamesRes.json().catch(() => []) : [];
+      statsHistoryMaxGameCount = 1;
 
       statsHistoryGamesByMatch.clear();
       if (Array.isArray(statsHistoryGames)) {
@@ -470,8 +510,23 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
             const bTime = new Date(b?.endTime || b?.startTime || b?.createdAt || 0).getTime();
             return aTime - bTime;
           });
+          const count = Array.isArray(list) ? list.length : 0;
+          if (count > statsHistoryMaxGameCount) {
+            statsHistoryMaxGameCount = count;
+          }
         });
       }
+
+      if (Array.isArray(statsHistoryMatches)) {
+        statsHistoryMatches.forEach(match => {
+          const inlineGames = Array.isArray(match?.games) ? match.games.length : 0;
+          if (inlineGames > statsHistoryMaxGameCount) {
+            statsHistoryMaxGameCount = inlineGames;
+          }
+        });
+      }
+
+      statsHistoryMaxGameCount = Math.max(1, Math.round(statsHistoryMaxGameCount));
 
       const idsToFetch = [];
       statsHistoryMatches.forEach(match => {
@@ -493,6 +548,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       console.error('Failed to load player history', err);
       statsHistoryMatches = [];
       statsHistoryGames = [];
+      statsHistoryMaxGameCount = 1;
       statsHistoryGamesByMatch.clear();
       showStatsOverlayMessage('Unable to load history right now. Please try again later.');
     } finally {
@@ -641,6 +697,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       }
       statsHistoryMatches = [];
       statsHistoryGames = [];
+      statsHistoryMaxGameCount = 1;
       statsHistoryFilter = 'all';
       statsHistoryLoaded = false;
       statsHistoryGamesByMatch.clear();
@@ -839,6 +896,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       statsUserElo = null;
       statsHistoryMatches = [];
       statsHistoryGames = [];
+      statsHistoryMaxGameCount = 1;
       statsHistoryLoaded = false;
       statsHistoryGamesByMatch.clear();
       statsUsernameMap = {};
