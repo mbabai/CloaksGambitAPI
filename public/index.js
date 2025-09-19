@@ -2322,13 +2322,9 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
         change.textContent = `(${sign}${delta})`;
         change.style.fontWeight = '700';
         change.style.marginLeft = '2px';
-        if (status === 'winner') {
-          change.style.color = '#34d399';
-        } else if (status === 'loser') {
-          change.style.color = '#f87171';
-        } else {
-          change.style.color = 'var(--CG-white)';
-        }
+        change.style.color = delta > 0
+          ? '#34d399'
+          : (delta < 0 ? '#f87171' : 'var(--CG-white)');
         cell.appendChild(change);
       }
 
