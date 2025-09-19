@@ -345,13 +345,18 @@ async function handleMatchUpdate(game) {
         } else if (winnerId === match.player2.toString()) {
             match.player2Score += 1;
         }
+    } else if (game.winner === null) {
+        match.drawCount = (match.drawCount || 0) + 1;
     }
 
     const config = new ServerConfig();
     const winScore = config.gameModeSettings[match.type]?.WIN_SCORE;
+    const drawWins = Number.isFinite(winScore) && (match.drawCount || 0) >= winScore;
 
     // If a player reached the win score, end the match
-    if (
+    if (drawWins) {
+        await match.endMatch(null);
+    } else if (
         (match.player1Score >= winScore) ||
         (match.player2Score >= winScore)
     ) {

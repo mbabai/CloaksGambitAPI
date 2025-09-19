@@ -41,6 +41,10 @@ const matchSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    drawCount: {
+        type: Number,
+        default: 0
+    },
     player1StartElo: {
         type: Number,
         required: function() {
@@ -110,17 +114,23 @@ matchSchema.virtual('duration').get(function() {
 });
 
 // Method to end the match
-matchSchema.methods.endMatch = async function(winnerId) {
+matchSchema.methods.endMatch = async function(winnerId = null) {
     if (!this.isActive) {
         throw new Error('Match is already ended');
     }
-    
-    if (winnerId.toString() !== this.player1.toString() && 
-        winnerId.toString() !== this.player2.toString()) {
-        throw new Error('Winner must be either Player 1 or Player 2');
+
+    const normalizedWinnerId = winnerId ?? null;
+    const hasWinner = Boolean(normalizedWinnerId);
+
+    if (hasWinner) {
+        const winnerStr = normalizedWinnerId.toString();
+        if (winnerStr !== this.player1.toString() &&
+            winnerStr !== this.player2.toString()) {
+            throw new Error('Winner must be either Player 1 or Player 2');
+        }
     }
 
-    this.winner = winnerId;
+    this.winner = normalizedWinnerId;
     this.endTime = new Date();
     this.isActive = false;
 
@@ -144,7 +154,7 @@ matchSchema.methods.endMatch = async function(winnerId) {
             this.player2StartElo = player2Start;
         }
 
-        const winnerStr = winnerId ? winnerId.toString() : null;
+        const winnerStr = hasWinner ? normalizedWinnerId.toString() : null;
         let player1Score = 0.5;
         if (winnerStr) {
             if (winnerStr === this.player1.toString()) {
