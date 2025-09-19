@@ -1982,6 +1982,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       closeButtonClass: 'banner-overlay__close',
       closeLabel: 'Close banner',
       closeText: '✕',
+      showCloseButton: false,
       closeOnBackdrop: false,
       openClass: 'cg-overlay--open banner-overlay--open',
       bodyOpenClass: 'cg-overlay-open',
