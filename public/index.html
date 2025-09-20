@@ -190,11 +190,17 @@
         height: 0;
       }
 
-      .history-summary { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-      .history-card { border: 4px solid var(--CG-deep-gold); border-radius: 6px; padding: 16px; background: rgba(38,17,58,0.85); display: flex; flex-direction: column; gap: 6px; }
-      .history-card .history-card-label { font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: rgba(255,215,0,0.8); }
-      .history-card .history-card-value { font-size: 30px; font-weight: 700; color: var(--CG-white); }
-      .history-card .history-card-sub { font-size: 13px; color: rgba(255,215,0,0.75); }
+      .history-summary { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .history-card { border: 3px solid var(--CG-deep-gold); border-radius: 8px; padding: 10px; background: rgba(38,17,58,0.7); display: grid; gap: 6px; align-content: start; justify-items: center; text-align: center; min-width: 0; }
+      .history-card .history-card-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(245,230,167,0.88); }
+      .history-card .history-card-stats { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+      .history-card .history-card-total { font-size: 24px; font-weight: 700; color: var(--CG-white); line-height: 1.1; }
+      .history-card .history-card-splits { display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; font-weight: 600; }
+      .history-card .history-card-split { display: inline-flex; align-items: center; gap: 3px; }
+      .history-card .history-card-split span { font-weight: 700; line-height: 1; }
+      .history-card .history-card-split--wins { color: #34d399; }
+      .history-card .history-card-split--draws { color: #9ca3af; }
+      .history-card .history-card-split--losses { color: #f87171; }
 
       .history-filters { display: flex; gap: 8px; flex-wrap: wrap; }
       .history-filter-btn { border: 2px solid var(--CG-deep-gold); background: rgba(38,17,58,0.6); color: var(--CG-white); padding: 8px 14px; border-radius: 999px; cursor: pointer; font-weight: 600; transition: background 0.2s ease, transform 0.15s ease; }
@@ -264,28 +270,22 @@
         .history-match-games { --history-match-gap: 6px; }
       }
 
+      @media (min-width: 768px) {
+        .history-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      }
+
       @media (max-width: 640px) {
         .history-current-elo { font-size: 14px; }
-        .history-summary { grid-template-columns: repeat(2, minmax(140px, 1fr)); gap: 12px; }
-        .history-card {
-          padding: 12px;
-          border-width: 3px;
-          aspect-ratio: 1;
-          justify-content: center;
-          align-items: center;
-          text-align: center;
-          gap: 4px;
-        }
-        .history-card .history-card-label { font-size: 12px; }
-        .history-card .history-card-value { font-size: 24px; }
-        .history-card .history-card-sub { font-size: 11px; }
+        .history-card { padding: 9px; }
+        .history-card .history-card-label { font-size: 11px; }
+        .history-card .history-card-total { font-size: 22px; }
+        .history-card .history-card-splits { gap: 8px; font-size: 11px; }
       }
 
       @media (max-width: 420px) {
-        .history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-        .history-card { padding: 10px; gap: 3px; }
-        .history-card .history-card-value { font-size: 22px; }
-        .history-card .history-card-sub { font-size: 10px; }
+        .history-card { padding: 8px; }
+        .history-card .history-card-total { font-size: 20px; }
+        .history-card .history-card-splits { gap: 6px; font-size: 10px; }
       }
     </style>
   </head>

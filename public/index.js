@@ -239,29 +239,48 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     summary.className = 'history-summary';
     summary.innerHTML = `
       <div class="history-card">
-        <div class="history-card-label">Total Games Played</div>
-        <div id="playerHistoryTotalGames" class="history-card-value">0</div>
-        <div id="playerHistoryTotalGamesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0</div>
+        <div class="history-card-label">Total Games</div>
+        <div class="history-card-stats">
+          <span id="playerHistoryTotalGames" class="history-card-total history-card-value">0</span>
+          <div class="history-card-splits">
+            <span class="history-card-split history-card-split--wins">W <span id="playerHistoryTotalGamesWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D <span id="playerHistoryTotalGamesDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L <span id="playerHistoryTotalGamesLosses">0</span></span>
+          </div>
+        </div>
       </div>
       <div class="history-card">
-        <div class="history-card-label">Total Matches Played</div>
-        <div id="playerHistoryTotalMatches" class="history-card-value">0</div>
-        <div id="playerHistoryTotalMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0% win)</div>
-      </div>
-      <div class="history-card">
-        <div class="history-card-label">Quickplay Games</div>
-        <div id="playerHistoryQuickplayGames" class="history-card-value">0</div>
-        <div id="playerHistoryQuickplayGamesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0</div>
-      </div>
-      <div class="history-card">
-        <div class="history-card-label">Custom Matches</div>
-        <div id="playerHistoryCustomMatches" class="history-card-value">0</div>
-        <div id="playerHistoryCustomMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0% win)</div>
+        <div class="history-card-label">Quickplay Matches</div>
+        <div class="history-card-stats">
+          <span id="playerHistoryQuickplayMatches" class="history-card-total history-card-value">0</span>
+          <div class="history-card-splits">
+            <span class="history-card-split history-card-split--wins">W <span id="playerHistoryQuickplayWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D <span id="playerHistoryQuickplayDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L <span id="playerHistoryQuickplayLosses">0</span></span>
+          </div>
+        </div>
       </div>
       <div class="history-card">
         <div class="history-card-label">Ranked Matches</div>
-        <div id="playerHistoryRankedMatches" class="history-card-value">0</div>
-        <div id="playerHistoryRankedMatchesBreakdown" class="history-card-sub">Wins 0 • Draws 0 • Losses 0 (0% win)</div>
+        <div class="history-card-stats">
+          <span id="playerHistoryRankedMatches" class="history-card-total history-card-value">0</span>
+          <div class="history-card-splits">
+            <span class="history-card-split history-card-split--wins">W <span id="playerHistoryRankedWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D <span id="playerHistoryRankedDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L <span id="playerHistoryRankedLosses">0</span></span>
+          </div>
+        </div>
+      </div>
+      <div class="history-card">
+        <div class="history-card-label">Custom Matches</div>
+        <div class="history-card-stats">
+          <span id="playerHistoryCustomMatches" class="history-card-total history-card-value">0</span>
+          <div class="history-card-splits">
+            <span class="history-card-split history-card-split--wins">W <span id="playerHistoryCustomWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D <span id="playerHistoryCustomDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L <span id="playerHistoryCustomLosses">0</span></span>
+          </div>
+        </div>
       </div>`;
     content.appendChild(summary);
 
@@ -288,15 +307,21 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     statsOverlayEloValueEl = eloRow.querySelector('#historyCurrentEloValue');
     statsOverlaySummaryEls = {
       totalGames: summary.querySelector('#playerHistoryTotalGames'),
-      totalGamesBreakdown: summary.querySelector('#playerHistoryTotalGamesBreakdown'),
-      totalMatches: summary.querySelector('#playerHistoryTotalMatches'),
-      totalMatchesBreakdown: summary.querySelector('#playerHistoryTotalMatchesBreakdown'),
-      quickplayGames: summary.querySelector('#playerHistoryQuickplayGames'),
-      quickplayGamesBreakdown: summary.querySelector('#playerHistoryQuickplayGamesBreakdown'),
-      customMatches: summary.querySelector('#playerHistoryCustomMatches'),
-      customMatchesBreakdown: summary.querySelector('#playerHistoryCustomMatchesBreakdown'),
+      totalGamesWins: summary.querySelector('#playerHistoryTotalGamesWins'),
+      totalGamesDraws: summary.querySelector('#playerHistoryTotalGamesDraws'),
+      totalGamesLosses: summary.querySelector('#playerHistoryTotalGamesLosses'),
+      quickplayMatches: summary.querySelector('#playerHistoryQuickplayMatches'),
+      quickplayWins: summary.querySelector('#playerHistoryQuickplayWins'),
+      quickplayDraws: summary.querySelector('#playerHistoryQuickplayDraws'),
+      quickplayLosses: summary.querySelector('#playerHistoryQuickplayLosses'),
       rankedMatches: summary.querySelector('#playerHistoryRankedMatches'),
-      rankedMatchesBreakdown: summary.querySelector('#playerHistoryRankedMatchesBreakdown')
+      rankedWins: summary.querySelector('#playerHistoryRankedWins'),
+      rankedDraws: summary.querySelector('#playerHistoryRankedDraws'),
+      rankedLosses: summary.querySelector('#playerHistoryRankedLosses'),
+      customMatches: summary.querySelector('#playerHistoryCustomMatches'),
+      customWins: summary.querySelector('#playerHistoryCustomWins'),
+      customDraws: summary.querySelector('#playerHistoryCustomDraws'),
+      customLosses: summary.querySelector('#playerHistoryCustomLosses')
     };
 
     statsOverlayFilterButtons.forEach(btn => {
@@ -350,23 +375,37 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     if (!statsOverlaySummaryEls) return;
     const summary = computeHistorySummary(statsHistoryMatches, statsHistoryGames, { userId: statsUserId });
     const games = summary.games;
-    const matches = summary.matches;
     const quickplay = summary.quickplayGames;
-    const custom = summary.customMatches;
     const ranked = summary.rankedMatches;
+    const custom = summary.customMatches;
 
     statsOverlaySummaryEls.totalGames.textContent = games.total;
-    statsOverlaySummaryEls.totalGamesBreakdown.textContent = `Wins ${games.wins} • Draws ${games.draws} • Losses ${games.losses}`;
-    statsOverlaySummaryEls.totalMatches.textContent = matches.total;
-    statsOverlaySummaryEls.totalMatchesBreakdown.textContent = `Wins ${matches.wins} • Draws ${matches.draws} • Losses ${matches.losses} (${matches.winPct}% win)`;
-    statsOverlaySummaryEls.quickplayGames.textContent = quickplay.total;
-    statsOverlaySummaryEls.quickplayGamesBreakdown.textContent = `Wins ${quickplay.wins} • Draws ${quickplay.draws} • Losses ${quickplay.losses}`;
-    if (statsOverlaySummaryEls.customMatches && statsOverlaySummaryEls.customMatchesBreakdown) {
-      statsOverlaySummaryEls.customMatches.textContent = custom.total;
-      statsOverlaySummaryEls.customMatchesBreakdown.textContent = `Wins ${custom.wins} • Draws ${custom.draws} • Losses ${custom.losses} (${custom.winPct}% win)`;
-    }
+    statsOverlaySummaryEls.totalGamesWins.textContent = games.wins;
+    statsOverlaySummaryEls.totalGamesDraws.textContent = games.draws;
+    statsOverlaySummaryEls.totalGamesLosses.textContent = games.losses;
+
+    statsOverlaySummaryEls.quickplayMatches.textContent = quickplay.total;
+    statsOverlaySummaryEls.quickplayWins.textContent = quickplay.wins;
+    statsOverlaySummaryEls.quickplayDraws.textContent = quickplay.draws;
+    statsOverlaySummaryEls.quickplayLosses.textContent = quickplay.losses;
+
     statsOverlaySummaryEls.rankedMatches.textContent = ranked.total;
-    statsOverlaySummaryEls.rankedMatchesBreakdown.textContent = `Wins ${ranked.wins} • Draws ${ranked.draws} • Losses ${ranked.losses} (${ranked.winPct}% win)`;
+    statsOverlaySummaryEls.rankedWins.textContent = ranked.wins;
+    statsOverlaySummaryEls.rankedDraws.textContent = ranked.draws;
+    statsOverlaySummaryEls.rankedLosses.textContent = ranked.losses;
+
+    if (statsOverlaySummaryEls.customMatches) {
+      statsOverlaySummaryEls.customMatches.textContent = custom.total;
+    }
+    if (statsOverlaySummaryEls.customWins) {
+      statsOverlaySummaryEls.customWins.textContent = custom.wins;
+    }
+    if (statsOverlaySummaryEls.customDraws) {
+      statsOverlaySummaryEls.customDraws.textContent = custom.draws;
+    }
+    if (statsOverlaySummaryEls.customLosses) {
+      statsOverlaySummaryEls.customLosses.textContent = custom.losses;
+    }
   }
 
   function formatMatchTypeLabel(type) {

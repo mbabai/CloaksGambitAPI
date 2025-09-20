@@ -27,13 +27,21 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   const historyFilterButtons = Array.from(document.querySelectorAll('[data-history-filter]'));
   const historySummaryEls = {
     totalGames: document.getElementById('historyTotalGames'),
-    totalGamesBreakdown: document.getElementById('historyTotalGamesBreakdown'),
-    totalMatches: document.getElementById('historyTotalMatches'),
-    totalMatchesBreakdown: document.getElementById('historyTotalMatchesBreakdown'),
-    quickplayGames: document.getElementById('historyQuickplayGames'),
-    quickplayGamesBreakdown: document.getElementById('historyQuickplayGamesBreakdown'),
+    totalGamesWins: document.getElementById('historyTotalGamesWins'),
+    totalGamesDraws: document.getElementById('historyTotalGamesDraws'),
+    totalGamesLosses: document.getElementById('historyTotalGamesLosses'),
+    quickplayMatches: document.getElementById('historyQuickplayMatches'),
+    quickplayWins: document.getElementById('historyQuickplayWins'),
+    quickplayDraws: document.getElementById('historyQuickplayDraws'),
+    quickplayLosses: document.getElementById('historyQuickplayLosses'),
     rankedMatches: document.getElementById('historyRankedMatches'),
-    rankedMatchesBreakdown: document.getElementById('historyRankedMatchesBreakdown')
+    rankedWins: document.getElementById('historyRankedWins'),
+    rankedDraws: document.getElementById('historyRankedDraws'),
+    rankedLosses: document.getElementById('historyRankedLosses'),
+    customMatches: document.getElementById('historyCustomMatches'),
+    customWins: document.getElementById('historyCustomWins'),
+    customDraws: document.getElementById('historyCustomDraws'),
+    customLosses: document.getElementById('historyCustomLosses')
   };
 
   const usernameMap = {};
@@ -365,28 +373,54 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     if (!historySummaryEls.totalGames) return;
     const summary = computeHistorySummary(historyMatches, historyGames);
     const games = summary.games;
-    const matches = summary.matches;
     const quickplay = summary.quickplayGames;
     const ranked = summary.rankedMatches;
+    const custom = summary.customMatches;
 
     historySummaryEls.totalGames.textContent = games.total;
-    if (historySummaryEls.totalGamesBreakdown) {
-      historySummaryEls.totalGamesBreakdown.textContent = '';
+    if (historySummaryEls.totalGamesWins) {
+      historySummaryEls.totalGamesWins.textContent = games.wins;
+    }
+    if (historySummaryEls.totalGamesDraws) {
+      historySummaryEls.totalGamesDraws.textContent = games.draws;
+    }
+    if (historySummaryEls.totalGamesLosses) {
+      historySummaryEls.totalGamesLosses.textContent = games.losses;
     }
 
-    historySummaryEls.totalMatches.textContent = matches.total;
-    if (historySummaryEls.totalMatchesBreakdown) {
-      historySummaryEls.totalMatchesBreakdown.textContent = '';
+    historySummaryEls.quickplayMatches.textContent = quickplay.total;
+    if (historySummaryEls.quickplayWins) {
+      historySummaryEls.quickplayWins.textContent = quickplay.wins;
     }
-
-    historySummaryEls.quickplayGames.textContent = quickplay.total;
-    if (historySummaryEls.quickplayGamesBreakdown) {
-      historySummaryEls.quickplayGamesBreakdown.textContent = '';
+    if (historySummaryEls.quickplayDraws) {
+      historySummaryEls.quickplayDraws.textContent = quickplay.draws;
+    }
+    if (historySummaryEls.quickplayLosses) {
+      historySummaryEls.quickplayLosses.textContent = quickplay.losses;
     }
 
     historySummaryEls.rankedMatches.textContent = ranked.total;
-    if (historySummaryEls.rankedMatchesBreakdown) {
-      historySummaryEls.rankedMatchesBreakdown.textContent = '';
+    if (historySummaryEls.rankedWins) {
+      historySummaryEls.rankedWins.textContent = ranked.wins;
+    }
+    if (historySummaryEls.rankedDraws) {
+      historySummaryEls.rankedDraws.textContent = ranked.draws;
+    }
+    if (historySummaryEls.rankedLosses) {
+      historySummaryEls.rankedLosses.textContent = ranked.losses;
+    }
+
+    if (historySummaryEls.customMatches) {
+      historySummaryEls.customMatches.textContent = custom.total;
+    }
+    if (historySummaryEls.customWins) {
+      historySummaryEls.customWins.textContent = custom.wins;
+    }
+    if (historySummaryEls.customDraws) {
+      historySummaryEls.customDraws.textContent = custom.draws;
+    }
+    if (historySummaryEls.customLosses) {
+      historySummaryEls.customLosses.textContent = custom.losses;
     }
   }
 

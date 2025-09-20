@@ -130,6 +130,103 @@ body.history-overlay-open {
   height: 0;
 }
 
+.history-current-elo {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255, 215, 0, 0.8);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.history-current-elo span {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--CG-white);
+}
+
+
+.history-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+@media (min-width: 768px) {
+  .history-summary {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.history-card {
+  border: 3px solid var(--CG-deep-gold);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(38, 17, 58, 0.7);
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  justify-items: center;
+  text-align: center;
+  min-height: 0;
+  min-width: 0;
+}
+
+.history-card .history-card-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(245, 230, 167, 0.85);
+}
+
+.history-card .history-card-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.history-card .history-card-total {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--CG-white);
+  line-height: 1.1;
+}
+
+.history-card .history-card-splits {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.history-card .history-card-split {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.history-card .history-card-split span {
+  font-weight: 700;
+  line-height: 1;
+}
+
+.history-card .history-card-split--wins {
+  color: #34d399;
+}
+
+.history-card .history-card-split--draws {
+  color: #9ca3af;
+}
+
+.history-card .history-card-split--losses {
+  color: #f87171;
+}
+
 .banner-overlay {
   --cg-overlay-padding: 0;
   --cg-overlay-z-index: 3200;
@@ -373,49 +470,44 @@ body.history-overlay-open {
   }
 
   .history-summary {
-    grid-template-columns: repeat(2, minmax(140px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+    gap: 9px;
   }
 
   .history-card {
-    padding: 12px;
-    border-width: 3px;
-    aspect-ratio: 1;
-    justify-content: center;
-    align-items: center;
-    text-align: center;
-    gap: 4px;
+    padding: 9px 10px;
   }
 
   .history-card .history-card-label {
-    font-size: 12px;
+    font-size: 10px;
   }
 
-  .history-card .history-card-value {
-    font-size: 24px;
+  .history-card .history-card-total {
+    font-size: 22px;
   }
 
-  .history-card .history-card-sub {
+  .history-card .history-card-splits {
+    gap: 6px;
     font-size: 11px;
   }
 }
 
 @media (max-width: 420px) {
   .history-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
   }
 
   .history-card {
-    padding: 10px;
-    gap: 3px;
+    padding: 8px 9px;
   }
 
-  .history-card .history-card-value {
-    font-size: 22px;
+  .history-card .history-card-total {
+    font-size: 20px;
   }
 
-  .history-card .history-card-sub {
+  .history-card .history-card-splits {
+    gap: 5px;
     font-size: 10px;
   }
 }
