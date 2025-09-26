@@ -67,19 +67,45 @@ async function buildUsernameFromProfile(payload = {}) {
   return username;
 }
 
-const {
-  GOOGLE_CLIENT_ID: CLIENT_ID,
-  GOOGLE_CLIENT_SECRET: CLIENT_SECRET,
-  GOOGLE_REDIRECT_URI
-} = process.env;
+function getEnvValue(...keys) {
+  for (const key of keys) {
+    if (!key) continue;
+    const value = process.env[key];
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function getGoogleClientId() {
+  return getEnvValue(
+    'GOOGLE_CLIENT_ID',
+    'GoogleAuth-ClientID',
+    'GoogleAuth_ClientID',
+    'GoogleAuthClientID'
+  );
+}
+
+function getGoogleClientSecret() {
+  return getEnvValue(
+    'GOOGLE_CLIENT_SECRET',
+    'GoogleAuth-ClientSecret',
+    'GoogleAuth_ClientSecret',
+    'GoogleAuthClientSecret'
+  );
+}
+
+const { GOOGLE_REDIRECT_URI } = process.env;
 
 router.get('/google', (req, res) => {
-  if (!CLIENT_ID || !CLIENT_SECRET) {
+  const clientId = getGoogleClientId();
+  const clientSecret = getGoogleClientSecret();
+
+  if (!clientId || !clientSecret) {
     return res.status(500).json({ message: 'Google OAuth is not configured' });
   }
   const redirectUri = GOOGLE_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
   const params = new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: scopes.join(' '),
@@ -96,16 +122,19 @@ router.get('/google/callback', async (req, res) => {
   }
 
   try {
-    if (!CLIENT_ID || !CLIENT_SECRET) {
+    const clientId = getGoogleClientId();
+    const clientSecret = getGoogleClientSecret();
+
+    if (!clientId || !clientSecret) {
       return res.status(500).json({ message: 'Google OAuth is not configured' });
     }
     const redirectUri = GOOGLE_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
-    const client = new OAuth2Client(CLIENT_ID, CLIENT_SECRET, redirectUri);
+    const client = new OAuth2Client(clientId, clientSecret, redirectUri);
 
     const { tokens } = await client.getToken(code);
     const ticket = await client.verifyIdToken({
       idToken: tokens.id_token,
-      audience: CLIENT_ID
+      audience: clientId
     });
 
     const payload = ticket.getPayload();

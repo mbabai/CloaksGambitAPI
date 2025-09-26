@@ -17,15 +17,44 @@ if (!isProduction) {
   require('dotenv').config({ path: path.resolve(__dirname, '..', envFile) });
 }
 
+function getEnvValue(...keys) {
+  for (const key of keys) {
+    if (!key) continue;
+    const value = process.env[key];
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function getGoogleClientId() {
+  return getEnvValue(
+    'GOOGLE_CLIENT_ID',
+    'GoogleAuth-ClientID',
+    'GoogleAuth_ClientID',
+    'GoogleAuthClientID'
+  );
+}
+
+function getGoogleClientSecret() {
+  return getEnvValue(
+    'GOOGLE_CLIENT_SECRET',
+    'GoogleAuth-ClientSecret',
+    'GoogleAuth_ClientSecret',
+    'GoogleAuthClientSecret'
+  );
+}
+
 const COSMOS_DB_NAME = 'myDatabase';
 const COSMOS_COLLECTION_NAME = 'myCollection';
 const COSMOS_URI = process.env.COSMOSDB_CONNECTION_STRING;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const GOOGLE_CLIENT_ID = getGoogleClientId();
+const GOOGLE_CLIENT_SECRET = getGoogleClientSecret();
 
 if (isProduction) {
   const missingSecrets = [];
   if (!COSMOS_URI) missingSecrets.push('COSMOSDB_CONNECTION_STRING');
-  if (!GOOGLE_CLIENT_SECRET) missingSecrets.push('GOOGLE_CLIENT_SECRET');
+  if (!GOOGLE_CLIENT_ID) missingSecrets.push('GOOGLE_CLIENT_ID (or GoogleAuth-ClientID)');
+  if (!GOOGLE_CLIENT_SECRET) missingSecrets.push('GOOGLE_CLIENT_SECRET (or GoogleAuth-ClientSecret)');
 
   if (missingSecrets.length > 0) {
     console.error(
