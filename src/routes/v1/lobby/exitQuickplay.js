@@ -3,20 +3,24 @@ const router = express.Router();
 const Lobby = require('../../../models/Lobby');
 const eventBus = require('../../../eventBus');
 const mongoose = require('mongoose');
+const ensureUser = require('../../../utils/ensureUser');
 
 router.post('/', async (req, res) => {
   try {
-    const { userId } = req.body;
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID required' });
+    let { userId } = req.body || {};
+    let userInfo;
+
+    if (!userId || !mongoose.isValidObjectId(userId)) {
+      userInfo = await ensureUser();
+    } else {
+      userInfo = await ensureUser(userId);
     }
-    if (!mongoose.isValidObjectId(userId)) {
-      return res.status(400).json({ message: 'Invalid userId' });
-    }
+
+    userId = userInfo.userId;
 
     let lobby = await Lobby.findOne();
     if (!lobby) {
-      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [] });
+      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [], inGame: [] });
     }
 
     lobby.quickplayQueue = lobby.quickplayQueue.filter(id => id.toString() !== userId);
@@ -28,7 +32,7 @@ router.post('/', async (req, res) => {
       affectedUsers: [userId.toString()],
     });
 
-    res.json({ message: 'Exited quickplay queue' });
+    res.json({ message: 'Exited quickplay queue', userId, username: userInfo.username });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

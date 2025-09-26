@@ -995,10 +995,51 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
 
   const ACTIONS = { SETUP: 0, MOVE: 1, CHALLENGE: 2, BOMB: 3, PASS: 4 };
 
+  function getStoredUserId() {
+    try {
+      return localStorage.getItem('cg_userId');
+    } catch (err) {
+      console.warn('Unable to read cg_userId from localStorage', err);
+      return null;
+    }
+  }
+
+  function setStoredUserId(id) {
+    try {
+      if (id) {
+        localStorage.setItem('cg_userId', id);
+      } else {
+        localStorage.removeItem('cg_userId');
+      }
+    } catch (err) {
+      console.warn('Unable to persist cg_userId to localStorage', err);
+    }
+  }
+
+  function setStoredUsername(name) {
+    try {
+      if (name) {
+        localStorage.setItem('cg_username', name);
+      } else {
+        localStorage.removeItem('cg_username');
+      }
+    } catch (err) {
+      console.warn('Unable to persist cg_username to localStorage', err);
+    }
+  }
+
   // Retrieve stored user ID if present; server assigns one if missing
   async function ensureUserId() {
+    const stored = getStoredUserId();
+    if (stored) return stored;
+
     const id = getCookie('userId');
-    return id || null;
+    if (id) {
+      setStoredUserId(id);
+      return id;
+    }
+
+    return null;
   }
 
   let socket;
@@ -1962,39 +2003,61 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       const newId = payload && payload.userId;
       if (newId) {
         userId = newId;
+        setStoredUserId(newId);
         setCookie('userId', newId, 60 * 60 * 24 * 365);
       }
-      if (payload && payload.username && !payload.guest) {
-        localStorage.setItem('cg_username', payload.username);
-        setCookie('username', payload.username, 60 * 60 * 24 * 365);
+
+      const payloadUsername = payload && payload.username;
+      setStoredUsername(payloadUsername || null);
+
+      if (payloadUsername && !payload?.guest) {
+        setCookie('username', payloadUsername, 60 * 60 * 24 * 365);
         setCookie('photo', LOGGED_IN_AVATAR_SRC, 60 * 60 * 24 * 365);
       } else {
-        localStorage.removeItem('cg_username');
         setCookie('username', '', 0);
         setCookie('photo', '', 0);
       }
+
       updateAccountPanel();
     });
   }
 
   async function enterQueue(mode) {
-    console.log('[action] enterQueue', { userId, mode });
-    const res = mode === 'ranked' ? await apiEnterRankedQueue(userId) : await apiEnterQueue(userId);
-    console.log('[action] enterQueue response', res.status);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || 'Failed to enter queue');
+    const activeUserId = getStoredUserId() || userId;
+    console.log('[action] enterQueue', { userId: activeUserId, mode });
+    const result = mode === 'ranked' ? await apiEnterRankedQueue() : await apiEnterQueue();
+    console.log('[action] enterQueue response', result);
+
+    if (result?.userId) {
+      userId = result.userId;
+      setStoredUserId(result.userId);
+      setCookie('userId', result.userId, 60 * 60 * 24 * 365);
     }
+
+    if (result?.username) {
+      setStoredUsername(result.username);
+    }
+
+    return result;
   }
 
   async function exitQueue(mode) {
-    console.log('[action] exitQueue', { userId, mode });
-    const res = mode === 'ranked' ? await apiExitRankedQueue(userId) : await apiExitQueue(userId);
-    console.log('[action] exitQueue response', res.status);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || 'Failed to exit queue');
+    const activeUserId = getStoredUserId() || userId;
+    console.log('[action] exitQueue', { userId: activeUserId, mode });
+    const result = mode === 'ranked' ? await apiExitRankedQueue() : await apiExitQueue();
+    console.log('[action] exitQueue response', result);
+
+    if (result?.userId) {
+      userId = result.userId;
+      setStoredUserId(result.userId);
+      setCookie('userId', result.userId, 60 * 60 * 24 * 365);
     }
+
+    if (result?.username) {
+      setStoredUsername(result.username);
+    }
+
+    return result;
   }
 
   queueBtn.addEventListener('click', async function() {
@@ -2056,7 +2119,13 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       }
       preloadPieceImages();
       preloadBubbleImages();
-      socket = io('/', { auth: { userId } });
+      const socketAuth = {};
+      const handshakeUserId = getStoredUserId() || userId;
+      if (handshakeUserId) {
+        socketAuth.userId = handshakeUserId;
+        userId = handshakeUserId;
+      }
+      socket = io('/', { auth: socketAuth });
       wireSocket();
     } catch (e) {
       console.error(e);
