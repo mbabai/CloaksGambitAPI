@@ -28,32 +28,83 @@ export async function apiGetDetails(gameId, color) {
   return res.json().catch(() => null);
 }
 
-export async function apiEnterQueue(userId) {
-  return fetch('/api/v1/lobby/enterQuickplay', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId })
-  });
+function getStoredUserId() {
+  try {
+    return localStorage.getItem('cg_userId');
+  } catch (err) {
+    console.warn('Unable to access localStorage for cg_userId', err);
+    return null;
+  }
 }
 
-export async function apiExitQueue(userId) {
-  return fetch('/api/v1/lobby/exitQuickplay', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId })
-  });
+function persistIdentity({ userId, username }) {
+  if (userId) {
+    try {
+      localStorage.setItem('cg_userId', userId);
+    } catch (err) {
+      console.warn('Failed to persist cg_userId to localStorage', err);
+    }
+  }
+
+  if (username) {
+    try {
+      localStorage.setItem('cg_username', username);
+    } catch (err) {
+      console.warn('Failed to persist cg_username to localStorage', err);
+    }
+  }
 }
 
-export async function apiEnterRankedQueue(userId) {
-  return fetch('/api/v1/lobby/enterRanked', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId })
+async function sendQueueRequest(path, payload = {}) {
+  const body = { ...payload };
+  if (!body.userId) {
+    const stored = getStoredUserId();
+    if (stored) {
+      body.userId = stored;
+    }
+  }
+
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
   });
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (err) {
+    data = null;
+  }
+
+  if (!res.ok) {
+    const error = new Error((data && data.message) || 'Queue request failed');
+    error.response = res;
+    error.data = data;
+    throw error;
+  }
+
+  if (data && (data.userId || data.username)) {
+    persistIdentity({ userId: data.userId, username: data.username });
+  }
+
+  return data;
 }
 
-export async function apiExitRankedQueue(userId) {
-  return fetch('/api/v1/lobby/exitRanked', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId })
-  });
+export async function apiEnterQueue(payload = {}) {
+  return sendQueueRequest('/api/v1/lobby/enterQuickplay', payload);
+}
+
+export async function apiExitQueue(payload = {}) {
+  return sendQueueRequest('/api/v1/lobby/exitQuickplay', payload);
+}
+
+export async function apiEnterRankedQueue(payload = {}) {
+  return sendQueueRequest('/api/v1/lobby/enterRanked', payload);
+}
+
+export async function apiExitRankedQueue(payload = {}) {
+  return sendQueueRequest('/api/v1/lobby/exitRanked', payload);
 }
 
 export async function apiMove({ gameId, color, from, to, declaration }) {
