@@ -52,15 +52,14 @@ const GOOGLE_CLIENT_SECRET = getGoogleClientSecret();
 
 if (isProduction) {
   const missingSecrets = [];
-  if (!COSMOS_URI) missingSecrets.push('COSMOSDB_CONNECTION_STRING');
   if (!GOOGLE_CLIENT_ID) missingSecrets.push('GOOGLE_CLIENT_ID (or GoogleAuth-ClientID)');
   if (!GOOGLE_CLIENT_SECRET) missingSecrets.push('GOOGLE_CLIENT_SECRET (or GoogleAuth-ClientSecret)');
+  if (!COSMOS_URI) missingSecrets.push('COSMOSDB_CONNECTION_STRING');
 
   if (missingSecrets.length > 0) {
-    console.error(
-      `❌ Missing required secrets in production: ${missingSecrets.join(', ')}. Check Key Vault references.`
-    );
-    process.exit(1);
+    const message = '❌ Required secrets are missing in production!';
+    console.error(`${message} Missing: ${missingSecrets.join(', ')}. Check Key Vault references.`);
+    throw new Error(message);
   }
 }
 
@@ -93,7 +92,9 @@ async function connectToDatabase() {
   const connectionOptions = isProduction
     ? {
         dbName: COSMOS_DB_NAME,
-        serverSelectionTimeoutMS: 10000
+        serverSelectionTimeoutMS: 10000,
+        useNewUrlParser: true,
+        useUnifiedTopology: true
       }
     : {};
 
@@ -101,7 +102,7 @@ async function connectToDatabase() {
     await mongoose.connect(uri, connectionOptions);
 
     if (isProduction) {
-      console.log('✅ Connected to Cosmos DB (Mongo API)');
+      console.log('✅ Connected to Cosmos DB');
 
       try {
         const cosmosCollection = mongoose.connection.db.collection(COSMOS_COLLECTION_NAME);
@@ -121,7 +122,7 @@ async function connectToDatabase() {
     return true;
   } catch (err) {
     if (isProduction) {
-      console.error('❌ Failed to connect to Cosmos DB:', err);
+      console.error('❌ Failed to connect:', err);
       process.exit(1);
     }
 
