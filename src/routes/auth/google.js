@@ -67,62 +67,21 @@ async function buildUsernameFromProfile(payload = {}) {
   return username;
 }
 
-function getEnvValue(...keys) {
-  for (const key of keys) {
-    if (!key) continue;
-    const value = process.env[key];
-    if (value) return value;
-  }
-  return undefined;
-}
-
 function getGoogleClientId() {
-  return getEnvValue(
-    'GOOGLE_CLIENT_ID',
-    'GoogleAuth-ClientID',
-    'GoogleAuth_ClientID',
-    'GoogleAuthClientID'
-  );
+  return process.env.GOOGLE_CLIENT_ID;
 }
 
 function getGoogleClientSecret() {
-  return getEnvValue(
-    'GOOGLE_CLIENT_SECRET',
-    'GoogleAuth-ClientSecret',
-    'GoogleAuth_ClientSecret',
-    'GoogleAuthClientSecret'
-  );
-}
-
-function getGoogleRedirectUri() {
-  return getEnvValue(
-    'GOOGLE_REDIRECT_URI',
-    'GoogleAuth-RedirectURI',
-    'GoogleAuth_RedirectURI',
-    'GoogleAuthRedirectURI',
-    'GoogleAuth-RedirectUrl',
-    'GoogleAuth_RedirectUrl',
-    'GoogleAuthRedirectUrl'
-  );
+  return process.env.GOOGLE_CLIENT_SECRET;
 }
 
 function resolveRedirectUri(req) {
-  const configured = getGoogleRedirectUri();
-  if (configured) {
-    return configured;
+  if (process.env.GOOGLE_REDIRECT_URI) {
+    return process.env.GOOGLE_REDIRECT_URI;
   }
-
-  const forwardedProto = req.get('x-forwarded-proto');
-  const protocol = (forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol) || 'https';
-  const hostHeader = req.get('x-forwarded-host') || req.get('host');
-  const host = hostHeader ? hostHeader.split(',')[0].trim() : undefined;
-
-  if (!host) {
-    const port = process.env.PORT || 3000;
-    return `${protocol}://localhost:${port}/api/auth/google/callback`;
-  }
-
-  return `${protocol}://${host}/api/auth/google/callback`;
+  // Fallback for dev/local
+  const port = process.env.PORT || 3000;
+  return `http://localhost:${port}/api/auth/google/callback`;
 }
 
 router.get('/google', (req, res) => {
