@@ -65,6 +65,10 @@ if (isProduction) {
 
 const app = express();
 
+// Ensure Express respects proxy headers so OAuth redirect URIs keep https
+// when running behind load balancers or reverse proxies.
+app.set('trust proxy', true);
+
 const routes = require('./routes');
 const initSocket = require('./socket');
 const Lobby = require('./models/Lobby');
