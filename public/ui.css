@@ -178,6 +178,14 @@ body.history-overlay-open {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(245, 230, 167, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.history-card .history-card-label-line {
+  display: block;
 }
 
 .history-card .history-card-stats {
@@ -198,16 +206,18 @@ body.history-overlay-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
+  font-family: 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+  font-variant-numeric: lining-nums;
 }
 
 .history-card .history-card-split {
   display: inline-flex;
-  align-items: center;
-  gap: 3px;
+  align-items: baseline;
+  gap: 0;
 }
 
 .history-card .history-card-split span {

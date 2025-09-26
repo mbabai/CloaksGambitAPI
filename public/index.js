@@ -239,46 +239,58 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     summary.className = 'history-summary';
     summary.innerHTML = `
       <div class="history-card">
-        <div class="history-card-label">Total Games</div>
+        <div class="history-card-label">
+          <span class="history-card-label-line">Total</span>
+          <span class="history-card-label-line">Games</span>
+        </div>
         <div class="history-card-stats">
           <span id="playerHistoryTotalGames" class="history-card-total history-card-value">0</span>
           <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W <span id="playerHistoryTotalGamesWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D <span id="playerHistoryTotalGamesDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L <span id="playerHistoryTotalGamesLosses">0</span></span>
+            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryTotalGamesWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryTotalGamesDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryTotalGamesLosses">0</span></span>
           </div>
         </div>
       </div>
       <div class="history-card">
-        <div class="history-card-label">Quickplay Matches</div>
+        <div class="history-card-label">
+          <span class="history-card-label-line">Quickplay</span>
+          <span class="history-card-label-line">Matches</span>
+        </div>
         <div class="history-card-stats">
           <span id="playerHistoryQuickplayMatches" class="history-card-total history-card-value">0</span>
           <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W <span id="playerHistoryQuickplayWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D <span id="playerHistoryQuickplayDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L <span id="playerHistoryQuickplayLosses">0</span></span>
+            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryQuickplayWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryQuickplayDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryQuickplayLosses">0</span></span>
           </div>
         </div>
       </div>
       <div class="history-card">
-        <div class="history-card-label">Ranked Matches</div>
+        <div class="history-card-label">
+          <span class="history-card-label-line">Ranked</span>
+          <span class="history-card-label-line">Matches</span>
+        </div>
         <div class="history-card-stats">
           <span id="playerHistoryRankedMatches" class="history-card-total history-card-value">0</span>
           <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W <span id="playerHistoryRankedWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D <span id="playerHistoryRankedDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L <span id="playerHistoryRankedLosses">0</span></span>
+            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryRankedWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryRankedDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryRankedLosses">0</span></span>
           </div>
         </div>
       </div>
       <div class="history-card">
-        <div class="history-card-label">Custom Matches</div>
+        <div class="history-card-label">
+          <span class="history-card-label-line">Custom</span>
+          <span class="history-card-label-line">Matches</span>
+        </div>
         <div class="history-card-stats">
           <span id="playerHistoryCustomMatches" class="history-card-total history-card-value">0</span>
           <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W <span id="playerHistoryCustomWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D <span id="playerHistoryCustomDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L <span id="playerHistoryCustomLosses">0</span></span>
+            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryCustomWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryCustomDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryCustomLosses">0</span></span>
           </div>
         </div>
       </div>`;

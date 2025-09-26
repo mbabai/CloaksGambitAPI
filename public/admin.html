@@ -42,8 +42,19 @@
       .history-card .history-card-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(245,230,167,0.88); }
       .history-card .history-card-stats { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
       .history-card .history-card-total { font-size: 24px; font-weight: 700; color: var(--light-gold); line-height: 1.1; }
-      .history-card .history-card-splits { display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; font-weight: 600; }
-      .history-card .history-card-split { display: inline-flex; align-items: center; gap: 3px; }
+      .history-card .history-card-splits {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        font-family: 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+        font-variant-numeric: lining-nums tabular-nums;
+        font-feature-settings: 'lnum' 1, 'tnum' 1;
+      }
+      .history-card .history-card-split { display: inline-flex; align-items: baseline; gap: 3px; }
       .history-card .history-card-split--wins { color: #34d399; }
       .history-card .history-card-split--draws { color: #9ca3af; }
       .history-card .history-card-split--losses { color: #f87171; }
@@ -185,46 +196,58 @@
         <h2>History</h2>
         <div class="history-summary">
           <div class="history-card">
-            <div class="history-card-label">Total Games</div>
+            <div class="history-card-label">
+              <span class="history-card-label-line">Total</span>
+              <span class="history-card-label-line">Games</span>
+            </div>
             <div class="history-card-stats">
               <span id="historyTotalGames" class="history-card-total history-card-value">0</span>
               <div class="history-card-splits">
-                <span class="history-card-split history-card-split--wins">W <span id="historyTotalGamesWins">0</span></span>
-                <span class="history-card-split history-card-split--draws">D <span id="historyTotalGamesDraws">0</span></span>
-                <span class="history-card-split history-card-split--losses">L <span id="historyTotalGamesLosses">0</span></span>
+                <span class="history-card-split history-card-split--wins">W:<span id="historyTotalGamesWins">0</span></span>
+                <span class="history-card-split history-card-split--draws">D:<span id="historyTotalGamesDraws">0</span></span>
+                <span class="history-card-split history-card-split--losses">L:<span id="historyTotalGamesLosses">0</span></span>
               </div>
             </div>
           </div>
           <div class="history-card">
-            <div class="history-card-label">Quickplay Matches</div>
+            <div class="history-card-label">
+              <span class="history-card-label-line">Quickplay</span>
+              <span class="history-card-label-line">Matches</span>
+            </div>
             <div class="history-card-stats">
               <span id="historyQuickplayMatches" class="history-card-total history-card-value">0</span>
               <div class="history-card-splits">
-                <span class="history-card-split history-card-split--wins">W <span id="historyQuickplayWins">0</span></span>
-                <span class="history-card-split history-card-split--draws">D <span id="historyQuickplayDraws">0</span></span>
-                <span class="history-card-split history-card-split--losses">L <span id="historyQuickplayLosses">0</span></span>
+                <span class="history-card-split history-card-split--wins">W:<span id="historyQuickplayWins">0</span></span>
+                <span class="history-card-split history-card-split--draws">D:<span id="historyQuickplayDraws">0</span></span>
+                <span class="history-card-split history-card-split--losses">L:<span id="historyQuickplayLosses">0</span></span>
               </div>
             </div>
           </div>
           <div class="history-card">
-            <div class="history-card-label">Ranked Matches</div>
+            <div class="history-card-label">
+              <span class="history-card-label-line">Ranked</span>
+              <span class="history-card-label-line">Matches</span>
+            </div>
             <div class="history-card-stats">
               <span id="historyRankedMatches" class="history-card-total history-card-value">0</span>
               <div class="history-card-splits">
-                <span class="history-card-split history-card-split--wins">W <span id="historyRankedWins">0</span></span>
-                <span class="history-card-split history-card-split--draws">D <span id="historyRankedDraws">0</span></span>
-                <span class="history-card-split history-card-split--losses">L <span id="historyRankedLosses">0</span></span>
+                <span class="history-card-split history-card-split--wins">W:<span id="historyRankedWins">0</span></span>
+                <span class="history-card-split history-card-split--draws">D:<span id="historyRankedDraws">0</span></span>
+                <span class="history-card-split history-card-split--losses">L:<span id="historyRankedLosses">0</span></span>
               </div>
             </div>
           </div>
           <div class="history-card">
-            <div class="history-card-label">Custom Matches</div>
+            <div class="history-card-label">
+              <span class="history-card-label-line">Custom</span>
+              <span class="history-card-label-line">Matches</span>
+            </div>
             <div class="history-card-stats">
               <span id="historyCustomMatches" class="history-card-total history-card-value">0</span>
               <div class="history-card-splits">
-                <span class="history-card-split history-card-split--wins">W <span id="historyCustomWins">0</span></span>
-                <span class="history-card-split history-card-split--draws">D <span id="historyCustomDraws">0</span></span>
-                <span class="history-card-split history-card-split--losses">L <span id="historyCustomLosses">0</span></span>
+                <span class="history-card-split history-card-split--wins">W:<span id="historyCustomWins">0</span></span>
+                <span class="history-card-split history-card-split--draws">D:<span id="historyCustomDraws">0</span></span>
+                <span class="history-card-split history-card-split--losses">L:<span id="historyCustomLosses">0</span></span>
               </div>
             </div>
           </div>
