@@ -17,49 +17,20 @@ if (!isProduction) {
   require('dotenv').config({ path: path.resolve(__dirname, '..', envFile) });
 }
 
-function getEnvValue(...keys) {
-  for (const key of keys) {
-    if (!key) continue;
-    const value = process.env[key];
-    if (value) return value;
-  }
-  return undefined;
-}
-
-function getGoogleClientId() {
-  return getEnvValue(
-    'GOOGLE_CLIENT_ID',
-    'GoogleAuth-ClientID',
-    'GoogleAuth_ClientID',
-    'GoogleAuthClientID'
-  );
-}
-
-function getGoogleClientSecret() {
-  return getEnvValue(
-    'GOOGLE_CLIENT_SECRET',
-    'GoogleAuth-ClientSecret',
-    'GoogleAuth_ClientSecret',
-    'GoogleAuthClientSecret'
-  );
-}
-
-const COSMOS_DB_NAME = 'myDatabase';
-const COSMOS_COLLECTION_NAME = 'myCollection';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
 const COSMOS_URI = process.env.COSMOSDB_CONNECTION_STRING;
-const GOOGLE_CLIENT_ID = getGoogleClientId();
-const GOOGLE_CLIENT_SECRET = getGoogleClientSecret();
+const COSMOS_COLLECTION_NAME = 'myCollection';
 
 if (isProduction) {
-  const missingSecrets = [];
-  if (!GOOGLE_CLIENT_ID) missingSecrets.push('GOOGLE_CLIENT_ID (or GoogleAuth-ClientID)');
-  if (!GOOGLE_CLIENT_SECRET) missingSecrets.push('GOOGLE_CLIENT_SECRET (or GoogleAuth-ClientSecret)');
-  if (!COSMOS_URI) missingSecrets.push('COSMOSDB_CONNECTION_STRING');
-
-  if (missingSecrets.length > 0) {
-    const message = '❌ Required secrets are missing in production!';
-    console.error(`${message} Missing: ${missingSecrets.join(', ')}. Check Key Vault references.`);
-    throw new Error(message);
+  const missing = [];
+  if (!GOOGLE_CLIENT_ID) missing.push('GOOGLE_CLIENT_ID');
+  if (!GOOGLE_CLIENT_SECRET) missing.push('GOOGLE_CLIENT_SECRET');
+  if (!GOOGLE_REDIRECT_URI) missing.push('GOOGLE_REDIRECT_URI');
+  if (!COSMOS_URI) missing.push('COSMOSDB_CONNECTION_STRING');
+  if (missing.length > 0) {
+    throw new Error(`❌ Required secrets are missing in production: ${missing.join(', ')}`);
   }
 }
 
@@ -95,7 +66,6 @@ async function connectToDatabase() {
 
   const connectionOptions = isProduction
     ? {
-        dbName: COSMOS_DB_NAME,
         serverSelectionTimeoutMS: 10000,
         useNewUrlParser: true,
         useUnifiedTopology: true

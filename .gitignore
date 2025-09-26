@@ -8,6 +8,7 @@ yarn-error.log
 .env
 .env.local
 .env.*.local
+.env.development
 
 # IDE
 .idea/
@@ -30,4 +31,5 @@ coverage/
 
 # Temporary files
 *.tmp
-*.temp 
+*.temp
+

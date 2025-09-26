@@ -15,12 +15,19 @@ updates are delivered through WebSocket events.
    ```bash
    npm install
    ```
-3. Create a `.env` file in the root directory with the following variables:
-   ```
-   PORT=3000
-   MONGODB_URI=mongodb://localhost:27017/cloaks-gambit
-   NODE_ENV=development
-   ```
+3. Copy `.env.example` to `.env.development` and update the values with your
+   local Google OAuth credentials and MongoDB connection string. This file is
+   ignored by git so each developer can manage their own secrets locally.
+
+## Environment configuration
+
+- **Development:** Environment variables are loaded from `.env.development` via
+  `dotenv`. Ensure you keep this file private and never commit it to version
+  control.
+- **Production:** All secrets must be provided as environment variables (for
+  example via Azure App Service with Key Vault references). The application
+  requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`,
+  and `COSMOSDB_CONNECTION_STRING` to be defined at runtime.
 
 ## Running the Application
 
