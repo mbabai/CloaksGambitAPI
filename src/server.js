@@ -6,11 +6,34 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const isProduction = NODE_ENV === 'production';
+
 // Load environment variables from a file based on NODE_ENV. Default to
 // `.env.development` so local development has Google OAuth credentials
 // without needing to manually copy them to `.env`.
-const envFile = `.env.${process.env.NODE_ENV || 'development'}`;
-require('dotenv').config({ path: path.resolve(__dirname, '..', envFile) });
+if (!isProduction) {
+  const envFile = `.env.${NODE_ENV}`;
+  require('dotenv').config({ path: path.resolve(__dirname, '..', envFile) });
+}
+
+const COSMOS_DB_NAME = 'myDatabase';
+const COSMOS_COLLECTION_NAME = 'myCollection';
+const COSMOS_URI = process.env.COSMOSDB_CONNECTION_STRING;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+
+if (isProduction) {
+  const missingSecrets = [];
+  if (!COSMOS_URI) missingSecrets.push('COSMOSDB_CONNECTION_STRING');
+  if (!GOOGLE_CLIENT_SECRET) missingSecrets.push('GOOGLE_CLIENT_SECRET');
+
+  if (missingSecrets.length > 0) {
+    console.error(
+      `❌ Missing required secrets in production: ${missingSecrets.join(', ')}. Check Key Vault references.`
+    );
+    process.exit(1);
+  }
+}
 
 const app = express();
 
@@ -34,34 +57,72 @@ app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'publ
 app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'test-client', 'assets', 'images', 'Pieces')));
 app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'frontend', 'public', 'assets', 'images', 'Pieces')));
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit')
-  .then(async () => {
-    console.log('Connected to MongoDB');
-    
-    // Clear any stale queues from previous server runs
-    try {
-      const lobby = await Lobby.findOne();
-      if (lobby) {
-        lobby.quickplayQueue = [];
-        lobby.rankedQueue = [];
-        lobby.inGame = [];
-        await lobby.save();
-        console.log('Cleared stale queues from previous server run');
-      } else {
-        // Create a new lobby if none exists
-        await Lobby.create({
-          quickplayQueue: [],
-          rankedQueue: [],
-          inGame: []
-        });
-        console.log('Created new lobby');
+async function connectToDatabase() {
+  const defaultDevUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit';
+  const uri = isProduction ? COSMOS_URI : defaultDevUri;
+
+  const connectionOptions = isProduction
+    ? {
+        dbName: COSMOS_DB_NAME,
+        serverSelectionTimeoutMS: 10000
       }
-    } catch (err) {
-      console.error('Error clearing queues:', err);
+    : {};
+
+  try {
+    await mongoose.connect(uri, connectionOptions);
+
+    if (isProduction) {
+      console.log('✅ Connected to Cosmos DB (Mongo API)');
+
+      try {
+        const cosmosCollection = mongoose.connection.db.collection(COSMOS_COLLECTION_NAME);
+        await cosmosCollection.findOne({}, { projection: { _id: 1 } });
+        console.log(`✅ Verified Cosmos DB collection \`${COSMOS_COLLECTION_NAME}\``);
+      } catch (collectionErr) {
+        console.error(
+          `❌ Unable to access required collection \`${COSMOS_COLLECTION_NAME}\` in Cosmos DB:`,
+          collectionErr
+        );
+        process.exit(1);
+      }
+    } else {
+      console.log('Connected to MongoDB');
     }
-  })
-  .catch((err) => console.error('MongoDB connection error:', err));
+
+    return true;
+  } catch (err) {
+    if (isProduction) {
+      console.error('❌ Failed to connect to Cosmos DB:', err);
+      process.exit(1);
+    }
+
+    console.error('MongoDB connection error:', err);
+    return false;
+  }
+}
+
+async function resetLobbyQueues() {
+  try {
+    const lobby = await Lobby.findOne();
+    if (lobby) {
+      lobby.quickplayQueue = [];
+      lobby.rankedQueue = [];
+      lobby.inGame = [];
+      await lobby.save();
+      console.log('Cleared stale queues from previous server run');
+    } else {
+      // Create a new lobby if none exists
+      await Lobby.create({
+        quickplayQueue: [],
+        rankedQueue: [],
+        inGame: []
+      });
+      console.log('Created new lobby');
+    }
+  } catch (err) {
+    console.error('Error clearing queues:', err);
+  }
+}
 
 // Routes
 // Serve the PlayArea page at root
@@ -87,6 +148,21 @@ const server = http.createServer(app);
 
 initSocket(server);
 
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+async function startServer() {
+  const connected = await connectToDatabase();
+
+  if (connected) {
+    await resetLobbyQueues();
+  }
+
+  server.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  if (isProduction) {
+    process.exit(1);
+  }
 });
