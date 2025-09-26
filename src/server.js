@@ -23,6 +23,16 @@ const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
 const COSMOS_URI = process.env.COSMOSDB_CONNECTION_STRING;
 const COSMOS_COLLECTION_NAME = 'myCollection';
 
+const cosmosPreview = COSMOS_URI ? `${COSMOS_URI.slice(0, 60)}${COSMOS_URI.length > 60 ? '…' : ''}` : null;
+
+console.log('Startup secrets check:', {
+  GOOGLE_CLIENT_ID: !!GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET: !!GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI: !!GOOGLE_REDIRECT_URI,
+  COSMOSDB_CONNECTION_STRING: !!COSMOS_URI,
+  COSMOSDB_CONNECTION_STRING_PREVIEW: cosmosPreview
+});
+
 if (isProduction) {
   const missing = [];
   if (!GOOGLE_CLIENT_ID) missing.push('GOOGLE_CLIENT_ID');
