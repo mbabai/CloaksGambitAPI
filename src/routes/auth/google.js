@@ -94,7 +94,36 @@ function getGoogleClientSecret() {
   );
 }
 
-const { GOOGLE_REDIRECT_URI } = process.env;
+function getGoogleRedirectUri() {
+  return getEnvValue(
+    'GOOGLE_REDIRECT_URI',
+    'GoogleAuth-RedirectURI',
+    'GoogleAuth_RedirectURI',
+    'GoogleAuthRedirectURI',
+    'GoogleAuth-RedirectUrl',
+    'GoogleAuth_RedirectUrl',
+    'GoogleAuthRedirectUrl'
+  );
+}
+
+function resolveRedirectUri(req) {
+  const configured = getGoogleRedirectUri();
+  if (configured) {
+    return configured;
+  }
+
+  const forwardedProto = req.get('x-forwarded-proto');
+  const protocol = (forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol) || 'https';
+  const hostHeader = req.get('x-forwarded-host') || req.get('host');
+  const host = hostHeader ? hostHeader.split(',')[0].trim() : undefined;
+
+  if (!host) {
+    const port = process.env.PORT || 3000;
+    return `${protocol}://localhost:${port}/api/auth/google/callback`;
+  }
+
+  return `${protocol}://${host}/api/auth/google/callback`;
+}
 
 router.get('/google', (req, res) => {
   const clientId = getGoogleClientId();
@@ -103,7 +132,7 @@ router.get('/google', (req, res) => {
   if (!clientId || !clientSecret) {
     return res.status(500).json({ message: 'Google OAuth is not configured' });
   }
-  const redirectUri = GOOGLE_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
+  const redirectUri = resolveRedirectUri(req);
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -128,7 +157,7 @@ router.get('/google/callback', async (req, res) => {
     if (!clientId || !clientSecret) {
       return res.status(500).json({ message: 'Google OAuth is not configured' });
     }
-    const redirectUri = GOOGLE_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
+    const redirectUri = resolveRedirectUri(req);
     const client = new OAuth2Client(clientId, clientSecret, redirectUri);
 
     const { tokens } = await client.getToken(code);
