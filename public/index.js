@@ -3748,7 +3748,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       const deckTop = deckEl ? (parseInt(deckEl.style.top, 10) || deckEl.offsetTop || stashTop) : stashTop;
       const deckCenterX = deckLeft + deckWidth / 2;
       const deckBottom = deckTop + deckHeight;
-      const gapBelowDeck = Math.max(6, Math.round(deckHeight * 0.1));
+      const gapBelowDeck = Math.max(2, Math.round(deckHeight * 0.02));
       const resignTop = deckBottom + gapBelowDeck;
       const resignW = Math.max(1, Math.round(btnW * 0.65));
       const resignH = Math.max(1, Math.round(btnH * 0.5));
@@ -3773,7 +3773,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
         height: resignH
       });
 
-      const drawGap = Math.max(4, Math.round(resignH * 0.25));
+      const drawGap = Math.max(2, Math.round(resignH * 0.05));
       const drawTop = resignTop + resignH + drawGap;
 
       renderGameButton({
