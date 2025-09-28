@@ -1971,6 +1971,8 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       },
       async onBothNext(payload) {
         try {
+          console.log('[socket] players:bothNext received', payload);
+          clearBannerOverlay({ restoreFocus: false });
           const { gameId, color } = payload || {};
           if (!gameId) return;
 
@@ -2206,6 +2208,24 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
 
   function setBannerKeyListener(listener) {
     bannerKeyListener = typeof listener === 'function' ? listener : null;
+  }
+
+  function clearBannerOverlay({ restoreFocus = false } = {}) {
+    if (bannerInterval) {
+      clearInterval(bannerInterval);
+      bannerInterval = null;
+    }
+    setBannerKeyListener(null);
+    if (bannerOverlay) {
+      try {
+        if (bannerOverlay.content) {
+          bannerOverlay.content.innerHTML = '';
+        }
+        bannerOverlay.hide({ restoreFocus });
+      } catch (err) {
+        console.warn('Failed to hide banner overlay', err);
+      }
+    }
   }
 
   function showInviteDeclinedBanner(name, status = 'declined') {
@@ -3467,12 +3487,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
   function returnToLobby() {
     hidePlayArea();
     showQueuer();
-    setBannerKeyListener(null);
-    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
-    if (bannerOverlay) {
-      bannerOverlay.content.innerHTML = '';
-      bannerOverlay.hide({ restoreFocus: false });
-    }
+    clearBannerOverlay({ restoreFocus: false });
     queuedState.quickplay = false;
     queuedState.ranked = false;
     pendingAction = null;
