@@ -20,17 +20,18 @@ if (!isProduction) {
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
-const COSMOS_URI = process.env.COSMOSDB_CONNECTION_STRING;
-const COSMOS_COLLECTION_NAME = 'myCollection';
+const MONGODB_ATLAS_URI = process.env.MONGODB_ATLAS_CONNECTION_STRING;
 
-const cosmosPreview = COSMOS_URI ? `${COSMOS_URI.slice(0, 60)}${COSMOS_URI.length > 60 ? '…' : ''}` : null;
+const atlasPreview = MONGODB_ATLAS_URI
+  ? `${MONGODB_ATLAS_URI.slice(0, 60)}${MONGODB_ATLAS_URI.length > 60 ? '…' : ''}`
+  : null;
 
 console.log('Startup secrets check:', {
   GOOGLE_CLIENT_ID: !!GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET: !!GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI: !!GOOGLE_REDIRECT_URI,
-  COSMOSDB_CONNECTION_STRING: !!COSMOS_URI,
-  COSMOSDB_CONNECTION_STRING_PREVIEW: cosmosPreview
+  MONGODB_ATLAS_CONNECTION_STRING: !!MONGODB_ATLAS_URI,
+  MONGODB_ATLAS_CONNECTION_STRING_PREVIEW: atlasPreview
 });
 
 if (isProduction) {
@@ -38,7 +39,7 @@ if (isProduction) {
   if (!GOOGLE_CLIENT_ID) missing.push('GOOGLE_CLIENT_ID');
   if (!GOOGLE_CLIENT_SECRET) missing.push('GOOGLE_CLIENT_SECRET');
   if (!GOOGLE_REDIRECT_URI) missing.push('GOOGLE_REDIRECT_URI');
-  if (!COSMOS_URI) missing.push('COSMOSDB_CONNECTION_STRING');
+  if (!MONGODB_ATLAS_URI) missing.push('MONGODB_ATLAS_CONNECTION_STRING');
   if (missing.length > 0) {
     throw new Error(`❌ Required secrets are missing in production: ${missing.join(', ')}`);
   }
@@ -72,7 +73,7 @@ app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'fron
 
 async function connectToDatabase() {
   const defaultDevUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit';
-  const uri = isProduction ? COSMOS_URI : defaultDevUri;
+  const uri = isProduction ? MONGODB_ATLAS_URI : defaultDevUri;
 
   const connectionOptions = isProduction
     ? {
@@ -86,31 +87,19 @@ async function connectToDatabase() {
     await mongoose.connect(uri, connectionOptions);
 
     if (isProduction) {
-      console.log('✅ Connected to Cosmos DB');
-
-      try {
-        const cosmosCollection = mongoose.connection.db.collection(COSMOS_COLLECTION_NAME);
-        await cosmosCollection.findOne({}, { projection: { _id: 1 } });
-        console.log(`✅ Verified Cosmos DB collection \`${COSMOS_COLLECTION_NAME}\``);
-      } catch (collectionErr) {
-        console.error(
-          `❌ Unable to access required collection \`${COSMOS_COLLECTION_NAME}\` in Cosmos DB:`,
-          collectionErr
-        );
-        process.exit(1);
-      }
+      console.log('✅ Connected to MongoDB Atlas');
     } else {
-      console.log('Connected to MongoDB');
+      console.log('Connected to MongoDB (localhost)');
     }
 
     return true;
   } catch (err) {
     if (isProduction) {
-      console.error('❌ Failed to connect:', err);
+      console.error('❌ Failed to connect to MongoDB Atlas:', err);
       process.exit(1);
     }
 
-    console.error('MongoDB connection error:', err);
+    console.error('MongoDB (localhost) connection error:', err);
     return false;
   }
 }

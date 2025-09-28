@@ -27,7 +27,7 @@ updates are delivered through WebSocket events.
 - **Production:** All secrets must be provided as environment variables (for
   example via Azure App Service with Key Vault references). The application
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`,
-  and `COSMOSDB_CONNECTION_STRING` to be defined at runtime.
+  and `MONGODB_ATLAS_CONNECTION_STRING` to be defined at runtime.
 
 ## Running the Application
 
