@@ -1,6 +1,9 @@
 const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../../models/User');
+const { createAuthToken, TOKEN_COOKIE_NAME } = require('../../utils/authTokens');
+
+const isProduction = (process.env.NODE_ENV || 'development') === 'production';
 
 const router = express.Router();
 
@@ -159,9 +162,20 @@ router.get('/google/callback', async (req, res) => {
     }
 
     const maxAge = 1000 * 60 * 60 * 24 * 365; // 1 year
-    res.cookie('userId', user._id.toString(), { maxAge });
-    res.cookie('username', user.username, { maxAge });
-    res.cookie('photo', 'assets/images/cloakHood.jpg', { maxAge });
+    const token = createAuthToken(user);
+    const baseCookieOptions = {
+      maxAge,
+      sameSite: 'lax',
+    };
+    const secureCookieOptions = isProduction ? { ...baseCookieOptions, secure: true } : baseCookieOptions;
+
+    res.cookie('userId', user._id.toString(), secureCookieOptions);
+    res.cookie('username', user.username, secureCookieOptions);
+    res.cookie('photo', 'assets/images/cloakHood.jpg', secureCookieOptions);
+    res.cookie(TOKEN_COOKIE_NAME, token, {
+      ...secureCookieOptions,
+      httpOnly: false,
+    });
     res.redirect('/');
   } catch (err) {
     console.error(err);

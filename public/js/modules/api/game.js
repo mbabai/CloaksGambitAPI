@@ -1,26 +1,51 @@
+const TOKEN_STORAGE_KEY = 'cg_token';
+
+function getStoredAuthToken() {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch (err) {
+    console.warn('Unable to access localStorage for auth token', err);
+    return null;
+  }
+}
+
+function buildAuthHeaders(base = {}) {
+  const headers = { ...base };
+  const token = getStoredAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+function authFetch(url, options = {}) {
+  const headers = buildAuthHeaders(options.headers || {});
+  return fetch(url, { ...options, headers });
+}
+
 export async function apiReady(gameId, color) {
-  return fetch('/api/v1/gameAction/ready', {
+  return authFetch('/api/v1/gameAction/ready', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
 }
 
 export async function apiNext(gameId, color) {
-  return fetch('/api/v1/gameAction/next', {
+  return authFetch('/api/v1/gameAction/next', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
 }
 
 export async function apiSetup(payload) {
-  return fetch('/api/v1/gameAction/setup', {
+  return authFetch('/api/v1/gameAction/setup', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
 }
 
 export async function apiGetDetails(gameId, color) {
-  const res = await fetch('/api/v1/games/getDetails', {
+  const res = await authFetch('/api/v1/games/getDetails', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
@@ -64,7 +89,7 @@ async function sendQueueRequest(path, payload = {}) {
     }
   }
 
-  const res = await fetch(path, {
+  const res = await authFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -108,63 +133,63 @@ export async function apiExitRankedQueue(payload = {}) {
 }
 
 export async function apiMove({ gameId, color, from, to, declaration }) {
-  return fetch('/api/v1/gameAction/move', {
+  return authFetch('/api/v1/gameAction/move', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color, from, to, declaration })
   });
 }
 
 export async function apiChallenge(gameId, color) {
-  return fetch('/api/v1/gameAction/challenge', {
+  return authFetch('/api/v1/gameAction/challenge', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
 }
 
 export async function apiBomb(gameId, color) {
-  return fetch('/api/v1/gameAction/bomb', {
+  return authFetch('/api/v1/gameAction/bomb', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
 }
 
 export async function apiPass(gameId, color) {
-  return fetch('/api/v1/gameAction/pass', {
+  return authFetch('/api/v1/gameAction/pass', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
 }
 
 export async function apiResign(gameId, color) {
-  return fetch('/api/v1/gameAction/resign', {
+  return authFetch('/api/v1/gameAction/resign', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
 }
 
 export async function apiDraw(gameId, color, action) {
-  return fetch('/api/v1/gameAction/draw', {
+  return authFetch('/api/v1/gameAction/draw', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color, action })
   });
 }
 
 export async function apiOnDeck(gameId, color, piece) {
-  return fetch('/api/v1/gameAction/onDeck', {
+  return authFetch('/api/v1/gameAction/onDeck', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color, piece })
   });
 }
 
 export async function apiCheckTimeControl(gameId) {
-  return fetch('/api/v1/gameAction/checkTimeControl', {
+  return authFetch('/api/v1/gameAction/checkTimeControl', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId })
   });
 }
 
 export async function apiGetMatchDetails(matchId) {
-  const res = await fetch('/api/v1/matches/getDetails', {
+  const res = await authFetch('/api/v1/matches/getDetails', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ matchId })
   });
@@ -173,7 +198,7 @@ export async function apiGetMatchDetails(matchId) {
 }
 
 export async function apiGetTimeSettings() {
-  const res = await fetch('/api/v1/config/timeSettings');
+  const res = await authFetch('/api/v1/config/timeSettings');
   if (!res.ok) return null;
   return res.json().catch(() => null);
 }

@@ -4,19 +4,24 @@ const Lobby = require('../../../models/Lobby');
 const eventBus = require('../../../eventBus');
 const mongoose = require('mongoose');
 const ensureUser = require('../../../utils/ensureUser');
+const { resolveUserFromRequest } = require('../../../utils/authTokens');
 
 router.post('/', async (req, res) => {
   try {
     let { userId } = req.body || {};
-    let userInfo;
+    let userInfo = await resolveUserFromRequest(req);
 
-    if (!userId || !mongoose.isValidObjectId(userId)) {
-      userInfo = await ensureUser();
+    if (userInfo && userInfo.userId) {
+      userId = userInfo.userId;
     } else {
-      userInfo = await ensureUser(userId);
-    }
+      if (!userId || !mongoose.isValidObjectId(userId)) {
+        userInfo = await ensureUser();
+      } else {
+        userInfo = await ensureUser(userId);
+      }
 
-    userId = userInfo.userId;
+      userId = userInfo.userId;
+    }
 
     let lobby = await Lobby.findOne();
     if (!lobby) {
