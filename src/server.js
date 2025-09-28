@@ -20,7 +20,48 @@ if (!isProduction) {
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
-const MONGODB_ATLAS_URI = process.env.MONGODB_ATLAS_CONNECTION_STRING;
+const ATLAS_DB_NAME = 'cloaksgambit';
+const MONGODB_ATLAS_URI_RAW = process.env.MONGODB_ATLAS_CONNECTION_STRING;
+
+function ensureDatabaseInUri(uri, dbName) {
+  if (!uri) return uri;
+
+  const [prefix, params] = uri.split('?');
+  const match = prefix.match(/^(mongodb(?:\+srv)?:\/\/[^/]+)(?:\/(.*))?$/i);
+
+  let base = prefix;
+
+  if (match) {
+    base = match[1];
+  } else if (prefix.endsWith('/')) {
+    base = prefix.replace(/\/+$/, '');
+  } else {
+    const lastSlashIndex = prefix.lastIndexOf('/');
+    base = lastSlashIndex === -1 ? prefix : prefix.slice(0, lastSlashIndex);
+  }
+
+  const finalPrefix = `${base}/${dbName}`;
+
+  return params ? `${finalPrefix}?${params}` : finalPrefix;
+}
+
+function getDatabaseNameFromUri(uri) {
+  if (!uri) return null;
+
+  const [prefix] = uri.split('?');
+  const schemeIndex = prefix.indexOf('://');
+  const lastSlashIndex = prefix.lastIndexOf('/');
+
+  if (lastSlashIndex === -1 || lastSlashIndex <= schemeIndex + 2) {
+    return null;
+  }
+
+  const name = prefix.slice(lastSlashIndex + 1);
+
+  return name || null;
+}
+
+const MONGODB_ATLAS_URI = ensureDatabaseInUri(MONGODB_ATLAS_URI_RAW, ATLAS_DB_NAME);
 
 const atlasPreview = MONGODB_ATLAS_URI
   ? `${MONGODB_ATLAS_URI.slice(0, 60)}${MONGODB_ATLAS_URI.length > 60 ? '…' : ''}`
@@ -74,6 +115,7 @@ app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'fron
 async function connectToDatabase() {
   const defaultDevUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit';
   const uri = isProduction ? MONGODB_ATLAS_URI : defaultDevUri;
+  const databaseName = isProduction ? ATLAS_DB_NAME : getDatabaseNameFromUri(uri) || 'unknown';
 
   const connectionOptions = isProduction
     ? {
@@ -84,22 +126,23 @@ async function connectToDatabase() {
     : {};
 
   try {
+    console.log(`Connecting to MongoDB database "${databaseName}" (${isProduction ? 'Atlas' : 'local instance'})`);
     await mongoose.connect(uri, connectionOptions);
 
     if (isProduction) {
-      console.log('✅ Connected to MongoDB Atlas');
+      console.log(`✅ Connected to MongoDB Atlas (${databaseName})`);
     } else {
-      console.log('Connected to MongoDB (localhost)');
+      console.log(`Connected to MongoDB (localhost) — database "${databaseName}"`);
     }
 
     return true;
   } catch (err) {
     if (isProduction) {
-      console.error('❌ Failed to connect to MongoDB Atlas:', err);
+      console.error(`❌ Failed to connect to MongoDB Atlas (${databaseName}):`, err);
       process.exit(1);
     }
 
-    console.error('MongoDB (localhost) connection error:', err);
+    console.error(`MongoDB (localhost) connection error for database "${databaseName}":`, err);
     return false;
   }
 }
