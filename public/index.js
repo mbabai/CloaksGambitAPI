@@ -518,7 +518,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     if (missing.length === 0) return;
     await Promise.all(missing.map(async id => {
       try {
-        const res = await fetch('/api/v1/users/getDetails', {
+        const res = await authFetch('/api/v1/users/getDetails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: id })
@@ -544,12 +544,12 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     showStatsOverlayMessage('Loading match history…');
     try {
       const [matchesRes, gamesRes] = await Promise.all([
-        fetch('/api/v1/matches/getList', {
+        authFetch('/api/v1/matches/getList', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: statsUserId })
         }),
-        fetch('/api/v1/games/getList', {
+        authFetch('/api/v1/games/getList', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: statsUserId })
@@ -739,7 +739,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       let userDetails = null;
       if (userIdCookie) {
         try {
-          const res = await fetch('/api/v1/users/getDetails', {
+          const res = await authFetch('/api/v1/users/getDetails', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId: userIdCookie })
@@ -923,7 +923,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
           return;
         }
         try {
-          const res = await fetch('/api/v1/users/update', {
+          const res = await authFetch('/api/v1/users/update', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId: currentUserId, username: trimmed })
@@ -1026,6 +1026,50 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     } catch (err) {
       console.warn('Unable to persist cg_username to localStorage', err);
     }
+  }
+
+  const TOKEN_STORAGE_KEY = 'cg_token';
+  const TOKEN_COOKIE_NAME = 'cgToken';
+
+  function getStoredAuthToken() {
+    try {
+      return localStorage.getItem(TOKEN_STORAGE_KEY);
+    } catch (err) {
+      console.warn('Unable to read cg_token from localStorage', err);
+      return null;
+    }
+  }
+
+  function setStoredAuthToken(token) {
+    try {
+      if (token) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, token);
+      } else {
+        localStorage.removeItem(TOKEN_STORAGE_KEY);
+      }
+    } catch (err) {
+      console.warn('Unable to persist cg_token to localStorage', err);
+    }
+  }
+
+  function ensureAuthToken() {
+    const stored = getStoredAuthToken();
+    if (stored) return stored;
+    const cookieToken = getCookie(TOKEN_COOKIE_NAME);
+    if (cookieToken) {
+      setStoredAuthToken(cookieToken);
+      return cookieToken;
+    }
+    return null;
+  }
+
+  function authFetch(input, init = {}) {
+    const headers = { ...(init && init.headers ? init.headers : {}) };
+    const token = ensureAuthToken();
+    if (token && !headers.Authorization) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    return fetch(input, { ...init, headers });
   }
 
   // Retrieve stored user ID if present; server assigns one if missing
@@ -1171,7 +1215,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     renderBoardAndBars();
     await Promise.all(currentPlayerIds.map(async (id, idx) => {
       try {
-        const res = await fetch('/api/v1/users/getDetails', {
+        const res = await authFetch('/api/v1/users/getDetails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: id })
@@ -1858,7 +1902,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
             let winnerName = playerNames[winnerIdx] || formatPlayerName(null, winnerIdx);
             if (winnerId) {
               try {
-                const res = await fetch('/api/v1/users/getDetails', {
+                const res = await authFetch('/api/v1/users/getDetails', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ userId: winnerId })
@@ -2000,6 +2044,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       onDisconnect() { /* keep UI; server handles grace */ }
     });
     socket.on('user:init', (payload) => {
+      ensureAuthToken();
       const newId = payload && payload.userId;
       if (newId) {
         userId = newId;
@@ -2120,6 +2165,10 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       preloadPieceImages();
       preloadBubbleImages();
       const socketAuth = {};
+      const authToken = ensureAuthToken();
+      if (authToken) {
+        socketAuth.token = authToken;
+      }
       const handshakeUserId = getStoredUserId() || userId;
       if (handshakeUserId) {
         socketAuth.userId = handshakeUserId;

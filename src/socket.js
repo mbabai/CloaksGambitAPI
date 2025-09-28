@@ -6,6 +6,7 @@ const maskGameForColor = require('./utils/gameView');
 const eventBus = require('./eventBus');
 const ChangeStreamToken = require('./models/ChangeStreamToken');
 const ensureUser = require('./utils/ensureUser');
+const { resolveUserFromToken } = require('./utils/authTokens');
 const User = require('./models/User');
 const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
@@ -767,15 +768,35 @@ function initSocket(httpServer) {
   eventBus.on('adminRefresh', () => emitAdminMetrics());
 
   io.on('connection', async (socket) => {
-    let { userId } = socket.handshake.auth || {};
-    let userInfo;
-    try {
-      userInfo = await ensureUser(userId);
-      userId = userInfo.userId;
-    } catch (err) {
-      console.error('Failed to ensure user account:', err);
-      return socket.disconnect(true);
+    const { token, userId: providedUserId } = socket.handshake.auth || {};
+    let userId = providedUserId;
+    let userInfo = null;
+    let authenticated = false;
+
+    if (token) {
+      try {
+        userInfo = await resolveUserFromToken(token);
+        if (userInfo && userInfo.userId) {
+          userId = userInfo.userId;
+          authenticated = !userInfo.isGuest;
+        }
+      } catch (err) {
+        console.warn('[socket] Failed to resolve user from token', { socketId: socket.id, message: err?.message });
+      }
     }
+
+    if (!userInfo) {
+      try {
+        userInfo = await ensureUser(userId);
+        userId = userInfo.userId;
+      } catch (err) {
+        console.error('Failed to ensure user account:', err);
+        return socket.disconnect(true);
+      }
+    }
+
+    const connectionLabel = authenticated ? 'logged-in' : 'anonymous';
+    console.log(`[socket] Connection ${socket.id} authenticated=${authenticated} (${connectionLabel}) user=${userId}`);
     // If a user reconnects quickly, keep the most recent socket only
     const prev = clients.get(userId);
     if (prev && prev.id !== socket.id) {

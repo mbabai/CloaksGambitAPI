@@ -1,5 +1,6 @@
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
+import { getCookie } from '/js/modules/utils/cookies.js';
 
 (function () {
   const origin = window.location.origin.replace(/\/$/, '');
@@ -7,6 +8,50 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   const params = new URLSearchParams(window.location.search);
   const adminIdParam = params.get('adminId');
   const adminUserId = adminIdParam || localStorage.getItem('cg_userId') || null;
+
+  const TOKEN_STORAGE_KEY = 'cg_token';
+  const TOKEN_COOKIE_NAME = 'cgToken';
+
+  function getStoredAuthToken() {
+    try {
+      return localStorage.getItem(TOKEN_STORAGE_KEY);
+    } catch (err) {
+      console.warn('Unable to read auth token from localStorage', err);
+      return null;
+    }
+  }
+
+  function setStoredAuthToken(token) {
+    try {
+      if (token) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, token);
+      } else {
+        localStorage.removeItem(TOKEN_STORAGE_KEY);
+      }
+    } catch (err) {
+      console.warn('Unable to persist auth token to localStorage', err);
+    }
+  }
+
+  function ensureAuthToken() {
+    const stored = getStoredAuthToken();
+    if (stored) return stored;
+    const cookieToken = getCookie(TOKEN_COOKIE_NAME);
+    if (cookieToken) {
+      setStoredAuthToken(cookieToken);
+      return cookieToken;
+    }
+    return null;
+  }
+
+  function authFetch(input, init = {}) {
+    const headers = { ...(init && init.headers ? init.headers : {}) };
+    const token = ensureAuthToken();
+    if (token && !headers.Authorization) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    return fetch(input, { ...init, headers });
+  }
 
   const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
   const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
@@ -199,7 +244,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   async function fetchAllUsers() {
     if (!usersListEl) return;
     try {
-      const res = await fetch('/api/v1/users/getList', {
+      const res = await authFetch('/api/v1/users/getList', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -309,12 +354,12 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
   async function fetchHistoryData() {
     try {
       const [matchesRes, gamesRes] = await Promise.all([
-        fetch('/api/v1/matches/getList', {
+        authFetch('/api/v1/matches/getList', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({})
         }),
-        fetch('/api/v1/games/getList', {
+        authFetch('/api/v1/games/getList', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({})
@@ -531,7 +576,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     purgeActiveMatchesBtn.addEventListener('click', async () => {
       if (!confirm('Are you sure you want to purge all ACTIVE matches from the database? This cannot be undone.')) return;
       try {
-        const res = await fetch('/api/v1/matches/purge-active', {
+        const res = await authFetch('/api/v1/matches/purge-active', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -558,7 +603,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     purgeMatchesBtn.addEventListener('click', async () => {
       if (!confirm('Are you sure you want to purge ALL matches from the database? This cannot be undone.')) return;
       try {
-        const res = await fetch('/api/v1/matches/purge', {
+        const res = await authFetch('/api/v1/matches/purge', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -583,7 +628,7 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
     purgeUsersBtn.addEventListener('click', async () => {
       if (!confirm('Are you sure you want to purge ALL user accounts from the database? This cannot be undone.')) return;
       try {
-        const res = await fetch('/api/v1/users/purge', {
+        const res = await authFetch('/api/v1/users/purge', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
