@@ -3285,6 +3285,7 @@ preloadAssets();
     const hasNextGame = Array.isArray(match?.games)
       ? match.games.some(g => g && g.isActive)
       : false;
+    const matchHasState = Boolean(match && typeof match.isActive === 'boolean');
     let descText;
     if (isDraw || reason === WIN_REASONS.DRAW) {
       const whiteName = playerNames[0] || formatPlayerName(null, 0);
@@ -3341,25 +3342,50 @@ preloadAssets();
         clearTimeout(summaryTimeout);
         summaryTimeout = null;
       }
-      const nextGame = Array.isArray(match?.games) ? match.games.find(g => g && g.isActive) : null;
+      let nextGame = Array.isArray(match?.games) ? match.games.find(g => g && g.isActive) : null;
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+      if (!nextGame && match?._id) {
+        try {
+          const refreshedMatch = await apiGetMatchDetails(match._id);
+          if (refreshedMatch) {
+            match = refreshedMatch;
+            currentMatch = refreshedMatch;
+            if (refreshedMatch?._id) {
+              activeMatchId = String(refreshedMatch._id);
+            }
+            applyExpectedTimeSettingsForMatch(currentMatch);
+            nextGame = Array.isArray(match?.games) ? match.games.find(g => g && g.isActive) : null;
+          }
+        } catch (refreshErr) {
+          console.error('Failed to refresh match details before NEXT', refreshErr);
+        }
+      }
       if (nextGame) {
         try {
           await apiNext(nextGame._id, 1 - myColor);
           desc.textContent = 'Waiting for other player...';
           btn.style.display = 'none';
         } catch (e) { console.error('Failed to queue next game', e); }
-      } else {
+      } else if (!match || match.isActive === false) {
         showMatchSummary(match);
+      } else {
+        desc.textContent = 'Waiting for other player...';
+        btn.style.display = 'none';
       }
     });
 
-    if (!hasNextGame) {
+    const shouldAutoShowSummary = !hasNextGame && (!matchHasState || match.isActive === false);
+
+    if (shouldAutoShowSummary) {
       summaryTimeout = setTimeout(() => {
         try {
           const currentId = currentMatch?._id ? String(currentMatch._id) : null;
           const incomingId = match?._id ? String(match._id) : null;
           if (incomingId && currentId && incomingId !== currentId) {
+            return;
+          }
+          const stillActive = (match && typeof match.isActive === 'boolean') ? match.isActive : null;
+          if (stillActive === true) {
             return;
           }
           showMatchSummary(match);
