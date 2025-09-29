@@ -185,6 +185,29 @@ function initSocket(httpServer) {
     return { gameId, update: sanitized };
   }
 
+  async function persistGameSnapshot(rawGame, fallbackMatchId) {
+    const sanitized = sanitizeGameForPersistence(rawGame, fallbackMatchId);
+    if (!sanitized || !sanitized.gameId || !sanitized.update?.match) {
+      console.warn('Unable to persist game snapshot - missing identifiers', {
+        gameId: sanitized?.gameId,
+        matchId: fallbackMatchId && toId(fallbackMatchId),
+      });
+      return false;
+    }
+
+    try {
+      await GameModel.findByIdAndUpdate(
+        sanitized.gameId,
+        { $set: sanitized.update },
+        { upsert: true, setDefaultsOnInsert: true },
+      );
+      return true;
+    } catch (err) {
+      console.error('Failed to persist game snapshot', { gameId: sanitized.gameId }, err);
+      return false;
+    }
+  }
+
   async function persistCompletedMatch(matchId, gameIds = [], payload = {}) {
     const normalizedMatchId = toId(matchId);
     if (!normalizedMatchId) return;
@@ -201,22 +224,10 @@ function initSocket(httpServer) {
         continue;
       }
 
-      const sanitized = sanitizeGameForPersistence(memoryGame, normalizedMatchId);
-      if (!sanitized || !sanitized.update?.match) {
-        console.warn('Unable to sanitize game for persistence', { matchId: normalizedMatchId, gameId });
+      const persisted = await persistGameSnapshot(memoryGame, normalizedMatchId);
+      if (!persisted) {
         gamesPersisted = false;
-        continue;
-      }
-
-      try {
-        await GameModel.findByIdAndUpdate(
-          gameId,
-          { $set: sanitized.update },
-          { upsert: true, setDefaultsOnInsert: true },
-        );
-      } catch (err) {
-        gamesPersisted = false;
-        console.error('Failed to persist game history', { matchId: normalizedMatchId, gameId }, err);
+        console.error('Failed to persist game history', { matchId: normalizedMatchId, gameId });
       }
     }
 
@@ -863,6 +874,9 @@ function initSocket(httpServer) {
         record.isActive = game.isActive;
       }
       matches.set(matchId, record);
+      if (game.isActive === false) {
+        await persistGameSnapshot(game, matchId);
+      }
       registerMatch(matchId, game.players || []);
     }
 
