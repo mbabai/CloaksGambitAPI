@@ -765,8 +765,13 @@ preloadAssets();
     return true;
   }
 
-  function setUsernameDisplay() {
-    const name = getCookie('username') || localStorage.getItem('cg_username');
+  function setUsernameDisplay(nameOverride) {
+    let name = null;
+    if (typeof nameOverride === 'string' && nameOverride.trim() !== '') {
+      name = nameOverride;
+    } else {
+      name = getCookie('username') || localStorage.getItem('cg_username');
+    }
     if (usernameDisplay) {
       usernameDisplay.textContent = name || '';
     }
@@ -1098,6 +1103,7 @@ preloadAssets();
     } catch (err) {
       console.warn('Unable to persist cg_username to localStorage', err);
     }
+    setUsernameDisplay(name || null);
   }
 
   const TOKEN_STORAGE_KEY = 'cg_token';
