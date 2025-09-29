@@ -1090,12 +1090,30 @@ preloadAssets();
   // Retrieve stored user ID if present; server assigns one if missing
   async function ensureUserId() {
     const stored = getStoredUserId();
-    if (stored) return stored;
+    const cookieId = getCookie('userId');
 
-    const id = getCookie('userId');
-    if (id) {
-      setStoredUserId(id);
-      return id;
+    if (cookieId && cookieId !== stored) {
+      setStoredUserId(cookieId);
+      const cookieName = getCookie('username');
+      setStoredUsername(cookieName || null);
+      return cookieId;
+    }
+
+    if (stored) {
+      if (cookieId === stored) {
+        const cookieName = getCookie('username');
+        if (cookieName) {
+          setStoredUsername(cookieName);
+        }
+      }
+      return stored;
+    }
+
+    if (cookieId) {
+      setStoredUserId(cookieId);
+      const cookieName = getCookie('username');
+      setStoredUsername(cookieName || null);
+      return cookieId;
     }
 
     return null;
