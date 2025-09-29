@@ -14,4 +14,8 @@ changeStreamTokenSchema.statics.saveToken = async function(streamName, token) {
   await this.updateOne({ streamName }, { token }, { upsert: true });
 };
 
+changeStreamTokenSchema.statics.clearToken = async function(streamName) {
+  await this.deleteOne({ streamName });
+};
+
 module.exports = mongoose.model('ChangeStreamToken', changeStreamTokenSchema);
