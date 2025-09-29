@@ -993,8 +993,17 @@ function initSocket(httpServer) {
   // Relay both-next signal to affected users with their color
   eventBus.on('players:bothNext', (payload) => {
     let game = null;
-    if (payload?.game) {
+    if (payload?.nextGame) {
+      game = upsertGameState(payload.nextGame);
+    }
+    if (!game && payload?.game) {
       game = upsertGameState(payload.game);
+    }
+    if (!game && payload?.nextGameId) {
+      const nextId = toId(payload.nextGameId);
+      if (nextId) {
+        game = games.get(nextId) || null;
+      }
     }
     if (!game) {
       const gameId = toId(payload?.gameId);
@@ -1005,20 +1014,38 @@ function initSocket(httpServer) {
     if (!game) return;
 
     const gameIdStr = toId(game._id) || toId(game.id);
-    if (gameIdStr) {
-      game.playersNext = [true, true];
-      games.set(gameIdStr, game);
-    }
+    if (!gameIdStr) return;
 
-    const recipients = (payload?.affectedUsers && payload.affectedUsers.length)
-      ? payload.affectedUsers.map(id => id.toString())
-      : (game.players || []).map(p => p.toString());
+    game.playersNext = [true, true];
+    games.set(gameIdStr, game);
 
-    recipients.forEach((id, idx) => {
-      const socket = clients.get(id.toString());
-      if (socket) {
-        socket.emit('players:bothNext', { gameId: gameIdStr, color: idx });
+    const playerIds = Array.isArray(game.players)
+      ? game.players.map((p) => toId(p)).filter(Boolean)
+      : [];
+
+    const colorByUserId = new Map();
+    playerIds.forEach((pid, idx) => {
+      colorByUserId.set(pid, idx);
+    });
+
+    const candidateRecipients = Array.isArray(payload?.affectedUsers) && payload.affectedUsers.length
+      ? payload.affectedUsers
+      : (Array.isArray(payload?.nextGamePlayers) && payload.nextGamePlayers.length
+        ? payload.nextGamePlayers
+        : playerIds);
+
+    const seen = new Set();
+    candidateRecipients.forEach((rawId) => {
+      const pid = toId(rawId);
+      if (!pid || seen.has(pid)) return;
+      seen.add(pid);
+      const socket = clients.get(pid);
+      if (!socket) return;
+      let color = colorByUserId.has(pid) ? colorByUserId.get(pid) : playerIds.indexOf(pid);
+      if (!Number.isInteger(color) || color < 0) {
+        color = seen.size - 1;
       }
+      socket.emit('players:bothNext', { gameId: gameIdStr, color });
     });
   });
 

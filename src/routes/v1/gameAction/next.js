@@ -146,9 +146,21 @@ router.post('/', async (req, res) => {
               { new: true }
             ).lean();
             if (auto && auto.players?.length === 2) {
+              const { response: autoResponse, nextGame: autoNextGame } = await buildNextResponse(auto, other, {
+                message: 'Auto-advanced after countdown',
+              });
+              const autoAffected = Array.isArray(autoResponse?.nextGamePlayers) && autoResponse.nextGamePlayers.length
+                ? autoResponse.nextGamePlayers
+                : (autoNextGame?.players || auto.players || []).map(toStringId).filter(Boolean);
+
               eventBus.emit('players:bothNext', {
-                game: auto,
-                affectedUsers: auto.players.map(p => p.toString())
+                game: autoNextGame || auto,
+                nextGame: autoNextGame || null,
+                nextGameId: autoResponse?.nextGameId || null,
+                nextGamePlayers: Array.isArray(autoResponse?.nextGamePlayers)
+                  ? autoResponse.nextGamePlayers
+                  : null,
+                affectedUsers: autoAffected,
               });
             }
           }
@@ -165,12 +177,17 @@ router.post('/', async (req, res) => {
 
     if (response.bothNext) {
       const eventGame = nextGame || updated;
-      const affected = Array.isArray(nextGame?.players)
-        ? nextGame.players.map(toStringId).filter(Boolean)
-        : (updated.players || []).map(toStringId).filter(Boolean);
+      const affected = Array.isArray(response.nextGamePlayers) && response.nextGamePlayers.length
+        ? response.nextGamePlayers
+        : (Array.isArray(nextGame?.players)
+            ? nextGame.players.map(toStringId).filter(Boolean)
+            : (updated.players || []).map(toStringId).filter(Boolean));
 
       eventBus.emit('players:bothNext', {
         game: eventGame,
+        nextGame: nextGame || null,
+        nextGameId: response.nextGameId || null,
+        nextGamePlayers: Array.isArray(response.nextGamePlayers) ? response.nextGamePlayers : null,
         affectedUsers: affected,
       });
     }
