@@ -1,9 +1,10 @@
 const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../../models/User');
-const { createAuthToken, TOKEN_COOKIE_NAME } = require('../../utils/authTokens');
+const { createAuthToken, TOKEN_COOKIE_NAME, parseCookies } = require('../../utils/authTokens');
 
 const isProduction = (process.env.NODE_ENV || 'development') === 'production';
+const PRODUCTION_COOKIE_DOMAIN = 'cloaksgambit.bymarcell.com';
 
 const router = express.Router();
 
@@ -14,6 +15,21 @@ const scopes = [
 ];
 
 const FALLBACK_USERNAME = 'GoogleUser';
+const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+function buildCookieBaseOptions() {
+  const base = {
+    path: '/',
+    sameSite: isProduction ? 'none' : 'lax',
+    secure: isProduction,
+  };
+
+  if (isProduction) {
+    base.domain = PRODUCTION_COOKIE_DOMAIN;
+  }
+
+  return base;
+}
 
 function sanitizeSegment(segment) {
   if (!segment) return '';
@@ -161,26 +177,62 @@ router.get('/google/callback', async (req, res) => {
       await user.save();
     }
 
-    const maxAge = 1000 * 60 * 60 * 24 * 365; // 1 year
+    const tokenMaxAge = SESSION_MAX_AGE_MS;
     const token = createAuthToken(user);
-    const baseCookieOptions = {
-      maxAge,
-      sameSite: 'lax',
-    };
-    const secureCookieOptions = isProduction ? { ...baseCookieOptions, secure: true } : baseCookieOptions;
 
-    res.cookie('userId', user._id.toString(), secureCookieOptions);
-    res.cookie('username', user.username, secureCookieOptions);
-    res.cookie('photo', 'assets/images/cloakHood.jpg', secureCookieOptions);
-    res.cookie(TOKEN_COOKIE_NAME, token, {
-      ...secureCookieOptions,
+    const cookieBase = { ...buildCookieBaseOptions(), maxAge: tokenMaxAge };
+
+    const readableCookieOptions = {
+      ...cookieBase,
       httpOnly: false,
+    };
+
+    const tokenCookieOptions = {
+      ...cookieBase,
+      httpOnly: true,
+    };
+
+    res.cookie('userId', user._id.toString(), readableCookieOptions);
+    res.cookie('username', user.username, readableCookieOptions);
+    res.cookie('photo', 'assets/images/cloakHood.jpg', readableCookieOptions);
+    res.cookie(TOKEN_COOKIE_NAME, token, tokenCookieOptions);
+
+    console.log('[auth] Issued session cookies for Google login', {
+      userId: user._id.toString(),
+      username: user.username,
+      domain: tokenCookieOptions.domain || null,
+      sameSite: tokenCookieOptions.sameSite,
+      secure: tokenCookieOptions.secure,
+      maxAge: tokenCookieOptions.maxAge,
     });
     res.redirect('/');
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Authentication failed' });
   }
+});
+
+router.post('/logout', (req, res) => {
+  const baseOptions = buildCookieBaseOptions();
+  const readableOptions = { ...baseOptions };
+  const tokenOptions = { ...baseOptions, httpOnly: true };
+
+  res.clearCookie('userId', readableOptions);
+  res.clearCookie('username', readableOptions);
+  res.clearCookie('photo', readableOptions);
+  res.clearCookie(TOKEN_COOKIE_NAME, tokenOptions);
+
+  const cookies = parseCookies(req?.headers?.cookie);
+
+  console.log('[auth] Cleared session cookies for logout', {
+    hadToken: Boolean(cookies && cookies[TOKEN_COOKIE_NAME]),
+    hadUserId: Boolean(cookies && cookies.userId),
+    domain: tokenOptions.domain || null,
+    sameSite: tokenOptions.sameSite,
+    secure: tokenOptions.secure,
+  });
+
+  res.status(204).end();
 });
 
 module.exports = router;

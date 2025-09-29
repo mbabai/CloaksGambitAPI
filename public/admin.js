@@ -7,7 +7,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   preloadAssets();
 
   const origin = window.location.origin.replace(/\/$/, '');
-  const socket = io(origin + '/admin');
+  const socket = io(origin + '/admin', { withCredentials: true });
   const params = new URLSearchParams(window.location.search);
   const adminIdParam = params.get('adminId');
   const adminUserId = adminIdParam || localStorage.getItem('cg_userId') || null;
@@ -53,7 +53,11 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     if (token && !headers.Authorization) {
       headers.Authorization = `Bearer ${token}`;
     }
-    return fetch(input, { ...init, headers });
+    const fetchOptions = { ...init, headers };
+    if (!fetchOptions.credentials) {
+      fetchOptions.credentials = 'include';
+    }
+    return fetch(input, fetchOptions);
   }
 
   const tabButtons = Array.from(document.querySelectorAll('.tab-button'));

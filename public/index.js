@@ -955,13 +955,21 @@ preloadAssets();
           alert('Failed to update username. Please try again.');
         }
       });
-      logoutBtn.addEventListener('click', ev => {
+      logoutBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
-        setCookie('username', '', 0);
-        setCookie('photo', '', 0);
-        setCookie('userId', '', 0);
-        localStorage.removeItem('cg_username');
-        window.location.reload();
+        try {
+          await authFetch('/api/auth/logout', { method: 'POST' });
+        } catch (error) {
+          console.error('Failed to clear server session during logout', error);
+        } finally {
+          setStoredAuthToken(null);
+          setStoredUserId(null);
+          setStoredUsername(null);
+          setCookie('username', '', 0);
+          setCookie('photo', '', 0);
+          setCookie('userId', '', 0);
+          window.location.reload();
+        }
       });
     } else {
       statsUserId = null;
@@ -1072,7 +1080,11 @@ preloadAssets();
     if (token && !headers.Authorization) {
       headers.Authorization = `Bearer ${token}`;
     }
-    return fetch(input, { ...init, headers });
+    const fetchOptions = { ...init, headers };
+    if (!fetchOptions.credentials) {
+      fetchOptions.credentials = 'include';
+    }
+    return fetch(input, fetchOptions);
   }
 
   // Retrieve stored user ID if present; server assigns one if missing
@@ -2179,7 +2191,7 @@ preloadAssets();
         socketAuth.userId = handshakeUserId;
         userId = handshakeUserId;
       }
-      socket = io('/', { auth: socketAuth });
+      socket = io('/', { auth: socketAuth, withCredentials: true });
       wireSocket();
     } catch (e) {
       console.error(e);
