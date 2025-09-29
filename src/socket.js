@@ -6,7 +6,7 @@ const maskGameForColor = require('./utils/gameView');
 const eventBus = require('./eventBus');
 const ChangeStreamToken = require('./models/ChangeStreamToken');
 const ensureUser = require('./utils/ensureUser');
-const { resolveUserFromToken } = require('./utils/authTokens');
+const { resolveUserFromToken, extractTokenFromRequest } = require('./utils/authTokens');
 const User = require('./models/User');
 const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
@@ -768,10 +768,22 @@ function initSocket(httpServer) {
   eventBus.on('adminRefresh', () => emitAdminMetrics());
 
   io.on('connection', async (socket) => {
-    const { token, userId: providedUserId } = socket.handshake.auth || {};
+    const { token: authTokenFromHandshake, userId: providedUserId } = socket.handshake.auth || {};
     let userId = providedUserId;
     let userInfo = null;
     let authenticated = false;
+
+    let token = authTokenFromHandshake;
+
+    if (!token) {
+      const requestLike = {
+        headers: socket.handshake.headers,
+        url: socket.handshake.url,
+        originalUrl: socket.handshake.url,
+        ip: socket.handshake.address,
+      };
+      token = extractTokenFromRequest(requestLike);
+    }
 
     if (token) {
       try {

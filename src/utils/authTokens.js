@@ -4,6 +4,28 @@ const User = require('../models/User');
 const DEFAULT_SECRET = 'development-secret-change-me';
 const TOKEN_COOKIE_NAME = 'cgToken';
 const TOKEN_HEADER = 'authorization';
+const TOKEN_EXPIRATION = '7d';
+
+function buildLogContext(req) {
+  if (!req || typeof req !== 'object') {
+    return {};
+  }
+
+  const context = {};
+  const url = req.originalUrl || req.url;
+  if (url) {
+    context.url = url;
+  }
+
+  const headerForwarded = req.headers?.['x-forwarded-for'];
+  if (headerForwarded) {
+    context.ip = Array.isArray(headerForwarded) ? headerForwarded[0] : headerForwarded;
+  } else if (req.ip) {
+    context.ip = req.ip;
+  }
+
+  return context;
+}
 
 function getJwtSecret() {
   return process.env.JWT_SECRET || DEFAULT_SECRET;
@@ -15,7 +37,7 @@ function createAuthToken(user) {
     sub: user._id.toString(),
     username: user.username || null,
   };
-  return jwt.sign(payload, getJwtSecret(), { expiresIn: '365d' });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: TOKEN_EXPIRATION });
 }
 
 function verifyAuthToken(token) {
@@ -46,10 +68,12 @@ function extractTokenFromRequest(req) {
   if (typeof header === 'string') {
     const parts = header.split(' ');
     if (parts.length === 2 && /^Bearer$/i.test(parts[0])) {
+      console.log('[auth] Resolved auth token from Authorization header', buildLogContext(req));
       return parts[1];
     }
     if (!header.includes(' ')) {
       // Allow sending raw token without Bearer prefix for flexibility
+      console.log('[auth] Resolved auth token from Authorization header (raw token)', buildLogContext(req));
       return header.trim();
     }
   }
@@ -58,6 +82,7 @@ function extractTokenFromRequest(req) {
   if (cookieHeader) {
     const cookies = parseCookies(cookieHeader);
     if (cookies[TOKEN_COOKIE_NAME]) {
+      console.log('[auth] Resolved auth token from cookie', buildLogContext(req));
       return cookies[TOKEN_COOKIE_NAME];
     }
   }
@@ -100,6 +125,7 @@ module.exports = {
   TOKEN_COOKIE_NAME,
   createAuthToken,
   extractTokenFromRequest,
+  parseCookies,
   resolveUserFromRequest,
   resolveUserFromToken,
   verifyAuthToken,
