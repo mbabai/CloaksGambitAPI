@@ -765,13 +765,45 @@ preloadAssets();
     return true;
   }
 
+  let cachedDisplayName = null;
+
+  function normalizeUsername(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
   function setUsernameDisplay(nameOverride) {
-    let name = null;
-    if (typeof nameOverride === 'string' && nameOverride.trim() !== '') {
-      name = nameOverride;
-    } else {
-      name = getCookie('username') || localStorage.getItem('cg_username');
+    const lockedName = normalizeUsername(LOCKED_NAME);
+    if (!cachedDisplayName && lockedName) {
+      cachedDisplayName = lockedName;
     }
+
+    const override = normalizeUsername(nameOverride);
+    if (override) {
+      cachedDisplayName = override;
+    }
+
+    let name = cachedDisplayName;
+    if (!name) {
+      const cookieName = normalizeUsername(getCookie('username'));
+      if (cookieName) {
+        name = cookieName;
+        cachedDisplayName = name;
+      }
+    }
+    if (!name) {
+      const storedName = normalizeUsername(getStoredUsername());
+      if (storedName) {
+        name = storedName;
+        cachedDisplayName = name;
+      }
+    }
+    if (!name && lockedName) {
+      name = lockedName;
+      cachedDisplayName = lockedName;
+    }
+
     if (usernameDisplay) {
       usernameDisplay.textContent = name || '';
     }
@@ -1004,13 +1036,12 @@ preloadAssets();
           const updated = await res.json();
           const updatedName = updated?.username || trimmed;
           setCookie('username', updatedName, 60 * 60 * 24 * 365);
-          localStorage.setItem('cg_username', updatedName);
+          setStoredUsername(updatedName);
           const playerIdx = currentPlayerIds.findIndex(id => id && id.toString() === currentUserId);
           if (playerIdx !== -1) {
             playerNames[playerIdx] = updatedName;
             renderBoardAndBars();
           }
-          setUsernameDisplay();
           updateAccountPanel();
           if (socket && socket.connected) {
             try { socket.emit('user:updateName', { username: updatedName }); } catch (_) {}
@@ -1093,17 +1124,28 @@ preloadAssets();
     }
   }
 
-  function setStoredUsername(name) {
+  function getStoredUsername() {
     try {
-      if (name) {
-        localStorage.setItem('cg_username', name);
+      return localStorage.getItem('cg_username');
+    } catch (err) {
+      console.warn('Unable to read cg_username from localStorage', err);
+      return null;
+    }
+  }
+
+  function setStoredUsername(name) {
+    const normalized = normalizeUsername(name);
+    try {
+      if (normalized) {
+        localStorage.setItem('cg_username', normalized);
       } else {
         localStorage.removeItem('cg_username');
       }
     } catch (err) {
       console.warn('Unable to persist cg_username to localStorage', err);
     }
-    setUsernameDisplay(name || null);
+    cachedDisplayName = normalized || null;
+    setUsernameDisplay(normalized || null);
   }
 
   const TOKEN_STORAGE_KEY = 'cg_token';
