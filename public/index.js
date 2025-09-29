@@ -1231,6 +1231,7 @@ preloadAssets();
   let socket;
   let userId;
   let lastGameId = null;
+  let activeSocketHandlers = null;
   let bannerInterval = null;
   let bannerOverlay = null;
   let bannerKeyListener = null;
@@ -1735,6 +1736,72 @@ preloadAssets();
     updateClockDisplay();
   }
 
+  async function handleNextResponse(data, fallbackColor = null) {
+    if (!data || typeof data !== 'object') return;
+
+    const normalizedMatchId = normalizeId(data.matchId);
+    let matchDetails = null;
+
+    if (normalizedMatchId) {
+      try {
+        matchDetails = await apiGetMatchDetails(normalizedMatchId);
+      } catch (err) {
+        console.error('Failed to refresh match details after NEXT response', err);
+        matchDetails = null;
+      }
+
+      if (matchDetails) {
+        currentMatch = matchDetails;
+        if (matchDetails?._id) {
+          activeMatchId = normalizeId(matchDetails._id);
+        }
+        applyExpectedTimeSettingsForMatch(matchDetails);
+        const updatedElos = syncPlayerElosFromMatch(matchDetails);
+        if (updatedElos) {
+          renderBoardAndBars();
+        }
+      }
+    }
+
+    if (!data.bothNext) {
+      return;
+    }
+
+    if (data.nextGameId) {
+      const nextGameId = normalizeId(data.nextGameId);
+      if (!nextGameId) return;
+
+      const players = Array.isArray(data.nextGamePlayers)
+        ? data.nextGamePlayers.map(normalizeId).filter(Boolean)
+        : [];
+
+      let color = typeof fallbackColor === 'number' ? fallbackColor : null;
+      if (players.length === 2 && userId) {
+        const idx = players.findIndex((id) => id === userId);
+        if (idx > -1) {
+          color = idx;
+        }
+      }
+
+      if (!(color === 0 || color === 1)) {
+        color = typeof myColor === 'number' ? myColor : 0;
+      }
+
+      if (activeSocketHandlers && typeof activeSocketHandlers.onBothNext === 'function') {
+        await activeSocketHandlers.onBothNext({ gameId: nextGameId, color });
+      }
+
+      return;
+    }
+
+    if (data.matchEnded && normalizedMatchId) {
+      const summaryMatch = matchDetails || await apiGetMatchDetails(normalizedMatchId).catch(() => null);
+      if (summaryMatch) {
+        showMatchSummary(summaryMatch);
+      }
+    }
+  }
+
   function updateFindButton() {
     const awaitingServerQueueState = !queueStatusKnown && queueStartTime != null;
     const anyQueued = queuedState.quickplay || queuedState.ranked;
@@ -1798,7 +1865,7 @@ preloadAssets();
   }
 
   function wireSocket() {
-    bindSocket(socket, {
+    const handlers = {
       onConnect() { console.log('[socket] connected'); },
       async onInitialState(payload) {
       console.log('[socket] initialState', payload);
@@ -1887,7 +1954,8 @@ preloadAssets();
                 console.error('Error showing banner on reconnect', err);
               }
               try {
-                await apiNext(latest._id, colorIdx);
+                const nextInfo = await apiNext(latest._id, colorIdx);
+                await handleNextResponse(nextInfo, colorIdx);
               } catch (err) {
                 console.error('NEXT on reconnect failed', err);
               }
@@ -2102,7 +2170,10 @@ preloadAssets();
             if (remaining <= 0) {
               clearInterval(bannerInterval);
               bannerInterval = null;
-              try { await apiNext(gameId, color); } catch (e) { console.error('auto next failed', e); }
+              try {
+                const nextInfo = await apiNext(gameId, color);
+                await handleNextResponse(nextInfo, color);
+              } catch (e) { console.error('auto next failed', e); }
               desc.textContent = 'Waiting for other player...';
               if (btn) btn.style.display = 'none';
             } else {
@@ -2186,7 +2257,10 @@ preloadAssets();
         handleCustomInviteCancel(payload);
       },
       onDisconnect() { /* keep UI; server handles grace */ }
-    });
+    };
+
+    activeSocketHandlers = handlers;
+    bindSocket(socket, handlers);
     socket.on('user:init', (payload) => {
       ensureAuthToken();
       const newId = payload && payload.userId;
@@ -3404,7 +3478,8 @@ preloadAssets();
       }
       if (nextGame) {
         try {
-          await apiNext(nextGame._id, 1 - myColor);
+          const nextInfo = await apiNext(nextGame._id, 1 - myColor);
+          await handleNextResponse(nextInfo, 1 - myColor);
           desc.textContent = 'Waiting for other player...';
           btn.style.display = 'none';
         } catch (e) { console.error('Failed to queue next game', e); }
