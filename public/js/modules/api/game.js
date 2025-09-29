@@ -31,10 +31,27 @@ export async function apiReady(gameId, color) {
 }
 
 export async function apiNext(gameId, color) {
-  return authFetch('/api/v1/gameAction/next', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+  const res = await authFetch('/api/v1/gameAction/next', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (err) {
+    data = null;
+  }
+
+  if (!res.ok) {
+    const error = new Error((data && data.message) || 'Next request failed');
+    error.response = res;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
 }
 
 export async function apiSetup(payload) {
