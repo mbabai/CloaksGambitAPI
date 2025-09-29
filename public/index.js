@@ -49,6 +49,43 @@ preloadAssets();
   const LOGGED_IN_AVATAR_SRC = getAvatarAsset('loggedInDefault') || '/assets/images/cloakHood.jpg';
   const GOOGLE_ICON_SRC = getIconAsset('google') || '/assets/images/google-icon.png';
 
+  const LOCKED_NAME = (() => {
+    if (typeof window === 'undefined') return null;
+
+    const globalKeys = ['LOCKED_NAME', 'CG_LOCKED_NAME'];
+    for (const key of globalKeys) {
+      if (Object.prototype.hasOwnProperty.call(window, key)) {
+        const value = window[key];
+        if (value !== undefined && value !== null && value !== '') {
+          return String(value);
+        }
+      }
+    }
+
+    try {
+      const meta = document.querySelector('meta[name="cg:locked-name"]');
+      if (meta) {
+        const content = meta.getAttribute('content');
+        if (content) {
+          return content;
+        }
+      }
+    } catch (err) {
+      console.warn('Unable to resolve locked name metadata', err);
+    }
+
+    try {
+      const lockedCookie = getCookie('lockedName');
+      if (lockedCookie) {
+        return lockedCookie;
+      }
+    } catch (err) {
+      console.warn('Unable to resolve locked name cookie', err);
+    }
+
+    return null;
+  })();
+
   let menuOpen = false;
   const PANEL_WIDTH = 180;
   const PANEL_MARGIN = 16; // keep gap from Find Game button
@@ -755,7 +792,16 @@ preloadAssets();
         }
       }
 
-      const displayName = userDetails?.username || name;
+      const serverName = userDetails?.username || null;
+      const lockedName = LOCKED_NAME || null;
+      const displayName = lockedName || serverName || name;
+      const isNameLocked = Boolean(lockedName);
+      let lockMessageEl = null;
+
+      if (displayName && displayName !== name) {
+        try { setCookie('username', displayName, 60 * 60 * 24 * 365); } catch (_) {}
+        setStoredUsername(displayName);
+      }
       const eloValue = Number.isFinite(userDetails?.elo) ? userDetails.elo : null;
 
       statsUserId = userIdCookie || null;
@@ -858,7 +904,17 @@ preloadAssets();
         editBtn.style.backgroundColor = 'transparent';
       });
       usernameRow.appendChild(usernameSpan);
-      usernameRow.appendChild(editBtn);
+
+      if (isNameLocked) {
+        editBtn.disabled = true;
+        editBtn.setAttribute('aria-hidden', 'true');
+        editBtn.style.display = 'none';
+        lockMessageEl = document.createElement('div');
+        lockMessageEl.className = 'menu-message';
+        lockMessageEl.textContent = 'Username changes are temporarily disabled for this account.';
+      } else {
+        usernameRow.appendChild(editBtn);
+      }
 
       const statsBtn = document.createElement('button');
       statsBtn.id = 'statsBtn';
@@ -900,6 +956,9 @@ preloadAssets();
       logoutBtn.appendChild(googleImg);
 
       accountPanelContent.appendChild(usernameRow);
+      if (lockMessageEl) {
+        accountPanelContent.appendChild(lockMessageEl);
+      }
       accountPanelContent.appendChild(statsBtn);
       accountPanelContent.appendChild(logoutBtn);
 
@@ -911,26 +970,27 @@ preloadAssets();
         ev.stopPropagation();
         openStatsOverlay();
       });
-      editBtn.addEventListener('click', async ev => {
-        ev.stopPropagation();
-        const currentUserId = getCookie('userId');
-        if (!currentUserId) {
-          alert('Unable to update username: user session not found.');
-          return;
-        }
-        const newName = prompt('Enter new username', displayName);
-        if (!newName) return;
-        const trimmed = newName.trim();
-        if (trimmed.length < 3 || trimmed.length > 18) {
-          alert('Username must be between 3 and 18 characters.');
-          return;
-        }
-        try {
-          const res = await authFetch('/api/v1/users/update', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: currentUserId, username: trimmed })
-          });
+      if (!isNameLocked) {
+        editBtn.addEventListener('click', async ev => {
+          ev.stopPropagation();
+          const currentUserId = getCookie('userId');
+          if (!currentUserId) {
+            alert('Unable to update username: user session not found.');
+            return;
+          }
+          const newName = prompt('Enter new username', displayName);
+          if (!newName) return;
+          const trimmed = newName.trim();
+          if (trimmed.length < 3 || trimmed.length > 18) {
+            alert('Username must be between 3 and 18 characters.');
+            return;
+          }
+          try {
+            const res = await authFetch('/api/v1/users/update', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: currentUserId, username: trimmed })
+            });
           if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             alert(err.message || 'Failed to update username.');
@@ -954,7 +1014,8 @@ preloadAssets();
           console.error('Failed to update username', error);
           alert('Failed to update username. Please try again.');
         }
-      });
+        });
+      }
       logoutBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
         try {
