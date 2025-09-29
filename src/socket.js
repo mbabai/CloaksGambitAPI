@@ -6,6 +6,8 @@ const eventBus = require('./eventBus');
 const ensureUser = require('./utils/ensureUser');
 const { resolveUserFromToken, extractTokenFromRequest } = require('./utils/authTokens');
 const User = require('./models/User');
+const GameModel = require('./models/Game');
+const MatchModel = require('./models/Match');
 const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
 
@@ -158,6 +160,134 @@ function initSocket(httpServer) {
     } catch (err) {
       console.error('Failed to clone object for socket state:', err);
       return { ...plain };
+    }
+  }
+
+  function sanitizeGameForPersistence(rawGame, fallbackMatchId) {
+    const plain = clonePlainObject(rawGame);
+    if (!plain) return null;
+
+    const gameId = toId(plain._id) || toId(plain.id);
+    const sanitized = { ...plain };
+    delete sanitized._id;
+    delete sanitized.id;
+    delete sanitized.__v;
+
+    const normalizedMatch = toId(plain.match) || toId(fallbackMatchId);
+    if (normalizedMatch) {
+      sanitized.match = normalizedMatch;
+    }
+
+    if (Array.isArray(plain.players)) {
+      sanitized.players = plain.players.map(player => toId(player)).filter(Boolean);
+    }
+
+    return { gameId, update: sanitized };
+  }
+
+  async function persistCompletedMatch(matchId, gameIds = [], payload = {}) {
+    const normalizedMatchId = toId(matchId);
+    if (!normalizedMatchId) return;
+
+    const uniqueGameIds = Array.from(new Set((gameIds || []).map(toId).filter(Boolean)));
+
+    let gamesPersisted = true;
+
+    for (const gameId of uniqueGameIds) {
+      const memoryGame = games.get(gameId);
+      if (!memoryGame) {
+        console.warn('No in-memory game found to persist for match', normalizedMatchId, 'game', gameId);
+        gamesPersisted = false;
+        continue;
+      }
+
+      const sanitized = sanitizeGameForPersistence(memoryGame, normalizedMatchId);
+      if (!sanitized || !sanitized.update?.match) {
+        console.warn('Unable to sanitize game for persistence', { matchId: normalizedMatchId, gameId });
+        gamesPersisted = false;
+        continue;
+      }
+
+      try {
+        await GameModel.findByIdAndUpdate(
+          gameId,
+          { $set: sanitized.update },
+          { upsert: true, setDefaultsOnInsert: true },
+        );
+      } catch (err) {
+        gamesPersisted = false;
+        console.error('Failed to persist game history', { matchId: normalizedMatchId, gameId }, err);
+      }
+    }
+
+    let statsUpdated = true;
+    let matchDoc = null;
+    try {
+      matchDoc = await MatchModel.findById(normalizedMatchId).lean();
+    } catch (err) {
+      statsUpdated = false;
+      console.error('Failed to load match for persistence', { matchId: normalizedMatchId }, err);
+    }
+
+    if (matchDoc) {
+      const winnerId = toId(payload?.winner) || (matchDoc.winner ? matchDoc.winner.toString() : null);
+      const playerData = [
+        {
+          id: matchDoc.player1 ? matchDoc.player1.toString() : null,
+          startElo: matchDoc.player1StartElo,
+          endElo: matchDoc.player1EndElo,
+        },
+        {
+          id: matchDoc.player2 ? matchDoc.player2.toString() : null,
+          startElo: matchDoc.player2StartElo,
+          endElo: matchDoc.player2EndElo,
+        },
+      ].filter(player => Boolean(player.id));
+
+      await Promise.all(playerData.map(async ({ id, startElo, endElo }) => {
+        const isRankedMatch = matchDoc.type === GAME_CONSTANTS.gameModes.RANKED;
+        const delta = (Number.isFinite(endElo) && Number.isFinite(startElo))
+          ? endElo - startElo
+          : 0;
+
+        const inc = { 'stats.matchesPlayed': 1 };
+        if (winnerId) {
+          if (winnerId === id) {
+            inc['stats.matchesWon'] = 1;
+          } else {
+            inc['stats.matchesLost'] = 1;
+          }
+        } else {
+          inc['stats.matchesDrawn'] = 1;
+        }
+        if (delta !== 0) {
+          inc['stats.totalEloDelta'] = delta;
+        }
+
+        const set = { 'stats.lastEloDelta': delta };
+        if (isRankedMatch && Number.isFinite(endElo)) {
+          set.elo = endElo;
+        }
+
+        try {
+          await User.updateOne(
+            { _id: id },
+            { $inc: inc, $set: set },
+          );
+        } catch (err) {
+          statsUpdated = false;
+          console.error('Failed to update user stats after match', { matchId: normalizedMatchId, userId: id }, err);
+        }
+      }));
+    } else {
+      statsUpdated = false;
+    }
+
+    if (gamesPersisted && statsUpdated) {
+      uniqueGameIds.forEach((gameId) => {
+        games.delete(gameId);
+      });
+      matches.delete(normalizedMatchId);
     }
   }
 
@@ -665,7 +795,7 @@ function initSocket(httpServer) {
     registerMatch(matchId, players);
   });
 
-  eventBus.on('match:ended', (payload) => {
+  eventBus.on('match:ended', async (payload) => {
     if (!payload) return;
     const matchId = toId(payload.matchId);
     if (!matchId) return;
@@ -684,7 +814,17 @@ function initSocket(httpServer) {
       lobby.inGame = (lobby.inGame || []).filter(id => !endedPlayers.has(toId(id)));
     }
 
+    const gamesForMatch = Array.isArray(record.games)
+      ? record.games.map(id => toId(id)).filter(Boolean)
+      : [];
+
     cleanupMatchTracking(matchId);
+
+    try {
+      await persistCompletedMatch(matchId, gamesForMatch, payload);
+    } catch (err) {
+      console.error('Failed to persist completed match data', { matchId }, err);
+    }
   });
 
   eventBus.on('gameChanged', async (payload) => {
