@@ -1,15 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const Lobby = require('../../../models/Lobby');
+const { lobbies, quickplayQueue, rankedQueue } = require('../../../state');
+
+function toIdStrings(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map((value) => {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    if (typeof value.toString === 'function') return value.toString();
+    return null;
+  }).filter(Boolean);
+}
 
 router.post('/', async (req, res) => {
   try {
-    let lobby = await Lobby.findOne().lean();
-    if (!lobby) {
-      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [] });
-      lobby = lobby.toObject();
-    }
-    res.json(lobby);
+    const lobby = lobbies.default || {};
+    res.json({
+      quickplayQueue: toIdStrings(lobby.quickplayQueue || quickplayQueue),
+      rankedQueue: toIdStrings(lobby.rankedQueue || rankedQueue),
+      inGame: toIdStrings(lobby.inGame),
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
