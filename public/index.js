@@ -1,3 +1,4 @@
+import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { pieceGlyph as modulePieceGlyph } from '/js/modules/render/pieceGlyph.js';
 import { renderBoard } from '/js/modules/render/board.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
@@ -25,6 +26,8 @@ import {
 } from '/js/modules/ui/icons.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
+
+preloadAssets();
 
 (function() {
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);

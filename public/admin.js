@@ -1,8 +1,11 @@
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { getCookie } from '/js/modules/utils/cookies.js';
+import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 
 (function () {
+  preloadAssets();
+
   const origin = window.location.origin.replace(/\/$/, '');
   const socket = io(origin + '/admin');
   const params = new URLSearchParams(window.location.search);
