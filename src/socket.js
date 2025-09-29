@@ -143,6 +143,52 @@ function initSocket(httpServer) {
     return lobbies.default;
   }
 
+  function replaceArrayContents(target, values = []) {
+    if (!Array.isArray(target)) return;
+    target.splice(0, target.length, ...(values || []));
+  }
+
+  function clonePlainObject(value) {
+    if (!value) return null;
+    const plain = typeof value.toObject === 'function'
+      ? value.toObject({ depopulate: false })
+      : value;
+    try {
+      return JSON.parse(JSON.stringify(plain));
+    } catch (err) {
+      console.error('Failed to clone object for socket state:', err);
+      return { ...plain };
+    }
+  }
+
+  function normalizeGameState(rawGame) {
+    const cloned = clonePlainObject(rawGame);
+    if (!cloned) return null;
+    const gameId = toId(cloned._id) || toId(cloned.id);
+    if (!gameId) return null;
+    const matchId = toId(cloned.match);
+    const players = Array.isArray(cloned.players)
+      ? cloned.players.map(p => toId(p)).filter(Boolean)
+      : [];
+
+    return {
+      ...cloned,
+      _id: gameId,
+      id: cloned.id || gameId,
+      match: matchId,
+      players,
+      playersReady: Array.isArray(cloned.playersReady) ? cloned.playersReady : [false, false],
+      playersNext: Array.isArray(cloned.playersNext) ? cloned.playersNext : [false, false],
+    };
+  }
+
+  function upsertGameState(rawGame) {
+    const normalized = normalizeGameState(rawGame);
+    if (!normalized) return null;
+    games.set(normalized._id, normalized);
+    return normalized;
+  }
+
   async function createCustomMatch(player1Id, player2Id) {
     const players = [toId(player1Id), toId(player2Id)].filter(Boolean);
     if (players.length !== 2) {
@@ -520,6 +566,12 @@ function initSocket(httpServer) {
 
     const affected = new Set((payload.affectedUsers || []).map(id => id.toString()));
 
+    replaceArrayContents(quickplayQueue, newQuick);
+    replaceArrayContents(rankedQueue, newRanked);
+    const lobby = ensureLobby();
+    lobby.quickplayQueue = quickplayQueue;
+    lobby.rankedQueue = rankedQueue;
+
     const collectDiff = (prev, next) => {
       prev.forEach((id) => {
         if (!next.includes(id)) affected.add(id);
@@ -532,8 +584,8 @@ function initSocket(httpServer) {
     collectDiff(lobbyState.quickplayQueue, newQuick);
     collectDiff(lobbyState.rankedQueue, newRanked);
 
-    lobbyState.quickplayQueue = newQuick;
-    lobbyState.rankedQueue = newRanked;
+    lobbyState.quickplayQueue = [...quickplayQueue];
+    lobbyState.rankedQueue = [...rankedQueue];
 
     affected.forEach((id) => {
       const socket = clients.get(id);
@@ -551,37 +603,139 @@ function initSocket(httpServer) {
 
   eventBus.on('match:created', (payload) => {
     if (!payload) return;
-    registerMatch(payload.matchId, payload.players || []);
+    const matchId = toId(payload.matchId);
+    if (!matchId) return;
+
+    const players = (payload.players || [])
+      .map(id => toId(id))
+      .filter(Boolean);
+
+    let record = matches.get(matchId) || {
+      _id: matchId,
+      id: matchId,
+      games: [],
+      isActive: true,
+    };
+
+    if (payload.match) {
+      const normalizedMatch = clonePlainObject(payload.match) || {};
+      record = {
+        ...record,
+        ...normalizedMatch,
+        _id: matchId,
+        id: matchId,
+        player1: toId(normalizedMatch.player1) || record.player1,
+        player2: toId(normalizedMatch.player2) || record.player2,
+        games: Array.isArray(normalizedMatch.games)
+          ? normalizedMatch.games.map(id => toId(id)).filter(Boolean)
+          : record.games,
+        type: normalizedMatch.type ?? record.type,
+        isActive: normalizedMatch.isActive ?? record.isActive ?? true,
+      };
+    }
+
+    if (players[0]) record.player1 = players[0];
+    if (players[1]) record.player2 = players[1];
+
+    if (Array.isArray(payload.games)) {
+      record.games = payload.games.map(id => toId(id)).filter(Boolean);
+    }
+
+    if (payload.type !== undefined) {
+      record.type = payload.type;
+    }
+
+    if (payload.isActive !== undefined) {
+      record.isActive = Boolean(payload.isActive);
+    } else if (record.isActive === undefined) {
+      record.isActive = true;
+    }
+
+    matches.set(matchId, record);
+
+    const lobby = ensureLobby();
+    lobby.inGame = lobby.inGame || [];
+    players.forEach((playerId) => {
+      if (!playerId) return;
+      if (!lobby.inGame.includes(playerId)) {
+        lobby.inGame.push(playerId);
+      }
+    });
+
+    registerMatch(matchId, players);
   });
 
   eventBus.on('match:ended', (payload) => {
     if (!payload) return;
-    cleanupMatchTracking(payload.matchId);
+    const matchId = toId(payload.matchId);
+    if (!matchId) return;
+
+    const record = matches.get(matchId) || { _id: matchId, id: matchId, games: [] };
+    record.isActive = false;
+    if (payload.winner !== undefined) {
+      record.winner = payload.winner;
+    }
+    record.endedAt = new Date();
+    matches.set(matchId, record);
+
+    const endedPlayers = new Set((payload.players || []).map(id => toId(id)).filter(Boolean));
+    if (endedPlayers.size > 0) {
+      const lobby = ensureLobby();
+      lobby.inGame = (lobby.inGame || []).filter(id => !endedPlayers.has(toId(id)));
+    }
+
+    cleanupMatchTracking(matchId);
   });
 
   eventBus.on('gameChanged', async (payload) => {
-    let game;
+    let game = null;
     if (payload?.game) {
-      game = typeof payload.game.toObject === 'function'
-        ? payload.game.toObject()
-        : payload.game;
-    } else {
-      const gameId = toId(payload?.documentKey?._id || payload?.gameId);
-      if (!gameId) return;
-      game = games.get(gameId);
+      game = upsertGameState(payload.game);
+    }
+
+    if (!game) {
+      const fallbackId = toId(payload?.documentKey?._id || payload?.gameId);
+      if (fallbackId) {
+        game = games.get(fallbackId) || null;
+      }
     }
 
     if (!game) return;
 
     const matchId = toId(game.match);
     const gameIdStr = toId(game._id) || toId(game.id);
-    const players = (payload?.affectedUsers || game.players || []).map(id => id.toString());
+
+    if (gameIdStr && !games.has(gameIdStr)) {
+      games.set(gameIdStr, game);
+    }
+
+    if (matchId) {
+      const record = matches.get(matchId) || { _id: matchId, id: matchId, games: [] };
+      record.games = Array.isArray(record.games) ? record.games : [];
+      if (gameIdStr && !record.games.includes(gameIdStr)) {
+        record.games.push(gameIdStr);
+      }
+      if (Array.isArray(game.players)) {
+        if (game.players[0]) record.player1 = toId(game.players[0]);
+        if (game.players[1]) record.player2 = toId(game.players[1]);
+      }
+      if (typeof game.isActive === 'boolean' && record.isActive === undefined) {
+        record.isActive = game.isActive;
+      }
+      matches.set(matchId, record);
+      registerMatch(matchId, game.players || []);
+    }
+
+    const players = (payload?.affectedUsers && payload.affectedUsers.length)
+      ? payload.affectedUsers.map(id => id.toString())
+      : (game.players || []).map(p => p.toString());
 
     players.forEach((playerId) => {
       const socket = clients.get(playerId);
       if (!socket) return;
-      const idx = game.players.findIndex(p => p.toString() === playerId);
-      const masked = maskGameForColor(JSON.parse(JSON.stringify(game)), idx);
+      const idx = (game.players || []).findIndex(p => p.toString() === playerId);
+      const maskedSource = JSON.parse(JSON.stringify(game));
+      const masked = maskGameForColor(maskedSource, idx);
       socket.emit('game:update', {
         matchId,
         gameId: gameIdStr,
@@ -602,7 +756,6 @@ function initSocket(httpServer) {
         winner: masked.winner,
         winReason: masked.winReason,
         playersReady: game.playersReady,
-        setupComplete: game.setupComplete,
         startTime: game.startTime,
         timeControlStart: game.timeControlStart,
         increment: game.increment,
@@ -651,6 +804,13 @@ function initSocket(httpServer) {
   // Relay explicit both-ready signal to affected users
   eventBus.on('players:bothReady', (payload) => {
     const gameId = payload?.gameId?.toString?.() || payload?.gameId
+    if (gameId) {
+      const storedGame = games.get(toId(gameId));
+      if (storedGame) {
+        storedGame.playersReady = [true, true];
+        games.set(toId(gameId), storedGame);
+      }
+    }
     const users = (payload?.affectedUsers || []).map(id => id.toString())
     console.log('[server] relaying players:bothReady', { gameId, users })
     users.forEach((playerId) => {
@@ -678,16 +838,29 @@ function initSocket(httpServer) {
 
   // Relay both-next signal to affected users with their color
   eventBus.on('players:bothNext', (payload) => {
-    let game = payload?.game;
+    let game = null;
+    if (payload?.game) {
+      game = upsertGameState(payload.game);
+    }
     if (!game) {
       const gameId = toId(payload?.gameId);
       if (gameId) {
-        game = games.get(gameId);
+        game = games.get(gameId) || null;
       }
     }
     if (!game) return;
+
     const gameIdStr = toId(game._id) || toId(game.id);
-    (payload?.affectedUsers || game.players || []).forEach((id, idx) => {
+    if (gameIdStr) {
+      game.playersNext = [true, true];
+      games.set(gameIdStr, game);
+    }
+
+    const recipients = (payload?.affectedUsers && payload.affectedUsers.length)
+      ? payload.affectedUsers.map(id => id.toString())
+      : (game.players || []).map(p => p.toString());
+
+    recipients.forEach((id, idx) => {
       const socket = clients.get(id.toString());
       if (socket) {
         socket.emit('players:bothNext', { gameId: gameIdStr, color: idx });
