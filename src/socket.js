@@ -698,6 +698,23 @@ function initSocket(httpServer) {
 
   async function setupChangeStream(Model, streamName, pipeline, options, handler) {
     let resumeToken = await ChangeStreamToken.getToken(streamName);
+    let restarting = false;
+
+    const isResumeTokenInvalid = (err) => {
+      const code = err?.code;
+      const codeName = err?.codeName;
+      const message = err?.message || '';
+
+      return (
+        code === 280 ||
+        code === 40585 ||
+        code === 286 ||
+        codeName === 'ChangeStreamHistoryLost' ||
+        message.includes('resume point may no longer be in the oplog') ||
+        message.includes('Change stream was invalidated') ||
+        message.includes('Resume of change stream was not possible')
+      );
+    };
 
     const start = () => {
       const watchOptions = { ...options };
@@ -706,10 +723,52 @@ function initSocket(httpServer) {
       }
 
       let stream;
+      const restart = (resetToken = false) => {
+        if (restarting) {
+          return;
+        }
+        restarting = true;
+
+        const doRestart = async () => {
+          if (resetToken) {
+            resumeToken = null;
+            try {
+              await ChangeStreamToken.clearToken(streamName);
+            } catch (clearErr) {
+              console.error(`Error clearing resume token for ${streamName}:`, clearErr);
+            }
+          }
+
+          try {
+            await stream?.close();
+          } catch (closeErr) {
+            console.error(`Error closing ${streamName} change stream:`, closeErr);
+          }
+
+          const restartMessage = resetToken
+            ? `${streamName} change stream restarting without resume token.`
+            : `${streamName} change stream restarting.`;
+          console.warn(restartMessage);
+
+          setTimeout(() => {
+            restarting = false;
+            start();
+          }, 0);
+        };
+
+        doRestart().catch((restartErr) => {
+          console.error(`Failed to restart ${streamName} change stream:`, restartErr);
+          restarting = false;
+        });
+      };
+
       try {
         stream = Model.watch(pipeline, watchOptions);
       } catch (err) {
         console.error(`Error watching ${streamName}:`, err);
+        if (isResumeTokenInvalid(err) && resumeToken) {
+          restart(true);
+        }
         return;
       }
 
@@ -726,17 +785,13 @@ function initSocket(httpServer) {
         }
       });
 
-      const restart = () => {
-        console.warn(`${streamName} change stream restarting.`);
-        start();
-      };
-
       stream.on('error', (err) => {
         console.error(`Error in ${streamName} change stream:`, err);
-        restart();
+        const resetToken = isResumeTokenInvalid(err);
+        restart(resetToken);
       });
 
-      stream.on('close', restart);
+      stream.on('close', () => restart(false));
     };
 
     start();
