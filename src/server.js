@@ -94,7 +94,7 @@ app.set('trust proxy', true);
 
 const routes = require('./routes');
 const initSocket = require('./socket');
-const Lobby = require('./models/Lobby');
+const { lobbies, rankedQueue, quickplayQueue, matches, games } = require('./state');
 
 // Middleware
 app.use(cors());
@@ -147,27 +147,19 @@ async function connectToDatabase() {
   }
 }
 
-async function resetLobbyQueues() {
-  try {
-    const lobby = await Lobby.findOne();
-    if (lobby) {
-      lobby.quickplayQueue = [];
-      lobby.rankedQueue = [];
-      lobby.inGame = [];
-      await lobby.save();
-      console.log('Cleared stale queues from previous server run');
-    } else {
-      // Create a new lobby if none exists
-      await Lobby.create({
-        quickplayQueue: [],
-        rankedQueue: [],
-        inGame: []
-      });
-      console.log('Created new lobby');
-    }
-  } catch (err) {
-    console.error('Error clearing queues:', err);
-  }
+function resetLobbyQueues() {
+  rankedQueue.splice(0, rankedQueue.length);
+  quickplayQueue.splice(0, quickplayQueue.length);
+  matches.clear();
+  games.clear();
+
+  const defaultLobby = lobbies.default || {};
+  defaultLobby.quickplayQueue = quickplayQueue;
+  defaultLobby.rankedQueue = rankedQueue;
+  defaultLobby.inGame = [];
+  lobbies.default = defaultLobby;
+
+  console.log('Initialized in-memory lobby state');
 }
 
 // Routes
@@ -198,7 +190,7 @@ async function startServer() {
   const connected = await connectToDatabase();
 
   if (connected) {
-    await resetLobbyQueues();
+    resetLobbyQueues();
   }
 
   server.listen(PORT, () => {

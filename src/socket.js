@@ -1,10 +1,8 @@
 const { Server } = require('socket.io');
-const Lobby = require('./models/Lobby');
-const Game = require('./models/Game');
-const Match = require('./models/Match');
+const { randomUUID } = require('crypto');
+const { lobbies, rankedQueue, quickplayQueue, matches, games } = require('./state');
 const maskGameForColor = require('./utils/gameView');
 const eventBus = require('./eventBus');
-const ChangeStreamToken = require('./models/ChangeStreamToken');
 const ensureUser = require('./utils/ensureUser');
 const { resolveUserFromToken, extractTokenFromRequest } = require('./utils/authTokens');
 const User = require('./models/User');
@@ -133,12 +131,16 @@ function initSocket(httpServer) {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  async function ensureLobby() {
-    let lobby = await Lobby.findOne();
-    if (!lobby) {
-      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [], inGame: [] });
+  function ensureLobby() {
+    if (!lobbies.default) {
+      lobbies.default = { quickplayQueue, rankedQueue, inGame: [] };
     }
-    return lobby;
+    if (!Array.isArray(lobbies.default.inGame)) {
+      lobbies.default.inGame = [];
+    }
+    lobbies.default.quickplayQueue = quickplayQueue;
+    lobbies.default.rankedQueue = rankedQueue;
+    return lobbies.default;
   }
 
   async function createCustomMatch(player1Id, player2Id) {
@@ -148,7 +150,7 @@ function initSocket(httpServer) {
     }
 
     const config = await getServerConfig();
-    const lobby = await ensureLobby();
+    const lobby = ensureLobby();
 
     const customSettings = config?.gameModeSettings?.get
       ? (config.gameModeSettings.get('CUSTOM') || config.gameModeSettings.get('QUICKPLAY') || {})
@@ -167,70 +169,79 @@ function initSocket(httpServer) {
       ? (config.gameModes.get('CUSTOM') || 'CUSTOM')
       : (config?.gameModes?.CUSTOM || 'CUSTOM');
 
-    const lobbyQuickplay = lobby.quickplayQueue.map(id => id.toString());
-    const lobbyRanked = lobby.rankedQueue.map(id => id.toString());
-
-    let lobbyChanged = false;
-    const filteredQuick = lobbyQuickplay.filter(id => !players.includes(id));
-    if (filteredQuick.length !== lobbyQuickplay.length) {
-      lobby.quickplayQueue = filteredQuick;
-      lobbyChanged = true;
-    }
-    const filteredRanked = lobbyRanked.filter(id => !players.includes(id));
-    if (filteredRanked.length !== lobbyRanked.length) {
-      lobby.rankedQueue = filteredRanked;
-      lobbyChanged = true;
-    }
-
-    const inGameSet = new Set(lobby.inGame.map(id => id.toString()));
-    players.forEach((pid) => {
-      if (!inGameSet.has(pid)) {
-        lobby.inGame.push(pid);
-        inGameSet.add(pid);
-        lobbyChanged = true;
+    const removeFromQueue = (queue, id) => {
+      const idx = queue.indexOf(id);
+      if (idx !== -1) {
+        queue.splice(idx, 1);
       }
+    };
+
+    const affected = new Set();
+    players.forEach((pid) => {
+      const id = pid.toString();
+      removeFromQueue(quickplayQueue, id);
+      removeFromQueue(rankedQueue, id);
+      if (!lobby.inGame.includes(id)) {
+        lobby.inGame.push(id);
+      }
+      affected.add(id);
     });
 
-    if (lobbyChanged) {
-      await lobby.save();
-      eventBus.emit('queueChanged', {
-        quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
-        rankedQueue: lobby.rankedQueue.map(id => id.toString()),
-        affectedUsers: players,
-      });
-    }
+    eventBus.emit('queueChanged', {
+      quickplayQueue: [...quickplayQueue],
+      rankedQueue: [...rankedQueue],
+      affectedUsers: Array.from(affected),
+    });
 
-    const match = await Match.create({
+    const matchId = randomUUID();
+    const match = {
+      _id: matchId,
+      id: matchId,
       player1: players[0],
       player2: players[1],
       type: typeValue,
       player1Score: 0,
       player2Score: 0,
       games: [],
-    });
+      isActive: true,
+      createdAt: new Date(),
+    };
+    matches.set(matchId, match);
 
-    const game = await Game.create({
-      players,
-      match: match._id,
+    const gameId = randomUUID();
+    const game = {
+      _id: gameId,
+      id: gameId,
+      match: matchId,
+      players: players.map(id => id.toString()),
+      playersReady: [false, false],
+      playersNext: [false, false],
+      playerTurn: null,
+      winner: null,
+      winReason: null,
+      createdAt: new Date(),
+      startTime: null,
+      endTime: null,
+      isActive: true,
       timeControlStart: timeControl,
       increment,
-    });
+    };
 
-    match.games.push(game._id);
-    await match.save();
+    games.set(gameId, game);
+    match.games.push(gameId);
 
-    const affected = players.map(id => id.toString());
+    const affectedList = Array.from(affected);
     eventBus.emit('gameChanged', {
-      game: typeof game.toObject === 'function' ? game.toObject() : game,
-      affectedUsers: affected,
+      game,
+      affectedUsers: affectedList,
     });
     eventBus.emit('players:bothNext', {
-      game: typeof game.toObject === 'function' ? game.toObject() : game,
-      affectedUsers: affected,
+      game,
+      affectedUsers: affectedList,
     });
     eventBus.emit('match:created', {
-      matchId: match._id.toString(),
-      players: affected,
+      matchId,
+      players: affectedList,
       type: match.type,
     });
 
@@ -426,7 +437,7 @@ function initSocket(httpServer) {
     const loserId = toId(playerId);
 
     try {
-      const match = await Match.findById(matchId);
+      const match = matches.get(matchId);
       if (!match || !match.isActive) {
         cleanupMatchTracking(matchId);
         return;
@@ -459,21 +470,24 @@ function initSocket(httpServer) {
         match.player2Score = Math.max(match.player2Score || 0, winScore);
       }
 
-      const games = await Game.find({ match: match._id, isActive: true });
+      match.isActive = false;
+      match.endedAt = new Date();
 
-      await match.endMatch(winnerId);
+      const activeGames = (match.games || [])
+        .map(id => games.get(toId(id)))
+        .filter(game => game?.isActive);
 
-      for (const game of games) {
+      for (const game of activeGames) {
         const winnerIdx = game.players.findIndex(p => p.toString() === winnerId);
         if (winnerIdx === -1) continue;
-        await game.endGame(winnerIdx, winReasonValue);
-        const updatedGame = await Game.findById(game._id).lean();
-        if (updatedGame) {
-          eventBus.emit('gameChanged', {
-            game: updatedGame,
-            affectedUsers: (updatedGame.players || []).map(id => id.toString()),
-          });
-        }
+        game.isActive = false;
+        game.winner = winnerIdx;
+        game.winReason = winReasonValue;
+        game.endTime = new Date();
+        eventBus.emit('gameChanged', {
+          game,
+          affectedUsers: (game.players || []).map(id => id.toString()),
+        });
       }
     } catch (err) {
       console.error('Error handling disconnect timeout', err);
@@ -491,40 +505,35 @@ function initSocket(httpServer) {
   // Admin namespace for dashboard metrics
   const adminNamespace = io.of('/admin');
 
-  const lobbyState = { quickplayQueue: [], rankedQueue: [] };
-  Lobby.findOne().lean().then(lobby => {
-    if (lobby) {
-      lobbyState.quickplayQueue = lobby.quickplayQueue.map(id => id.toString());
-      lobbyState.rankedQueue = lobby.rankedQueue.map(id => id.toString());
-    }
-  }).catch(err => {
-    console.error('Error initializing lobby state:', err);
-  });
+  const lobbyState = {
+    quickplayQueue: [...quickplayQueue],
+    rankedQueue: [...rankedQueue],
+  };
 
-  eventBus.on('queueChanged', (payload) => {
-    let newQuick = [];
-    let newRanked = [];
-    const affected = new Set();
+  eventBus.on('queueChanged', (payload = {}) => {
+    const newQuick = Array.isArray(payload.quickplayQueue)
+      ? payload.quickplayQueue.map(id => id.toString())
+      : [...quickplayQueue];
+    const newRanked = Array.isArray(payload.rankedQueue)
+      ? payload.rankedQueue.map(id => id.toString())
+      : [...rankedQueue];
 
-    if (payload.fullDocument) {
-      const { quickplayQueue = [], rankedQueue = [] } = payload.fullDocument;
-      newQuick = quickplayQueue.map(id => id.toString());
-      newRanked = rankedQueue.map(id => id.toString());
+    const affected = new Set((payload.affectedUsers || []).map(id => id.toString()));
 
-      const added = new Set();
-      const removed = new Set();
+    const collectDiff = (prev, next) => {
+      prev.forEach((id) => {
+        if (!next.includes(id)) affected.add(id);
+      });
+      next.forEach((id) => {
+        if (!prev.includes(id)) affected.add(id);
+      });
+    };
 
-      newQuick.forEach(id => { if (!lobbyState.quickplayQueue.includes(id)) added.add(id); });
-      lobbyState.quickplayQueue.forEach(id => { if (!newQuick.includes(id)) removed.add(id); });
-      newRanked.forEach(id => { if (!lobbyState.rankedQueue.includes(id)) added.add(id); });
-      lobbyState.rankedQueue.forEach(id => { if (!newRanked.includes(id)) removed.add(id); });
+    collectDiff(lobbyState.quickplayQueue, newQuick);
+    collectDiff(lobbyState.rankedQueue, newRanked);
 
-      [...added, ...removed].forEach(id => affected.add(id));
-    } else {
-      newQuick = (payload.quickplayQueue || []).map(id => id.toString());
-      newRanked = (payload.rankedQueue || []).map(id => id.toString());
-      (payload.affectedUsers || []).forEach(id => affected.add(id.toString()));
-    }
+    lobbyState.quickplayQueue = newQuick;
+    lobbyState.rankedQueue = newRanked;
 
     affected.forEach((id) => {
       const socket = clients.get(id);
@@ -536,12 +545,9 @@ function initSocket(httpServer) {
       }
     });
 
-      lobbyState.quickplayQueue = newQuick;
-      lobbyState.rankedQueue = newRanked;
-
-      // Emit updated metrics to admin dashboard
-      emitAdminMetrics();
-    });
+    // Emit updated metrics to admin dashboard
+    emitAdminMetrics();
+  });
 
   eventBus.on('match:created', (payload) => {
     if (!payload) return;
@@ -555,26 +561,21 @@ function initSocket(httpServer) {
 
   eventBus.on('gameChanged', async (payload) => {
     let game;
-    if (payload.game) {
+    if (payload?.game) {
       game = typeof payload.game.toObject === 'function'
         ? payload.game.toObject()
         : payload.game;
     } else {
-      const gameId = payload?.documentKey?._id || payload?.gameId;
+      const gameId = toId(payload?.documentKey?._id || payload?.gameId);
       if (!gameId) return;
-      try {
-        game = await Game.findById(gameId).lean();
-      } catch (err) {
-        console.error('Error fetching game for update:', err);
-        return;
-      }
+      game = games.get(gameId);
     }
 
     if (!game) return;
 
-    const matchId = game.match?.toString();
-    const gameIdStr = game._id.toString();
-    const players = (payload.affectedUsers || game.players || []).map(id => id.toString());
+    const matchId = toId(game.match);
+    const gameIdStr = toId(game._id) || toId(game.id);
+    const players = (payload?.affectedUsers || game.players || []).map(id => id.toString());
 
     players.forEach((playerId) => {
       const socket = clients.get(playerId);
@@ -676,18 +677,16 @@ function initSocket(httpServer) {
   });
 
   // Relay both-next signal to affected users with their color
-  eventBus.on('players:bothNext', async (payload) => {
-    let game = payload.game;
+  eventBus.on('players:bothNext', (payload) => {
+    let game = payload?.game;
     if (!game) {
-      const gameId = payload?.gameId;
+      const gameId = toId(payload?.gameId);
       if (gameId) {
-        try {
-          game = await Game.findById(gameId).lean();
-        } catch (_) {}
+        game = games.get(gameId);
       }
     }
     if (!game) return;
-    const gameIdStr = game._id.toString();
+    const gameIdStr = toId(game._id) || toId(game.id);
     (payload?.affectedUsers || game.players || []).forEach((id, idx) => {
       const socket = clients.get(id.toString());
       if (socket) {
@@ -696,128 +695,7 @@ function initSocket(httpServer) {
     });
   });
 
-  async function setupChangeStream(Model, streamName, pipeline, options, handler) {
-    let resumeToken = await ChangeStreamToken.getToken(streamName);
-    let restarting = false;
-
-    const isResumeTokenInvalid = (err) => {
-      const code = err?.code;
-      const codeName = err?.codeName;
-      const message = err?.message || '';
-
-      return (
-        code === 280 ||
-        code === 40585 ||
-        code === 286 ||
-        codeName === 'ChangeStreamHistoryLost' ||
-        message.includes('resume point may no longer be in the oplog') ||
-        message.includes('Change stream was invalidated') ||
-        message.includes('Resume of change stream was not possible')
-      );
-    };
-
-    const start = () => {
-      const watchOptions = { ...options };
-      if (resumeToken) {
-        watchOptions.resumeAfter = resumeToken;
-      }
-
-      let stream;
-      const restart = (resetToken = false) => {
-        if (restarting) {
-          return;
-        }
-        restarting = true;
-
-        const doRestart = async () => {
-          if (resetToken) {
-            resumeToken = null;
-            try {
-              await ChangeStreamToken.clearToken(streamName);
-            } catch (clearErr) {
-              console.error(`Error clearing resume token for ${streamName}:`, clearErr);
-            }
-          }
-
-          try {
-            await stream?.close();
-          } catch (closeErr) {
-            console.error(`Error closing ${streamName} change stream:`, closeErr);
-          }
-
-          const restartMessage = resetToken
-            ? `${streamName} change stream restarting without resume token.`
-            : `${streamName} change stream restarting.`;
-          console.warn(restartMessage);
-
-          setTimeout(() => {
-            restarting = false;
-            start();
-          }, 0);
-        };
-
-        doRestart().catch((restartErr) => {
-          console.error(`Failed to restart ${streamName} change stream:`, restartErr);
-          restarting = false;
-        });
-      };
-
-      try {
-        stream = Model.watch(pipeline, watchOptions);
-      } catch (err) {
-        console.error(`Error watching ${streamName}:`, err);
-        if (isResumeTokenInvalid(err) && resumeToken) {
-          restart(true);
-        }
-        return;
-      }
-
-      stream.on('change', async (change) => {
-        try {
-          handler(change);
-        } finally {
-          resumeToken = change._id;
-          try {
-            await ChangeStreamToken.saveToken(streamName, resumeToken);
-          } catch (err) {
-            console.error(`Error saving resume token for ${streamName}:`, err);
-          }
-        }
-      });
-
-      stream.on('error', (err) => {
-        console.error(`Error in ${streamName} change stream:`, err);
-        const resetToken = isResumeTokenInvalid(err);
-        restart(resetToken);
-      });
-
-      stream.on('close', () => restart(false));
-    };
-
-    start();
-  }
-
-  // Setup change streams to broadcast high-level events with resume tokens
-  // Only enable change streams in production (replica sets)
-  if (process.env.NODE_ENV === 'production') {
-    setupChangeStream(
-      Lobby,
-      'Lobby',
-      [],
-      { fullDocument: 'updateLookup' },
-      (change) => eventBus.emit('queueChanged', change)
-    );
-
-    setupChangeStream(
-      Game,
-      'Game',
-      [],
-      {},
-      (change) => eventBus.emit('gameChanged', change)
-    );
-  } else {
-    console.log('Change streams disabled in development mode (requires replica set)');
-  }
+  // Change streams are no longer used when operating purely in memory.
 
   // Allow other parts of the app to request an on-demand admin metrics refresh
   eventBus.on('adminRefresh', () => emitAdminMetrics());
@@ -879,16 +757,20 @@ function initSocket(httpServer) {
     emitAdminMetrics();
 
     try {
-      const lobby = await Lobby.findOne().lean();
+      const lobby = ensureLobby();
+      const userIdStr = userId.toString();
       const queued = {
-        quickplay: lobby?.quickplayQueue?.some(id => id.toString() === userId) || false,
-        ranked: lobby?.rankedQueue?.some(id => id.toString() === userId) || false,
+        quickplay: quickplayQueue.includes(userIdStr),
+        ranked: rankedQueue.includes(userIdStr),
       };
 
-      const games = await Game.find({ players: userId, isActive: true }).lean();
+      const activeGames = Array.from(games.values()).filter((game) => {
+        if (!game?.isActive) return false;
+        return (game.players || []).some(p => p.toString() === userIdStr);
+      });
 
       const matchPlayers = new Map();
-      games.forEach((game) => {
+      activeGames.forEach((game) => {
         const matchId = toId(game?.match);
         if (!matchId) return;
         if (!matchPlayers.has(matchId)) {
@@ -905,13 +787,14 @@ function initSocket(httpServer) {
         registerMatch(matchId, Array.from(playersSet));
       });
 
-      const maskedGames = games.map((game) => {
-        const color = game.players.findIndex(p => p.toString() === userId);
-        const masked = maskGameForColor(game, color);
+      const maskedGames = activeGames.map((game) => {
+        const color = (game.players || []).findIndex(p => p.toString() === userIdStr);
+        const clonedGame = JSON.parse(JSON.stringify(game));
+        const masked = maskGameForColor(clonedGame, color);
         return {
           ...masked,
-          _id: game._id,
-          players: game.players.map(p => p.toString()),
+          _id: game._id || game.id,
+          players: (game.players || []).map(p => p.toString()),
           playersReady: game.playersReady,
           startTime: game.startTime,
           timeControlStart: game.timeControlStart,
@@ -1069,26 +952,29 @@ function initSocket(httpServer) {
           markPlayerDisconnectedFromAllMatches(userId);
           removeConnectedUsername(userId);
         }
-        setTimeout(async () => {
+        setTimeout(() => {
           // If user reconnected, skip cleanup
           if (clients.has(userId)) return;
-          try {
-            const Lobby = require('./models/Lobby');
-            const lobby = await Lobby.findOne();
-            if (!lobby) return;
-            const before = lobby.quickplayQueue.length;
-            lobby.quickplayQueue = lobby.quickplayQueue.filter(id => id.toString() !== userId);
-            if (lobby.quickplayQueue.length !== before) {
-              await lobby.save();
-              const eventBus = require('./eventBus');
-              eventBus.emit('queueChanged', {
-                quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
-                rankedQueue: lobby.rankedQueue.map(id => id.toString()),
-                affectedUsers: [userId.toString()],
-              });
+          const lobby = ensureLobby();
+          const id = userId.toString();
+          const beforeQuick = quickplayQueue.length;
+          const beforeRanked = rankedQueue.length;
+          const removeFromQueue = (queue) => {
+            const idx = queue.indexOf(id);
+            if (idx !== -1) {
+              queue.splice(idx, 1);
             }
-          } catch (err) {
-            console.error('Error cleaning up queue after disconnect:', err);
+          };
+          removeFromQueue(quickplayQueue);
+          removeFromQueue(rankedQueue);
+          lobby.inGame = (lobby.inGame || []).filter(entry => entry !== id);
+
+          if (quickplayQueue.length !== beforeQuick || rankedQueue.length !== beforeRanked) {
+            eventBus.emit('queueChanged', {
+              quickplayQueue: [...quickplayQueue],
+              rankedQueue: [...rankedQueue],
+              affectedUsers: [id],
+            });
           }
         }, 3000);
       }
@@ -1112,28 +998,24 @@ function initSocket(httpServer) {
     try {
       const connectedIds = Array.from(clients.keys());
       // Build in-game user list from active games
-      let inGameIds = [];
-      let gamesList = [];
-      let matchesList = [];
-      try {
-        const activeGames = await Game.find({ isActive: true }).select('players _id').lean();
-        const set = new Set();
-        activeGames.forEach(g => {
-          (g.players || []).forEach(p => set.add(p.toString()));
-          gamesList.push({ id: g._id.toString(), players: (g.players || []).map(p => p.toString()) });
+      const inGameSet = new Set();
+      const gamesList = [];
+      Array.from(games.values())
+        .filter(game => game?.isActive)
+        .forEach((game) => {
+          const gameId = toId(game._id) || toId(game.id);
+          const players = (game.players || []).map(p => p.toString());
+          players.forEach(p => inGameSet.add(p));
+          gamesList.push({ id: gameId, players });
         });
-        inGameIds = Array.from(set);
-      } catch (err) {
-        console.error('Error fetching active games for admin metrics:', err);
-      }
+      const inGameIds = Array.from(inGameSet);
 
-      try {
-        const Match = require('./models/Match');
-        const activeMatches = await Match.find({ isActive: true }).select('player1 player2 _id').lean();
-        matchesList = activeMatches.map(m => ({ id: m._id.toString(), players: [m.player1?.toString(), m.player2?.toString()].filter(Boolean) }));
-      } catch (err) {
-        console.error('Error fetching active matches for admin metrics:', err);
-      }
+      const matchesList = Array.from(matches.values())
+        .filter(match => match?.isActive)
+        .map(match => ({
+          id: toId(match._id) || toId(match.id),
+          players: [match.player1?.toString(), match.player2?.toString()].filter(Boolean),
+        }));
 
       const allIds = new Set([
         ...connectedIds,
