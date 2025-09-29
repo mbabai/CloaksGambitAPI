@@ -1233,6 +1233,7 @@ preloadAssets();
   let lastGameId = null;
   let activeSocketHandlers = null;
   let bannerInterval = null;
+  let pendingNextCountdown = null;
   let bannerOverlay = null;
   let bannerKeyListener = null;
   let playAreaRoot = null;
@@ -1736,6 +1737,59 @@ preloadAssets();
     updateClockDisplay();
   }
 
+  function normalizeCountdownSeconds(value) {
+    const num = typeof value === 'string' ? parseInt(value, 10) : Number(value);
+    return Number.isFinite(num) && num > 0 ? num : 5;
+  }
+
+  function triggerNextCountdown(gameId, color, seconds) {
+    if (!gameId && pendingNextCountdown) {
+      pendingNextCountdown = null;
+    }
+    const desc = document.getElementById('gameOverDesc');
+    if (!desc) {
+      pendingNextCountdown = { gameId, color, seconds };
+      return;
+    }
+    const btn = document.getElementById('gameOverNextBtn');
+    pendingNextCountdown = null;
+    let remaining = normalizeCountdownSeconds(seconds);
+    desc.textContent = `Opponent ready. Continuing in ${remaining}...`;
+    if (bannerInterval) {
+      clearInterval(bannerInterval);
+      bannerInterval = null;
+    }
+    bannerInterval = setInterval(async () => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(bannerInterval);
+        bannerInterval = null;
+        try {
+          const nextInfo = await apiNext(gameId, color);
+          await handleNextResponse(nextInfo, color);
+        } catch (e) {
+          console.error('auto next failed', e);
+        }
+        const latestDesc = document.getElementById('gameOverDesc');
+        const latestBtn = document.getElementById('gameOverNextBtn');
+        if (latestDesc) latestDesc.textContent = 'Waiting for other player...';
+        if (latestBtn) latestBtn.style.display = 'none';
+      } else {
+        const latestDesc = document.getElementById('gameOverDesc');
+        if (latestDesc) {
+          latestDesc.textContent = `Opponent ready. Continuing in ${remaining}...`;
+        }
+      }
+    }, 1000);
+  }
+
+  function resumePendingNextCountdown() {
+    if (!pendingNextCountdown) return;
+    const { gameId, color, seconds } = pendingNextCountdown;
+    pendingNextCountdown = null;
+    triggerNextCountdown(gameId, color, seconds);
+  }
+
   async function handleNextResponse(data, fallbackColor = null) {
     if (!data || typeof data !== 'object') return;
 
@@ -2159,27 +2213,7 @@ preloadAssets();
       async onNextCountdown(payload) {
         try {
           const { gameId, color, seconds } = payload || {};
-          const desc = document.getElementById('gameOverDesc');
-          const btn = document.getElementById('gameOverNextBtn');
-          if (!desc) return;
-          let remaining = seconds || 5;
-          desc.textContent = `Opponent ready. Continuing in ${remaining}...`;
-          if (bannerInterval) clearInterval(bannerInterval);
-          bannerInterval = setInterval(async () => {
-            remaining -= 1;
-            if (remaining <= 0) {
-              clearInterval(bannerInterval);
-              bannerInterval = null;
-              try {
-                const nextInfo = await apiNext(gameId, color);
-                await handleNextResponse(nextInfo, color);
-              } catch (e) { console.error('auto next failed', e); }
-              desc.textContent = 'Waiting for other player...';
-              if (btn) btn.style.display = 'none';
-            } else {
-              desc.textContent = `Opponent ready. Continuing in ${remaining}...`;
-            }
-          }, 1000);
+          triggerNextCountdown(gameId, color, seconds);
         } catch (e) { console.error('next countdown handler failed', e); }
       },
       async onBothNext(payload) {
@@ -2431,6 +2465,7 @@ preloadAssets();
       clearInterval(bannerInterval);
       bannerInterval = null;
     }
+    pendingNextCountdown = null;
     setBannerKeyListener(null);
     if (bannerOverlay) {
       try {
@@ -3528,6 +3563,7 @@ preloadAssets();
     card.appendChild(desc);
     card.appendChild(btn);
     content.appendChild(card);
+    resumePendingNextCountdown();
     overlay.show({ initialFocus: btn });
   }
 
