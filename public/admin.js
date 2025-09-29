@@ -360,16 +360,17 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 
   async function fetchHistoryData() {
     try {
+      const historyRequest = { status: 'completed' };
       const [matchesRes, gamesRes] = await Promise.all([
         authFetch('/api/v1/matches/getList', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({})
+          body: JSON.stringify(historyRequest)
         }),
         authFetch('/api/v1/games/getList', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({})
+          body: JSON.stringify(historyRequest)
         })
       ]);
 
