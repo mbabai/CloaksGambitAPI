@@ -546,16 +546,17 @@ preloadAssets();
     statsOverlayFetching = true;
     showStatsOverlayMessage('Loading match history…');
     try {
+      const requestBody = JSON.stringify({ userId: statsUserId, status: 'completed' });
       const [matchesRes, gamesRes] = await Promise.all([
         authFetch('/api/v1/matches/getList', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: statsUserId })
+          body: requestBody
         }),
         authFetch('/api/v1/games/getList', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: statsUserId })
+          body: requestBody
         })
       ]);
 
