@@ -712,7 +712,10 @@ function initSocket(httpServer) {
 
   // Setup change streams to broadcast high-level events with resume tokens
   // Only enable change streams in production (replica sets)
-  if (process.env.NODE_ENV === 'production') {
+  const supportsChangeStream =
+    typeof Game.watch === 'function' && typeof Match.watch === 'function';
+
+  if (process.env.NODE_ENV === 'production' && supportsChangeStream) {
     setupChangeStream(
       Game,
       'Game',
@@ -721,7 +724,7 @@ function initSocket(httpServer) {
       (change) => eventBus.emit('gameChanged', change)
     );
   } else {
-    console.log('Change streams disabled in development mode (requires replica set)');
+    console.log('Change streams disabled (unsupported in current environment)');
   }
 
   // Allow other parts of the app to request an on-demand admin metrics refresh

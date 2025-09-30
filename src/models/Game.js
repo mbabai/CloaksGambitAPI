@@ -1,3 +1,4 @@
+/*
 const mongoose = require('mongoose');
 const ServerConfig = require('./ServerConfig');
 
@@ -453,4 +454,342 @@ gameSchema.methods.addAction = function(type, player, details) {
     return this;
 };
 
-module.exports = mongoose.model('Game', gameSchema); 
+module.exports = mongoose.model('Game', gameSchema);
+*/
+
+const ServerConfig = require('./ServerConfig');
+const {
+  generateId,
+  toIdString,
+  cloneValue,
+  matchesQuery,
+  applyUpdate,
+  QueryBase,
+  applySelect,
+} = require('./inMemoryUtils');
+
+const defaultConfig = new ServerConfig();
+
+function ensureTwo(value, fallback) {
+  if (!Array.isArray(value) || value.length !== 2) {
+    return cloneValue(fallback);
+  }
+  return value.slice(0, 2);
+}
+
+function createDefaultBoard() {
+  const ranks = defaultConfig.boardDimensions.RANKS;
+  const files = defaultConfig.boardDimensions.FILES;
+  return Array.from({ length: ranks }, () => Array.from({ length: files }, () => null));
+}
+
+function createDefaultStashes() {
+  const white = defaultConfig.colors.get('WHITE');
+  const black = defaultConfig.colors.get('BLACK');
+  const template = (color) => ([
+    { color, identity: defaultConfig.identities.get('ROOK') },
+    { color, identity: defaultConfig.identities.get('ROOK') },
+    { color, identity: defaultConfig.identities.get('BISHOP') },
+    { color, identity: defaultConfig.identities.get('BISHOP') },
+    { color, identity: defaultConfig.identities.get('KNIGHT') },
+    { color, identity: defaultConfig.identities.get('KNIGHT') },
+    { color, identity: defaultConfig.identities.get('KING') },
+    { color, identity: defaultConfig.identities.get('BOMB') },
+  ]);
+
+  return [template(white), template(black)];
+}
+
+function createDefaultDaggers() {
+  return [0, 0];
+}
+
+function cloneDate(value) {
+  return value ? new Date(value) : value;
+}
+
+class GameDocument {
+  constructor(data = {}) {
+    this._id = toIdString(data._id) || generateId();
+    this.players = Array.isArray(data.players) ? data.players.map(toIdString) : [];
+    this.match = data.match ? toIdString(data.match) : null;
+    this.playersReady = ensureTwo(data.playersReady, [false, false]);
+    this.playersNext = ensureTwo(data.playersNext, [false, false]);
+    this.playerTurn = data.playerTurn ?? null;
+    this.winner = data.winner ?? undefined;
+    this.winReason = data.winReason ?? undefined;
+    this.createdAt = cloneDate(data.createdAt) || new Date();
+    this.startTime = cloneDate(data.startTime) || null;
+    this.endTime = cloneDate(data.endTime) || null;
+    this.isActive = data.isActive !== undefined ? Boolean(data.isActive) : true;
+    this.timeControlStart = data.timeControlStart ?? defaultConfig.gameModeSettings.QUICKPLAY.TIME_CONTROL;
+    this.increment = data.increment ?? defaultConfig.gameModeSettings.INCREMENT;
+    this.board = Array.isArray(data.board) ? cloneValue(data.board) : createDefaultBoard();
+    this.stashes = Array.isArray(data.stashes) ? cloneValue(data.stashes) : createDefaultStashes();
+    this.onDecks = ensureTwo(data.onDecks, [null, null]);
+    this.captured = Array.isArray(data.captured) ? cloneValue(data.captured) : [[], []];
+    this.actions = Array.isArray(data.actions) ? cloneValue(data.actions) : [];
+    this.moves = Array.isArray(data.moves) ? cloneValue(data.moves) : [];
+    this.daggers = Array.isArray(data.daggers) ? data.daggers.slice(0, 2) : createDefaultDaggers();
+    this.movesSinceAction = data.movesSinceAction ?? 0;
+    this.setupComplete = ensureTwo(data.setupComplete, [false, false]);
+    this.onDeckingPlayer = data.onDeckingPlayer ?? null;
+    this.drawOffer = data.drawOffer ? cloneValue(data.drawOffer) : null;
+    this.drawOfferCooldowns = ensureTwo(data.drawOfferCooldowns, [null, null]);
+  }
+
+  markModified() {
+    // No-op for in-memory persistence; maintained for compatibility with Mongoose API
+  }
+
+  async save() {
+    GameModel._store.set(this._id, this);
+    return this;
+  }
+
+  toObject() {
+    return GameModel._toObject(this);
+  }
+
+  toJSON() {
+    return this.toObject();
+  }
+
+  async endGame(winner, winReason) {
+    if (!this.isActive) {
+      throw new Error('Game is already ended');
+    }
+
+    if (winner !== null && winner !== 0 && winner !== 1) {
+      throw new Error('Winner must be 0 (white), 1 (black) or null for draw');
+    }
+
+    const validWinReasons = Array.from(defaultConfig.winReasons.values());
+    if (!validWinReasons.includes(winReason)) {
+      throw new Error('Invalid win reason');
+    }
+
+    this.winner = winner;
+    this.winReason = winReason;
+    this.endTime = new Date();
+    this.isActive = false;
+    this.drawOffer = null;
+    this.drawOfferCooldowns = [null, null];
+
+    await this.save();
+
+    await GameModel._handleMatchUpdate(this);
+
+    return this;
+  }
+
+  makeMove(from, to, declaration) {
+    if (!this.isActive) {
+      throw new Error('Game is not active');
+    }
+
+    const move = {
+      from,
+      to,
+      declaration,
+      state: defaultConfig.moveStates.get('PENDING'),
+      timestamp: new Date(),
+    };
+
+    this.moves.push(move);
+    return this.save();
+  }
+
+  addAction(type, player, details) {
+    if (!this.isActive) {
+      throw new Error('Game is not active');
+    }
+
+    if (typeof type !== 'number' || type < 0 || type > 7) {
+      throw new Error('Invalid action type');
+    }
+
+    const action = {
+      type,
+      player,
+      details: details || {},
+      timestamp: new Date(),
+    };
+
+    this.actions.push(action);
+    GameModel._store.set(this._id, this);
+    return this;
+  }
+}
+
+class GameModel {
+  static _store = new Map();
+
+  static _ensureDocument(doc) {
+    if (!doc) return null;
+    if (doc instanceof GameDocument) return doc;
+    return new GameDocument(doc);
+  }
+
+  static _toObject(doc) {
+    if (!doc) return null;
+    if (typeof doc.toObject === 'function') {
+      const obj = doc.toObject === GameDocument.prototype.toObject
+        ? null
+        : doc.toObject();
+      if (obj) return obj;
+    }
+    const plain = {};
+    Object.entries(doc).forEach(([key, value]) => {
+      if (typeof value === 'function') return;
+      plain[key] = cloneValue(value);
+    });
+    if (!plain._id && doc._id) {
+      plain._id = cloneValue(doc._id);
+    }
+    return plain;
+  }
+
+  static _selectOnDocument(doc, selectSet) {
+    const plain = this._toObject(doc);
+    if (!plain) return plain;
+    if (!selectSet || selectSet.size === 0) {
+      return plain;
+    }
+    return applySelect(plain, selectSet);
+  }
+
+  static async _populateDocument(doc, path, options = {}) {
+    if (!doc) return doc;
+    if (path === 'match') {
+      const Match = require('./Match');
+      const populated = options.lean
+        ? await Match.findById(doc.match).lean()
+        : await Match.findById(doc.match);
+      if (!populated) return doc;
+      const clone = Object.assign(
+        Object.create(Object.getPrototypeOf(doc) || {}),
+        doc,
+      );
+      clone.match = populated;
+      return clone;
+    }
+    return doc;
+  }
+
+  static async _handleMatchUpdate(game) {
+    try {
+      const Match = require('./Match');
+      const match = await Match.findById(game.match);
+      if (!match) return;
+
+      if (!match.isActive) {
+        return;
+      }
+
+      if (game.winner === 0 || game.winner === 1) {
+        const winnerId = game.players[game.winner];
+        if (winnerId && toIdString(winnerId) === toIdString(match.player1)) {
+          match.player1Score = (match.player1Score || 0) + 1;
+        } else if (winnerId && toIdString(winnerId) === toIdString(match.player2)) {
+          match.player2Score = (match.player2Score || 0) + 1;
+        }
+      } else if (game.winner === null) {
+        match.drawCount = (match.drawCount || 0) + 1;
+      }
+
+      const config = new ServerConfig();
+      const typeSettings = config.gameModeSettings[match.type]
+        || config.gameModeSettings.get?.(match.type);
+      const winScore = typeSettings?.WIN_SCORE;
+      const drawWins = Number.isFinite(winScore) && (match.drawCount || 0) >= winScore;
+
+      if (drawWins) {
+        await match.endMatch(null);
+      } else if (
+        Number.isFinite(winScore)
+        && ((match.player1Score || 0) >= winScore || (match.player2Score || 0) >= winScore)
+      ) {
+        const winnerId = (match.player1Score || 0) >= winScore ? match.player1 : match.player2;
+        await match.endMatch(winnerId);
+      } else {
+        const newGame = await GameModel.create({
+          players: [game.players[1], game.players[0]],
+          match: match._id,
+          timeControlStart: game.timeControlStart,
+          increment: game.increment,
+        });
+        match.games.push(newGame._id);
+        await match.save();
+      }
+    } catch (err) {
+      console.error('Failed to update match after game end:', err);
+    }
+  }
+
+  static async create(data) {
+    const doc = this._ensureDocument(data);
+    await doc.save();
+    return doc;
+  }
+
+  static find(query = {}) {
+    const results = Array.from(this._store.values()).filter((doc) => matchesQuery(doc, query));
+    return new QueryBase(this, results, { multi: true });
+  }
+
+  static findById(id) {
+    const key = toIdString(id);
+    const doc = key ? this._store.get(key) || null : null;
+    return new QueryBase(this, doc);
+  }
+
+  static findOne(query = {}) {
+    const results = Array.from(this._store.values()).filter((doc) => matchesQuery(doc, query));
+    return new QueryBase(this, results, { fromList: true });
+  }
+
+  static async exists(query = {}) {
+    const found = Array.from(this._store.values()).some((doc) => matchesQuery(doc, query));
+    return found;
+  }
+
+  static async deleteMany(query = {}) {
+    const keys = [];
+    for (const [key, doc] of this._store.entries()) {
+      if (matchesQuery(doc, query)) {
+        keys.push(key);
+      }
+    }
+    keys.forEach((key) => this._store.delete(key));
+    return { acknowledged: true, deletedCount: keys.length };
+  }
+
+  static async updateOne(filter, update) {
+    const doc = Array.from(this._store.values()).find((item) => matchesQuery(item, filter));
+    if (!doc) {
+      return { acknowledged: true, matchedCount: 0, modifiedCount: 0 };
+    }
+    applyUpdate(doc, update);
+    await doc.save();
+    return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+  }
+
+  static findByIdAndUpdate(id, update, options = {}) {
+    const key = toIdString(id);
+    const doc = key ? this._store.get(key) : null;
+    if (!doc) {
+      return new QueryBase(this, null);
+    }
+    applyUpdate(doc, update);
+    doc.updatedAt = new Date();
+    this._store.set(key, doc);
+    return new QueryBase(this, doc);
+  }
+
+  static _getRawDocument(id) {
+    return this._store.get(toIdString(id));
+  }
+}
+
+module.exports = GameModel;
