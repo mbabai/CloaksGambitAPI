@@ -12,7 +12,8 @@ export function wireSocket(socket, handlers) {
     onConnectionStatus,
     onInviteRequest,
     onInviteResult,
-    onInviteCancel
+    onInviteCancel,
+    onUserNameUpdated
   } = handlers;
 
   socket.on('connect', () => { try { onConnect && onConnect(); } catch (_) {} });
@@ -27,6 +28,7 @@ export function wireSocket(socket, handlers) {
   socket.on('custom:inviteRequest', (payload) => { try { onInviteRequest && onInviteRequest(payload); } catch (_) {} });
   socket.on('custom:inviteResult', (payload) => { try { onInviteResult && onInviteResult(payload); } catch (_) {} });
   socket.on('custom:inviteCancel', (payload) => { try { onInviteCancel && onInviteCancel(payload); } catch (_) {} });
+  socket.on('user:nameUpdated', (payload) => { try { onUserNameUpdated && onUserNameUpdated(payload); } catch (_) {} });
   socket.on('disconnect', () => { try { onDisconnect && onDisconnect(); } catch (_) {} });
 }
 

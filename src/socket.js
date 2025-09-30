@@ -607,6 +607,22 @@ function initSocket(httpServer) {
     }
   });
 
+  eventBus.on('user:updated', (payload) => {
+    try {
+      if (!payload) return;
+      const id = toId(payload.userId);
+      if (!id) return;
+      const username = typeof payload.username === 'string' ? payload.username : null;
+      setConnectedUsername(id, username);
+      const message = { userId: id, username };
+      io.emit('user:nameUpdated', message);
+      adminNamespace.emit('user:nameUpdated', message);
+      emitAdminMetrics();
+    } catch (err) {
+      console.error('Error broadcasting user update:', err);
+    }
+  });
+
   eventBus.on('gameChanged', (payload) => {
     let game = payload?.game;
     if (game && typeof game.toObject === 'function') {
