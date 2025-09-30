@@ -2113,8 +2113,8 @@ preloadAssets();
   queueBtn.addEventListener('click', async function() {
     let mode = modeSelect.value;
 
-    if (mode === 'bots') {
-      window.alert('Bots coming soon!');
+    if (mode === 'bots' || mode === 'spectate') {
+      window.alert(`${mode === 'spectate' ? 'Spectating' : 'Bots'} coming soon!`);
       return;
     }
 
