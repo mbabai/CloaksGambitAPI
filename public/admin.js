@@ -478,6 +478,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     const upper = type.toUpperCase();
     if (upper === 'RANKED') return 'Ranked Match';
     if (upper === 'QUICKPLAY') return 'Quickplay Match';
+    if (upper === 'CUSTOM') return 'Custom Match';
     return `${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()} Match`;
   }
 
@@ -506,6 +507,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       if (!match || match.isActive) return false;
       const type = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
       if (historyFilter === 'quickplay') return type === 'QUICKPLAY';
+      if (historyFilter === 'custom') return type === 'CUSTOM';
       if (historyFilter === 'ranked') return type === 'RANKED';
       return true;
     });
