@@ -1,7 +1,11 @@
 const { randomUUID } = require('crypto');
+const mongoose = require('mongoose');
 
 function generateId() {
-  return randomUUID();
+  if (mongoose?.Types?.ObjectId) {
+    return new mongoose.Types.ObjectId().toString();
+  }
+  return randomUUID().replace(/-/g, '');
 }
 
 function toIdString(value) {
