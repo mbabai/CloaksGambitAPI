@@ -99,6 +99,7 @@ async function resolveUserFromRequest(req) {
 module.exports = {
   TOKEN_COOKIE_NAME,
   createAuthToken,
+  parseCookies,
   extractTokenFromRequest,
   resolveUserFromRequest,
   resolveUserFromToken,
