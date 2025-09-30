@@ -666,6 +666,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   function formatMatchType(type) {
     const baseLabel = formatMatchTypeLabel(type);
     if (!baseLabel || baseLabel === 'Match') return 'Match';
+    const upper = typeof type === 'string' ? type.toUpperCase() : '';
     if (upper === 'CUSTOM') return 'Custom Match';
     return `${baseLabel} Match`;
   }
