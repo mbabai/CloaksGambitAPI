@@ -15,6 +15,7 @@ const configTimeSettings = require('./config/getTimeSettings');
 const matchGetList = require('./matches/getList');
 const matchGetDetails = require('./matches/getDetails');
 const matchCreate = require('./matches/create');
+const matchDelete = require('./matches/delete');
 const matchPurge = require('./matches/purge');
 const matchPurgeActive = require('./matches/purgeActive');
 
@@ -59,6 +60,7 @@ router.use('/config/timeSettings', configTimeSettings);
 router.use('/matches/getList', matchGetList);
 router.use('/matches/getDetails', matchGetDetails);
 router.use('/matches/create', matchCreate);
+router.use('/matches/delete', matchDelete);
 router.use('/matches/purge', matchPurge);
 router.use('/matches/purge-active', matchPurgeActive);
 

@@ -67,7 +67,6 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   const usersListEl = document.getElementById('usersList');
   const matchesListEl = document.getElementById('matchesList');
   const purgeActiveMatchesBtn = document.getElementById('purgeActiveMatchesBtn');
-  const purgeMatchesBtn = document.getElementById('purgeMatchesBtn');
   const purgeUsersBtn = document.getElementById('purgeUsersBtn');
 
   const historyMatchesListEl = document.getElementById('historyMatchesList');
@@ -735,6 +734,76 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     }
   }
 
+  async function requestMatchDeletion(matchId) {
+    const normalizedId = normalizeId(matchId);
+    if (!normalizedId) {
+      alert('Unable to delete match: missing identifier.');
+      return;
+    }
+
+    const confirmation = confirm('Delete this match and all related games? This will also undo ranked ELO changes.');
+    if (!confirmation) return;
+
+    try {
+      const res = await authFetch('/api/v1/matches/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
+        },
+        body: JSON.stringify({ matchId: normalizedId })
+      });
+
+      if (!res.ok) {
+        let errorMessage = 'Failed to delete match.';
+        try {
+          const errorData = await res.json();
+          if (errorData && typeof errorData.message === 'string') {
+            errorMessage = errorData.message;
+          }
+        } catch (err) {
+          // ignore JSON parse errors
+        }
+        alert(`${errorMessage} (status ${res.status})`);
+        return;
+      }
+
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (err) {
+        data = null;
+      }
+
+      const messageParts = ['Match deleted successfully.'];
+      const deletedGames = data && typeof data.deletedGames === 'number' ? data.deletedGames : null;
+      if (typeof deletedGames === 'number') {
+        messageParts.push(`Games removed: ${deletedGames}`);
+      }
+      const eloAdjustments = Array.isArray(data?.eloAdjustments) ? data.eloAdjustments : [];
+      if (eloAdjustments.length > 0) {
+        const adjustmentsText = eloAdjustments
+          .map(adj => {
+            const name = getUsername(adj.userId) || adj.userId || 'Unknown player';
+            const adjValue = typeof adj.adjustment === 'number' ? adj.adjustment : 0;
+            const formatted = adjValue > 0 ? `+${adjValue}` : String(adjValue);
+            return `${name}: ${formatted}`;
+          })
+          .join(', ');
+        if (adjustmentsText) {
+          messageParts.push(`ELO adjustments: ${adjustmentsText}`);
+        }
+      }
+
+      alert(messageParts.join('\n'));
+    } catch (err) {
+      console.error(err);
+      alert('Error deleting match. Check console for details.');
+    } finally {
+      fetchHistoryData();
+    }
+  }
+
   function renderHistoryList() {
     if (!historyMatchesListEl) return;
     historyMatchesListEl.innerHTML = '';
@@ -766,24 +835,43 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       const descriptor = describeMatch(match, { usernameLookup: getUsername });
       const matchId = normalizeId(match?._id || match?.id || descriptor.id);
       const games = matchId ? (historyGamesByMatch.get(matchId) || []) : [];
-      return { match, descriptor, games };
+      return { match, descriptor, games, matchId };
     });
 
     const maxGameCount = Math.max(1, historyMaxGameCount);
 
-    matchEntries.forEach(({ match, descriptor, games }) => {
+    matchEntries.forEach(({ match, descriptor, games, matchId }) => {
       const row = document.createElement('div');
       row.className = 'history-row';
       const meta = document.createElement('div');
       meta.className = 'history-row-top';
+      const header = document.createElement('div');
+      header.className = 'history-row-header';
       const pill = document.createElement('span');
       pill.className = 'history-pill';
       pill.textContent = formatMatchType(descriptor.type);
-      meta.appendChild(pill);
+      header.appendChild(pill);
       const date = document.createElement('span');
       date.className = 'history-date';
       date.textContent = formatMatchDate(descriptor);
-      meta.appendChild(date);
+      header.appendChild(date);
+      meta.appendChild(header);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'history-delete-btn';
+      deleteBtn.setAttribute('aria-label', 'Delete match');
+      deleteBtn.title = 'Delete this match';
+      deleteBtn.textContent = '🗑';
+      if (matchId) {
+        deleteBtn.addEventListener('click', () => {
+          requestMatchDeletion(matchId);
+        });
+      } else {
+        deleteBtn.disabled = true;
+        deleteBtn.title = 'Unable to delete match: missing identifier';
+      }
+      meta.appendChild(deleteBtn);
       row.appendChild(meta);
 
       const matchForGrid = Object.assign({}, match, { games });
@@ -869,31 +957,6 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       } catch (err) {
         console.error(err);
         alert('Error purging active matches. Check console.');
-      }
-    });
-  }
-
-  if (purgeMatchesBtn) {
-    purgeMatchesBtn.addEventListener('click', async () => {
-      if (!confirm('Are you sure you want to purge ALL matches from the database? This cannot be undone.')) return;
-      try {
-        const res = await authFetch('/api/v1/matches/purge', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
-          }
-        });
-        if (!res.ok) {
-          alert('Failed to purge matches: ' + res.status);
-          return;
-        }
-        const data = await res.json();
-        alert('Purged matches: ' + (data.deleted || 0));
-        if (historyLoaded) fetchHistoryData();
-      } catch (err) {
-        console.error(err);
-        alert('Error purging matches. Check console.');
       }
     });
   }

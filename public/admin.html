@@ -99,9 +99,14 @@
 
       .history-matches { display: flex; flex-direction: column; gap: 12px; }
       .history-row { border: 4px solid var(--deep-gold); border-radius: 8px; background: rgba(24,9,38,0.85); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-      .history-row-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .history-row-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: nowrap; }
+      .history-row-header { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
       .history-pill { padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(255,215,0,0.6); background: rgba(255,215,0,0.15); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
       .history-date { font-size: 12px; color: rgba(255,215,0,0.75); }
+      .history-delete-btn { border: none; background: transparent; color: rgba(255,215,0,0.85); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 6px; border-radius: 6px; font-size: 18px; line-height: 1; transition: transform 0.15s ease, color 0.2s ease, background 0.2s ease; }
+      .history-delete-btn:hover { color: var(--deep-green); background: var(--light-gold); transform: scale(1.08); }
+      .history-delete-btn:focus-visible { outline: 2px solid var(--light-gold); outline-offset: 2px; }
+      .history-delete-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
       .history-player-name { font-weight: 700; min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .history-player-score { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
       .history-player-elo { font-size: 12px; color: rgba(255,215,0,0.75); }
@@ -155,6 +160,8 @@
         .tab-header { flex-wrap: wrap; }
         .history-match-row { grid-template-columns: minmax(0, 1fr); }
         .history-match-games { --history-match-gap: 6px; }
+        .history-row-top { flex-wrap: wrap; }
+        .history-delete-btn { order: 3; }
       }
 
       @media (min-width: 768px) {
@@ -208,7 +215,6 @@
 
         <div style="margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap;">
           <button id="purgeActiveMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge Active Matches</button>
-          <button id="purgeMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Matches</button>
           <button id="purgeUsersBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Accounts</button>
           <span style="opacity:0.85; font-size:12px; align-self:center;">Requires server `ADMIN_SECRET` header to authorize.</span>
         </div>
