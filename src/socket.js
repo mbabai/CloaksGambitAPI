@@ -521,6 +521,55 @@ function initSocket(httpServer) {
     emitAdminMetrics();
   });
 
+  const resolveMatchType = (source = {}) => {
+    const candidates = [
+      source.type,
+      source.matchType,
+      source.mode,
+      source.matchMode,
+      source.gameMode,
+      source?.settings?.type,
+      source?.settings?.mode,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim().toUpperCase();
+      }
+    }
+    return null;
+  };
+
+  const toScore = (value, fallback = 0) => {
+    if (value === undefined || value === null) return fallback;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  };
+
+  const resolveScore = (fallback, ...values) => {
+    const candidates = [];
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'object') {
+        if ('wins' in value) {
+          const parsed = toScore(value.wins, null);
+          if (parsed !== null) candidates.push(parsed);
+        }
+        if ('count' in value) {
+          const parsed = toScore(value.count, null);
+          if (parsed !== null) candidates.push(parsed);
+        }
+        if ('value' in value) {
+          const parsed = toScore(value.value, null);
+          if (parsed !== null) candidates.push(parsed);
+        }
+      }
+      const parsed = toScore(value, null);
+      if (parsed !== null) candidates.push(parsed);
+    }
+    if (candidates.length === 0) return fallback;
+    return Math.max(...candidates);
+  };
+
   function buildAdminMatchPayload(payload = {}) {
     try {
       const matchId = toId(payload.matchId || payload.id || payload._id);
@@ -528,17 +577,13 @@ function initSocket(httpServer) {
       const players = Array.isArray(payload.players)
         ? payload.players.map((id) => toId(id)).filter(Boolean)
         : [];
-      const toScore = (value, fallback = 0) => {
-        const num = Number(value);
-        return Number.isFinite(num) ? num : fallback;
-      };
       const normalized = {
         id: matchId,
-        type: typeof payload.type === 'string' ? payload.type : null,
+        type: resolveMatchType(payload),
         players,
-        player1Score: toScore(payload.player1Score),
-        player2Score: toScore(payload.player2Score),
-        drawCount: toScore(payload.drawCount),
+        player1Score: resolveScore(0, payload.player1Score, payload.player1_score, payload.scores?.[0], payload.scores?.player1, payload.results?.player1?.wins),
+        player2Score: resolveScore(0, payload.player2Score, payload.player2_score, payload.scores?.[1], payload.scores?.player2, payload.results?.player2?.wins),
+        drawCount: resolveScore(0, payload.drawCount, payload.draws, payload.scores?.[2], payload.scores?.draws, payload.results?.draws),
       };
       if (payload.isActive !== undefined) {
         normalized.isActive = Boolean(payload.isActive);
@@ -994,13 +1039,13 @@ function initSocket(httpServer) {
         const activeMatches = await Match.find({ isActive: true })
           .select('player1 player2 _id type player1Score player2Score drawCount')
           .lean();
-        matchesList = activeMatches.map(m => ({
+        matchesList = activeMatches.map((m) => ({
           id: m._id.toString(),
-          type: typeof m.type === 'string' ? m.type : null,
+          type: resolveMatchType(m),
           players: [m.player1?.toString(), m.player2?.toString()].filter(Boolean),
-          player1Score: Number.isFinite(m.player1Score) ? m.player1Score : 0,
-          player2Score: Number.isFinite(m.player2Score) ? m.player2Score : 0,
-          drawCount: Number.isFinite(m.drawCount) ? m.drawCount : 0,
+          player1Score: resolveScore(0, m.player1Score, m.player1_score, m.scores?.[0], m.scores?.player1, m.results?.player1?.wins),
+          player2Score: resolveScore(0, m.player2Score, m.player2_score, m.scores?.[1], m.scores?.player2, m.results?.player2?.wins),
+          drawCount: resolveScore(0, m.drawCount, m.draws, m.scores?.[2], m.scores?.draws, m.results?.draws),
         }));
       } catch (err) {
         console.error('Error fetching active matches for admin metrics:', err);

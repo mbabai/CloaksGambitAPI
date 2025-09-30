@@ -292,6 +292,50 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     return Number.isFinite(numeric) ? numeric : 0;
   }
 
+  function resolveMatchType(source) {
+    if (!source) return null;
+    const candidates = [
+      source.type,
+      source.matchType,
+      source.mode,
+      source.matchMode,
+      source.gameMode,
+      source?.settings?.type,
+      source?.settings?.mode,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim().toUpperCase();
+      }
+    }
+    return null;
+  }
+
+  function resolveScoreValue(...values) {
+    const candidates = [];
+    values.forEach(value => {
+      if (value === undefined || value === null) return;
+      if (typeof value === 'object') {
+        if ('wins' in value) {
+          const parsed = normalizeScoreValue(value.wins);
+          if (Number.isFinite(parsed)) candidates.push(parsed);
+        }
+        if ('count' in value) {
+          const parsed = normalizeScoreValue(value.count);
+          if (Number.isFinite(parsed)) candidates.push(parsed);
+        }
+        if ('value' in value) {
+          const parsed = normalizeScoreValue(value.value);
+          if (Number.isFinite(parsed)) candidates.push(parsed);
+        }
+      }
+      const parsed = normalizeScoreValue(value);
+      if (Number.isFinite(parsed)) candidates.push(parsed);
+    });
+    if (candidates.length === 0) return null;
+    return Math.max(...candidates);
+  }
+
   function normalizeActiveMatchRecord(match) {
     if (!match) return null;
     const id = normalizeId(match.id || match._id || match.matchId);
@@ -303,23 +347,31 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       .map(playerId => normalizeId(playerId))
       .filter(Boolean);
     const players = primaryPlayers.length > 0 ? primaryPlayers : fallbackPlayers;
-    const resolveScore = (...values) => {
-      for (const value of values) {
-        if (value === undefined || value === null) continue;
-        const normalizedValue = normalizeScoreValue(value);
-        if (Number.isFinite(normalizedValue)) {
-          return normalizedValue;
-        }
-      }
-      return null;
-    };
     const normalized = {
       id,
-      type: typeof match.type === 'string' ? match.type : null,
+      type: resolveMatchType(match),
       players,
-      player1Score: resolveScore(match.player1Score, match.player1_score, match.scores?.[0]),
-      player2Score: resolveScore(match.player2Score, match.player2_score, match.scores?.[1]),
-      drawCount: resolveScore(match.drawCount, match.draws),
+      player1Score: resolveScoreValue(
+        match.player1Score,
+        match.player1_score,
+        match.scores?.[0],
+        match.scores?.player1,
+        match.results?.player1?.wins,
+      ),
+      player2Score: resolveScoreValue(
+        match.player2Score,
+        match.player2_score,
+        match.scores?.[1],
+        match.scores?.player2,
+        match.results?.player2?.wins,
+      ),
+      drawCount: resolveScoreValue(
+        match.drawCount,
+        match.draws,
+        match.scores?.[2],
+        match.scores?.draws,
+        match.results?.draws,
+      ),
     };
     if (match.isActive !== undefined) {
       normalized.isActive = Boolean(match.isActive);
@@ -397,7 +449,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 
   function formatMatchTypeLabel(type) {
     if (!type) return 'Match';
-    const upper = String(type).toUpperCase();
+    const upper = String(type).trim().toUpperCase();
     if (upper === 'RANKED') return 'Ranked';
     if (upper === 'QUICKPLAY') return 'Quickplay';
     if (upper === 'CUSTOM') return 'Custom';
