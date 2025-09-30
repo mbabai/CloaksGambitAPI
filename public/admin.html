@@ -28,6 +28,39 @@
       .tableList .row { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; word-break: break-all; display: flex; align-items: center; gap: 8px; }
       .tableList .row:last-child { border-bottom: 0; }
       .tableList .headerRow { font-weight: 700; justify-content: space-between; gap: 0; }
+      .tableList .matchTypePill { display: inline-flex; align-items: center; justify-content: center; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(255,215,0,0.55); background: rgba(255,215,0,0.12); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+      .tableList .matchId { font-size: 11px; opacity: 0.8; word-break: break-all; }
+      .tableList .matchScoreLine {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .tableList .matchPlayerName { font-weight: 600; }
+      .tableList .matchScoreValue {
+        color: #34d399;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .tableList .matchScoreSeparator { opacity: 0.8; }
+      .tableList .matchDrawLine {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        opacity: 0.85;
+      }
+      .tableList .matchDrawIcon {
+        width: 18px;
+        height: 18px;
+        object-fit: contain;
+        filter: drop-shadow(0 0 4px rgba(0,0,0,0.35));
+      }
+      .tableList .spectateBtn { margin-left: auto; border: 2px solid var(--deep-gold); background: var(--light-gold); color: var(--deep-green); padding: 6px 12px; border-radius: 6px; font-weight: 700; cursor: pointer; transition: transform 0.15s ease, background 0.2s ease; }
+      .tableList .spectateBtn:hover { background: #ffe69c; transform: translateY(-1px); }
+      .tableList .spectateBtn:active { transform: translateY(0); }
 
       .tab-header { display: flex; gap: 12px; margin-bottom: 16px; border-bottom: 3px solid rgba(184,134,11,0.45); }
       .tab-button { background: none; border: none; color: rgba(255,215,0,0.65); font-size: 22px; font-weight: 700; padding: 12px 16px; cursor: pointer; position: relative; transition: color 0.2s ease; }
@@ -181,10 +214,6 @@
         </div>
 
         <div class="grid" style="margin-top: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
-          <div class="listCard" style="grid-column: span 2;">
-            <div class="title">Active Games</div>
-            <div id="gamesList" class="tableList" role="table"></div>
-          </div>
           <div class="listCard" style="grid-column: span 2;">
             <div class="title">Active Matches</div>
             <div id="matchesList" class="tableList" role="table"></div>

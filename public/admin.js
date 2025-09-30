@@ -65,7 +65,6 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   const quickplayQueueListEl = document.getElementById('quickplayQueueList');
   const rankedQueueListEl = document.getElementById('rankedQueueList');
   const usersListEl = document.getElementById('usersList');
-  const gamesListEl = document.getElementById('gamesList');
   const matchesListEl = document.getElementById('matchesList');
   const purgeActiveMatchesBtn = document.getElementById('purgeActiveMatchesBtn');
   const purgeMatchesBtn = document.getElementById('purgeMatchesBtn');
@@ -93,6 +92,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   };
 
   const usernameMap = {};
+  const activeMatchesState = new Map();
   let latestMetrics = null;
   let historyMatches = [];
   let historyGames = [];
@@ -276,8 +276,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       if (latestMetrics) {
         renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
         renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
-        renderGameOrMatchList(gamesListEl, latestMetrics.games);
-        renderGameOrMatchList(matchesListEl, latestMetrics.matches);
+        renderActiveMatchesFromState();
       }
       if (historyLoaded) {
         renderHistoryList();
@@ -287,28 +286,219 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     }
   }
 
-  function renderGameOrMatchList(targetEl, items) {
+  function normalizeScoreValue(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  }
+
+  function normalizeActiveMatchRecord(match) {
+    if (!match) return null;
+    const id = normalizeId(match.id || match._id || match.matchId);
+    if (!id) return null;
+    const primaryPlayers = Array.isArray(match.players)
+      ? match.players.map(playerId => normalizeId(playerId)).filter(Boolean)
+      : [];
+    const fallbackPlayers = [match.player1, match.player2]
+      .map(playerId => normalizeId(playerId))
+      .filter(Boolean);
+    const players = primaryPlayers.length > 0 ? primaryPlayers : fallbackPlayers;
+    const resolveScore = (...values) => {
+      for (const value of values) {
+        if (value === undefined || value === null) continue;
+        const normalizedValue = normalizeScoreValue(value);
+        if (Number.isFinite(normalizedValue)) {
+          return normalizedValue;
+        }
+      }
+      return null;
+    };
+    const normalized = {
+      id,
+      type: typeof match.type === 'string' ? match.type : null,
+      players,
+      player1Score: resolveScore(match.player1Score, match.player1_score, match.scores?.[0]),
+      player2Score: resolveScore(match.player2Score, match.player2_score, match.scores?.[1]),
+      drawCount: resolveScore(match.drawCount, match.draws),
+    };
+    if (match.isActive !== undefined) {
+      normalized.isActive = Boolean(match.isActive);
+    }
+    return normalized;
+  }
+
+  function updateLatestMetricsMatches() {
+    if (latestMetrics) {
+      latestMetrics.matches = Array.from(activeMatchesState.values());
+    }
+  }
+
+  function replaceActiveMatches(matches) {
+    activeMatchesState.clear();
+    if (Array.isArray(matches)) {
+      matches.forEach(item => {
+        const normalized = normalizeActiveMatchRecord(item);
+        if (!normalized || normalized.isActive === false) return;
+        activeMatchesState.set(normalized.id, {
+          id: normalized.id,
+          type: normalized.type,
+          players: normalized.players,
+          player1Score: Number.isFinite(normalized.player1Score) ? normalized.player1Score : 0,
+          player2Score: Number.isFinite(normalized.player2Score) ? normalized.player2Score : 0,
+          drawCount: Number.isFinite(normalized.drawCount) ? normalized.drawCount : 0,
+        });
+      });
+    }
+    updateLatestMetricsMatches();
+  }
+
+  function applyActiveMatchUpdate(match) {
+    const normalized = normalizeActiveMatchRecord(match);
+    if (!normalized) return false;
+    const existing = activeMatchesState.get(normalized.id);
+    if (normalized.isActive === false) {
+      const removed = activeMatchesState.delete(normalized.id);
+      if (removed) updateLatestMetricsMatches();
+      return removed;
+    }
+    const next = {
+      id: normalized.id,
+      type: normalized.type || existing?.type || null,
+      players: normalized.players.length > 0 ? normalized.players : (existing?.players || []),
+      player1Score: Number.isFinite(normalized.player1Score)
+        ? normalized.player1Score
+        : (existing?.player1Score ?? 0),
+      player2Score: Number.isFinite(normalized.player2Score)
+        ? normalized.player2Score
+        : (existing?.player2Score ?? 0),
+      drawCount: Number.isFinite(normalized.drawCount)
+        ? normalized.drawCount
+        : (existing?.drawCount ?? 0),
+    };
+    const changed =
+      !existing
+      || existing.type !== next.type
+      || existing.player1Score !== next.player1Score
+      || existing.player2Score !== next.player2Score
+      || existing.drawCount !== next.drawCount
+      || existing.players.length !== next.players.length
+      || existing.players.some((value, idx) => value !== next.players[idx]);
+    if (changed || !existing) {
+      activeMatchesState.set(next.id, next);
+      updateLatestMetricsMatches();
+      return true;
+    }
+    return false;
+  }
+
+  function renderActiveMatchesFromState() {
+    renderActiveMatchesList(matchesListEl, Array.from(activeMatchesState.values()));
+  }
+
+  function formatMatchTypeLabel(type) {
+    if (!type) return 'Match';
+    const upper = String(type).toUpperCase();
+    if (upper === 'RANKED') return 'Ranked';
+    if (upper === 'QUICKPLAY') return 'Quickplay';
+    if (upper === 'CUSTOM') return 'Custom';
+    return `${String(type).charAt(0).toUpperCase()}${String(type).slice(1).toLowerCase()}`;
+  }
+
+  function renderActiveMatchesList(targetEl, items) {
     if (!targetEl) return;
     targetEl.innerHTML = '';
     if (!Array.isArray(items) || items.length === 0) return;
+
     const frag = document.createDocumentFragment();
+
     items.forEach(item => {
       const row = document.createElement('div');
       row.className = 'row';
-      const idSpan = document.createElement('span');
-      idSpan.textContent = item.id;
-      idSpan.style.opacity = '0.9';
-      idSpan.style.marginRight = '12px';
-      row.appendChild(idSpan);
-      (item.players || []).forEach(pid => {
-        const nameEl = document.createElement(adminUserId && pid === adminUserId ? 'strong' : 'span');
-        nameEl.textContent = getUsername(pid);
-        nameEl.title = pid;
-        nameEl.style.marginRight = '10px';
-        row.appendChild(nameEl);
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '12px';
+
+      const typePill = document.createElement('span');
+      typePill.className = 'matchTypePill';
+      typePill.textContent = formatMatchTypeLabel(item?.type);
+      row.appendChild(typePill);
+
+      const players = Array.isArray(item?.players) ? item.players : [];
+      const player1Id = players[0] || null;
+      const player2Id = players[1] || null;
+      const player1Name = getUsername(player1Id);
+      const player2Name = getUsername(player2Id);
+
+      const player1Score = normalizeScoreValue(item?.player1Score);
+      const player2Score = normalizeScoreValue(item?.player2Score);
+      const drawCount = normalizeScoreValue(item?.drawCount);
+
+      const scoreLine = document.createElement('div');
+      scoreLine.className = 'matchScoreLine';
+      scoreLine.style.flex = '1 1 auto';
+      scoreLine.style.minWidth = '0';
+      const opponentLine = [player1Name || player1Id || 'Player 1', 'vs', player2Name || player2Id || 'Player 2']
+        .filter(Boolean)
+        .join(' ');
+      scoreLine.title = opponentLine;
+
+      const player1Label = document.createElement('span');
+      player1Label.className = 'matchPlayerName';
+      player1Label.textContent = player1Name || player1Id || 'Player 1';
+      scoreLine.appendChild(player1Label);
+
+      const player1ScoreEl = document.createElement('span');
+      player1ScoreEl.className = 'matchScoreValue';
+      player1ScoreEl.textContent = player1Score;
+      scoreLine.appendChild(player1ScoreEl);
+
+      const separatorEl = document.createElement('span');
+      separatorEl.className = 'matchScoreSeparator';
+      separatorEl.textContent = '-';
+      scoreLine.appendChild(separatorEl);
+
+      const player2ScoreEl = document.createElement('span');
+      player2ScoreEl.className = 'matchScoreValue';
+      player2ScoreEl.textContent = player2Score;
+      scoreLine.appendChild(player2ScoreEl);
+
+      const player2Label = document.createElement('span');
+      player2Label.className = 'matchPlayerName';
+      player2Label.textContent = player2Name || player2Id || 'Player 2';
+      scoreLine.appendChild(player2Label);
+
+      row.appendChild(scoreLine);
+
+      const drawLine = document.createElement('div');
+      drawLine.className = 'matchDrawLine';
+      drawLine.title = `Draws: ${drawCount}`;
+
+      const drawIcon = document.createElement('img');
+      drawIcon.src = 'assets/images/draw.png';
+      drawIcon.alt = 'Draws';
+      drawIcon.className = 'matchDrawIcon';
+      drawLine.appendChild(drawIcon);
+
+      const drawValue = document.createElement('span');
+      drawValue.className = 'matchScoreValue';
+      drawValue.textContent = drawCount;
+      drawLine.appendChild(drawValue);
+
+      row.appendChild(drawLine);
+
+      const spectateBtn = document.createElement('button');
+      spectateBtn.type = 'button';
+      spectateBtn.className = 'spectateBtn';
+      spectateBtn.textContent = 'Spectate';
+      spectateBtn.setAttribute('aria-label', `Spectate match ${item?.id || ''}`.trim());
+      spectateBtn.addEventListener('click', () => {
+        alert('Spectate coming soon');
       });
+      row.appendChild(spectateBtn);
+
       frag.appendChild(row);
     });
+
     targetEl.appendChild(frag);
   }
 
@@ -474,12 +664,10 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   }
 
   function formatMatchType(type) {
-    if (!type) return 'Match';
-    const upper = type.toUpperCase();
-    if (upper === 'RANKED') return 'Ranked Match';
-    if (upper === 'QUICKPLAY') return 'Quickplay Match';
+    const baseLabel = formatMatchTypeLabel(type);
+    if (!baseLabel || baseLabel === 'Match') return 'Match';
     if (upper === 'CUSTOM') return 'Custom Match';
-    return `${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()} Match`;
+    return `${baseLabel} Match`;
   }
 
   function formatMatchDate(match) {
@@ -570,11 +758,17 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     if (rankedQueueEl) rankedQueueEl.textContent = payload.rankedQueue ?? 0;
     renderList(quickplayQueueListEl, payload.quickplayQueueUserIds);
     renderList(rankedQueueListEl, payload.rankedQueueUserIds);
-    renderGameOrMatchList(gamesListEl, payload.games);
-    renderGameOrMatchList(matchesListEl, payload.matches);
+    replaceActiveMatches(payload.matches);
+    renderActiveMatchesFromState();
     fetchAllUsers();
     if (historyLoaded) {
       fetchHistoryData();
+    }
+  });
+
+  socket.on('admin:matchUpdated', payload => {
+    if (applyActiveMatchUpdate(payload)) {
+      renderActiveMatchesFromState();
     }
   });
 

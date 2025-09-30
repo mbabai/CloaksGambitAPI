@@ -320,6 +320,19 @@ class MatchDocument {
 
   async save() {
     MatchModel._store.set(this._id, this);
+    try {
+      eventBus.emit('match:updated', {
+        matchId: this._id.toString(),
+        type: this.type,
+        players: [this.player1, this.player2].filter(Boolean).map(toIdString),
+        player1Score: Number.isFinite(this.player1Score) ? this.player1Score : 0,
+        player2Score: Number.isFinite(this.player2Score) ? this.player2Score : 0,
+        drawCount: Number.isFinite(this.drawCount) ? this.drawCount : 0,
+        isActive: Boolean(this.isActive),
+      });
+    } catch (err) {
+      console.error('Error emitting match:updated event:', err);
+    }
     return this;
   }
 

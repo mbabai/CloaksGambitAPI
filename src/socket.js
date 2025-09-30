@@ -519,6 +519,48 @@ function initSocket(httpServer) {
   eventBus.on('match:ended', (payload) => {
     if (!payload) return;
     cleanupMatchTracking(payload.matchId);
+    emitAdminMetrics();
+  });
+
+  function buildAdminMatchPayload(payload = {}) {
+    try {
+      const matchId = toId(payload.matchId || payload.id || payload._id);
+      if (!matchId) return null;
+      const players = Array.isArray(payload.players)
+        ? payload.players.map((id) => toId(id)).filter(Boolean)
+        : [];
+      const toScore = (value, fallback = 0) => {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : fallback;
+      };
+      const normalized = {
+        id: matchId,
+        type: typeof payload.type === 'string' ? payload.type : null,
+        players,
+        player1Score: toScore(payload.player1Score),
+        player2Score: toScore(payload.player2Score),
+        drawCount: toScore(payload.drawCount),
+      };
+      if (payload.isActive !== undefined) {
+        normalized.isActive = Boolean(payload.isActive);
+      }
+      return normalized;
+    } catch (err) {
+      console.error('Error normalizing admin match payload:', err);
+      return null;
+    }
+  }
+
+  eventBus.on('match:updated', (payload) => {
+    emitAdminMetrics();
+    try {
+      const normalized = buildAdminMatchPayload(payload || {});
+      if (normalized) {
+        adminNamespace.emit('admin:matchUpdated', normalized);
+      }
+    } catch (err) {
+      console.error('Error emitting admin match update:', err);
+    }
   });
 
   eventBus.on('gameChanged', async (payload) => {
@@ -1000,14 +1042,12 @@ function initSocket(httpServer) {
       const connectedIds = Array.from(clients.keys());
       // Build in-game user list from active games
       let inGameIds = [];
-      let gamesList = [];
       let matchesList = [];
       try {
         const activeGames = await Game.find({ isActive: true }).select('players _id').lean();
         const set = new Set();
         activeGames.forEach(g => {
           (g.players || []).forEach(p => set.add(p.toString()));
-          gamesList.push({ id: g._id.toString(), players: (g.players || []).map(p => p.toString()) });
         });
         inGameIds = Array.from(set);
       } catch (err) {
@@ -1016,8 +1056,17 @@ function initSocket(httpServer) {
 
       try {
         const Match = require('./models/Match');
-        const activeMatches = await Match.find({ isActive: true }).select('player1 player2 _id').lean();
-        matchesList = activeMatches.map(m => ({ id: m._id.toString(), players: [m.player1?.toString(), m.player2?.toString()].filter(Boolean) }));
+        const activeMatches = await Match.find({ isActive: true })
+          .select('player1 player2 _id type player1Score player2Score drawCount')
+          .lean();
+        matchesList = activeMatches.map(m => ({
+          id: m._id.toString(),
+          type: typeof m.type === 'string' ? m.type : null,
+          players: [m.player1?.toString(), m.player2?.toString()].filter(Boolean),
+          player1Score: Number.isFinite(m.player1Score) ? m.player1Score : 0,
+          player2Score: Number.isFinite(m.player2Score) ? m.player2Score : 0,
+          drawCount: Number.isFinite(m.drawCount) ? m.drawCount : 0,
+        }));
       } catch (err) {
         console.error('Error fetching active matches for admin metrics:', err);
       }
@@ -1045,7 +1094,6 @@ function initSocket(httpServer) {
         quickplayQueueUserIds: lobbyState.quickplayQueue,
         rankedQueueUserIds: lobbyState.rankedQueue,
         inGameUserIds: inGameIds,
-        games: gamesList,
         matches: matchesList,
         usernames,
       });
