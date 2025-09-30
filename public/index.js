@@ -968,6 +968,9 @@ preloadAssets();
         setCookie('username', '', 0);
         setCookie('photo', '', 0);
         setCookie('userId', '', 0);
+        setStoredAuthToken(null);
+        setStoredUserId(null);
+        setStoredUsername(null);
         localStorage.removeItem('cg_username');
         window.location.reload();
       });
@@ -1095,13 +1098,20 @@ preloadAssets();
   }
 
   function ensureAuthToken() {
+    const cookieToken = getCookie(TOKEN_COOKIE_NAME) || null;
     const stored = getStoredAuthToken();
-    if (stored) return stored;
-    const cookieToken = getCookie(TOKEN_COOKIE_NAME);
+
     if (cookieToken) {
-      setStoredAuthToken(cookieToken);
+      if (stored !== cookieToken) {
+        setStoredAuthToken(cookieToken);
+      }
       return cookieToken;
     }
+
+    if (stored) {
+      setStoredAuthToken(null);
+    }
+
     return null;
   }
 
@@ -1117,12 +1127,17 @@ preloadAssets();
   // Retrieve stored user ID if present; server assigns one if missing
   async function ensureUserId() {
     const stored = getStoredUserId();
-    if (stored) return stored;
+    const cookieId = getCookie('userId');
 
-    const id = getCookie('userId');
-    if (id) {
-      setStoredUserId(id);
-      return id;
+    if (cookieId) {
+      if (stored !== cookieId) {
+        setStoredUserId(cookieId);
+      }
+      return cookieId;
+    }
+
+    if (stored) {
+      return stored;
     }
 
     return null;
