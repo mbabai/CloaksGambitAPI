@@ -4,6 +4,30 @@ const Game = require('../../../models/Game');
 const ServerConfig = require('../../../models/ServerConfig');
 const eventBus = require('../../../eventBus');
 
+function resolveStartTimeMs(game) {
+  if (!game) return null;
+
+  const candidates = [game.startTime, game.createdAt];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const ms = new Date(candidate).getTime();
+    if (Number.isFinite(ms)) {
+      return ms;
+    }
+  }
+
+  return null;
+}
+
+function calculateElapsedMs(game, now = Date.now()) {
+  const startTimeMs = resolveStartTimeMs(game);
+  if (!Number.isFinite(startTimeMs)) {
+    return 0;
+  }
+  return Math.max(0, now - startTimeMs);
+}
+
 router.post('/', async (req, res) => {
   try {
     const { gameId } = req.body;
@@ -28,7 +52,7 @@ router.post('/', async (req, res) => {
     const increment = game.increment;
     const winReason = config.winReasons.get('TIME_CONTROL');
     const now = Date.now();
-    const elapsed = now - new Date(game.startTime).getTime();
+    const elapsed = calculateElapsedMs(game, now);
 
     const setup0 = game.setupComplete[0];
     const setup1 = game.setupComplete[1];
@@ -76,3 +100,7 @@ router.post('/', async (req, res) => {
 });
 
 module.exports = router;
+module.exports._private = {
+  resolveStartTimeMs,
+  calculateElapsedMs,
+};
