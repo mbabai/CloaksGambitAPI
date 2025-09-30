@@ -644,8 +644,5 @@ class MatchModel {
 }
 
 MatchModel.historyModel = MatchHistoryModel;
-if (typeof MatchHistoryModel.watch === 'function') {
-  MatchModel.watch = (...args) => MatchHistoryModel.watch(...args);
-}
 
 module.exports = MatchModel;

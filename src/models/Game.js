@@ -873,8 +873,5 @@ class GameModel {
 }
 
 GameModel.historyModel = GameHistoryModel;
-if (typeof GameHistoryModel.watch === 'function') {
-  GameModel.watch = (...args) => GameHistoryModel.watch(...args);
-}
 
 module.exports = GameModel;
