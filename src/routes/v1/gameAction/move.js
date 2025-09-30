@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
-const ServerConfig = require('../../../models/ServerConfig');
+const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 
 // Helper function to resolve a move
@@ -60,7 +60,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Game is not active' });
     }
 
-    const config = new ServerConfig();
+    const config = await getServerConfig();
     const normalizedColor = parseInt(color, 10);
     if (normalizedColor !== 0 && normalizedColor !== 1) {
       return res.status(400).json({ message: 'Invalid color' });

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
-const ServerConfig = require('../../../models/ServerConfig');
+const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 
 router.post('/', async (req, res) => {
@@ -15,7 +15,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Invalid color' });
     }
 
-    const config = new ServerConfig();
+    const config = await getServerConfig();
 
     // Atomic update: set the one playersReady index to true and push READY action
     const actionDoc = {

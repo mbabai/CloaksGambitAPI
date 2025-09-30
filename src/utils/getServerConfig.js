@@ -32,7 +32,76 @@ function toNumber(value) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-async function getServerConfig() {
+let cachedConfig = null;
+let configPromise = null;
+
+const cloneDeep = (value) => JSON.parse(JSON.stringify(value));
+
+function toMap(source) {
+  if (!source) {
+    return new Map();
+  }
+  if (source instanceof Map) {
+    return new Map(source);
+  }
+  if (typeof source.entries === 'function') {
+    return new Map(Array.from(source.entries()));
+  }
+  if (typeof source[Symbol.iterator] === 'function' && !Array.isArray(source)) {
+    return new Map(source);
+  }
+  return new Map(Object.entries(source));
+}
+
+function toPlainObject(value) {
+  if (!value) return {};
+  if (typeof value.toObject === 'function') {
+    return value.toObject();
+  }
+  if (value instanceof Map) {
+    return Object.fromEntries(value.entries());
+  }
+  if (typeof value.entries === 'function') {
+    return Object.fromEntries(Array.from(value.entries()));
+  }
+  if (typeof value === 'object') {
+    return { ...value };
+  }
+  return {};
+}
+
+function createConfigSnapshot(configLike = DEFAULT_CONFIG) {
+  const snapshot = {
+    gameModes: toMap(configLike.gameModes || DEFAULT_CONFIG.gameModes),
+    colors: toMap(configLike.colors || DEFAULT_CONFIG.colors),
+    identities: toMap(configLike.identities || DEFAULT_CONFIG.identities),
+    actions: toMap(configLike.actions || DEFAULT_CONFIG.actions),
+    moveStates: toMap(configLike.moveStates || DEFAULT_CONFIG.moveStates),
+    boardDimensions: {
+      ...DEFAULT_CONFIG.boardDimensions,
+      ...(configLike.boardDimensions || {})
+    },
+    gameModeSettings: cloneDeep(
+      toPlainObject(configLike.gameModeSettings || DEFAULT_CONFIG.gameModeSettings)
+    ),
+    gameViewStates: toMap(configLike.gameViewStates || DEFAULT_CONFIG.gameViewStates),
+    winReasons: toMap(configLike.winReasons || DEFAULT_CONFIG.winReasons),
+    gameActionStates: toMap(configLike.gameActionStates || DEFAULT_CONFIG.gameActionStates),
+  };
+
+  if (snapshot.gameModeSettings && typeof snapshot.gameModeSettings === 'object' && !snapshot.gameModeSettings.get) {
+    Object.defineProperty(snapshot.gameModeSettings, 'get', {
+      value(key) {
+        return this[key];
+      },
+      enumerable: false
+    });
+  }
+
+  return snapshot;
+}
+
+async function loadServerConfigFromDatabase() {
   try {
     let config = await ServerConfig.findOne();
     if (!config) {
@@ -91,9 +160,65 @@ async function getServerConfig() {
 
     return config;
   } catch (err) {
-    console.error('Error in getServerConfig:', err);
+    console.error('Error loading server config from database:', err);
     throw err;
   }
 }
 
+async function initServerConfig(forceReload = false) {
+  if (forceReload) {
+    cachedConfig = null;
+    configPromise = null;
+  }
+
+  if (!configPromise) {
+    configPromise = loadServerConfigFromDatabase()
+      .then((config) => {
+        cachedConfig = config;
+        return cachedConfig;
+      })
+      .catch((err) => {
+        cachedConfig = null;
+        configPromise = null;
+        throw err;
+      });
+  }
+
+  return configPromise;
+}
+
+async function getServerConfig() {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+
+  return initServerConfig();
+}
+
+function getServerConfigSync() {
+  if (!cachedConfig) {
+    throw new Error('Server config has not been initialized');
+  }
+
+  return cachedConfig;
+}
+
+async function refreshServerConfig() {
+  return initServerConfig(true);
+}
+
+function getServerConfigSnapshotSync() {
+  try {
+    return createConfigSnapshot(getServerConfigSync());
+  } catch (err) {
+    return createConfigSnapshot(DEFAULT_CONFIG);
+  }
+}
+
 module.exports = getServerConfig;
+module.exports.getServerConfig = getServerConfig;
+module.exports.initServerConfig = initServerConfig;
+module.exports.getServerConfigSync = getServerConfigSync;
+module.exports.refreshServerConfig = refreshServerConfig;
+module.exports.getServerConfigSnapshotSync = getServerConfigSnapshotSync;
+module.exports.createConfigSnapshot = createConfigSnapshot;

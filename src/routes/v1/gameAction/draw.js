@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
-const ServerConfig = require('../../../models/ServerConfig');
+const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 
 const DRAW_COOLDOWN_MS = 10000;
@@ -39,7 +39,7 @@ router.post('/', async (req, res) => {
       game.drawOfferCooldowns = [null, null];
     }
 
-    const config = new ServerConfig();
+    const config = await getServerConfig();
     const affectedUsers = (game.players || []).map((p) => p.toString());
     const now = Date.now();
 

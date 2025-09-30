@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const ServerConfig = require('./ServerConfig');
+const getServerConfig = require('../utils/getServerConfig');
 const {
   generateId,
   toIdString,
@@ -14,7 +15,7 @@ const defaultConfig = new ServerConfig();
 
 async function getRuntimeConfig() {
   try {
-    return await ServerConfig.getSingleton();
+    return await getServerConfig();
   } catch (err) {
     console.error('Failed to fetch server config for validation, falling back to defaults:', err);
     return null;
@@ -358,7 +359,7 @@ async function updateMatchAfterGame(game, createNextGame) {
       match.drawCount = (match.drawCount || 0) + 1;
     }
 
-    const config = new ServerConfig();
+    const config = getServerConfig.getServerConfigSnapshotSync();
     const typeSettings = config.gameModeSettings[match.type]
       || config.gameModeSettings.get?.(match.type);
     const winScore = typeSettings?.WIN_SCORE;

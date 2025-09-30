@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
-const ServerConfig = require('../../../models/ServerConfig');
+const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 
 function resolveStartTimeMs(game) {
@@ -47,7 +47,7 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const config = new ServerConfig();
+    const config = await getServerConfig();
     const timeControl = game.timeControlStart;
     const increment = game.increment;
     const winReason = config.winReasons.get('TIME_CONTROL');

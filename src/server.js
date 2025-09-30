@@ -95,6 +95,7 @@ app.set('trust proxy', true);
 const routes = require('./routes');
 const initSocket = require('./socket');
 const lobbyStore = require('./state/lobby');
+const getServerConfig = require('./utils/getServerConfig');
 
 // Middleware
 app.use(cors());
@@ -185,6 +186,16 @@ async function startServer() {
   const connected = await connectToDatabase();
 
   if (connected) {
+    try {
+      await getServerConfig.initServerConfig();
+      console.log('Loaded server configuration into memory');
+    } catch (err) {
+      console.error('Failed to load server configuration:', err);
+      if (isProduction) {
+        process.exit(1);
+      }
+    }
+
     await resetLobbyQueues();
   }
 

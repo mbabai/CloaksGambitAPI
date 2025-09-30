@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
-const ServerConfig = require('../../../models/ServerConfig');
+const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 
 router.post('/', async (req, res) => {
@@ -26,7 +26,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: "Not this player's turn" });
     }
 
-    const config = new ServerConfig();
+    const config = await getServerConfig();
     const lastAction = game.actions[game.actions.length - 1];
     if (!lastAction || lastAction.type !== config.actions.get('MOVE')) {
       return res.status(400).json({ message: 'Last action was not a move' });

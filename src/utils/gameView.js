@@ -1,4 +1,4 @@
-const ServerConfig = require('../models/ServerConfig');
+const getServerConfig = require('./getServerConfig');
 
 function maskGameForColor(game, color) {
   const normalized = String(color).toLowerCase();
@@ -10,7 +10,7 @@ function maskGameForColor(game, color) {
     return game;
   }
 
-  const config = new ServerConfig();
+  const config = getServerConfig.getServerConfigSnapshotSync();
   const unknown = config.identities.get('UNKNOWN');
 
   const maskPiece = (piece) => {

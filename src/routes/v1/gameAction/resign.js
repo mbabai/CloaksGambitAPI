@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
-const ServerConfig = require('../../../models/ServerConfig');
+const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 
 router.post('/', async (req, res) => {
@@ -24,7 +24,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Game is already ended' });
     }
 
-    const config = new ServerConfig();
+    const config = await getServerConfig();
     
     // Set winner as the other color
     const winner = normalizedColor === 0 ? 1 : 0;
