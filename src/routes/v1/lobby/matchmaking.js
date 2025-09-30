@@ -1,253 +1,206 @@
 const express = require('express');
+const { randomUUID } = require('crypto');
 const router = express.Router();
-const Lobby = require('../../../models/Lobby');
-const Match = require('../../../models/Match');
-const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 const User = require('../../../models/User');
 const ensureUser = require('../../../utils/ensureUser');
+const {
+  ensureLobby,
+  removeUserFromQueue,
+  ensureUserInGame,
+  snapshotQueues,
+} = require('../../../utils/lobbyState');
+const { matches, games, quickplayQueue, rankedQueue } = require('../../../state');
 
 const DEFAULT_ELO = 800;
 
-// Function to check and create matches
+function resolveConfigValue(collection, key, fallback) {
+  if (!collection) return fallback;
+  if (typeof collection.get === 'function') {
+    return collection.get(key) ?? fallback;
+  }
+  if (typeof collection === 'object' && collection !== null) {
+    return collection[key] ?? fallback;
+  }
+  return fallback;
+}
+
+function createInMemoryMatch({
+  players,
+  type,
+  timeControl,
+  increment,
+  rankedMeta = {},
+}) {
+  const normalizedPlayers = players.map((id) => id.toString());
+  const matchId = randomUUID();
+  const createdAt = new Date();
+  const match = {
+    _id: matchId,
+    id: matchId,
+    player1: normalizedPlayers[0],
+    player2: normalizedPlayers[1],
+    players: normalizedPlayers,
+    type,
+    player1Score: 0,
+    player2Score: 0,
+    games: [],
+    isActive: true,
+    createdAt,
+    ...rankedMeta,
+  };
+
+  const gameId = randomUUID();
+  const game = {
+    _id: gameId,
+    id: gameId,
+    match: matchId,
+    players: normalizedPlayers,
+    playersReady: [false, false],
+    playersNext: [false, false],
+    playerTurn: null,
+    winner: null,
+    winReason: null,
+    createdAt,
+    startTime: null,
+    endTime: null,
+    isActive: true,
+    timeControlStart: timeControl,
+    increment,
+  };
+
+  match.games.push(gameId);
+  matches.set(matchId, match);
+  games.set(gameId, game);
+
+  return { matchId, match, gameId, game };
+}
+
+async function pairPlayers(queue, config, typeKey) {
+  const paired = [];
+
+  while (queue.length >= 2) {
+    const player1 = queue.shift();
+    const player2 = queue.shift();
+
+    if (!player1 || !player2) {
+      console.error('Invalid players in queue:', { player1, player2 });
+      break;
+    }
+
+    await Promise.all([
+      ensureUser(player1),
+      ensureUser(player2),
+    ]);
+
+    removeUserFromQueue(quickplayQueue, player1);
+    removeUserFromQueue(quickplayQueue, player2);
+    removeUserFromQueue(rankedQueue, player1);
+    removeUserFromQueue(rankedQueue, player2);
+
+    const typeValue = resolveConfigValue(config.gameModes, typeKey, typeKey);
+    const settings = resolveConfigValue(config.gameModeSettings, typeKey, {});
+    const incrementSetting = resolveConfigValue(config.gameModeSettings, 'INCREMENT', 0);
+    const timeControl = Number(settings?.TIME_CONTROL) || 0;
+    const increment = Number(settings?.INCREMENT ?? incrementSetting) || 0;
+
+    let rankedMeta = {};
+    if (typeKey === 'RANKED') {
+      const [p1User, p2User] = await Promise.all([
+        User.findById(player1).lean().catch(() => null),
+        User.findById(player2).lean().catch(() => null),
+      ]);
+      rankedMeta = {
+        player1StartElo: p1User?.elo ?? DEFAULT_ELO,
+        player2StartElo: p2User?.elo ?? DEFAULT_ELO,
+        player1EndElo: p1User?.elo ?? DEFAULT_ELO,
+        player2EndElo: p2User?.elo ?? DEFAULT_ELO,
+      };
+    }
+
+    const { matchId, match, game } = createInMemoryMatch({
+      players: [player1, player2],
+      type: typeValue,
+      timeControl,
+      increment,
+      rankedMeta,
+    });
+
+    ensureUserInGame(player1);
+    ensureUserInGame(player2);
+
+    const affectedUsers = [player1.toString(), player2.toString()];
+
+    eventBus.emit('gameChanged', {
+      game,
+      affectedUsers,
+    });
+
+    eventBus.emit('players:bothNext', {
+      game,
+      affectedUsers,
+    });
+
+    eventBus.emit('match:created', {
+      matchId,
+      players: affectedUsers,
+      type: match.type,
+    });
+
+    paired.push({ matchId, match, game, affectedUsers });
+  }
+
+  if (paired.length) {
+    const snapshot = snapshotQueues();
+    const affectedUsers = Array.from(new Set(paired.flatMap(item => item.affectedUsers)));
+    eventBus.emit('queueChanged', {
+      ...snapshot,
+      affectedUsers,
+    });
+  }
+
+  return paired;
+}
+
 async function checkAndCreateMatches() {
   try {
     console.log('Starting matchmaking check...');
-    
-    const lobby = await Lobby.findOne();
-    if (!lobby) {
-      console.log('No lobby found');
-      return;
-    }
-
-    // Always use the single config from DB
-    const config = await getServerConfig();
-    console.log('Got server config:', {
-      gameModes: Object.fromEntries(config.gameModes),
-      quickplaySettings: config.gameModeSettings.QUICKPLAY
-    });
+    const lobby = ensureLobby();
 
     console.log('Checking queues:', {
       rankedQueue: lobby.rankedQueue.length,
       quickplayQueue: lobby.quickplayQueue.length,
-      inGame: lobby.inGame.length
+      inGame: lobby.inGame.length,
     });
 
-    // Check quickplay queue first (since that's what we're using)
-      if (lobby.quickplayQueue.length >= 2) {
-        const player1 = lobby.quickplayQueue[0];
-        const player2 = lobby.quickplayQueue[1];
-
-        await Promise.all([
-          ensureUser(player1),
-          ensureUser(player2),
-        ]);
-      
-      // Additional safety check - ensure we have exactly 2 valid players
-      if (!player1 || !player2) {
-        console.error('Invalid players in queue:', { player1, player2 });
-        return;
-      }
-
-      console.log('Creating quickplay match for players:', {
-        player1: player1.toString(),
-        player2: player2.toString()
-      });
-
-      try {
-        // Create new match
-        const match = await Match.create({
-          player1,
-          player2,
-          type: config.gameModes.get('QUICKPLAY'),
-          player1Score: 0,
-          player2Score: 0,
-          games: []
-        });
-
-        console.log('Match created:', match._id);
-
-        // Create first game
-        const game = await Game.create({
-          players: [player1, player2],
-          match: match._id,
-          timeControlStart: config.gameModeSettings.QUICKPLAY.TIME_CONTROL,
-          increment: config.gameModeSettings.INCREMENT
-        });
-
-        console.log('Game created:', game._id);
-
-        eventBus.emit('gameChanged', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: [player1.toString(), player2.toString()],
-        });
-
-        eventBus.emit('players:bothNext', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: [player1.toString(), player2.toString()],
-        });
-
-        // Update match with game
-        match.games.push(game._id);
-        await match.save();
-        console.log('Match after saving game:', await Match.findById(match._id).lean());
-
-        eventBus.emit('match:created', {
-          matchId: match._id.toString(),
-          players: [player1.toString(), player2.toString()],
-          type: match.type,
-        });
-
-        // Update lobby - use atomic operation to prevent race conditions
-        const updateResult = await Lobby.updateOne(
-          { _id: lobby._id },
-          {
-            $pull: { quickplayQueue: { $in: [player1, player2] } },
-            $push: { inGame: { $each: [player1, player2] } }
-          }
-        );
-
-        console.log('Lobby update result:', updateResult);
-
-        if (updateResult.modifiedCount === 0) {
-          console.error('Failed to update lobby - no documents modified');
-          return;
-        }
-        
-        // Verify the queue was properly updated
-        const verifyLobby = await Lobby.findById(lobby._id).lean();
-        if (verifyLobby.quickplayQueue.length > 0) {
-          console.log('Queue after match creation:', verifyLobby.quickplayQueue.length, 'players remaining');
-        }
-
-        const updatedLobby = await Lobby.findById(lobby._id).lean();
-        eventBus.emit('queueChanged', {
-          quickplayQueue: updatedLobby.quickplayQueue.map(id => id.toString()),
-          rankedQueue: updatedLobby.rankedQueue.map(id => id.toString()),
-          affectedUsers: [player1.toString(), player2.toString()],
-        });
-
-        // Defensive: make sure playersReady is initialized [false, false]
-        await Game.updateOne({ _id: game._id, playersReady: { $exists: false } }, { $set: { playersReady: [false, false] } });
-
-        console.log('Quickplay match created successfully');
-      } catch (matchErr) {
-        console.error('Error creating match:', matchErr);
-        throw matchErr;
-      }
+    if (lobby.quickplayQueue.length < 2 && lobby.rankedQueue.length < 2) {
+      return [];
     }
 
-    // Check ranked queue
-      if (lobby.rankedQueue.length >= 2) {
-        const player1 = lobby.rankedQueue[0];
-        const player2 = lobby.rankedQueue[1];
+    const config = await getServerConfig();
+    const results = [];
 
-        await Promise.all([
-          ensureUser(player1),
-          ensureUser(player2),
-        ]);
+    const quickplayPairs = await pairPlayers(lobby.quickplayQueue, config, 'QUICKPLAY');
+    results.push(...quickplayPairs);
 
-        const [p1User, p2User] = await Promise.all([
-          User.findById(player1).lean().catch(() => null),
-          User.findById(player2).lean().catch(() => null)
-        ]);
+    const rankedPairs = await pairPlayers(lobby.rankedQueue, config, 'RANKED');
+    results.push(...rankedPairs);
 
-      console.log('Creating ranked match for players:', {
-        player1: player1.toString(),
-        player2: player2.toString()
-      });
+    console.log('Matchmaking created matches:', results.length);
 
-      try {
-        // Create new match
-        const match = await Match.create({
-          player1,
-          player2,
-          type: config.gameModes.get('RANKED'),
-          player1Score: 0,
-          player2Score: 0,
-          games: [],
-          player1StartElo: p1User?.elo ?? DEFAULT_ELO,
-          player2StartElo: p2User?.elo ?? DEFAULT_ELO,
-          player1EndElo: p1User?.elo ?? DEFAULT_ELO,
-          player2EndElo: p2User?.elo ?? DEFAULT_ELO,
-        });
-
-        console.log('Match created:', match._id);
-
-        // Create first game
-        const game = await Game.create({
-          players: [player1, player2],
-          match: match._id,
-          timeControlStart: config.gameModeSettings.RANKED.TIME_CONTROL,
-          increment: config.gameModeSettings.INCREMENT
-        });
-
-        console.log('Game created:', game._id);
-
-        eventBus.emit('gameChanged', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: [player1.toString(), player2.toString()],
-        });
-
-        eventBus.emit('players:bothNext', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: [player1.toString(), player2.toString()],
-        });
-
-        // Update match with game
-        match.games.push(game._id);
-        await match.save();
-        console.log('Match after saving game:', await Match.findById(match._id).lean());
-
-        eventBus.emit('match:created', {
-          matchId: match._id.toString(),
-          players: [player1.toString(), player2.toString()],
-          type: match.type,
-        });
-
-        // Update lobby - use atomic operation to prevent race conditions
-        const updateResult = await Lobby.updateOne(
-          { _id: lobby._id },
-          {
-            $pull: { rankedQueue: { $in: [player1, player2] } },
-            $push: { inGame: { $each: [player1, player2] } }
-          }
-        );
-
-        console.log('Lobby update result:', updateResult);
-
-        if (updateResult.modifiedCount === 0) {
-          console.error('Failed to update lobby - no documents modified');
-        }
-
-        const updatedLobby = await Lobby.findById(lobby._id).lean();
-        eventBus.emit('queueChanged', {
-          quickplayQueue: updatedLobby.quickplayQueue.map(id => id.toString()),
-          rankedQueue: updatedLobby.rankedQueue.map(id => id.toString()),
-          affectedUsers: [player1.toString(), player2.toString()],
-        });
-
-        await Game.updateOne({ _id: game._id, playersReady: { $exists: false } }, { $set: { playersReady: [false, false] } });
-
-        console.log('Ranked match created successfully');
-      } catch (matchErr) {
-        console.error('Error creating match:', matchErr);
-        throw matchErr;
-      }
-    }
+    return results;
   } catch (err) {
     console.error('Error in matchmaking:', err);
-    throw err; // Re-throw to ensure the error is properly handled
+    throw err;
   }
 }
 
-// Endpoint to trigger matchmaking check
 router.post('/check', async (req, res) => {
   try {
     console.log('Matchmaking check endpoint called');
-    await checkAndCreateMatches();
-    res.json({ message: 'Matchmaking check completed' });
+    const results = await checkAndCreateMatches();
+    res.json({ message: 'Matchmaking check completed', matchesCreated: results.length });
   } catch (err) {
     console.error('Error in matchmaking endpoint:', err);
     res.status(500).json({ message: err.message });

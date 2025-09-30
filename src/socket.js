@@ -1377,12 +1377,47 @@ function initSocket(httpServer) {
         ...lobbyState.rankedQueue,
         ...inGameIds,
       ]);
-      const users = await User.find({ _id: { $in: Array.from(allIds) } })
+
+      const queueUsersPromise = allIds.size
+        ? User.find({ _id: { $in: Array.from(allIds) } })
+            .select('_id username')
+            .lean()
+        : Promise.resolve([]);
+
+      const persistedUsersPromise = User.find({})
+        .sort({ createdAt: -1 })
+        .limit(200)
         .select('_id username')
         .lean();
+
+      const [queueUsers, persistedUsersRaw] = await Promise.all([
+        queueUsersPromise,
+        persistedUsersPromise,
+      ]);
+
       const usernames = {};
-      users.forEach(u => {
-        usernames[u._id.toString()] = u.username;
+      const persistedUsers = [];
+
+      (Array.isArray(queueUsers) ? queueUsers : []).forEach((u) => {
+        if (!u) return;
+        const id = u._id?.toString?.();
+        if (!id) return;
+        if (typeof u.username === 'string' && u.username) {
+          usernames[id] = u.username;
+        }
+      });
+
+      const seenPersisted = new Set();
+      (Array.isArray(persistedUsersRaw) ? persistedUsersRaw : []).forEach((u) => {
+        if (!u) return;
+        const id = u._id?.toString?.();
+        if (!id || seenPersisted.has(id)) return;
+        seenPersisted.add(id);
+        const username = typeof u.username === 'string' && u.username ? u.username : 'Unknown';
+        if (!usernames[id]) {
+          usernames[id] = username;
+        }
+        persistedUsers.push({ id, username });
       });
 
       adminNamespace.emit('admin:metrics', {
@@ -1397,6 +1432,7 @@ function initSocket(httpServer) {
         games: gamesList,
         matches: matchesList,
         usernames,
+        persistedUsers,
       });
     } catch (err) {
       console.error('Error emitting admin metrics:', err);

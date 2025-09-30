@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const Lobby = require('../../../models/Lobby');
 const eventBus = require('../../../eventBus');
-const mongoose = require('mongoose');
 const ensureUser = require('../../../utils/ensureUser');
 const { resolveUserFromRequest } = require('../../../utils/authTokens');
+const {
+  ensureLobby,
+  removeUserFromQueue,
+  snapshotQueues,
+} = require('../../../utils/lobbyState');
 
 router.post('/', async (req, res) => {
   try {
@@ -14,7 +17,7 @@ router.post('/', async (req, res) => {
     if (userInfo && userInfo.userId) {
       userId = userInfo.userId;
     } else {
-      if (!userId || !mongoose.isValidObjectId(userId)) {
+      if (!userId) {
         userInfo = await ensureUser();
       } else {
         userInfo = await ensureUser(userId);
@@ -23,17 +26,13 @@ router.post('/', async (req, res) => {
       userId = userInfo.userId;
     }
 
-    let lobby = await Lobby.findOne();
-    if (!lobby) {
-      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [], inGame: [] });
-    }
+    const lobby = ensureLobby();
 
-    lobby.quickplayQueue = lobby.quickplayQueue.filter(id => id.toString() !== userId);
-    await lobby.save();
+    removeUserFromQueue(lobby.quickplayQueue, userId);
 
+    const snapshot = snapshotQueues();
     eventBus.emit('queueChanged', {
-      quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
-      rankedQueue: lobby.rankedQueue.map(id => id.toString()),
+      ...snapshot,
       affectedUsers: [userId.toString()],
     });
 

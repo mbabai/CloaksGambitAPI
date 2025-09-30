@@ -98,6 +98,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 
   const usernameMap = {};
   let latestMetrics = null;
+  let latestPersistedUsers = [];
   let historyMatches = [];
   let historyGames = [];
   let historyMaxGameCount = 1;
@@ -248,6 +249,46 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     setColumnWidth(connCells, connWidth);
   }
 
+  function applyPersistedUsers(users) {
+    if (!usersListEl) return false;
+    const normalized = [];
+    const seen = new Set();
+    (Array.isArray(users) ? users : []).forEach((entry) => {
+      if (!entry) return;
+      let id = null;
+      if (typeof entry === 'string') {
+        id = entry;
+      } else if (typeof entry === 'object') {
+        if (entry.id) {
+          id = entry.id;
+        } else if (entry._id && typeof entry._id === 'string') {
+          id = entry._id;
+        } else if (entry._id && typeof entry._id.toString === 'function') {
+          id = entry._id.toString();
+        }
+      }
+      if (!id) return;
+      id = id.toString();
+      if (seen.has(id)) return;
+      seen.add(id);
+      const username = (entry && typeof entry.username === 'string' && entry.username)
+        ? entry.username
+        : 'Unknown';
+      usernameMap[id] = username;
+      normalized.push({ id, username });
+    });
+
+    latestPersistedUsers = normalized;
+    renderUsersList(
+      usersListEl,
+      latestPersistedUsers,
+      latestMetrics ? latestMetrics.connectedUserIds : [],
+      latestMetrics ? latestMetrics.matches : []
+    );
+
+    return normalized.length > 0;
+  }
+
   async function fetchAllUsers() {
     if (!usersListEl) return;
     try {
@@ -261,22 +302,11 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
         return;
       }
       const data = await res.json();
-      const users = [];
       if (Array.isArray(data)) {
-        data.forEach(u => {
-          const id = u._id ? u._id.toString() : '';
-          if (!id) return;
-          const username = u.username || 'Unknown';
-          usernameMap[id] = username;
-          users.push({ id, username });
-        });
+        applyPersistedUsers(data);
+      } else {
+        applyPersistedUsers([]);
       }
-      renderUsersList(
-        usersListEl,
-        users,
-        latestMetrics ? latestMetrics.connectedUserIds : [],
-        latestMetrics ? latestMetrics.matches : []
-      );
       if (latestMetrics) {
         renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
         renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
@@ -574,7 +604,9 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     renderList(rankedQueueListEl, payload.rankedQueueUserIds);
     renderGameOrMatchList(gamesListEl, payload.games);
     renderGameOrMatchList(matchesListEl, payload.matches);
-    fetchAllUsers();
+    if (!applyPersistedUsers(payload.persistedUsers)) {
+      fetchAllUsers();
+    }
     if (historyLoaded) {
       fetchHistoryData();
     }
