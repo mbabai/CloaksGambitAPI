@@ -1,7 +1,14 @@
 const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../../models/User');
-const { createAuthToken, TOKEN_COOKIE_NAME } = require('../../utils/authTokens');
+const ensureUser = require('../../utils/ensureUser');
+const {
+  createAuthToken,
+  TOKEN_COOKIE_NAME,
+  extractTokenFromRequest,
+  resolveUserFromToken,
+  parseCookies,
+} = require('../../utils/authTokens');
 
 const isProduction = (process.env.NODE_ENV || 'development') === 'production';
 
@@ -14,6 +21,82 @@ const scopes = [
 ];
 
 const FALLBACK_USERNAME = 'GoogleUser';
+const ONE_YEAR_MS = 1000 * 60 * 60 * 24 * 365;
+
+function buildCookieOptions() {
+  const base = {
+    maxAge: ONE_YEAR_MS,
+    sameSite: 'lax',
+  };
+  return isProduction ? { ...base, secure: true } : base;
+}
+
+function clearCookie(res, name, baseOptions = {}) {
+  res.cookie(name, '', { ...baseOptions, maxAge: 0 });
+}
+
+function applyAuthenticatedCookies(res, user, token) {
+  const options = buildCookieOptions();
+  const userId = user._id.toString();
+  const username = user.username || FALLBACK_USERNAME;
+  const photo = user.photoUrl || 'assets/images/cloakHood.jpg';
+
+  if (userId) {
+    res.cookie('userId', userId, options);
+  } else {
+    clearCookie(res, 'userId', options);
+  }
+  res.cookie('username', username, options);
+  res.cookie('photo', photo, options);
+  res.cookie(TOKEN_COOKIE_NAME, token, { ...options, httpOnly: false });
+}
+
+function applyGuestCookies(res, guestInfo) {
+  const options = buildCookieOptions();
+  const userId = guestInfo.userId ? String(guestInfo.userId) : '';
+  const username = guestInfo.username || FALLBACK_USERNAME;
+  res.cookie('userId', userId, options);
+  res.cookie('username', username, options);
+  clearCookie(res, 'photo', options);
+  clearCookie(res, TOKEN_COOKIE_NAME, { ...options, httpOnly: false });
+}
+
+async function resolveSessionFromRequest(req) {
+  const token = extractTokenFromRequest(req);
+  if (token) {
+    try {
+      const resolved = await resolveUserFromToken(token);
+      if (resolved?.user) {
+        return {
+          type: 'authenticated',
+          token,
+          user: resolved.user,
+          userId: resolved.userId,
+          username: resolved.username,
+          isGuest: resolved.isGuest,
+        };
+      }
+    } catch (err) {
+      console.warn('Failed to resolve user from token', err);
+    }
+  }
+
+  const cookies = parseCookies(req.headers?.cookie);
+  const cookieUserId = cookies?.userId;
+  if (cookieUserId) {
+    try {
+      const ensured = await ensureUser(cookieUserId);
+      if (ensured && ensured.isGuest) {
+        return { type: 'guest', ...ensured };
+      }
+    } catch (err) {
+      console.warn('Failed to reuse cookie userId', err);
+    }
+  }
+
+  const guest = await ensureUser();
+  return { type: 'guest', ...guest };
+}
 
 function sanitizeSegment(segment) {
   if (!segment) return '';
@@ -161,25 +244,55 @@ router.get('/google/callback', async (req, res) => {
       await user.save();
     }
 
-    const maxAge = 1000 * 60 * 60 * 24 * 365; // 1 year
     const token = createAuthToken(user);
-    const baseCookieOptions = {
-      maxAge,
-      sameSite: 'lax',
-    };
-    const secureCookieOptions = isProduction ? { ...baseCookieOptions, secure: true } : baseCookieOptions;
-
-    res.cookie('userId', user._id.toString(), secureCookieOptions);
-    res.cookie('username', user.username, secureCookieOptions);
-    res.cookie('photo', 'assets/images/cloakHood.jpg', secureCookieOptions);
-    res.cookie(TOKEN_COOKIE_NAME, token, {
-      ...secureCookieOptions,
-      httpOnly: false,
-    });
+    applyAuthenticatedCookies(res, user, token);
     res.redirect('/');
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Authentication failed' });
+  }
+});
+
+router.get('/session', async (req, res) => {
+  try {
+    const session = await resolveSessionFromRequest(req);
+    if (session.type === 'authenticated' && !session.isGuest) {
+      const token = createAuthToken(session.user);
+      applyAuthenticatedCookies(res, session.user, token);
+      return res.json({
+        userId: session.userId,
+        username: session.username,
+        isGuest: false,
+        authenticated: true,
+      });
+    }
+
+    applyGuestCookies(res, session);
+    return res.json({
+      userId: session.userId,
+      username: session.username,
+      isGuest: true,
+      authenticated: false,
+    });
+  } catch (err) {
+    console.error('Failed to resolve session', err);
+    res.status(500).json({ message: 'Failed to resolve session' });
+  }
+});
+
+router.post('/logout', async (req, res) => {
+  try {
+    const guest = await ensureUser();
+    applyGuestCookies(res, guest);
+    res.json({
+      userId: guest.userId,
+      username: guest.username,
+      isGuest: true,
+      authenticated: false,
+    });
+  } catch (err) {
+    console.error('Failed to log out user', err);
+    res.status(500).json({ message: 'Failed to log out' });
   }
 });
 

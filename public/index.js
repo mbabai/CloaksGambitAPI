@@ -729,15 +729,81 @@ preloadAssets();
     return true;
   }
 
+  function updateSessionInfo(partial = {}, { syncCookies = false } = {}) {
+    if (partial.userId !== undefined) {
+      sessionInfo.userId = partial.userId ? String(partial.userId) : null;
+    }
+    if (partial.username !== undefined) {
+      sessionInfo.username = typeof partial.username === 'string' ? partial.username : '';
+    }
+
+    let recomputeAuth = false;
+    if (partial.isGuest !== undefined) {
+      sessionInfo.isGuest = Boolean(partial.isGuest);
+      recomputeAuth = partial.authenticated === undefined;
+    }
+
+    if (partial.authenticated !== undefined) {
+      sessionInfo.authenticated = Boolean(partial.authenticated);
+      if (partial.isGuest === undefined) {
+        sessionInfo.isGuest = !sessionInfo.authenticated;
+      }
+    } else if (recomputeAuth) {
+      sessionInfo.authenticated = !sessionInfo.isGuest;
+    }
+
+    setStoredUserId(sessionInfo.userId);
+    if (sessionInfo.username) {
+      setStoredUsername(sessionInfo.username);
+    } else {
+      setStoredUsername(null);
+    }
+
+    const tokenValue = getCookie(TOKEN_COOKIE_NAME) || null;
+    setStoredAuthToken(tokenValue);
+
+    if (syncCookies) {
+      if (sessionInfo.userId) {
+        setCookie('userId', sessionInfo.userId, 60 * 60 * 24 * 365);
+      } else {
+        setCookie('userId', '', 0);
+      }
+
+      if (sessionInfo.username) {
+        setCookie('username', sessionInfo.username, 60 * 60 * 24 * 365);
+      } else {
+        setCookie('username', '', 0);
+      }
+
+      if (sessionInfo.authenticated) {
+        setCookie('photo', LOGGED_IN_AVATAR_SRC, 60 * 60 * 24 * 365);
+      } else {
+        setCookie('photo', '', 0);
+      }
+    }
+
+    setUsernameDisplay();
+  }
+
   function setUsernameDisplay() {
-    const name = getCookie('username') || localStorage.getItem('cg_username');
+    let name = sessionInfo.username || '';
+    if (!name) {
+      try {
+        name = localStorage.getItem('cg_username') || '';
+      } catch (err) {
+        console.warn('Unable to read cg_username from localStorage', err);
+        name = '';
+      }
+    }
+    if (!name) {
+      name = getCookie('username') || '';
+    }
     if (usernameDisplay) {
       usernameDisplay.textContent = name || '';
     }
   }
 
   async function updateAccountPanel() {
-    const name = getCookie('username');
     let storedName = '';
     try {
       storedName = localStorage.getItem('cg_username') || '';
@@ -745,15 +811,18 @@ preloadAssets();
       console.warn('Unable to read cg_username from localStorage', err);
       storedName = '';
     }
-    if (name) {
-      const userIdCookie = getCookie('userId');
+
+    const isAuthenticated = Boolean(sessionInfo.authenticated && sessionInfo.userId);
+
+    if (isAuthenticated) {
+      const sessionUserId = sessionInfo.userId;
       let userDetails = null;
-      if (userIdCookie) {
+      if (sessionUserId) {
         try {
           const res = await authFetch('/api/v1/users/getDetails', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: userIdCookie })
+            body: JSON.stringify({ userId: sessionUserId })
           });
           if (res.ok) {
             userDetails = await res.json().catch(() => null);
@@ -763,10 +832,14 @@ preloadAssets();
         }
       }
 
-      const displayName = userDetails?.username || name;
+      const displayName = userDetails?.username || sessionInfo.username || storedName || '';
       const eloValue = Number.isFinite(userDetails?.elo) ? userDetails.elo : null;
 
-      statsUserId = userIdCookie || null;
+      if (displayName && displayName !== sessionInfo.username) {
+        updateSessionInfo({ username: displayName });
+      }
+
+      statsUserId = sessionUserId || null;
       statsUserElo = eloValue;
       statsUsernameMap = {};
       if (statsUserId) {
@@ -818,53 +891,25 @@ preloadAssets();
       const editBtn = document.createElement('button');
       editBtn.id = 'editUsername';
       editBtn.type = 'button';
-      editBtn.setAttribute('aria-label', 'Edit username');
-      editBtn.setAttribute('title', 'Edit username');
-      editBtn.innerHTML = `
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 24 24"
-          width="18"
-          height="18"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            d="m16.862 4.487 1.651-1.652a1.875 1.875 0 0 1 2.652 2.652l-1.652 1.651m-2.651-2.651 2.651 2.651m-2.651-2.651-8.955 8.955a1.5 1.5 0 0 0-.383.65l-.547 2.188 2.188-.547a1.5 1.5 0 0 0 .65-.383l8.955-8.955m-2.651-2.651 2.651 2.651"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      `.trim();
-      editBtn.style.background = 'none';
-      editBtn.style.border = 'none';
-      editBtn.style.color = 'var(--CG-white)';
+      editBtn.className = 'account__edit-button';
+      editBtn.textContent = 'Edit';
+      editBtn.style.flex = '0 0 auto';
+      editBtn.style.fontSize = '14px';
+      editBtn.style.padding = '6px 10px';
+      editBtn.style.border = '1px solid rgba(255, 255, 255, 0.2)';
+      editBtn.style.borderRadius = '12px';
+      editBtn.style.background = 'rgba(0, 0, 0, 0.3)';
+      editBtn.style.color = 'white';
       editBtn.style.cursor = 'pointer';
-      editBtn.style.padding = '2px';
-      editBtn.style.marginLeft = 'auto';
-      editBtn.style.marginRight = '0';
-      editBtn.style.borderRadius = '4px';
-      editBtn.style.transition = 'background-color 120ms ease-in-out';
-      editBtn.style.display = 'inline-flex';
-      editBtn.style.alignItems = 'center';
-      editBtn.style.justifyContent = 'center';
-      editBtn.style.flexShrink = '0';
-      editBtn.style.flexGrow = '0';
-      editBtn.style.flexBasis = 'auto';
-      editBtn.addEventListener('focusin', () => {
-        editBtn.style.backgroundColor = 'rgba(255, 255, 255, 0.12)';
-      });
-      editBtn.addEventListener('focusout', () => {
-        editBtn.style.backgroundColor = 'transparent';
-      });
+      editBtn.style.transition = 'background 0.2s ease';
+
       editBtn.addEventListener('mouseenter', () => {
-        editBtn.style.backgroundColor = 'rgba(255, 255, 255, 0.12)';
+        editBtn.style.background = 'rgba(255, 255, 255, 0.1)';
       });
       editBtn.addEventListener('mouseleave', () => {
-        editBtn.style.backgroundColor = 'transparent';
+        editBtn.style.background = 'rgba(0, 0, 0, 0.3)';
       });
+
       usernameRow.appendChild(usernameSpan);
       usernameRow.appendChild(editBtn);
 
@@ -913,7 +958,9 @@ preloadAssets();
 
       accountBtnImg.src = LOGGED_IN_AVATAR_SRC;
       setCookie('photo', LOGGED_IN_AVATAR_SRC, 60 * 60 * 24 * 365);
-      usernameDisplay.textContent = displayName;
+      if (usernameDisplay) {
+        usernameDisplay.textContent = displayName;
+      }
 
       statsBtn.addEventListener('click', ev => {
         ev.stopPropagation();
@@ -921,7 +968,7 @@ preloadAssets();
       });
       editBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
-        const currentUserId = getCookie('userId');
+        const currentUserId = sessionInfo.userId;
         if (!currentUserId) {
           alert('Unable to update username: user session not found.');
           return;
@@ -946,8 +993,7 @@ preloadAssets();
           }
           const updated = await res.json();
           const updatedName = updated?.username || trimmed;
-          setCookie('username', updatedName, 60 * 60 * 24 * 365);
-          localStorage.setItem('cg_username', updatedName);
+          updateSessionInfo({ username: updatedName }, { syncCookies: true });
           const playerIdx = currentPlayerIds.findIndex(id => id && id.toString() === currentUserId);
           if (playerIdx !== -1) {
             playerNames[playerIdx] = updatedName;
@@ -963,15 +1009,27 @@ preloadAssets();
           alert('Failed to update username. Please try again.');
         }
       });
-      logoutBtn.addEventListener('click', ev => {
+      logoutBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
-        setCookie('username', '', 0);
-        setCookie('photo', '', 0);
-        setCookie('userId', '', 0);
+        try {
+          const res = await fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include'
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.message || 'Failed to log out.');
+            return;
+          }
+        } catch (error) {
+          console.error('Failed to log out', error);
+          alert('Failed to log out. Please try again.');
+          return;
+        }
         setStoredAuthToken(null);
         setStoredUserId(null);
         setStoredUsername(null);
-        localStorage.removeItem('cg_username');
         window.location.reload();
       });
     } else {
@@ -982,11 +1040,10 @@ preloadAssets();
       statsHistoryMaxGameCount = 1;
       statsHistoryLoaded = false;
       statsHistoryGamesByMatch.clear();
-      statsUsernameMap = {};
       if (isStatsOverlayOpen()) {
         closeStatsOverlay();
       }
-      const guestName = storedName || '';
+      const guestName = sessionInfo.username || storedName || '';
       accountPanelContent.style.alignItems = 'flex-end';
       accountPanelContent.style.gap = '8px';
       accountPanelContent.innerHTML = '';
@@ -1025,6 +1082,7 @@ preloadAssets();
       loginMessage.textContent = 'Log in to see account history, statistics, elo, and participate in ranked matches.';
       accountPanelContent.appendChild(loginMessage);
       accountBtnImg.src = ACCOUNT_ICON_SRC;
+      setCookie('photo', '', 0);
       if (usernameDisplay) {
         usernameDisplay.textContent = guestName;
       }
@@ -1034,8 +1092,56 @@ preloadAssets();
     }
   }
 
-  updateAccountPanel();
+  async function refreshSession() {
+    let sessionData = null;
+    try {
+      const res = await fetch('/api/auth/session', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include'
+      });
+      if (!res.ok) {
+        throw new Error(`Session request failed (${res.status})`);
+      }
+      sessionData = await res.json().catch(() => null);
 
+      if (sessionData) {
+        const updates = {};
+        if (sessionData.userId !== undefined) updates.userId = sessionData.userId;
+        if (sessionData.username !== undefined) updates.username = sessionData.username;
+        if (sessionData.isGuest !== undefined) updates.isGuest = Boolean(sessionData.isGuest);
+        if (sessionData.authenticated !== undefined) updates.authenticated = Boolean(sessionData.authenticated);
+        updateSessionInfo(updates);
+      }
+    } catch (err) {
+      console.warn('Failed to refresh session', err);
+      let fallbackId = null;
+      try {
+        fallbackId = getCookie('userId') || getStoredUserId();
+      } catch (idErr) {
+        console.warn('Unable to read userId from storage', idErr);
+      }
+      let fallbackName = '';
+      try {
+        fallbackName = localStorage.getItem('cg_username') || '';
+      } catch (nameErr) {
+        console.warn('Unable to read cg_username from localStorage', nameErr);
+      }
+      if (!fallbackName) {
+        fallbackName = getCookie('username') || '';
+      }
+      const token = ensureAuthToken();
+      updateSessionInfo({
+        userId: fallbackId || null,
+        username: fallbackName || '',
+        authenticated: Boolean(token),
+        isGuest: !token,
+      });
+    }
+
+    await updateAccountPanel();
+    return sessionInfo;
+  }
   // Cookie helpers moved to modules/utils/cookies.js
 
   const ACTIONS = { SETUP: 0, MOVE: 1, CHALLENGE: 2, BOMB: 3, PASS: 4 };
@@ -1126,21 +1232,14 @@ preloadAssets();
 
   // Retrieve stored user ID if present; server assigns one if missing
   async function ensureUserId() {
-    const stored = getStoredUserId();
-    const cookieId = getCookie('userId');
-
-    if (cookieId) {
-      if (stored !== cookieId) {
-        setStoredUserId(cookieId);
-      }
-      return cookieId;
+    if (sessionInfo.userId) {
+      return sessionInfo.userId;
     }
-
-    if (stored) {
-      return stored;
+    const refreshed = await refreshSession().catch(() => sessionInfo);
+    if (refreshed && refreshed.userId) {
+      return refreshed.userId;
     }
-
-    return null;
+    return sessionInfo.userId;
   }
 
   let socket;
@@ -1165,6 +1264,13 @@ preloadAssets();
   let currentIsWhite = true;
 
   // Player identity state
+  let sessionInfo = {
+    userId: null,
+    username: '',
+    isGuest: true,
+    authenticated: false,
+  };
+
   let playerNames = ['Anonymous0', 'Anonymous1'];
   let playerElos = [null, null];
   let currentPlayerIds = [];
@@ -1310,9 +1416,7 @@ preloadAssets();
 
     const isSelfUpdate = !targetId || (activeUserId && String(activeUserId) === targetId);
     if (isSelfUpdate) {
-      setStoredUsername(normalizedName);
-      setCookie('username', normalizedName, 60 * 60 * 24 * 365);
-      setUsernameDisplay();
+      updateSessionInfo({ username: normalizedName }, { syncCookies: true });
       updateAccountPanel();
       if (activeUserId) {
         statsUsernameMap[String(activeUserId)] = normalizedName;
@@ -2146,62 +2250,62 @@ preloadAssets();
     });
     socket.on('user:init', (payload) => {
       ensureAuthToken();
-      const newId = payload && payload.userId;
-      if (newId) {
-        userId = newId;
-        setStoredUserId(newId);
-        setCookie('userId', newId, 60 * 60 * 24 * 365);
+      const payloadUserId = payload?.userId ? String(payload.userId) : null;
+      const payloadUsername = typeof payload?.username === 'string' ? payload.username : undefined;
+      const isGuest = Boolean(payload?.guest);
+
+      const updates = {
+        isGuest,
+        authenticated: !isGuest,
+      };
+      if (payloadUserId) {
+        updates.userId = payloadUserId;
+      }
+      if (payloadUsername !== undefined) {
+        updates.username = payloadUsername;
       }
 
-      const payloadUsername = payload && payload.username;
-      setStoredUsername(payloadUsername || null);
-      setUsernameDisplay();
-
-      if (payloadUsername && !payload?.guest) {
-        setCookie('username', payloadUsername, 60 * 60 * 24 * 365);
+      updateSessionInfo(updates, { syncCookies: isGuest });
+      if (!isGuest) {
         setCookie('photo', LOGGED_IN_AVATAR_SRC, 60 * 60 * 24 * 365);
       } else {
-        setCookie('username', '', 0);
         setCookie('photo', '', 0);
       }
 
+      userId = sessionInfo.userId || userId;
       updateAccountPanel();
     });
   }
 
   async function enterQueue(mode) {
-    const activeUserId = getStoredUserId() || userId;
+    const activeUserId = sessionInfo.userId || getStoredUserId() || userId;
     console.log('[action] enterQueue', { userId: activeUserId, mode });
     const result = mode === 'ranked' ? await apiEnterRankedQueue() : await apiEnterQueue();
     console.log('[action] enterQueue response', result);
 
-    if (result?.userId) {
-      userId = result.userId;
-      setStoredUserId(result.userId);
-      setCookie('userId', result.userId, 60 * 60 * 24 * 365);
-    }
-
-    if (result?.username) {
-      setStoredUsername(result.username);
+    if (result && (result.userId || result.username)) {
+      updateSessionInfo({
+        ...(result.userId ? { userId: result.userId } : {}),
+        ...(result.username ? { username: result.username } : {}),
+      });
+      userId = sessionInfo.userId || userId;
     }
 
     return result;
   }
 
   async function exitQueue(mode) {
-    const activeUserId = getStoredUserId() || userId;
+    const activeUserId = sessionInfo.userId || getStoredUserId() || userId;
     console.log('[action] exitQueue', { userId: activeUserId, mode });
     const result = mode === 'ranked' ? await apiExitRankedQueue() : await apiExitQueue();
     console.log('[action] exitQueue response', result);
 
-    if (result?.userId) {
-      userId = result.userId;
-      setStoredUserId(result.userId);
-      setCookie('userId', result.userId, 60 * 60 * 24 * 365);
-    }
-
-    if (result?.username) {
-      setStoredUsername(result.username);
+    if (result && (result.userId || result.username)) {
+      updateSessionInfo({
+        ...(result.userId ? { userId: result.userId } : {}),
+        ...(result.username ? { username: result.username } : {}),
+      });
+      userId = sessionInfo.userId || userId;
     }
 
     return result;
@@ -2256,7 +2360,11 @@ preloadAssets();
 
   (async function init() {
     try {
-      userId = await ensureUserId();
+      await refreshSession();
+      userId = sessionInfo.userId || null;
+      if (!userId) {
+        userId = await ensureUserId();
+      }
       console.log('[init] userId', userId);
       try {
         const settings = await apiGetTimeSettings();
