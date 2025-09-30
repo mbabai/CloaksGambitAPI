@@ -737,6 +737,13 @@ preloadAssets();
 
   async function updateAccountPanel() {
     const name = getCookie('username');
+    let storedName = '';
+    try {
+      storedName = localStorage.getItem('cg_username') || '';
+    } catch (err) {
+      console.warn('Unable to read cg_username from localStorage', err);
+      storedName = '';
+    }
     if (name) {
       const userIdCookie = getCookie('userId');
       let userDetails = null;
@@ -975,20 +982,51 @@ preloadAssets();
       if (isStatsOverlayOpen()) {
         closeStatsOverlay();
       }
+      const guestName = storedName || '';
       accountPanelContent.style.alignItems = 'flex-end';
-      accountPanelContent.style.gap = '';
-      accountPanelContent.innerHTML = `
-        <button id="googleLoginBtn" class="menu-button"><img src="${GOOGLE_ICON_SRC}" alt="Google" /> Sign in with Google</button>
-        <div class="menu-message">Log in to see account history, statistics, elo, and participate in ranked matches.</div>
-      `;
-      accountBtnImg.src = ACCOUNT_ICON_SRC;
-      usernameDisplay.textContent = '';
-      const loginBtn = document.getElementById('googleLoginBtn');
-      if (loginBtn) {
-        loginBtn.addEventListener('click', () => {
-          window.location.href = '/api/auth/google';
-        });
+      accountPanelContent.style.gap = '8px';
+      accountPanelContent.innerHTML = '';
+
+      const loginBtn = document.createElement('button');
+      loginBtn.id = 'googleLoginBtn';
+      loginBtn.className = 'menu-button';
+      loginBtn.style.display = 'flex';
+      loginBtn.style.alignItems = 'center';
+      loginBtn.style.justifyContent = 'flex-start';
+      loginBtn.style.gap = '12px';
+      loginBtn.style.width = '100%';
+      const loginImg = document.createElement('img');
+      loginImg.src = GOOGLE_ICON_SRC;
+      loginImg.alt = 'Google';
+      loginImg.style.width = '18px';
+      loginImg.style.height = '18px';
+      loginImg.style.objectFit = 'contain';
+      const loginLabel = document.createElement('span');
+      loginLabel.textContent = 'Sign in with Google';
+      loginLabel.style.flex = '1';
+      loginLabel.style.textAlign = 'left';
+      loginBtn.appendChild(loginImg);
+      loginBtn.appendChild(loginLabel);
+      accountPanelContent.appendChild(loginBtn);
+
+      if (guestName) {
+        const guestMessage = document.createElement('div');
+        guestMessage.className = 'menu-message';
+        guestMessage.textContent = `Playing as ${guestName}`;
+        accountPanelContent.appendChild(guestMessage);
       }
+
+      const loginMessage = document.createElement('div');
+      loginMessage.className = 'menu-message';
+      loginMessage.textContent = 'Log in to see account history, statistics, elo, and participate in ranked matches.';
+      accountPanelContent.appendChild(loginMessage);
+      accountBtnImg.src = ACCOUNT_ICON_SRC;
+      if (usernameDisplay) {
+        usernameDisplay.textContent = guestName;
+      }
+      loginBtn.addEventListener('click', () => {
+        window.location.href = '/api/auth/google';
+      });
     }
   }
 
@@ -2059,6 +2097,7 @@ preloadAssets();
 
       const payloadUsername = payload && payload.username;
       setStoredUsername(payloadUsername || null);
+      setUsernameDisplay();
 
       if (payloadUsername && !payload?.guest) {
         setCookie('username', payloadUsername, 60 * 60 * 24 * 365);
