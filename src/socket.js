@@ -1,5 +1,4 @@
 const { Server } = require('socket.io');
-const Lobby = require('./models/Lobby');
 const Game = require('./models/Game');
 const Match = require('./models/Match');
 const maskGameForColor = require('./utils/gameView');
@@ -10,6 +9,7 @@ const { resolveUserFromToken } = require('./utils/authTokens');
 const User = require('./models/User');
 const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
+const lobbyStore = require('./state/lobby');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -133,14 +133,6 @@ function initSocket(httpServer) {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  async function ensureLobby() {
-    let lobby = await Lobby.findOne();
-    if (!lobby) {
-      lobby = await Lobby.create({ quickplayQueue: [], rankedQueue: [], inGame: [] });
-    }
-    return lobby;
-  }
-
   async function createCustomMatch(player1Id, player2Id) {
     const players = [toId(player1Id), toId(player2Id)].filter(Boolean);
     if (players.length !== 2) {
@@ -148,7 +140,7 @@ function initSocket(httpServer) {
     }
 
     const config = await getServerConfig();
-    const lobby = await ensureLobby();
+    let lobbyChanged = false;
 
     const customSettings = config?.gameModeSettings?.get
       ? (config.gameModeSettings.get('CUSTOM') || config.gameModeSettings.get('QUICKPLAY') || {})
@@ -167,37 +159,21 @@ function initSocket(httpServer) {
       ? (config.gameModes.get('CUSTOM') || 'CUSTOM')
       : (config?.gameModes?.CUSTOM || 'CUSTOM');
 
-    const lobbyQuickplay = lobby.quickplayQueue.map(id => id.toString());
-    const lobbyRanked = lobby.rankedQueue.map(id => id.toString());
-
-    let lobbyChanged = false;
-    const filteredQuick = lobbyQuickplay.filter(id => !players.includes(id));
-    if (filteredQuick.length !== lobbyQuickplay.length) {
-      lobby.quickplayQueue = filteredQuick;
-      lobbyChanged = true;
-    }
-    const filteredRanked = lobbyRanked.filter(id => !players.includes(id));
-    if (filteredRanked.length !== lobbyRanked.length) {
-      lobby.rankedQueue = filteredRanked;
-      lobbyChanged = true;
-    }
-
-    const inGameSet = new Set(lobby.inGame.map(id => id.toString()));
     players.forEach((pid) => {
-      if (!inGameSet.has(pid)) {
-        lobby.inGame.push(pid);
-        inGameSet.add(pid);
+      const quickResult = lobbyStore.removeFromQueue('quickplay', pid);
+      const rankedResult = lobbyStore.removeFromQueue('ranked', pid);
+      if (quickResult.removed || rankedResult.removed) {
         lobbyChanged = true;
       }
     });
 
+    const { added: addedInGame } = lobbyStore.addInGame(players);
+    if (addedInGame) {
+      lobbyChanged = true;
+    }
+
     if (lobbyChanged) {
-      await lobby.save();
-      eventBus.emit('queueChanged', {
-        quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
-        rankedQueue: lobby.rankedQueue.map(id => id.toString()),
-        affectedUsers: players,
-      });
+      lobbyStore.emitQueueChanged(players);
     }
 
     const match = await Match.create({
@@ -491,15 +467,7 @@ function initSocket(httpServer) {
   // Admin namespace for dashboard metrics
   const adminNamespace = io.of('/admin');
 
-  const lobbyState = { quickplayQueue: [], rankedQueue: [] };
-  Lobby.findOne().lean().then(lobby => {
-    if (lobby) {
-      lobbyState.quickplayQueue = lobby.quickplayQueue.map(id => id.toString());
-      lobbyState.rankedQueue = lobby.rankedQueue.map(id => id.toString());
-    }
-  }).catch(err => {
-    console.error('Error initializing lobby state:', err);
-  });
+  const lobbyState = lobbyStore.getState();
 
   eventBus.on('queueChanged', (payload) => {
     let newQuick = [];
@@ -746,14 +714,6 @@ function initSocket(httpServer) {
   // Only enable change streams in production (replica sets)
   if (process.env.NODE_ENV === 'production') {
     setupChangeStream(
-      Lobby,
-      'Lobby',
-      [],
-      { fullDocument: 'updateLookup' },
-      (change) => eventBus.emit('queueChanged', change)
-    );
-
-    setupChangeStream(
       Game,
       'Game',
       [],
@@ -812,10 +772,10 @@ function initSocket(httpServer) {
     emitAdminMetrics();
 
     try {
-      const lobby = await Lobby.findOne().lean();
+      const lobby = lobbyStore.getState();
       const queued = {
-        quickplay: lobby?.quickplayQueue?.some(id => id.toString() === userId) || false,
-        ranked: lobby?.rankedQueue?.some(id => id.toString() === userId) || false,
+        quickplay: lobby.quickplayQueue.some(id => id === userId),
+        ranked: lobby.rankedQueue.some(id => id === userId),
       };
 
       const games = await Game.find({ players: userId, isActive: true }).lean();
@@ -1002,23 +962,14 @@ function initSocket(httpServer) {
           markPlayerDisconnectedFromAllMatches(userId);
           removeConnectedUsername(userId);
         }
-        setTimeout(async () => {
+        setTimeout(() => {
           // If user reconnected, skip cleanup
           if (clients.has(userId)) return;
           try {
-            const Lobby = require('./models/Lobby');
-            const lobby = await Lobby.findOne();
-            if (!lobby) return;
-            const before = lobby.quickplayQueue.length;
-            lobby.quickplayQueue = lobby.quickplayQueue.filter(id => id.toString() !== userId);
-            if (lobby.quickplayQueue.length !== before) {
-              await lobby.save();
-              const eventBus = require('./eventBus');
-              eventBus.emit('queueChanged', {
-                quickplayQueue: lobby.quickplayQueue.map(id => id.toString()),
-                rankedQueue: lobby.rankedQueue.map(id => id.toString()),
-                affectedUsers: [userId.toString()],
-              });
+            const quickRemoved = lobbyStore.removeFromQueue('quickplay', userId).removed;
+            const rankedRemoved = lobbyStore.removeFromQueue('ranked', userId).removed;
+            if (quickRemoved || rankedRemoved) {
+              lobbyStore.emitQueueChanged([userId]);
             }
           } catch (err) {
             console.error('Error cleaning up queue after disconnect:', err);

@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const Match = require('../../../models/Match');
 const Game = require('../../../models/Game');
-const Lobby = require('../../../models/Lobby');
 const eventBus = require('../../../eventBus');
+const lobbyStore = require('../../../state/lobby');
 
 router.post('/', async (req, res) => {
         try {
@@ -39,19 +39,9 @@ router.post('/', async (req, res) => {
 
                 if (playerObjectIds.length) {
                         try {
-                                const updateResult = await Lobby.updateOne({}, {
-                                        $pull: { inGame: { $in: playerObjectIds } }
-                                });
-
-                                if (updateResult.modifiedCount > 0) {
-                                        const lobby = await Lobby.findOne().lean();
-                                        if (lobby) {
-                                                eventBus.emit('queueChanged', {
-                                                        quickplayQueue: (lobby.quickplayQueue || []).map(id => id.toString()),
-                                                        rankedQueue: (lobby.rankedQueue || []).map(id => id.toString()),
-                                                        affectedUsers: affectedUserIds
-                                                });
-                                        }
+                                const { removed } = lobbyStore.removeInGame(affectedUserIds);
+                                if (removed) {
+                                        lobbyStore.emitQueueChanged(affectedUserIds);
                                 }
                         } catch (lobbyErr) {
                                 console.error('Error cleaning lobby while purging active matches:', lobbyErr);

@@ -94,7 +94,7 @@ app.set('trust proxy', true);
 
 const routes = require('./routes');
 const initSocket = require('./socket');
-const Lobby = require('./models/Lobby');
+const lobbyStore = require('./state/lobby');
 
 // Middleware
 app.use(cors());
@@ -149,24 +149,11 @@ async function connectToDatabase() {
 
 async function resetLobbyQueues() {
   try {
-    const lobby = await Lobby.findOne();
-    if (lobby) {
-      lobby.quickplayQueue = [];
-      lobby.rankedQueue = [];
-      lobby.inGame = [];
-      await lobby.save();
-      console.log('Cleared stale queues from previous server run');
-    } else {
-      // Create a new lobby if none exists
-      await Lobby.create({
-        quickplayQueue: [],
-        rankedQueue: [],
-        inGame: []
-      });
-      console.log('Created new lobby');
-    }
+    lobbyStore.clear();
+    lobbyStore.emitQueueChanged([]);
+    console.log('Cleared lobby state from previous server run');
   } catch (err) {
-    console.error('Error clearing queues:', err);
+    console.error('Error clearing in-memory lobby state:', err);
   }
 }
 

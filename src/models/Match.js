@@ -215,19 +215,12 @@ matchSchema.methods.endMatch = async function(winnerId = null) {
 
     // Ensure players are removed from lobby.inGame when a match ends
     try {
-        const Lobby = require('./Lobby');
-        const updateResult = await Lobby.updateOne({}, {
-            $pull: { inGame: { $in: [this.player1, this.player2] } }
-        });
-
-        if (updateResult.modifiedCount > 0) {
-            const lobby = await Lobby.findOne().lean();
-            if (lobby) {
-                eventBus.emit('queueChanged', {
-                    quickplayQueue: (lobby.quickplayQueue || []).map(id => id.toString()),
-                    rankedQueue: (lobby.rankedQueue || []).map(id => id.toString()),
-                    affectedUsers: [this.player1.toString(), this.player2.toString()],
-                });
+        const lobbyStore = require('../state/lobby');
+        const players = [this.player1?.toString(), this.player2?.toString()].filter(Boolean);
+        if (players.length > 0) {
+            const { removed } = lobbyStore.removeInGame(players);
+            if (removed) {
+                lobbyStore.emitQueueChanged(players);
             }
         }
     } catch (err) {

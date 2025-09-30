@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
-const Lobby = require('../../../models/Lobby');
 const eventBus = require('../../../eventBus');
+const lobbyStore = require('../../../state/lobby');
 
 router.post('/', async (req, res) => {
 	try {
@@ -11,12 +11,12 @@ router.post('/', async (req, res) => {
 			return res.status(403).json({ message: 'Forbidden' });
 		}
 
-		const result = await Game.deleteMany({});
-		const lobby = await Lobby.findOne();
-		if (lobby) {
-			lobby.inGame = [];
-			await lobby.save();
-		}
+                const result = await Game.deleteMany({});
+                const before = lobbyStore.getState();
+                const { cleared } = lobbyStore.clearInGame();
+                if (cleared) {
+                        lobbyStore.emitQueueChanged(before.inGame);
+                }
 
 		// Notify admin dashboard to refresh
 		eventBus.emit('adminRefresh');
