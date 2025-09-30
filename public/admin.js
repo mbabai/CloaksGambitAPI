@@ -772,6 +772,27 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     }
   });
 
+  socket.on('user:nameUpdated', payload => {
+    try {
+      const id = payload?.userId ? String(payload.userId) : null;
+      const name = typeof payload === 'string' ? payload : payload?.username;
+      if (!id || typeof name !== 'string' || !name.trim()) return;
+      const trimmed = name.trim();
+      usernameMap[id] = trimmed;
+      if (latestMetrics && latestMetrics.usernames) {
+        latestMetrics.usernames[id] = trimmed;
+      }
+      fetchAllUsers();
+      renderActiveMatchesFromState();
+      if (latestMetrics) {
+        renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
+        renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
+      }
+    } catch (err) {
+      console.error('Error handling user:nameUpdated event:', err);
+    }
+  });
+
   if (purgeActiveMatchesBtn) {
     purgeActiveMatchesBtn.addEventListener('click', async () => {
       if (!confirm('Are you sure you want to purge all ACTIVE matches from the database? This cannot be undone.')) return;

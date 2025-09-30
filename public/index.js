@@ -1272,6 +1272,45 @@ preloadAssets();
     renderBoardAndBars();
   }
 
+  function handleUserNameUpdated(payload) {
+    if (!payload) return;
+    const updatedName = typeof payload === 'string' ? payload : payload?.username;
+    if (typeof updatedName !== 'string' || !updatedName.trim()) return;
+    const normalizedName = updatedName.trim();
+    const targetId = payload?.userId ? String(payload.userId) : null;
+    const activeUserId = getStoredUserId() || userId;
+    let shouldRefreshStats = false;
+
+    if (targetId) {
+      const idx = currentPlayerIds.findIndex((id) => id && id.toString() === targetId);
+      if (idx !== -1) {
+        playerNames[idx] = formatPlayerName(normalizedName, idx);
+        renderBoardAndBars();
+      }
+      statsUsernameMap[targetId] = normalizedName;
+      if (statsUserId && String(statsUserId) === targetId) {
+        shouldRefreshStats = true;
+      }
+    }
+
+    const isSelfUpdate = !targetId || (activeUserId && String(activeUserId) === targetId);
+    if (isSelfUpdate) {
+      setStoredUsername(normalizedName);
+      setCookie('username', normalizedName, 60 * 60 * 24 * 365);
+      setUsernameDisplay();
+      updateAccountPanel();
+      if (activeUserId) {
+        statsUsernameMap[String(activeUserId)] = normalizedName;
+        shouldRefreshStats = true;
+      }
+    }
+
+    if (shouldRefreshStats && isStatsOverlayOpen()) {
+      updateStatsOverlaySummary();
+      renderStatsHistoryMatches();
+    }
+  }
+
   function syncPlayerElosFromMatch(match) {
     if (!match || typeof match !== 'object') return false;
     const matchType = typeof match.type === 'string' ? match.type.toUpperCase() : '';
@@ -2084,6 +2123,9 @@ preloadAssets();
       },
       onInviteCancel(payload) {
         handleCustomInviteCancel(payload);
+      },
+      onUserNameUpdated(payload) {
+        handleUserNameUpdated(payload);
       },
       onDisconnect() { /* keep UI; server handles grace */ }
     });
