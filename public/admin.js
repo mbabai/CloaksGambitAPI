@@ -37,13 +37,20 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   }
 
   function ensureAuthToken() {
+    const cookieToken = getCookie(TOKEN_COOKIE_NAME) || null;
     const stored = getStoredAuthToken();
-    if (stored) return stored;
-    const cookieToken = getCookie(TOKEN_COOKIE_NAME);
+
     if (cookieToken) {
-      setStoredAuthToken(cookieToken);
+      if (stored !== cookieToken) {
+        setStoredAuthToken(cookieToken);
+      }
       return cookieToken;
     }
+
+    if (stored) {
+      setStoredAuthToken(null);
+    }
+
     return null;
   }
 
