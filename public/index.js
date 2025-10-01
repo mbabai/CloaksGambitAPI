@@ -2334,6 +2334,13 @@ preloadAssets();
     const actionMode = currentlyQueued && queueStartMode ? queueStartMode : mode;
     console.log('[ui] click queueBtn', { mode, pendingAction, isQueued, awaitingServerQueueState, currentlyQueued, actionMode });
     const RANKED_LOGIN_REQUIRED_MESSAGE = 'Please log in to play ranked.';
+    if (actionMode === 'ranked') {
+      const hasAuthenticatedSession = Boolean(sessionInfo?.authenticated && sessionInfo?.userId);
+      if (!hasAuthenticatedSession) {
+        window.alert(RANKED_LOGIN_REQUIRED_MESSAGE);
+        return;
+      }
+    }
 
     try {
       if (!(pendingAction === 'join' || currentlyQueued)) {
