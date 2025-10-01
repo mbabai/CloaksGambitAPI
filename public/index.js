@@ -3294,8 +3294,8 @@ preloadAssets();
     applyExpectedTimeSettingsForMatch(currentMatch);
     const overlay = ensureBannerOverlay();
     const { content, dialog, closeButton } = overlay;
-    dialog.style.alignItems = 'flex-end';
-    dialog.style.justifyContent = 'center';
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'flex-end';
     content.innerHTML = '';
     if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
     let summaryTimeout = null;
@@ -3309,14 +3309,23 @@ preloadAssets();
       };
     }
     const card = document.createElement('div');
+    const compactHeight = Math.round(160 * 0.7);
     card.style.width = '100%';
     card.style.maxWidth = '100%';
-    card.style.height = '160px';
-    card.style.transform = 'translateY(-15%)';
-    card.style.padding = '18px 26px';
+    card.style.height = `${compactHeight}px`;
+    card.style.padding = '12px 24px 16px';
     card.style.borderRadius = '0';
     card.style.borderTop = '2px solid var(--CG-deep-gold)';
     card.style.borderBottom = '2px solid var(--CG-deep-gold)';
+    card.style.marginTop = 'auto';
+    card.style.marginBottom = 'clamp(12px, 2vh, 40px)';
+    card.style.marginLeft = 'auto';
+    card.style.marginRight = 'auto';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.alignItems = 'center';
+    card.style.justifyContent = 'flex-start';
+    card.style.gap = '4px';
     const isDraw = winnerColor !== 0 && winnerColor !== 1;
     card.style.background = isDraw ? 'var(--CG-gray)' : (didWin ? 'var(--CG-dark-red)' : 'var(--CG-black)');
     card.style.color = 'var(--CG-white)';
@@ -3326,9 +3335,9 @@ preloadAssets();
 
     const title = document.createElement('div');
     title.textContent = isDraw ? 'Draw' : (didWin ? 'Victory' : 'Defeat');
-    title.style.fontSize = '32px';
+    title.style.fontSize = '28px';
     title.style.fontWeight = '800';
-    title.style.marginBottom = '10px';
+    title.style.marginBottom = '6px';
 
     const desc = document.createElement('div');
     const colorStr = winnerColor === 0 ? 'White' : 'Black';
@@ -3369,23 +3378,25 @@ preloadAssets();
       }
     }
     desc.textContent = descText;
-    desc.style.fontSize = '20px';
+    desc.style.fontSize = '18px';
     desc.style.fontWeight = '500';
+    desc.style.lineHeight = '1.3';
+    desc.style.margin = '0 auto';
+    desc.style.maxWidth = 'min(520px, 90%)';
+    desc.style.textAlign = 'center';
+    desc.style.padding = '0 8px';
     desc.id = 'gameOverDesc';
 
     const btn = document.createElement('button');
     btn.textContent = 'Next';
-    btn.style.position = 'absolute';
-    btn.style.bottom = '10px';
-    btn.style.left = '50%';
-    btn.style.transform = 'translateX(-50%)';
     btn.style.background = 'var(--CG-purple)';
     btn.style.color = 'var(--CG-white)';
     btn.style.border = '2px solid #fbbf24';
     btn.style.borderRadius = '6px';
-    btn.style.padding = '10px 22px';
-    btn.style.fontSize = '18px';
+    btn.style.padding = '8px 20px';
+    btn.style.fontSize = '17px';
     btn.style.cursor = 'pointer';
+    btn.style.marginTop = 'auto';
     btn.id = 'gameOverNextBtn';
     btn.addEventListener('click', async () => {
       if (summaryTimeout) {

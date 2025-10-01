@@ -4,13 +4,14 @@ import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { renderBars } from '/js/modules/render/bars.js';
 import { createBoardView } from '/js/modules/components/boardView.js';
 import { computeBoardMetrics } from '/js/modules/layout.js';
-import { PIECE_IMAGES, ACTIONS } from '/js/modules/constants.js';
+import { PIECE_IMAGES, ACTIONS, WIN_REASONS } from '/js/modules/constants.js';
 import { formatClock, describeTimeControl } from '/js/modules/utils/timeControl.js';
 import { computeGameClockState } from '/js/modules/utils/clockState.js';
 import { getCookie } from '/js/modules/utils/cookies.js';
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { getBubbleAsset } from '/js/modules/ui/icons.js';
 import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
+import { createOverlay } from '/js/modules/ui/overlays.js';
 
 (function () {
   preloadAssets();
@@ -96,6 +97,7 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
   const spectateCloseBtn = document.getElementById('spectateCloseBtn');
 
   const spectateRefs = { boardCells: [], activeBubbles: [] };
+  let spectateGameBannerOverlay = null;
   const spectateBoardView = spectateBoardEl
     ? createBoardView({
         container: spectateBoardEl,
@@ -148,7 +150,9 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
     clockTimer: null,
     clockBase: null,
     clockDisplay: { whiteMs: 0, blackMs: 0, label: null },
-    clockRefs: { top: null, bottom: null }
+    clockRefs: { top: null, bottom: null },
+    lastBoardGame: null,
+    lastCompletedGame: null
   };
 
   const confirmModal = createConfirmationModal();
@@ -1045,6 +1049,10 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
     clearSpectateBubbles();
     resetSpectateClockState();
     spectateState.clockRefs = { top: null, bottom: null };
+    spectateState.data = null;
+    spectateState.lastBoardGame = null;
+    spectateState.lastCompletedGame = null;
+    hideSpectateGameBanner();
   }
 
   function resolveSpectatePlayer(snapshot, id, fallbackLabel) {
@@ -1127,6 +1135,243 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
       spectateBannerEl.classList.add('spectate-banner--info');
       spectateBannerEl.hidden = false;
     }
+  }
+
+  function getSpectatePlayerNameForColor(snapshot, colorIdx) {
+    const fallback = colorIdx === 0 ? 'White' : 'Black';
+    if (!snapshot || typeof snapshot !== 'object') return fallback;
+    const game = snapshot.game || {};
+    const match = snapshot.match || {};
+    const players = Array.isArray(game.players) ? game.players : [];
+    let playerId = players[colorIdx];
+    if (!playerId) {
+      if (colorIdx === 0) {
+        playerId = match.player1Id || match.player1?._id || match.player1?.id;
+      } else {
+        playerId = match.player2Id || match.player2?._id || match.player2?.id;
+      }
+    }
+    const resolved = resolveSpectatePlayer(snapshot, playerId, fallback);
+    return resolved?.name || fallback;
+  }
+
+  function ensureSpectateGameBannerOverlay() {
+    if (spectateGameBannerOverlay) return spectateGameBannerOverlay;
+    spectateGameBannerOverlay = createOverlay({
+      baseClass: 'cg-overlay banner-overlay',
+      dialogClass: 'banner-overlay__dialog',
+      contentClass: 'banner-overlay__content',
+      backdropClass: 'cg-overlay__backdrop banner-overlay-backdrop',
+      closeButtonClass: 'banner-overlay__close',
+      openClass: 'cg-overlay--open banner-overlay--open',
+      bodyOpenClass: 'cg-overlay-open',
+      showCloseButton: false,
+      closeOnBackdrop: false,
+      closeOnEscape: false,
+      trapFocus: false
+    });
+    return spectateGameBannerOverlay;
+  }
+
+  function hideSpectateGameBanner() {
+    if (!spectateGameBannerOverlay) {
+      return;
+    }
+    try {
+      if (spectateGameBannerOverlay.content) {
+        spectateGameBannerOverlay.content.innerHTML = '';
+      }
+      spectateGameBannerOverlay.hide();
+    } catch (err) {
+      console.warn('Failed to hide spectate banner overlay', err);
+    }
+  }
+
+  function showSpectateGameBanner(snapshot) {
+    if (!snapshot) {
+      hideSpectateGameBanner();
+      return;
+    }
+    const overlay = ensureSpectateGameBannerOverlay();
+    if (!overlay) return;
+    const { content, dialog } = overlay;
+    if (dialog) {
+      dialog.style.alignItems = 'center';
+      dialog.style.justifyContent = 'flex-end';
+    }
+    if (content) {
+      content.innerHTML = '';
+      content.style.alignItems = 'center';
+      content.style.justifyContent = 'flex-end';
+      content.style.width = '100%';
+      content.style.minHeight = '100%';
+    }
+
+    const match = snapshot.match || {};
+    const game = snapshot.game || {};
+    const winnerIdx = Number.isInteger(game.winner) ? game.winner : -1;
+    const winnerColor = winnerIdx === 0 || winnerIdx === 1 ? winnerIdx : null;
+    const loserColor = winnerColor === 0 ? 1 : winnerColor === 1 ? 0 : null;
+    const isDraw = winnerColor === null;
+    const winnerName = isDraw ? null : getSpectatePlayerNameForColor(snapshot, winnerColor);
+    const loserName = isDraw || loserColor === null ? null : getSpectatePlayerNameForColor(snapshot, loserColor);
+    const whiteName = getSpectatePlayerNameForColor(snapshot, 0);
+    const blackName = getSpectatePlayerNameForColor(snapshot, 1);
+    const winnerLabel = winnerColor === null
+      ? null
+      : (winnerName || (winnerColor === 0 ? whiteName : blackName) || (winnerColor === 0 ? 'White' : 'Black'));
+    const loserLabel = loserColor === null
+      ? null
+      : (loserName || (loserColor === 0 ? whiteName : blackName) || 'their opponent');
+
+    const card = document.createElement('div');
+    card.style.width = '100%';
+    card.style.maxWidth = '100%';
+    card.style.height = '160px';
+    card.style.padding = '18px 26px';
+    card.style.borderRadius = '0';
+    card.style.borderTop = '2px solid var(--CG-deep-gold)';
+    card.style.borderBottom = '2px solid var(--CG-deep-gold)';
+    card.style.marginTop = 'auto';
+    card.style.marginBottom = 'clamp(12px, 2vh, 40px)';
+    card.style.marginLeft = 'auto';
+    card.style.marginRight = 'auto';
+    card.style.background = isDraw ? 'var(--CG-gray)' : 'var(--CG-dark-red)';
+    card.style.color = 'var(--CG-white)';
+    card.style.boxShadow = '0 10px 30px var(--CG-black)';
+    card.style.textAlign = 'center';
+    card.style.position = 'relative';
+
+    const title = document.createElement('div');
+    if (isDraw) {
+      title.textContent = 'Draw';
+    } else {
+      const colorLabel = winnerColor === 0 ? 'White' : 'Black';
+      title.textContent = `${winnerLabel || colorLabel} Victory`;
+    }
+    title.style.fontSize = '32px';
+    title.style.fontWeight = '800';
+    title.style.marginBottom = '10px';
+
+    const desc = document.createElement('div');
+    const reason = Number(game.winReason);
+    let descText;
+    if (isDraw || reason === WIN_REASONS.DRAW) {
+      descText = `${whiteName} and ${blackName} agreed to a draw.`;
+    } else {
+      switch (reason) {
+        case WIN_REASONS.KING_CAPTURE:
+        case 0:
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by capturing ${loserLabel}'s king.`;
+          break;
+        case WIN_REASONS.KING_ADVANCE:
+        case 1:
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by advancing their king to the final rank.`;
+          break;
+        case WIN_REASONS.TRUE_KING:
+        case 2:
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} challenged the true king.`;
+          break;
+        case WIN_REASONS.DAGGER_PENALTY:
+        case 3:
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} accumulated 3 dagger tokens.`;
+          break;
+        case WIN_REASONS.TIME:
+        case 4:
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} ran out of time.`;
+          break;
+        case WIN_REASONS.DISCONNECT:
+        case 5:
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} disconnected.`;
+          break;
+        case WIN_REASONS.RESIGNATION:
+        case 6:
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by resignation.`;
+          break;
+        default:
+          descText = `${winnerLabel || 'The winner'} prevailed.`;
+      }
+    }
+    desc.textContent = descText;
+    desc.style.fontSize = '20px';
+    desc.style.fontWeight = '500';
+    desc.id = 'spectateGameOverDesc';
+
+    const footer = document.createElement('div');
+    footer.textContent = match?.isActive === false
+      ? 'Match complete. Close the spectate view to exit.'
+      : 'Awaiting the next game…';
+    footer.style.fontSize = '14px';
+    footer.style.fontWeight = '600';
+    footer.style.position = 'absolute';
+    footer.style.bottom = '12px';
+    footer.style.left = '50%';
+    footer.style.transform = 'translateX(-50%)';
+    footer.style.opacity = '0.85';
+
+    card.appendChild(title);
+    card.appendChild(desc);
+    card.appendChild(footer);
+    if (content) {
+      content.appendChild(card);
+    }
+    overlay.show();
+  }
+
+  function updateSpectateGameBanner(rawSnapshot, displaySnapshot) {
+    const match = (displaySnapshot && displaySnapshot.match)
+      || (rawSnapshot && rawSnapshot.match)
+      || {};
+    const matchId = normalizeId(match?._id || match?.id || rawSnapshot?.matchId || displaySnapshot?.matchId);
+    const storedMatchId = spectateState.lastCompletedGame?.matchId || null;
+    if (storedMatchId && matchId && storedMatchId !== matchId) {
+      spectateState.lastCompletedGame = null;
+    }
+
+    if (rawSnapshot?.game && rawSnapshot.game.isActive) {
+      spectateState.lastCompletedGame = null;
+      hideSpectateGameBanner();
+      return;
+    }
+
+    if (rawSnapshot?.game && rawSnapshot.game.isActive === false) {
+      const snapshotForDisplay = displaySnapshot || rawSnapshot;
+      spectateState.lastCompletedGame = {
+        matchId,
+        snapshot: snapshotForDisplay
+      };
+      showSpectateGameBanner(snapshotForDisplay);
+      return;
+    }
+
+    if (!rawSnapshot?.game) {
+      if (
+        spectateState.lastCompletedGame
+        && (!matchId || !spectateState.lastCompletedGame.matchId || spectateState.lastCompletedGame.matchId === matchId)
+      ) {
+        showSpectateGameBanner(spectateState.lastCompletedGame.snapshot);
+        return;
+      }
+      if (displaySnapshot?.game && displaySnapshot.game.isActive === false) {
+        spectateState.lastCompletedGame = {
+          matchId,
+          snapshot: displaySnapshot
+        };
+        showSpectateGameBanner(displaySnapshot);
+        return;
+      }
+    }
+
+    if (match?.isActive === false && displaySnapshot?.game && displaySnapshot.game.isActive === false) {
+      spectateState.lastCompletedGame = {
+        matchId,
+        snapshot: displaySnapshot
+      };
+      showSpectateGameBanner(displaySnapshot);
+      return;
+    }
+
+    hideSpectateGameBanner();
   }
 
   function renderSpectateBarsForSnapshot(snapshot, baseSizes) {
@@ -1264,16 +1509,43 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
     applySpectateMoveOverlay(metrics.squareSize, overlay);
   }
 
+  function getSpectateDisplaySnapshot(snapshot) {
+    const isObject = snapshot && typeof snapshot === 'object';
+    const game = isObject ? snapshot.game : null;
+    if (game && Array.isArray(game.board) && game.board.length) {
+      spectateState.lastBoardGame = game;
+      return snapshot;
+    }
+
+    const fallbackGame = spectateState.lastBoardGame;
+    if (!fallbackGame) {
+      return snapshot;
+    }
+
+    let base = isObject ? { ...snapshot } : null;
+    if (!base) {
+      const stored = spectateState.lastCompletedGame?.snapshot;
+      if (stored && typeof stored === 'object') {
+        base = { ...stored };
+      } else {
+        base = {};
+      }
+    }
+    base.game = fallbackGame;
+    return base;
+  }
+
   function renderSpectateContent(snapshot) {
     if (!spectateOverlay || spectateOverlay.hidden) return;
-    spectateState.data = snapshot;
+    const displaySnapshot = getSpectateDisplaySnapshot(snapshot);
+    spectateState.data = displaySnapshot;
     syncSpectateClocks(snapshot);
-    renderSpectateMeta(snapshot);
-    renderSpectateScore(snapshot);
-    renderSpectateBanner(snapshot);
+    renderSpectateMeta(displaySnapshot);
+    renderSpectateScore(displaySnapshot);
+    renderSpectateBanner(displaySnapshot);
     if (spectateStatusEl) {
-      const match = snapshot?.match;
-      const game = snapshot?.game;
+      const match = displaySnapshot?.match;
+      const game = displaySnapshot?.game;
       if (!game) {
         spectateStatusEl.textContent = match?.isActive ? 'No active game for this match.' : 'Match complete.';
       } else if (game.isActive) {
@@ -1282,7 +1554,8 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
         spectateStatusEl.textContent = match?.isActive ? 'Game finished. Awaiting next game.' : 'Final game complete.';
       }
     }
-    renderSpectateBoard(snapshot);
+    renderSpectateBoard(displaySnapshot);
+    updateSpectateGameBanner(snapshot, displaySnapshot);
   }
 
   function openSpectateModal(matchId) {
