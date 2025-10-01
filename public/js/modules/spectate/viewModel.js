@@ -143,6 +143,13 @@ export function deriveSpectateView(game) {
 
   const challengeRemoved = resolveChallengeRemoved(lastAction, previousAction, lastMove);
 
+  if (lastAction?.type === ACTIONS.CHALLENGE) {
+    const outcome = lastAction?.details?.outcome;
+    if (typeof outcome === 'string' && outcome.toUpperCase() === 'SUCCESS') {
+      overlay = null;
+    }
+  }
+
   return {
     board,
     rows,

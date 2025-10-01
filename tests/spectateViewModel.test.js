@@ -77,7 +77,7 @@ describe('deriveSpectateView', () => {
     expect(view.board[1][1]).toBeNull();
   });
 
-  test('keeps overlay after challenge success and marks removed square', () => {
+  test('clears overlay after challenge success but marks removed square', () => {
     const game = {
       board: [
         [null, makePiece(IDENTITIES.UNKNOWN, 1), null],
@@ -113,11 +113,7 @@ describe('deriveSpectateView', () => {
     };
 
     const view = deriveViaWorker(game);
-    expect(view.overlay).toMatchObject({
-      uiC: 1,
-      types: expect.arrayContaining(['bishopSpeechLeft']),
-      isPending: false,
-    });
+    expect(view.overlay).toBeNull();
     expect(view.challengeRemoved).toEqual({ row: 0, col: 1 });
   });
 

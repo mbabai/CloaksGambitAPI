@@ -27,6 +27,7 @@ import {
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
 import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
+import { computeGameClockState } from '/js/modules/utils/clockState.js';
 
 preloadAssets();
 
@@ -1675,53 +1676,21 @@ preloadAssets();
       return;
     }
 
-    let white = baseTime;
-    let black = baseTime;
-    let lastTs = gameStartTime;
-    const actions = (actionHistory || []).filter(a => new Date(a.timestamp).getTime() >= gameStartTime);
-    const setupFlags = [false, false];
-    let turn = null;
-    for (const act of actions) {
-      const ts = new Date(act.timestamp).getTime();
-      const delta = ts - lastTs;
-      if (!setupFlags[0] || !setupFlags[1]) {
-        if (!setupFlags[0]) white -= delta;
-        if (!setupFlags[1]) black -= delta;
-      } else if (turn === 0) {
-        white -= delta;
-      } else if (turn === 1) {
-        black -= delta;
-      }
-      lastTs = ts;
-      if (act.type === ACTIONS.SETUP) {
-        setupFlags[act.player] = true;
-        if (setupFlags[0] && setupFlags[1]) {
-          turn = 0; // white to move after both setups
-        }
-      } else {
-        if (turn === null) turn = 0;
-        if (act.player === 0) {
-          white += incValue;
-          turn = 1;
-        } else {
-          black += incValue;
-          turn = 0;
-        }
-      }
-    }
     const now = Date.now();
-    const delta = now - lastTs;
-    if (!setupFlags[0] || !setupFlags[1]) {
-      if (!setupFlags[0]) white -= delta;
-      if (!setupFlags[1]) black -= delta;
-    } else if (turn === 0) {
-      white -= delta;
-    } else if (turn === 1) {
-      black -= delta;
-    }
-    whiteTimeMs = white;
-    blackTimeMs = black;
-    activeColor = (setupFlags[0] && setupFlags[1]) ? turn : null;
+    const computed = computeGameClockState({
+      baseTime,
+      increment: incValue,
+      startTime: gameStartTime,
+      actions: actionHistory,
+      setupComplete,
+      playerTurn: currentPlayerTurn,
+      isActive: !gameFinished,
+      now,
+    });
+
+    whiteTimeMs = computed.whiteMs;
+    blackTimeMs = computed.blackMs;
+    activeColor = computed.activeColor;
     updateClockDisplay();
     const expired = whiteTimeMs <= 0 || blackTimeMs <= 0;
     if (expired && lastGameId && !timeExpiredSent) {

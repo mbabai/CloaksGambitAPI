@@ -6,6 +6,7 @@ import { createBoardView } from '/js/modules/components/boardView.js';
 import { computeBoardMetrics } from '/js/modules/layout.js';
 import { PIECE_IMAGES, ACTIONS } from '/js/modules/constants.js';
 import { formatClock, describeTimeControl } from '/js/modules/utils/timeControl.js';
+import { computeGameClockState } from '/js/modules/utils/clockState.js';
 import { getCookie } from '/js/modules/utils/cookies.js';
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { getBubbleAsset } from '/js/modules/ui/icons.js';
@@ -182,9 +183,10 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
     const elapsed = Math.max(0, now - base.receivedAt);
     let white = base.whiteMs;
     let black = base.blackMs;
-    if (base.ticking && base.activeColor === 0) {
+    if (base.tickingWhite) {
       white -= elapsed;
-    } else if (base.ticking && base.activeColor === 1) {
+    }
+    if (base.tickingBlack) {
       black -= elapsed;
     }
     spectateState.clockDisplay = {
@@ -203,30 +205,60 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
   }
 
   function syncSpectateClocks(snapshot) {
-    const baseClocks = snapshot?.clocks || {};
-    const whiteMs = Number(baseClocks.whiteMs);
-    const blackMs = Number(baseClocks.blackMs);
-    const hasWhite = Number.isFinite(whiteMs);
-    const hasBlack = Number.isFinite(blackMs);
-    if (!hasWhite && !hasBlack) {
+    const game = snapshot?.game || null;
+    if (!game) {
       resetSpectateClockState();
       return;
     }
-    const activeColor = (baseClocks.activeColor === 0 || baseClocks.activeColor === 1)
-      ? baseClocks.activeColor
-      : null;
-    const shouldTick = activeColor !== null;
+
+    const baseTime = Number(game.timeControlStart);
+    if (!Number.isFinite(baseTime) || baseTime <= 0) {
+      resetSpectateClockState();
+      return;
+    }
+
+    const matchActive = snapshot?.match?.isActive !== false;
+    const now = Date.now();
+    const computed = computeGameClockState({
+      baseTime,
+      increment: game.increment,
+      startTime: game.startTime,
+      endTime: game.endTime,
+      actions: game.actions,
+      setupComplete: game.setupComplete,
+      playerTurn: game.playerTurn ?? snapshot?.clocks?.activeColor,
+      isActive: Boolean(game.isActive && matchActive),
+      now,
+    });
+
+    const setupFlags = Array.isArray(computed.setupComplete)
+      ? computed.setupComplete
+      : [false, false];
+    const whiteSetupComplete = setupFlags[0] ?? false;
+    const blackSetupComplete = setupFlags[1] ?? false;
+    const bothSetupComplete = whiteSetupComplete && blackSetupComplete;
+    const clocksActive = Boolean(game.isActive && matchActive);
+    const tickWhite = clocksActive && (bothSetupComplete ? computed.activeColor === 0 : !whiteSetupComplete);
+    const tickBlack = clocksActive && (bothSetupComplete ? computed.activeColor === 1 : !blackSetupComplete);
+
+    const whiteMs = Number.isFinite(computed.whiteMs) ? computed.whiteMs : 0;
+    const blackMs = Number.isFinite(computed.blackMs) ? computed.blackMs : 0;
+    const label = snapshot?.clocks?.label
+      || describeTimeControl(game.timeControlStart, game.increment)
+      || null;
+
     spectateState.clockBase = {
-      whiteMs: hasWhite ? whiteMs : 0,
-      blackMs: hasBlack ? blackMs : 0,
-      activeColor,
-      label: baseClocks.label || null,
-      receivedAt: Date.now(),
-      ticking: shouldTick,
+      whiteMs,
+      blackMs,
+      activeColor: computed.activeColor,
+      label,
+      receivedAt: now,
+      tickingWhite: tickWhite,
+      tickingBlack: tickBlack,
     };
     updateSpectateClockDisplay();
     stopSpectateClockTimer();
-    if (spectateState.clockBase.ticking) {
+    if (tickWhite || tickBlack) {
       spectateState.clockTimer = setInterval(updateSpectateClockDisplay, 200);
     }
   }
@@ -1116,8 +1148,11 @@ import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
     const daggers = Array.isArray(game.daggers) ? game.daggers : [0, 0];
     const captured = Array.isArray(game.captured) ? game.captured : [[], []];
     const lastAction = Array.isArray(game.actions) ? game.actions[game.actions.length - 1] : null;
-    const showChallengeTop = lastAction && lastAction.type === ACTIONS.CHALLENGE && lastAction.player === 1;
-    const showChallengeBottom = lastAction && lastAction.type === ACTIONS.CHALLENGE && lastAction.player === 0;
+    const challengeOutcome = lastAction?.details?.outcome;
+    const challengeActive = lastAction?.type === ACTIONS.CHALLENGE
+      && (!challengeOutcome || String(challengeOutcome).toUpperCase() === 'PENDING');
+    const showChallengeTop = challengeActive && lastAction.player === 1;
+    const showChallengeBottom = challengeActive && lastAction.player === 0;
     const displayClocks = spectateState.clockDisplay || {};
     const clockLabel = displayClocks.label
       || snapshot?.clocks?.label
