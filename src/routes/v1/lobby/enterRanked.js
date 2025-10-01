@@ -1,24 +1,44 @@
 const express = require('express');
 const router = express.Router();
 const Match = require('../../../models/Match');
+const User = require('../../../models/User');
 const { checkAndCreateMatches } = require('./matchmaking');
 const eventBus = require('../../../eventBus');
-const ensureUser = require('../../../utils/ensureUser');
 const { resolveUserFromRequest } = require('../../../utils/authTokens');
 const lobbyStore = require('../../../state/lobby');
+
+const LOGIN_REQUIRED_MESSAGE = 'Please log in to play ranked.';
 
 router.post('/', async (req, res) => {
   try {
     let { userId } = req.body;
     let userInfo = await resolveUserFromRequest(req);
+
+    if (userInfo?.isGuest) {
+      return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
+    }
+
     if (userInfo && userInfo.userId) {
       userId = userInfo.userId;
     } else {
       if (!userId) {
-        userInfo = await ensureUser();
-      } else {
-        userInfo = await ensureUser(userId);
+        return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
       }
+
+      const existingUser = await User.findById(userId).lean();
+      if (!existingUser) {
+        return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
+      }
+
+      const isGuest = (existingUser.email || '').endsWith('@guest.local');
+      if (isGuest) {
+        return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
+      }
+
+      userInfo = {
+        userId: existingUser._id.toString(),
+        username: existingUser.username || existingUser.email || 'Player',
+      };
       userId = userInfo.userId;
     }
 

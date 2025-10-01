@@ -2333,6 +2333,8 @@ preloadAssets();
     const currentlyQueued = isQueued || (awaitingServerQueueState && (!queueStartMode || queueStartMode === mode));
     const actionMode = currentlyQueued && queueStartMode ? queueStartMode : mode;
     console.log('[ui] click queueBtn', { mode, pendingAction, isQueued, awaitingServerQueueState, currentlyQueued, actionMode });
+    const RANKED_LOGIN_REQUIRED_MESSAGE = 'Please log in to play ranked.';
+
     try {
       if (!(pendingAction === 'join' || currentlyQueued)) {
         pendingAction = 'join';
@@ -2352,6 +2354,14 @@ preloadAssets();
         stopQueueTimer();
       }
       updateFindButton();
+
+      const alertMessage = (e && e.data && e.data.message) || e?.message;
+      if (
+        alertMessage &&
+        (actionMode === 'ranked' || alertMessage === RANKED_LOGIN_REQUIRED_MESSAGE)
+      ) {
+        window.alert(alertMessage);
+      }
     }
   });
 
