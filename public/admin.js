@@ -1,4 +1,4 @@
-import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
+﻿import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { getCookie } from '/js/modules/utils/cookies.js';
@@ -215,8 +215,9 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       row.style.alignItems = 'center';
       row.style.justifyContent = 'flex-start';
       row.style.gap = '12px';
+      const username = u.username || 'Unknown';
       const nameEl = document.createElement(adminUserId && u.id === adminUserId ? 'strong' : 'span');
-      nameEl.textContent = u.username || 'Unknown';
+      nameEl.textContent = username;
       nameEl.title = u.id;
       nameEl.style.flex = '1 1 auto';
       nameEl.style.minWidth = '0';
@@ -227,7 +228,6 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       eloEl.style.whiteSpace = 'nowrap';
       eloEl.style.wordBreak = 'keep-all';
       eloEl.style.padding = '0 2px';
-      const username = u.username || 'Unknown';
       if (!isAnonymousUsername(username)) {
         const eloValue = Number.isFinite(u.elo) ? u.elo : null;
         const badge = createEloBadge({ elo: eloValue, size: 24, alt: `${username} Elo` });
@@ -285,7 +285,6 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
       deleteBtn.className = 'user-delete-btn';
-      const username = u.username || 'Unknown';
       deleteBtn.setAttribute('aria-label', `Delete ${username}`);
       deleteBtn.title = `Delete ${username}`;
       deleteBtn.textContent = '🗑';
@@ -1226,3 +1225,5 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   }
 
 })();
+
+
