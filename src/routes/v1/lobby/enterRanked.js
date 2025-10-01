@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const Match = require('../../../models/Match');
-const User = require('../../../models/User');
 const { checkAndCreateMatches } = require('./matchmaking');
 const eventBus = require('../../../eventBus');
 const { resolveUserFromRequest } = require('../../../utils/authTokens');
@@ -14,33 +13,16 @@ router.post('/', async (req, res) => {
     let { userId } = req.body;
     let userInfo = await resolveUserFromRequest(req);
 
+    if (!userInfo || !userInfo.userId) {
+      // Ranked queue requires an authenticated session/token.
+      return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
+    }
+
     if (userInfo?.isGuest) {
       return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
     }
 
-    if (userInfo && userInfo.userId) {
-      userId = userInfo.userId;
-    } else {
-      if (!userId) {
-        return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
-      }
-
-      const existingUser = await User.findById(userId).lean();
-      if (!existingUser) {
-        return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
-      }
-
-      const isGuest = (existingUser.email || '').endsWith('@guest.local');
-      if (isGuest) {
-        return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
-      }
-
-      userInfo = {
-        userId: existingUser._id.toString(),
-        username: existingUser.username || existingUser.email || 'Player',
-      };
-      userId = userInfo.userId;
-    }
+    userId = userInfo.userId;
 
     // Check if user is already in a game
     if (lobbyStore.isInGame(userId)) {
