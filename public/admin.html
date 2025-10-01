@@ -28,6 +28,11 @@
       .tableList .row { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; word-break: break-all; display: flex; align-items: center; gap: 8px; }
       .tableList .row:last-child { border-bottom: 0; }
       .tableList .headerRow { font-weight: 700; justify-content: space-between; gap: 0; }
+      .tableList .userActionCell { display: inline-flex; justify-content: center; align-items: center; gap: 4px; white-space: nowrap; }
+      .user-delete-btn { border: none; background: transparent; color: rgba(255,215,0,0.85); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 6px; border-radius: 6px; font-size: 18px; line-height: 1; transition: transform 0.15s ease, color 0.2s ease, background 0.2s ease; }
+      .user-delete-btn:hover { color: var(--deep-green); background: var(--light-gold); transform: scale(1.08); }
+      .user-delete-btn:focus-visible { outline: 2px solid var(--light-gold); outline-offset: 2px; }
+      .user-delete-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
       .tableList .matchTypePill { display: inline-flex; align-items: center; justify-content: center; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(255,215,0,0.55); background: rgba(255,215,0,0.12); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
       .tableList .matchId { font-size: 11px; opacity: 0.8; word-break: break-all; }
       .tableList .matchScoreLine {
@@ -107,6 +112,17 @@
       .history-delete-btn:hover { color: var(--deep-green); background: var(--light-gold); transform: scale(1.08); }
       .history-delete-btn:focus-visible { outline: 2px solid var(--light-gold); outline-offset: 2px; }
       .history-delete-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+      .admin-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 1000; }
+      .admin-modal-overlay[hidden] { display: none; }
+      .admin-modal { background: rgba(24,9,38,0.95); border: 4px solid var(--deep-gold); border-radius: 8px; padding: 20px; width: 100%; max-width: 360px; box-sizing: border-box; color: var(--light-gold); display: flex; flex-direction: column; gap: 16px; }
+      .admin-modal-title { margin: 0; font-size: 20px; font-weight: 700; color: var(--light-gold); }
+      .admin-modal-message { margin: 0; font-size: 14px; line-height: 1.5; color: rgba(255,215,0,0.9); }
+      .admin-modal-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+      .admin-modal-button { cursor: pointer; border: 2px solid var(--deep-gold); border-radius: 6px; font-weight: 700; padding: 8px 14px; background: rgba(24,9,38,0.6); color: var(--light-gold); transition: background 0.2s ease, color 0.2s ease, transform 0.15s ease; }
+      .admin-modal-button:hover { background: rgba(184,134,11,0.25); }
+      .admin-modal-button:focus-visible { outline: 2px solid var(--light-gold); outline-offset: 2px; }
+      .admin-modal-button--danger { background: var(--light-gold); color: var(--deep-green); }
+      .admin-modal-button--danger:hover { background: #ffe69c; }
       .history-player-name { font-weight: 700; min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .history-player-score { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
       .history-player-elo { font-size: 12px; color: rgba(255,215,0,0.75); }
@@ -215,7 +231,6 @@
 
         <div style="margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap;">
           <button id="purgeActiveMatchesBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge Active Matches</button>
-          <button id="purgeUsersBtn" style="cursor:pointer; padding: 10px 14px; font-weight: 800; color: var(--deep-green); background: var(--light-gold); border: 3px solid var(--deep-gold); border-radius: 6px;">Purge All Accounts</button>
           <span style="opacity:0.85; font-size:12px; align-self:center;">Requires server `ADMIN_SECRET` header to authorize.</span>
         </div>
 

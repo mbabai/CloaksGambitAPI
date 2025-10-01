@@ -6,6 +6,7 @@ const userGetList = require('./users/getList');
 const userGetDetails = require('./users/getDetails');
 const userCreate = require('./users/create');
 const userUpdate = require('./users/update');
+const userDelete = require('./users/delete');
 const userPurge = require('./users/purge');
 
 // Config routes
@@ -51,6 +52,7 @@ router.use('/users/getList', userGetList);
 router.use('/users/getDetails', userGetDetails);
 router.use('/users/create', userCreate);
 router.use('/users/update', userUpdate);
+router.use('/users/delete', userDelete);
 router.use('/users/purge', userPurge);
 
 // Config routes
