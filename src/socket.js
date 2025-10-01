@@ -9,6 +9,7 @@ const User = require('./models/User');
 const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
 const lobbyStore = require('./state/lobby');
+const { buildSpectateSnapshot } = require('./utils/spectatorSnapshot');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -519,6 +520,11 @@ function initSocket(httpServer) {
     if (!payload) return;
     cleanupMatchTracking(payload.matchId);
     emitAdminMetrics();
+    if (payload.matchId) {
+      emitSpectateUpdate(payload.matchId).catch((err) => {
+        console.error('Error emitting spectate update after match end:', err);
+      });
+    }
   });
 
   const resolveMatchType = (source = {}) => {
@@ -570,6 +576,42 @@ function initSocket(httpServer) {
     return Math.max(...candidates);
   };
 
+  async function emitSpectateUpdate(matchId) {
+    const id = toId(matchId);
+    if (!id) return;
+    const roomName = `spectate:${id}`;
+    const rooms = adminNamespace?.adapter?.rooms;
+    let hasListeners = false;
+    if (rooms) {
+      if (typeof rooms.get === 'function') {
+        const room = rooms.get(roomName);
+        hasListeners = Boolean(room && room.size > 0);
+      } else if (rooms[roomName]) {
+        const clientsInRoom = rooms[roomName];
+        if (clientsInRoom && typeof clientsInRoom.size === 'number') {
+          hasListeners = clientsInRoom.size > 0;
+        } else {
+          hasListeners = true;
+        }
+      }
+    }
+    if (!hasListeners) return;
+
+    try {
+      const snapshot = await buildSpectateSnapshot(id);
+      if (!snapshot) {
+        adminNamespace.to(roomName).emit('spectate:error', {
+          matchId: id,
+          message: 'Match not found',
+        });
+        return;
+      }
+      adminNamespace.to(roomName).emit('spectate:update', snapshot);
+    } catch (err) {
+      console.error('Error emitting spectate update:', err);
+    }
+  }
+
   function buildAdminMatchPayload(payload = {}) {
     try {
       const matchId = toId(payload.matchId || payload.id || payload._id);
@@ -601,6 +643,12 @@ function initSocket(httpServer) {
       const normalized = buildAdminMatchPayload(payload || {});
       if (normalized) {
         adminNamespace.emit('admin:matchUpdated', normalized);
+        const targetMatchId = toId(payload?.matchId || normalized.id);
+        if (targetMatchId) {
+          emitSpectateUpdate(targetMatchId).catch((err) => {
+            console.error('Error emitting spectate update after match change:', err);
+          });
+        }
       }
     } catch (err) {
       console.error('Error emitting admin match update:', err);
@@ -712,6 +760,12 @@ function initSocket(httpServer) {
         winner: game.winner,
         winReason: game.winReason,
         game,
+      });
+    }
+
+    if (matchId) {
+      emitSpectateUpdate(matchId).catch((err) => {
+        console.error('Error emitting spectate update after game change:', err);
       });
     }
   });
@@ -1028,8 +1082,54 @@ function initSocket(httpServer) {
     // Send initial metrics snapshot
     emitAdminMetrics();
 
+    socket.data = socket.data || {};
+    socket.data.spectating = new Set();
+
+    socket.on('spectate:join', async (payload = {}) => {
+      try {
+        const matchId = payload.matchId || payload.id;
+        const id = toId(matchId);
+        if (!id) {
+          socket.emit('spectate:error', { matchId: null, message: 'matchId is required' });
+          return;
+        }
+        const roomName = `spectate:${id}`;
+        socket.join(roomName);
+        socket.data.spectating.add(id);
+        const snapshot = await buildSpectateSnapshot(id);
+        if (!snapshot) {
+          socket.emit('spectate:error', { matchId: id, message: 'Match not found' });
+          socket.leave(roomName);
+          socket.data.spectating.delete(id);
+          return;
+        }
+        socket.emit('spectate:snapshot', snapshot);
+      } catch (err) {
+        console.error('Error handling spectate:join:', err);
+        const matchId = payload?.matchId ? toId(payload.matchId) : null;
+        socket.emit('spectate:error', { matchId, message: 'Failed to load match' });
+      }
+    });
+
+    socket.on('spectate:leave', (payload = {}) => {
+      const matchId = payload.matchId || payload.id;
+      const id = toId(matchId);
+      if (!id) return;
+      const roomName = `spectate:${id}`;
+      socket.leave(roomName);
+      if (socket.data?.spectating) {
+        socket.data.spectating.delete(id);
+      }
+    });
+
     socket.on('disconnect', () => {
       console.log('Admin disconnected', socket.id);
+      if (socket.data?.spectating) {
+        socket.data.spectating.forEach((id) => {
+          socket.leave(`spectate:${id}`);
+        });
+        socket.data.spectating.clear();
+      }
     });
   });
 

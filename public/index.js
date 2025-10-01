@@ -1,6 +1,6 @@
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { pieceGlyph as modulePieceGlyph } from '/js/modules/render/pieceGlyph.js';
-import { renderBoard } from '/js/modules/render/board.js';
+import { createBoardView } from '/js/modules/components/boardView.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
@@ -26,6 +26,7 @@ import {
 } from '/js/modules/ui/icons.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
+import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
 
 preloadAssets();
 
@@ -1256,6 +1257,7 @@ preloadAssets();
 
   // Simple board + bars state (plain page)
   let boardRoot = null;
+  let boardView = null;
   let topBar = null;
   let bottomBar = null;
   let stashRoot = null;
@@ -1543,51 +1545,6 @@ preloadAssets();
       drawCooldownTimeout = null;
       renderBoardAndBars();
     }, Math.max(0, next - now));
-  }
-
-  // Clock helpers
-  function formatClock(ms) {
-    ms = Math.max(0, ms);
-    if (ms >= 60000) {
-      const m = Math.floor(ms / 60000);
-      const s = Math.floor((ms % 60000) / 1000);
-      return m + ':' + String(s).padStart(2, '0');
-    } else {
-      const s = Math.floor(ms / 1000);
-      const h = Math.floor((ms % 1000) / 10);
-      return s + ':' + String(h).padStart(2, '0');
-    }
-  }
-
-  function coerceMilliseconds(value, { allowZero = false } = {}) {
-    if (value === null || value === undefined) return null;
-    const num = Number(value);
-    if (!Number.isFinite(num)) return null;
-    if (!allowZero && num <= 0) return null;
-    if (allowZero && num < 0) return null;
-    return num;
-  }
-
-  function describeTimeControl(baseMs, incMs) {
-    const parts = [];
-    if (Number.isFinite(baseMs) && baseMs > 0) {
-      const minutes = Math.floor(baseMs / 60000);
-      const seconds = Math.round((baseMs % 60000) / 1000);
-      if (minutes > 0 && seconds > 0) {
-        parts.push(`${minutes}m ${seconds}s`);
-      } else if (minutes > 0) {
-        parts.push(`${minutes}m`);
-      } else if (seconds > 0) {
-        parts.push(`${seconds}s`);
-      }
-    }
-    if (Number.isFinite(incMs) && incMs > 0) {
-      const incSeconds = incMs / 1000;
-      const formatted = Number.isInteger(incSeconds) ? String(incSeconds) : incSeconds.toFixed(1);
-      parts.push(`+ ${formatted}s`);
-    }
-    if (parts.length === 0) return null;
-    return parts.join(' ');
   }
 
   function getClockLabel() {
@@ -3640,6 +3597,12 @@ preloadAssets();
     boardRoot.style.position = 'absolute';
     playAreaRoot.appendChild(boardRoot);
 
+    boardView = createBoardView({
+      container: boardRoot,
+      identityMap: PIECE_IMAGES,
+      refs
+    });
+
     topBar = document.createElement('div');
     topBar.id = 'playAreaTopBar';
     topBar.style.position = 'absolute';
@@ -3730,7 +3693,7 @@ preloadAssets();
   }
 
   function renderBoardAndBars() {
-    if (!playAreaRoot || !boardRoot || !currentRows || !currentCols) return;
+    if (!playAreaRoot || !boardRoot || !boardView || !currentRows || !currentCols) return;
     // Reset interactive refs each render
     refs.bottomCells = [];
     refs.stashSlots = [];
@@ -3747,8 +3710,7 @@ preloadAssets();
     const fileLetters = ['A','B','C','D','E'];
 
     // Use modular board renderer
-    renderBoard({
-      container: boardRoot,
+    boardView.render({
       sizes: {
         rows: currentRows,
         cols: currentCols,
@@ -3766,12 +3728,12 @@ preloadAssets();
         pendingMoveFrom,
         challengeRemoved
       },
-      refs,
-      identityMap: PIECE_IMAGES,
       onAttachHandlers: (cell, target) => attachInteractiveHandlers(cell, target),
       onAttachGameHandlers: (cell, r, c) => attachGameHandlers(cell, r, c),
       labelFont,
-      fileLetters
+      fileLetters,
+      readOnly: false,
+      deploymentLines: true
     });
 
     // Determine whether to show challenge bubbles on player bars

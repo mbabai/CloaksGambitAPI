@@ -10,9 +10,9 @@ export {
   GAME_VIEW_STATES,
   WIN_REASONS,
   GAME_ACTION_STATES
-} from '/js/shared/gameConstants.js';
+} from '../shared/gameConstants.js';
 
-import { IDENTITIES } from '/js/shared/gameConstants.js';
+import { IDENTITIES } from '../shared/gameConstants.js';
 
 // Map piece identity and color to SVG assets served from /assets/images/Pieces
 export const PIECE_IMAGES = {

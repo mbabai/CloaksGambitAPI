@@ -1,8 +1,15 @@
-﻿import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
+import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
+import { renderBars } from '/js/modules/render/bars.js';
+import { createBoardView } from '/js/modules/components/boardView.js';
+import { computeBoardMetrics } from '/js/modules/layout.js';
+import { PIECE_IMAGES, ACTIONS } from '/js/modules/constants.js';
+import { formatClock, describeTimeControl } from '/js/modules/utils/timeControl.js';
 import { getCookie } from '/js/modules/utils/cookies.js';
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
+import { getBubbleAsset } from '/js/modules/ui/icons.js';
+import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
 
 (function () {
   preloadAssets();
@@ -76,6 +83,30 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   const matchesListEl = document.getElementById('matchesList');
   const purgeActiveMatchesBtn = document.getElementById('purgeActiveMatchesBtn');
 
+  const spectateOverlay = document.getElementById('spectateOverlay');
+  const spectatePlayArea = document.getElementById('spectatePlayArea');
+  const spectateBoardEl = document.getElementById('spectateBoard');
+  const spectateTopBar = document.getElementById('spectateTopBar');
+  const spectateBottomBar = document.getElementById('spectateBottomBar');
+  const spectateStatusEl = document.getElementById('spectateStatus');
+  const spectateScoreEl = document.getElementById('spectateScore');
+  const spectateBannerEl = document.getElementById('spectateBanner');
+  const spectateMetaEl = document.getElementById('spectateMeta');
+  const spectateCloseBtn = document.getElementById('spectateCloseBtn');
+
+  const spectateRefs = { boardCells: [], activeBubbles: [] };
+  const spectateBoardView = spectateBoardEl
+    ? createBoardView({
+        container: spectateBoardEl,
+        identityMap: PIECE_IMAGES,
+        refs: spectateRefs,
+        alwaysAttachGameRefs: true
+      })
+    : null;
+  if (spectateBoardView) {
+    spectateBoardView.setReadOnly(true);
+  }
+
   const historyMatchesListEl = document.getElementById('historyMatchesList');
   const historyFilterButtons = Array.from(document.querySelectorAll('[data-history-filter]'));
   const historySummaryEls = {
@@ -108,7 +139,155 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   let isFetchingHistory = false;
   const historyGamesByMatch = new Map();
 
+  const spectateState = {
+    matchId: null,
+    data: null,
+    loading: false,
+    resizeHandler: null,
+    clockTimer: null,
+    clockBase: null,
+    clockDisplay: { whiteMs: 0, blackMs: 0, label: null },
+    clockRefs: { top: null, bottom: null }
+  };
+
   const confirmModal = createConfirmationModal();
+
+  function stopSpectateClockTimer() {
+    if (spectateState.clockTimer) {
+      clearInterval(spectateState.clockTimer);
+      spectateState.clockTimer = null;
+    }
+  }
+
+  function updateSpectateClockElements() {
+    const topEl = spectateState.clockRefs?.top;
+    const bottomEl = spectateState.clockRefs?.bottom;
+    const display = spectateState.clockDisplay || { whiteMs: 0, blackMs: 0 };
+    if (topEl) {
+      topEl.textContent = formatClock(display.blackMs || 0);
+    }
+    if (bottomEl) {
+      bottomEl.textContent = formatClock(display.whiteMs || 0);
+    }
+  }
+
+  function updateSpectateClockDisplay() {
+    const base = spectateState.clockBase;
+    if (!base) {
+      spectateState.clockDisplay = { whiteMs: 0, blackMs: 0, label: null };
+      updateSpectateClockElements();
+      return;
+    }
+    const now = Date.now();
+    const elapsed = Math.max(0, now - base.receivedAt);
+    let white = base.whiteMs;
+    let black = base.blackMs;
+    if (base.ticking && base.activeColor === 0) {
+      white -= elapsed;
+    } else if (base.ticking && base.activeColor === 1) {
+      black -= elapsed;
+    }
+    spectateState.clockDisplay = {
+      whiteMs: Math.max(0, Math.round(white)),
+      blackMs: Math.max(0, Math.round(black)),
+      label: base.label || null,
+    };
+    updateSpectateClockElements();
+  }
+
+  function resetSpectateClockState() {
+    stopSpectateClockTimer();
+    spectateState.clockBase = null;
+    spectateState.clockDisplay = { whiteMs: 0, blackMs: 0, label: null };
+    updateSpectateClockElements();
+  }
+
+  function syncSpectateClocks(snapshot) {
+    const baseClocks = snapshot?.clocks || {};
+    const whiteMs = Number(baseClocks.whiteMs);
+    const blackMs = Number(baseClocks.blackMs);
+    const hasWhite = Number.isFinite(whiteMs);
+    const hasBlack = Number.isFinite(blackMs);
+    if (!hasWhite && !hasBlack) {
+      resetSpectateClockState();
+      return;
+    }
+    const activeColor = (baseClocks.activeColor === 0 || baseClocks.activeColor === 1)
+      ? baseClocks.activeColor
+      : null;
+    const shouldTick = activeColor !== null;
+    spectateState.clockBase = {
+      whiteMs: hasWhite ? whiteMs : 0,
+      blackMs: hasBlack ? blackMs : 0,
+      activeColor,
+      label: baseClocks.label || null,
+      receivedAt: Date.now(),
+      ticking: shouldTick,
+    };
+    updateSpectateClockDisplay();
+    stopSpectateClockTimer();
+    if (spectateState.clockBase.ticking) {
+      spectateState.clockTimer = setInterval(updateSpectateClockDisplay, 200);
+    }
+  }
+
+  function clearSpectateBubbles() {
+    if (!Array.isArray(spectateRefs.activeBubbles)) {
+      spectateRefs.activeBubbles = [];
+      return;
+    }
+    spectateRefs.activeBubbles.forEach((img) => {
+      try {
+        if (img && img.parentNode) {
+          img.parentNode.removeChild(img);
+        }
+      } catch (_) {}
+    });
+    spectateRefs.activeBubbles = [];
+  }
+
+  function makeSpectateBubbleImg(type, squareSize) {
+    const src = getBubbleAsset(type);
+    if (!src) return null;
+    const img = document.createElement('img');
+    img.dataset.bubble = '1';
+    img.dataset.bubbleType = type;
+    img.draggable = false;
+    img.style.position = 'absolute';
+    img.style.pointerEvents = 'none';
+    img.style.zIndex = '1001';
+    const size = Math.max(0, Math.floor(squareSize * 1.08));
+    img.style.width = `${size}px`;
+    img.style.height = 'auto';
+    const offsetX = Math.floor(squareSize * 0.6);
+    const offsetY = Math.floor(squareSize * 0.5);
+    if (typeof type === 'string' && type.endsWith('Right')) {
+      img.style.right = `${-offsetX}px`;
+      img.style.left = 'auto';
+    } else {
+      img.style.left = `${-offsetX}px`;
+      img.style.right = 'auto';
+    }
+    img.style.top = `${-offsetY}px`;
+    img.src = src;
+    img.alt = '';
+    return img;
+  }
+
+  function applySpectateMoveOverlay(squareSize, overlay) {
+    if (!spectateRefs.boardCells) return;
+    clearSpectateBubbles();
+    if (!overlay) return;
+    const cellRef = spectateRefs.boardCells?.[overlay.uiR]?.[overlay.uiC];
+    if (!cellRef || !cellRef.el) return;
+    overlay.types.forEach((type) => {
+      const img = makeSpectateBubbleImg(type, squareSize);
+      if (!img) return;
+      try { cellRef.el.style.position = 'relative'; } catch (_) {}
+      cellRef.el.appendChild(img);
+      spectateRefs.activeBubbles.push(img);
+    });
+  }
 
   function getUsername(id) {
     if (!id) return 'Unknown';
@@ -806,7 +985,9 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       spectateBtn.textContent = 'Spectate';
       spectateBtn.setAttribute('aria-label', `Spectate match ${item?.id || ''}`.trim());
       spectateBtn.addEventListener('click', () => {
-        alert('Spectate coming soon');
+        if (item?.id) {
+          openSpectateModal(item.id);
+        }
       });
       row.appendChild(spectateBtn);
 
@@ -815,6 +996,317 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 
     targetEl.appendChild(frag);
   }
+
+  function clearSpectateVisuals() {
+    if (spectateStatusEl) spectateStatusEl.textContent = '';
+    if (spectateScoreEl) spectateScoreEl.textContent = '';
+    if (spectateBannerEl) {
+      spectateBannerEl.textContent = '';
+      spectateBannerEl.hidden = true;
+      spectateBannerEl.className = 'spectate-banner';
+    }
+    if (spectateMetaEl) spectateMetaEl.textContent = '';
+    if (spectateTopBar) spectateTopBar.innerHTML = '';
+    if (spectateBottomBar) spectateBottomBar.innerHTML = '';
+    if (spectateBoardView) spectateBoardView.destroy();
+    spectateRefs.boardCells = [];
+    clearSpectateBubbles();
+    resetSpectateClockState();
+    spectateState.clockRefs = { top: null, bottom: null };
+  }
+
+  function resolveSpectatePlayer(snapshot, id, fallbackLabel) {
+    if (!id) return { name: fallbackLabel, elo: null };
+    const key = String(id);
+    const playersMap = snapshot?.players || {};
+    const entry = playersMap[key] || playersMap[id] || null;
+    const username = entry?.username || getUsername(key) || fallbackLabel;
+    const elo = Number.isFinite(entry?.elo) ? entry.elo : null;
+    return { name: username, elo };
+  }
+
+  function renderSpectateMeta(snapshot) {
+    if (!spectateMetaEl) return;
+    spectateMetaEl.textContent = '';
+    const match = snapshot?.match || {};
+    const pieces = [];
+    if (match.type) pieces.push(`Type: ${formatMatchTypeLabel(match.type)}`);
+    if (snapshot?.game?.id) pieces.push(`Game ID: ${snapshot.game.id}`);
+    if (match.isActive === false) {
+      pieces.push('Match complete');
+    } else if (snapshot?.game && snapshot.game.isActive === false) {
+      pieces.push('Game complete');
+    }
+    spectateMetaEl.textContent = pieces.join(' • ');
+  }
+
+  function renderSpectateScore(snapshot) {
+    if (!spectateScoreEl) return;
+    spectateScoreEl.innerHTML = '';
+    const match = snapshot?.match;
+    if (!match) return;
+    const player1Id = match.player1Id || match.player1?.id;
+    const player2Id = match.player2Id || match.player2?.id;
+    const player1 = resolveSpectatePlayer(snapshot, player1Id, 'Player 1');
+    const player2 = resolveSpectatePlayer(snapshot, player2Id, 'Player 2');
+    const scoreWrap = document.createDocumentFragment();
+    const span1 = document.createElement('span');
+    span1.textContent = player1.name;
+    span1.style.fontWeight = '700';
+    const scoreSpan = document.createElement('span');
+    scoreSpan.textContent = `${Number(match.player1Score || 0)} - ${Number(match.player2Score || 0)}`;
+    const span2 = document.createElement('span');
+    span2.textContent = player2.name;
+    span2.style.fontWeight = '700';
+    scoreWrap.appendChild(span1);
+    scoreWrap.appendChild(scoreSpan);
+    scoreWrap.appendChild(span2);
+    const draws = Number(match.drawCount || 0);
+    if (draws > 0) {
+      const drawSpan = document.createElement('span');
+      drawSpan.textContent = `Draws: ${draws}`;
+      scoreWrap.appendChild(drawSpan);
+    }
+    spectateScoreEl.appendChild(scoreWrap);
+  }
+
+  function renderSpectateBanner(snapshot) {
+    if (!spectateBannerEl) return;
+    spectateBannerEl.hidden = true;
+    spectateBannerEl.textContent = '';
+    spectateBannerEl.className = 'spectate-banner';
+    const match = snapshot?.match;
+    if (!match) return;
+    if (match.isActive === false) {
+      const winnerId = match.winnerId || match.winner || match.winner?._id;
+      const winner = resolveSpectatePlayer(snapshot, winnerId, 'Winner');
+      const p1Score = Number(match.player1Score || 0);
+      const p2Score = Number(match.player2Score || 0);
+      const draws = Number(match.drawCount || 0);
+      const parts = [`${winner.name} wins the match ${p1Score}-${p2Score}`];
+      if (draws > 0) {
+        parts.push(`with ${draws} draw${draws === 1 ? '' : 's'}`);
+      }
+      spectateBannerEl.textContent = parts.join(' ');
+      spectateBannerEl.classList.add('spectate-banner--success');
+      spectateBannerEl.hidden = false;
+    } else if (snapshot?.game && snapshot.game.isActive === false) {
+      spectateBannerEl.textContent = 'Awaiting the next game in this match…';
+      spectateBannerEl.classList.add('spectate-banner--info');
+      spectateBannerEl.hidden = false;
+    }
+  }
+
+  function renderSpectateBarsForSnapshot(snapshot, baseSizes) {
+    if (!spectateBoardView || !spectateTopBar || !spectateBottomBar) return;
+    spectateTopBar.innerHTML = '';
+    spectateBottomBar.innerHTML = '';
+    if (!snapshot) return;
+    const game = snapshot.game;
+    if (!game) return;
+    const match = snapshot.match || {};
+    const players = Array.isArray(game.players) ? game.players.map(id => id && id.toString()) : [];
+    const whiteId = players[0] || match.player1Id || match.player1?.id;
+    const blackId = players[1] || match.player2Id || match.player2?.id;
+    const white = resolveSpectatePlayer(snapshot, whiteId, 'White');
+    const black = resolveSpectatePlayer(snapshot, blackId, 'Black');
+    const isRankedMatch = String(match.type || '').toUpperCase() === 'RANKED';
+    const p1Score = Number(match.player1Score || 0);
+    const p2Score = Number(match.player2Score || 0);
+    const daggers = Array.isArray(game.daggers) ? game.daggers : [0, 0];
+    const captured = Array.isArray(game.captured) ? game.captured : [[], []];
+    const lastAction = Array.isArray(game.actions) ? game.actions[game.actions.length - 1] : null;
+    const showChallengeTop = lastAction && lastAction.type === ACTIONS.CHALLENGE && lastAction.player === 1;
+    const showChallengeBottom = lastAction && lastAction.type === ACTIONS.CHALLENGE && lastAction.player === 0;
+    const displayClocks = spectateState.clockDisplay || {};
+    const clockLabel = displayClocks.label
+      || snapshot?.clocks?.label
+      || describeTimeControl(game.timeControlStart, game.increment);
+    const whiteMs = Number.isFinite(displayClocks.whiteMs) ? displayClocks.whiteMs : 0;
+    const blackMs = Number.isFinite(displayClocks.blackMs) ? displayClocks.blackMs : 0;
+
+    const bars = renderBars({
+      topBar: spectateTopBar,
+      bottomBar: spectateBottomBar,
+      sizes: {
+        squareSize: baseSizes.squareSize,
+        boardWidth: baseSizes.boardWidth,
+        boardHeight: baseSizes.boardHeight,
+        boardLeft: baseSizes.boardLeft,
+        boardTop: baseSizes.boardTop,
+        playAreaHeight: spectatePlayArea?.clientHeight || (baseSizes.boardHeight * 2)
+      },
+      state: {
+        currentIsWhite: true,
+        currentCaptured: captured,
+        currentDaggers: daggers,
+        showChallengeTop,
+        showChallengeBottom,
+        clockTop: formatClock(blackMs),
+        clockBottom: formatClock(whiteMs),
+        clockLabel,
+        nameTop: black.name,
+        nameBottom: white.name,
+        winsTop: p2Score,
+        winsBottom: p1Score,
+        connectionTop: null,
+        connectionBottom: null,
+        isRankedMatch,
+        eloTop: black.elo,
+        eloBottom: white.elo
+      },
+      identityMap: PIECE_IMAGES
+    });
+    spectateState.clockRefs = {
+      top: bars?.topClockEl || null,
+      bottom: bars?.bottomClockEl || null,
+    };
+    updateSpectateClockElements();
+  }
+
+  function renderSpectateBoard(snapshot) {
+    if (!spectateBoardView || !spectatePlayArea) return;
+    const game = snapshot?.game;
+    if (!game || !Array.isArray(game.board) || !game.board.length) {
+      spectateBoardView.destroy();
+      spectateRefs.boardCells = [];
+      if (spectateTopBar) spectateTopBar.innerHTML = '';
+      if (spectateBottomBar) spectateBottomBar.innerHTML = '';
+      return;
+    }
+    const viewState = deriveSpectateView(game);
+    const rows = viewState.rows;
+    const cols = viewState.cols;
+    if (!rows || !cols) return;
+    const boardForRender = viewState.board;
+    const pendingMoveFrom = viewState.pendingMoveFrom;
+    const pendingCapture = viewState.pendingCapture;
+    const challengeRemoved = viewState.challengeRemoved;
+    const overlay = viewState.overlay;
+    const metrics = computeBoardMetrics(
+      spectatePlayArea.clientWidth,
+      spectatePlayArea.clientHeight,
+      cols,
+      rows
+    );
+    spectateRefs.boardCells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null));
+    spectateBoardView.render({
+      sizes: {
+        rows,
+        cols,
+        squareSize: metrics.squareSize,
+        boardLeft: metrics.boardLeft,
+        boardTop: metrics.boardTop
+      },
+      state: {
+        currentBoard: boardForRender,
+        currentIsWhite: true,
+        selected: null,
+        isInSetup: false,
+        workingRank: new Array(cols).fill(null),
+        pendingCapture,
+        pendingMoveFrom,
+        challengeRemoved
+      },
+      onAttachGameHandlers: (cell, uiR, uiC) => {
+        if (!spectateRefs.boardCells[uiR]) {
+          spectateRefs.boardCells[uiR] = [];
+        }
+        spectateRefs.boardCells[uiR][uiC] = { el: cell, uiR, uiC };
+      },
+      labelFont: Math.max(10, Math.floor(0.024 * spectatePlayArea.clientHeight)),
+      fileLetters: ['A', 'B', 'C', 'D', 'E'],
+      readOnly: true,
+        deploymentLines: true
+    });
+    renderSpectateBarsForSnapshot(snapshot, {
+      squareSize: metrics.squareSize,
+      boardWidth: metrics.boardWidth,
+      boardHeight: metrics.boardHeight,
+      boardLeft: metrics.boardLeft,
+      boardTop: metrics.boardTop
+    });
+    applySpectateMoveOverlay(metrics.squareSize, overlay);
+  }
+
+  function renderSpectateContent(snapshot) {
+    if (!spectateOverlay || spectateOverlay.hidden) return;
+    spectateState.data = snapshot;
+    syncSpectateClocks(snapshot);
+    renderSpectateMeta(snapshot);
+    renderSpectateScore(snapshot);
+    renderSpectateBanner(snapshot);
+    if (spectateStatusEl) {
+      const match = snapshot?.match;
+      const game = snapshot?.game;
+      if (!game) {
+        spectateStatusEl.textContent = match?.isActive ? 'No active game for this match.' : 'Match complete.';
+      } else if (game.isActive) {
+        spectateStatusEl.textContent = 'Live game in progress';
+      } else {
+        spectateStatusEl.textContent = match?.isActive ? 'Game finished. Awaiting next game.' : 'Final game complete.';
+      }
+    }
+    renderSpectateBoard(snapshot);
+  }
+
+  function openSpectateModal(matchId) {
+    if (!spectateOverlay || !spectateBoardView) return;
+    const normalizedId = normalizeId(matchId);
+    if (!normalizedId) return;
+    if (spectateState.matchId && spectateState.matchId !== normalizedId) {
+      socket.emit('spectate:leave', { matchId: spectateState.matchId });
+    }
+    spectateState.matchId = normalizedId;
+    spectateState.loading = true;
+    spectateState.data = null;
+    clearSpectateVisuals();
+    spectateOverlay.hidden = false;
+    if (spectateStatusEl) spectateStatusEl.textContent = 'Loading live game state…';
+    socket.emit('spectate:join', { matchId: normalizedId });
+    if (spectateState.resizeHandler) {
+      window.removeEventListener('resize', spectateState.resizeHandler);
+    }
+    spectateState.resizeHandler = () => {
+      if (!spectateOverlay.hidden && spectateState.data) {
+        renderSpectateBoard(spectateState.data);
+      }
+    };
+    window.addEventListener('resize', spectateState.resizeHandler);
+  }
+
+  function closeSpectateModal() {
+    if (!spectateOverlay || spectateOverlay.hidden) return;
+    const currentId = spectateState.matchId;
+    if (currentId) {
+      socket.emit('spectate:leave', { matchId: currentId });
+    }
+    spectateOverlay.hidden = true;
+    spectateState.matchId = null;
+    spectateState.data = null;
+    spectateState.loading = false;
+    clearSpectateVisuals();
+    if (spectateState.resizeHandler) {
+      window.removeEventListener('resize', spectateState.resizeHandler);
+      spectateState.resizeHandler = null;
+    }
+  }
+
+  if (spectateOverlay) {
+    spectateOverlay.addEventListener('mousedown', (event) => {
+      if (event.target === spectateOverlay) {
+        closeSpectateModal();
+      }
+    });
+  }
+  if (spectateCloseBtn) {
+    spectateCloseBtn.addEventListener('click', () => closeSpectateModal());
+  }
+  document.addEventListener('keydown', (event) => {
+    if ((event.key === 'Escape' || event.key === 'Esc') && spectateOverlay && !spectateOverlay.hidden) {
+      closeSpectateModal();
+    }
+  });
 
   let activeTab = 'live';
   function setActiveTab(tab) {
@@ -1173,6 +1665,36 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   socket.on('admin:matchUpdated', payload => {
     if (applyActiveMatchUpdate(payload)) {
       renderActiveMatchesFromState();
+    }
+  });
+
+  socket.on('spectate:snapshot', (payload) => {
+    const payloadId = normalizeId(payload?.matchId);
+    if (!payloadId || payloadId !== spectateState.matchId) return;
+    spectateState.loading = false;
+    renderSpectateContent({ ...payload, matchId: payloadId });
+  });
+
+  socket.on('spectate:update', (payload) => {
+    const payloadId = normalizeId(payload?.matchId);
+    if (!payloadId || payloadId !== spectateState.matchId) return;
+    spectateState.loading = false;
+    renderSpectateContent({ ...payload, matchId: payloadId });
+  });
+
+  socket.on('spectate:error', (payload) => {
+    const payloadId = normalizeId(payload?.matchId);
+    if (!payloadId || payloadId !== spectateState.matchId) return;
+    spectateState.loading = false;
+    resetSpectateClockState();
+    clearSpectateBubbles();
+    if (spectateStatusEl) {
+      spectateStatusEl.textContent = payload?.message || 'Unable to spectate match.';
+    }
+    if (spectateBannerEl) {
+      spectateBannerEl.textContent = payload?.message || 'Unable to spectate match.';
+      spectateBannerEl.className = 'spectate-banner spectate-banner--info';
+      spectateBannerEl.hidden = false;
     }
   });
 
