@@ -74,7 +74,6 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   const usersListEl = document.getElementById('usersList');
   const matchesListEl = document.getElementById('matchesList');
   const purgeActiveMatchesBtn = document.getElementById('purgeActiveMatchesBtn');
-  const purgeUsersBtn = document.getElementById('purgeUsersBtn');
 
   const historyMatchesListEl = document.getElementById('historyMatchesList');
   const historyFilterButtons = Array.from(document.querySelectorAll('[data-history-filter]'));
@@ -107,6 +106,8 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
   let historyLoaded = false;
   let isFetchingHistory = false;
   const historyGamesByMatch = new Map();
+
+  const confirmModal = createConfirmationModal();
 
   function getUsername(id) {
     if (!id) return 'Unknown';
@@ -149,6 +150,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     const frag = document.createDocumentFragment();
     const matchCells = [];
     const connCells = [];
+    const actionCells = [];
     const header = document.createElement('div');
     header.className = 'row headerRow';
     header.style.display = 'flex';
@@ -173,11 +175,21 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     hConn.style.alignItems = 'center';
     hConn.style.whiteSpace = 'nowrap';
     hConn.style.wordBreak = 'keep-all';
+    const hAction = document.createElement('span');
+    hAction.textContent = 'Delete';
+    hAction.style.display = 'inline-flex';
+    hAction.style.justifyContent = 'center';
+    hAction.style.alignItems = 'center';
+    hAction.style.whiteSpace = 'nowrap';
+    hAction.style.wordBreak = 'keep-all';
+
     header.appendChild(hName);
     header.appendChild(hMatch);
     header.appendChild(hConn);
+    header.appendChild(hAction);
     matchCells.push(hMatch);
     connCells.push(hConn);
+    actionCells.push(hAction);
     frag.appendChild(header);
 
     users.forEach(u => {
@@ -222,21 +234,49 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
         img.style.height = '16px';
         connEl.appendChild(img);
       }
+      const actionEl = document.createElement('span');
+      actionEl.className = 'userActionCell';
+      actionEl.style.display = 'inline-flex';
+      actionEl.style.justifyContent = 'center';
+      actionEl.style.alignItems = 'center';
+      actionEl.style.whiteSpace = 'nowrap';
+      actionEl.style.wordBreak = 'keep-all';
+      actionEl.style.padding = '0 2px';
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'user-delete-btn';
+      const username = u.username || 'Unknown';
+      deleteBtn.setAttribute('aria-label', `Delete ${username}`);
+      deleteBtn.title = `Delete ${username}`;
+      deleteBtn.textContent = '🗑';
+      deleteBtn.addEventListener('click', () => {
+        requestUserDeletion({ id: u.id, username });
+      });
+
+      actionEl.appendChild(deleteBtn);
+
       row.appendChild(nameEl);
       row.appendChild(matchEl);
       row.appendChild(connEl);
+      row.appendChild(actionEl);
       matchCells.push(matchEl);
       connCells.push(connEl);
+      actionCells.push(actionEl);
       frag.appendChild(row);
     });
     targetEl.appendChild(frag);
     let matchWidth = 0;
     let connWidth = 0;
+    let actionWidth = 0;
     matchCells.forEach(cell => {
       matchWidth = Math.max(matchWidth, Math.ceil(cell.getBoundingClientRect().width));
     });
     connCells.forEach(cell => {
       connWidth = Math.max(connWidth, Math.ceil(cell.getBoundingClientRect().width));
+    });
+    actionCells.forEach(cell => {
+      actionWidth = Math.max(actionWidth, Math.ceil(cell.getBoundingClientRect().width));
     });
     const setColumnWidth = (cells, width) => {
       if (!width) return;
@@ -248,6 +288,175 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     };
     setColumnWidth(matchCells, matchWidth);
     setColumnWidth(connCells, connWidth);
+    setColumnWidth(actionCells, actionWidth);
+  }
+
+  async function requestUserDeletion(user) {
+    if (!user) return;
+    const normalizedId = normalizeId(user.id || user.userId || user);
+    if (!normalizedId) {
+      alert('Unable to delete user: missing identifier.');
+      return;
+    }
+
+    const username = typeof user.username === 'string' && user.username.trim()
+      ? user.username.trim()
+      : getUsername(normalizedId);
+
+    const confirmed = await confirmModal.show({
+      title: 'Delete Account',
+      message: `Delete account "${username}"? This cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+    });
+
+    if (!confirmed) return;
+
+    try {
+      const res = await authFetch('/api/v1/users/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
+        },
+        body: JSON.stringify({ userId: normalizedId })
+      });
+
+      if (!res.ok) {
+        let errorMessage = 'Failed to delete user account.';
+        try {
+          const errorData = await res.json();
+          if (errorData && typeof errorData.message === 'string') {
+            errorMessage = errorData.message;
+          }
+        } catch (err) {
+          // ignore JSON parse errors
+        }
+        alert(`${errorMessage} (status ${res.status})`);
+        return;
+      }
+
+      alert(`Account for "${username}" deleted successfully.`);
+    } catch (err) {
+      console.error('Error deleting user account:', err);
+      alert('Error deleting user account. Check console for details.');
+    } finally {
+      fetchAllUsers();
+    }
+  }
+
+  function createConfirmationModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'admin-modal-overlay';
+    overlay.hidden = true;
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'admin-modal';
+
+    const titleEl = document.createElement('h3');
+    titleEl.className = 'admin-modal-title';
+    titleEl.textContent = 'Confirm Action';
+
+    const messageEl = document.createElement('p');
+    messageEl.className = 'admin-modal-message';
+    messageEl.textContent = '';
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'admin-modal-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'admin-modal-button';
+    cancelBtn.textContent = 'Cancel';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'admin-modal-button admin-modal-button--danger';
+    confirmBtn.textContent = 'Confirm';
+
+    actionsEl.appendChild(cancelBtn);
+    actionsEl.appendChild(confirmBtn);
+
+    dialog.appendChild(titleEl);
+    dialog.appendChild(messageEl);
+    dialog.appendChild(actionsEl);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    let resolver = null;
+    let lastActiveElement = null;
+
+    function close(result) {
+      if (overlay.hidden) return;
+      overlay.hidden = true;
+      overlay.setAttribute('aria-hidden', 'true');
+      document.removeEventListener('keydown', handleKeyDown, true);
+      if (typeof resolver === 'function') {
+        resolver(result);
+      }
+      resolver = null;
+      if (lastActiveElement && typeof lastActiveElement.focus === 'function') {
+        lastActiveElement.focus();
+      }
+      lastActiveElement = null;
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close(false);
+      }
+    }
+
+    cancelBtn.addEventListener('click', () => close(false));
+    confirmBtn.addEventListener('click', () => close(true));
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay) {
+        close(false);
+      }
+    });
+
+    return {
+      show(options = {}) {
+        const { title, message, confirmText, cancelText } = options;
+        if (typeof title === 'string' && title.trim()) {
+          titleEl.textContent = title.trim();
+        } else {
+          titleEl.textContent = 'Confirm Action';
+        }
+        if (typeof message === 'string' && message.trim()) {
+          messageEl.textContent = message.trim();
+        } else {
+          messageEl.textContent = 'Are you sure?';
+        }
+        if (typeof confirmText === 'string' && confirmText.trim()) {
+          confirmBtn.textContent = confirmText.trim();
+        } else {
+          confirmBtn.textContent = 'Confirm';
+        }
+        if (typeof cancelText === 'string' && cancelText.trim()) {
+          cancelBtn.textContent = cancelText.trim();
+        } else {
+          cancelBtn.textContent = 'Cancel';
+        }
+
+        overlay.hidden = false;
+        overlay.removeAttribute('aria-hidden');
+        lastActiveElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        document.addEventListener('keydown', handleKeyDown, true);
+
+        setTimeout(() => {
+          confirmBtn.focus();
+        }, 0);
+
+        return new Promise(resolve => {
+          resolver = resolve;
+        });
+      }
+    };
   }
 
   async function fetchAllUsers() {
@@ -968,28 +1177,4 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     });
   }
 
-  if (purgeUsersBtn) {
-    purgeUsersBtn.addEventListener('click', async () => {
-      if (!confirm('Are you sure you want to purge ALL user accounts from the database? This cannot be undone.')) return;
-      try {
-        const res = await authFetch('/api/v1/users/purge', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
-          }
-        });
-        if (!res.ok) {
-          alert('Failed to purge users: ' + res.status);
-          return;
-        }
-        const data = await res.json();
-        alert('Purged users: ' + (data.deleted || 0));
-        if (historyLoaded) fetchHistoryData();
-      } catch (err) {
-        console.error(err);
-        alert('Error purging users. Check console.');
-      }
-    });
-  }
 })();
