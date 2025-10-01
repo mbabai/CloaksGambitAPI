@@ -1,5 +1,6 @@
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
+import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { getCookie } from '/js/modules/utils/cookies.js';
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 
@@ -114,6 +115,11 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     return usernameMap[id] || id;
   }
 
+  function isAnonymousUsername(username) {
+    if (typeof username !== 'string') return false;
+    return /^anonymous\d+$/i.test(username.trim());
+  }
+
   function renderList(targetEl, ids) {
     if (!targetEl) return;
     targetEl.innerHTML = '';
@@ -148,6 +154,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       return (connectedSet.has(b.id) - connectedSet.has(a.id)) || (a.username || '').localeCompare(b.username || '');
     });
     const frag = document.createDocumentFragment();
+    const eloCells = [];
     const matchCells = [];
     const connCells = [];
     const actionCells = [];
@@ -161,6 +168,13 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     hName.textContent = 'Username';
     hName.style.flex = '1 1 auto';
     hName.style.minWidth = '0';
+    const hElo = document.createElement('span');
+    hElo.textContent = 'Elo';
+    hElo.style.display = 'inline-flex';
+    hElo.style.justifyContent = 'center';
+    hElo.style.alignItems = 'center';
+    hElo.style.whiteSpace = 'nowrap';
+    hElo.style.wordBreak = 'keep-all';
     const hMatch = document.createElement('span');
     hMatch.textContent = 'In Match';
     hMatch.style.display = 'inline-flex';
@@ -184,9 +198,11 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
     hAction.style.wordBreak = 'keep-all';
 
     header.appendChild(hName);
+    header.appendChild(hElo);
     header.appendChild(hMatch);
     header.appendChild(hConn);
     header.appendChild(hAction);
+    eloCells.push(hElo);
     matchCells.push(hMatch);
     connCells.push(hConn);
     actionCells.push(hAction);
@@ -204,6 +220,29 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       nameEl.title = u.id;
       nameEl.style.flex = '1 1 auto';
       nameEl.style.minWidth = '0';
+      const eloEl = document.createElement('span');
+      eloEl.style.display = 'inline-flex';
+      eloEl.style.justifyContent = 'center';
+      eloEl.style.alignItems = 'center';
+      eloEl.style.whiteSpace = 'nowrap';
+      eloEl.style.wordBreak = 'keep-all';
+      eloEl.style.padding = '0 2px';
+      const username = u.username || 'Unknown';
+      if (!isAnonymousUsername(username)) {
+        const eloValue = Number.isFinite(u.elo) ? u.elo : null;
+        const badge = createEloBadge({ elo: eloValue, size: 24, alt: `${username} Elo` });
+        if (badge) {
+          eloEl.appendChild(badge);
+          if (Number.isFinite(eloValue)) {
+            const roundedElo = Math.round(eloValue);
+            eloEl.title = `${roundedElo} Elo`;
+            eloEl.setAttribute('aria-label', `${roundedElo} Elo`);
+          } else {
+            eloEl.title = 'Elo unavailable';
+            eloEl.setAttribute('aria-label', 'Elo unavailable');
+          }
+        }
+      }
       const matchEl = document.createElement('span');
       matchEl.style.display = 'inline-flex';
       matchEl.style.justifyContent = 'center';
@@ -257,18 +296,24 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
       actionEl.appendChild(deleteBtn);
 
       row.appendChild(nameEl);
+      row.appendChild(eloEl);
       row.appendChild(matchEl);
       row.appendChild(connEl);
       row.appendChild(actionEl);
+      eloCells.push(eloEl);
       matchCells.push(matchEl);
       connCells.push(connEl);
       actionCells.push(actionEl);
       frag.appendChild(row);
     });
     targetEl.appendChild(frag);
+    let eloWidth = 0;
     let matchWidth = 0;
     let connWidth = 0;
     let actionWidth = 0;
+    eloCells.forEach(cell => {
+      eloWidth = Math.max(eloWidth, Math.ceil(cell.getBoundingClientRect().width));
+    });
     matchCells.forEach(cell => {
       matchWidth = Math.max(matchWidth, Math.ceil(cell.getBoundingClientRect().width));
     });
@@ -286,6 +331,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
         cell.style.minWidth = `${width}px`;
       });
     };
+    setColumnWidth(eloCells, eloWidth);
     setColumnWidth(matchCells, matchWidth);
     setColumnWidth(connCells, connWidth);
     setColumnWidth(actionCells, actionWidth);
@@ -478,8 +524,10 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
           const id = u._id ? u._id.toString() : '';
           if (!id) return;
           const username = u.username || 'Unknown';
+          const numericElo = Number(u.elo);
+          const elo = Number.isFinite(numericElo) ? numericElo : null;
           usernameMap[id] = username;
-          users.push({ id, username });
+          users.push({ id, username, elo });
         });
       }
       renderUsersList(
