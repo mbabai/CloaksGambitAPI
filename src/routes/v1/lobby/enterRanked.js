@@ -4,6 +4,9 @@ const Match = require('../../../models/Match');
 const { checkAndCreateMatches } = require('./matchmaking');
 const eventBus = require('../../../eventBus');
 const { resolveUserFromRequest } = require('../../../utils/authTokens');
+const ensureUser = require('../../../utils/ensureUser');
+
+const isProduction = process.env.NODE_ENV === 'production';
 const lobbyStore = require('../../../state/lobby');
 
 const LOGIN_REQUIRED_MESSAGE = 'Please log in to play ranked.';
@@ -13,13 +16,19 @@ router.post('/', async (req, res) => {
     let { userId } = req.body;
     let userInfo = await resolveUserFromRequest(req);
 
-    if (!userInfo || !userInfo.userId) {
-      // Ranked queue requires an authenticated session/token.
-      return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
-    }
+    if (!userInfo || !userInfo.userId || userInfo.isGuest) {
+      if (isProduction) {
+        // Ranked queue requires an authenticated session/token in production.
+        return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
+      }
 
-    if (userInfo?.isGuest) {
-      return res.status(403).json({ message: LOGIN_REQUIRED_MESSAGE });
+      if (!userInfo || !userInfo.userId) {
+        if (!userId) {
+          userInfo = await ensureUser();
+        } else {
+          userInfo = await ensureUser(userId);
+        }
+      }
     }
 
     userId = userInfo.userId;

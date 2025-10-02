@@ -38,6 +38,47 @@ preloadAssets();
 
   const queueBtn = document.getElementById('queueBtn');
   const modeSelect = document.getElementById('modeSelect');
+
+  const isLocalDevelopmentHost = (() => {
+    const { hostname = '', protocol = '' } = window.location || {};
+    if (!hostname) {
+      return protocol === 'file:';
+    }
+
+    const normalizedHost = hostname.trim().toLowerCase();
+    const explicitlyLocalHosts = new Set([
+      'localhost',
+      '127.0.0.1',
+      '0.0.0.0',
+      '::1',
+      '[::1]',
+      'host.docker.internal'
+    ]);
+
+    if (explicitlyLocalHosts.has(normalizedHost)) {
+      return true;
+    }
+
+    if (normalizedHost.endsWith('.local')) {
+      return true;
+    }
+
+    if (/^192\.168\.(?:\d{1,3})\.(?:\d{1,3})$/.test(normalizedHost)) {
+      return true;
+    }
+
+    if (/^10\.(?:\d{1,3})\.(?:\d{1,3})\.(?:\d{1,3})$/.test(normalizedHost)) {
+      return true;
+    }
+
+    if (/^172\.(?:1[6-9]|2\d|3[0-1])\.(?:\d{1,3})\.(?:\d{1,3})$/.test(normalizedHost)) {
+      return true;
+    }
+
+    return false;
+  })();
+
+  const allowGuestRankedQueue = isLocalDevelopmentHost;
   const selectWrap = document.getElementById('selectWrap');
 
   const menuToggle = document.getElementById('menuToggle');
@@ -2313,7 +2354,7 @@ preloadAssets();
     const RANKED_LOGIN_REQUIRED_MESSAGE = 'Please log in to play ranked.';
     if (actionMode === 'ranked') {
       const hasAuthenticatedSession = Boolean(sessionInfo?.authenticated && sessionInfo?.userId);
-      if (!hasAuthenticatedSession) {
+      if (!hasAuthenticatedSession && !allowGuestRankedQueue) {
         window.alert(RANKED_LOGIN_REQUIRED_MESSAGE);
         return;
       }
