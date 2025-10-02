@@ -49,10 +49,10 @@ function computeSpectatorClocks(game) {
 
   let white = baseTime;
   let black = baseTime;
-  const initialSetup = Array.isArray(game?.setupComplete)
+  const finalSetupState = Array.isArray(game?.setupComplete)
     ? game.setupComplete.map((value) => Boolean(value))
     : [false, false];
-  const setupFlags = [...initialSetup];
+  const setupTimeline = [false, false];
   let lastTs = startTime;
   let derivedTurn = null;
 
@@ -63,9 +63,9 @@ function computeSpectatorClocks(game) {
     }
     const delta = Math.max(0, ts - lastTs);
     if (delta > 0) {
-      if (!setupFlags[0] || !setupFlags[1]) {
-        if (!setupFlags[0]) white -= delta;
-        if (!setupFlags[1]) black -= delta;
+      if (!setupTimeline[0] || !setupTimeline[1]) {
+        if (!setupTimeline[0]) white -= delta;
+        if (!setupTimeline[1]) black -= delta;
       } else if (derivedTurn === 0) {
         white -= delta;
       } else if (derivedTurn === 1) {
@@ -76,8 +76,8 @@ function computeSpectatorClocks(game) {
 
     if (action.type === ACTIONS.SETUP) {
       if (action.player === 0 || action.player === 1) {
-        setupFlags[action.player] = true;
-        if (setupFlags[0] && setupFlags[1] && derivedTurn === null) {
+        setupTimeline[action.player] = true;
+        if (setupTimeline[0] && setupTimeline[1] && derivedTurn === null) {
           derivedTurn = 0;
         }
       }
@@ -97,21 +97,26 @@ function computeSpectatorClocks(game) {
     }
   });
 
+  const resolvedSetupFlags = [
+    finalSetupState[0] || setupTimeline[0],
+    finalSetupState[1] || setupTimeline[1],
+  ];
+
   const activeColorFromGame = (game?.playerTurn === 0 || game?.playerTurn === 1)
     ? game.playerTurn
     : null;
   const activeColor = activeColorFromGame !== null
     ? activeColorFromGame
-    : ((setupFlags[0] && setupFlags[1]) ? derivedTurn : null);
+    : ((resolvedSetupFlags[0] && resolvedSetupFlags[1]) ? derivedTurn : null);
 
   const referenceTs = game?.isActive
     ? Date.now()
     : (game?.endTime ? new Date(game.endTime).getTime() : lastTs);
   const tailDelta = Math.max(0, referenceTs - lastTs);
   if (tailDelta > 0) {
-    if (!setupFlags[0] || !setupFlags[1]) {
-      if (!setupFlags[0]) white -= tailDelta;
-      if (!setupFlags[1]) black -= tailDelta;
+    if (!resolvedSetupFlags[0] || !resolvedSetupFlags[1]) {
+      if (!resolvedSetupFlags[0]) white -= tailDelta;
+      if (!resolvedSetupFlags[1]) black -= tailDelta;
     } else if (activeColor === 0) {
       white -= tailDelta;
     } else if (activeColor === 1) {

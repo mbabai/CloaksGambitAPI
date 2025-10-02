@@ -102,7 +102,7 @@ export function computeGameClockState({
   const orderedActions = mapActions(actions, startTs);
   let white = base;
   let black = base;
-  const setupFlags = [...normalizedSetup];
+  const setupTimeline = [false, false];
   let lastTs = startTs;
   let derivedTurn = null;
 
@@ -110,9 +110,9 @@ export function computeGameClockState({
     const ts = action.timestamp;
     const delta = Math.max(0, ts - lastTs);
     if (delta > 0) {
-      if (!setupFlags[0] || !setupFlags[1]) {
-        if (!setupFlags[0]) white -= delta;
-        if (!setupFlags[1]) black -= delta;
+      if (!setupTimeline[0] || !setupTimeline[1]) {
+        if (!setupTimeline[0]) white -= delta;
+        if (!setupTimeline[1]) black -= delta;
       } else if (derivedTurn === 0) {
         white -= delta;
       } else if (derivedTurn === 1) {
@@ -123,8 +123,8 @@ export function computeGameClockState({
 
     if (action.type === ACTIONS.SETUP) {
       if (action.player === 0 || action.player === 1) {
-        setupFlags[action.player] = true;
-        if (setupFlags[0] && setupFlags[1] && derivedTurn === null) {
+        setupTimeline[action.player] = true;
+        if (setupTimeline[0] && setupTimeline[1] && derivedTurn === null) {
           derivedTurn = 0;
         }
       }
@@ -145,7 +145,11 @@ export function computeGameClockState({
   });
 
   const providedTurn = normalizePlayer(playerTurn);
-  const bothSetupDone = setupFlags[0] && setupFlags[1];
+  const finalSetupFlags = [
+    normalizedSetup[0] || setupTimeline[0],
+    normalizedSetup[1] || setupTimeline[1],
+  ];
+  const bothSetupDone = finalSetupFlags[0] && finalSetupFlags[1];
   const activeColor = providedTurn !== null
     ? providedTurn
     : (bothSetupDone ? derivedTurn : null);
@@ -154,9 +158,9 @@ export function computeGameClockState({
   const referenceTimestamp = isActive ? now : (Number.isFinite(endTs) ? endTs : lastTs);
   const tailDelta = Math.max(0, referenceTimestamp - lastTs);
   if (tailDelta > 0) {
-    if (!setupFlags[0] || !setupFlags[1]) {
-      if (!setupFlags[0]) white -= tailDelta;
-      if (!setupFlags[1]) black -= tailDelta;
+    if (!finalSetupFlags[0] || !finalSetupFlags[1]) {
+      if (!finalSetupFlags[0]) white -= tailDelta;
+      if (!finalSetupFlags[1]) black -= tailDelta;
     } else if (activeColor === 0) {
       white -= tailDelta;
     } else if (activeColor === 1) {
@@ -166,14 +170,14 @@ export function computeGameClockState({
 
   const whiteMs = Math.max(0, Math.round(white));
   const blackMs = Math.max(0, Math.round(black));
-  const tickingWhite = Boolean(isActive) && (bothSetupDone ? activeColor === 0 : !setupFlags[0]);
-  const tickingBlack = Boolean(isActive) && (bothSetupDone ? activeColor === 1 : !setupFlags[1]);
+  const tickingWhite = Boolean(isActive) && (bothSetupDone ? activeColor === 0 : !finalSetupFlags[0]);
+  const tickingBlack = Boolean(isActive) && (bothSetupDone ? activeColor === 1 : !finalSetupFlags[1]);
 
   return {
     whiteMs,
     blackMs,
     activeColor,
-    setupComplete: setupFlags,
+    setupComplete: finalSetupFlags,
     lastTimestamp: lastTs,
     referenceTimestamp,
     tickingWhite,
