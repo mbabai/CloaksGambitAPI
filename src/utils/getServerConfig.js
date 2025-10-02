@@ -142,11 +142,15 @@ async function loadServerConfigFromDatabase() {
 
     const rawWins = ranked.WIN_SCORE;
     let rankedWins = toNumber(rawWins);
+    const defaultRankedWins = DEFAULT_CONFIG.gameModeSettings.RANKED.WIN_SCORE;
     if (!(rankedWins > 0)) {
-      rankedWins = DEFAULT_CONFIG.gameModeSettings.RANKED.WIN_SCORE;
+      rankedWins = defaultRankedWins;
     }
     if (LEGACY_RANKED_WIN_SCORE.has(rawWins) || LEGACY_RANKED_WIN_SCORE.has(rankedWins)) {
-      rankedWins = DEFAULT_CONFIG.gameModeSettings.RANKED.WIN_SCORE;
+      rankedWins = defaultRankedWins;
+    }
+    if (rankedWins !== defaultRankedWins) {
+      rankedWins = defaultRankedWins;
     }
     if (toNumber(rawWins) !== rankedWins || typeof rawWins !== 'number') {
       ranked.WIN_SCORE = rankedWins;
