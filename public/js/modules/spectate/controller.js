@@ -397,19 +397,9 @@ export function createSpectateController(options) {
     const match = snapshot?.match;
     if (!match) return;
     if (match.isActive === false) {
-      const winnerId = match.winnerId || match.winner || match.winner?._id;
-      const winner = resolveSpectatePlayer(snapshot, winnerId, 'Winner');
-      const p1Score = Number(match.player1Score || 0);
-      const p2Score = Number(match.player2Score || 0);
-      const draws = Number(match.drawCount || 0);
-      const parts = [`${winner.name} wins the match ${p1Score}-${p2Score}`];
-      if (draws > 0) {
-        parts.push(`with ${draws} draw${draws === 1 ? '' : 's'}`);
-      }
-      bannerEl.textContent = parts.join(' ');
-      bannerEl.classList.add('spectate-banner--success');
-      bannerEl.hidden = false;
-    } else if (snapshot?.game && snapshot.game.isActive === false) {
+      return;
+    }
+    if (snapshot?.game && snapshot.game.isActive === false) {
       bannerEl.textContent = 'Awaiting the next game in this match…';
       bannerEl.classList.add('spectate-banner--info');
       bannerEl.hidden = false;
@@ -457,6 +447,18 @@ export function createSpectateController(options) {
       return;
     }
     try {
+      if (spectateGameBannerOverlay.element) {
+        spectateGameBannerOverlay.element.style.pointerEvents = '';
+      }
+      if (spectateGameBannerOverlay.backdrop) {
+        spectateGameBannerOverlay.backdrop.style.pointerEvents = '';
+      }
+      if (spectateGameBannerOverlay.dialog) {
+        spectateGameBannerOverlay.dialog.style.pointerEvents = '';
+      }
+      if (spectateGameBannerOverlay.content) {
+        spectateGameBannerOverlay.content.style.pointerEvents = '';
+      }
       if (spectateGameBannerOverlay.content) {
         spectateGameBannerOverlay.content.innerHTML = '';
       }
@@ -474,9 +476,16 @@ export function createSpectateController(options) {
     const overlay = ensureSpectateGameBannerOverlay();
     if (!overlay) return;
     const { content, dialog } = overlay;
+    if (overlay.element) {
+      overlay.element.style.pointerEvents = 'none';
+    }
+    if (overlay.backdrop) {
+      overlay.backdrop.style.pointerEvents = 'none';
+    }
     if (dialog) {
       dialog.style.alignItems = 'center';
       dialog.style.justifyContent = 'flex-end';
+      dialog.style.pointerEvents = 'none';
     }
     if (content) {
       content.innerHTML = '';
@@ -484,6 +493,7 @@ export function createSpectateController(options) {
       content.style.justifyContent = 'flex-end';
       content.style.width = '100%';
       content.style.minHeight = '100%';
+      content.style.pointerEvents = 'none';
     }
 
     const match = snapshot.match || {};
@@ -520,6 +530,7 @@ export function createSpectateController(options) {
     card.style.boxShadow = '0 10px 30px var(--CG-black)';
     card.style.textAlign = 'center';
     card.style.position = 'relative';
+    card.style.pointerEvents = 'auto';
 
     const title = document.createElement('div');
     if (isDraw) {

@@ -138,9 +138,35 @@ async function buildSpectateSnapshot(matchId) {
   const match = await Match.findById(normalizedId).lean();
   if (!match) return null;
 
-  const latestGame = await Game.findOne({ match: normalizedId })
-    .sort({ createdAt: -1, startTime: -1, _id: -1 })
-    .lean();
+  const [activeGame, finishedGame] = await Promise.all([
+    Game.findOne({ match: normalizedId, isActive: true })
+      .sort({ startTime: -1, createdAt: -1, _id: -1 })
+      .lean(),
+    Game.findOne({ match: normalizedId, isActive: false })
+      .sort({ endTime: -1, createdAt: -1, _id: -1 })
+      .lean(),
+  ]);
+
+  const normalizeTime = (value) => {
+    if (!value) return 0;
+    const ts = new Date(value).getTime();
+    return Number.isFinite(ts) ? ts : 0;
+  };
+
+  let latestGame = null;
+  if (activeGame && finishedGame) {
+    const activeStart = normalizeTime(activeGame.startTime);
+    const finishedEnd = normalizeTime(finishedGame.endTime);
+    latestGame = activeStart >= finishedEnd ? activeGame : finishedGame;
+  } else {
+    latestGame = activeGame || finishedGame;
+  }
+
+  if (!latestGame) {
+    latestGame = await Game.findOne({ match: normalizedId })
+      .sort({ createdAt: -1, _id: -1 })
+      .lean();
+  }
 
   let gamePayload = null;
   let clocks = { whiteMs: 0, blackMs: 0, activeColor: null, label: null };
