@@ -10,6 +10,7 @@ const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
 const lobbyStore = require('./state/lobby');
 const { buildSpectateSnapshot } = require('./utils/spectatorSnapshot');
+const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/activeMatches');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -464,8 +465,86 @@ function initSocket(httpServer) {
     cleanupMatchTracking(matchId);
   }
 
+  const defaultNamespace = io.of('/');
   // Admin namespace for dashboard metrics
   const adminNamespace = io.of('/admin');
+
+  function getRoomSize(adapter, roomName) {
+    if (!adapter || !roomName) return 0;
+    const { rooms } = adapter;
+    if (!rooms) return 0;
+    if (typeof rooms.get === 'function') {
+      const room = rooms.get(roomName);
+      return room && typeof room.size === 'number' ? room.size : 0;
+    }
+    const room = rooms[roomName];
+    if (!room) return 0;
+    if (typeof room.size === 'number') return room.size;
+    if (typeof room.length === 'number') return room.length;
+    if (typeof room === 'object') {
+      return Object.keys(room).length;
+    }
+    return 0;
+  }
+
+  function emitSpectateEvent(roomName, event, payload) {
+    if (!roomName || !event) return;
+    try {
+      defaultNamespace.to(roomName).emit(event, payload);
+    } catch (err) {
+      console.error(`Error emitting ${event} to default spectate room:`, err);
+    }
+    try {
+      adminNamespace.to(roomName).emit(event, payload);
+    } catch (err) {
+      console.error(`Error emitting ${event} to admin spectate room:`, err);
+    }
+  }
+
+  async function joinSpectateRoom(socket, payload = {}) {
+    const matchId = payload.matchId || payload.id;
+    const id = toId(matchId);
+    if (!id) {
+      socket.emit('spectate:error', { matchId: null, message: 'matchId is required' });
+      return;
+    }
+
+    const roomName = `spectate:${id}`;
+    try {
+      socket.join(roomName);
+      if (socket.data && socket.data.spectating && typeof socket.data.spectating.add === 'function') {
+        socket.data.spectating.add(id);
+      }
+      const snapshot = await buildSpectateSnapshot(id);
+      if (!snapshot) {
+        socket.emit('spectate:error', { matchId: id, message: 'Match not found' });
+        socket.leave(roomName);
+        if (socket.data && socket.data.spectating && typeof socket.data.spectating.delete === 'function') {
+          socket.data.spectating.delete(id);
+        }
+        return;
+      }
+      socket.emit('spectate:snapshot', snapshot);
+    } catch (err) {
+      console.error('Error handling spectate:join:', err);
+      socket.emit('spectate:error', { matchId: id, message: 'Failed to load match' });
+      socket.leave(roomName);
+      if (socket.data && socket.data.spectating && typeof socket.data.spectating.delete === 'function') {
+        socket.data.spectating.delete(id);
+      }
+    }
+  }
+
+  function leaveSpectateRoom(socket, payload = {}) {
+    const matchId = payload.matchId || payload.id;
+    const id = toId(matchId);
+    if (!id) return;
+    const roomName = `spectate:${id}`;
+    socket.leave(roomName);
+    if (socket.data && socket.data.spectating && typeof socket.data.spectating.delete === 'function') {
+      socket.data.spectating.delete(id);
+    }
+  }
 
   const lobbyState = lobbyStore.getState();
 
@@ -527,86 +606,25 @@ function initSocket(httpServer) {
     }
   });
 
-  const resolveMatchType = (source = {}) => {
-    const candidates = [
-      source.type,
-      source.matchType,
-      source.mode,
-      source.matchMode,
-      source.gameMode,
-      source?.settings?.type,
-      source?.settings?.mode,
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate.trim().toUpperCase();
-      }
-    }
-    return null;
-  };
-
-  const toScore = (value, fallback = 0) => {
-    if (value === undefined || value === null) return fallback;
-    const num = Number(value);
-    return Number.isFinite(num) ? num : fallback;
-  };
-
-  const resolveScore = (fallback, ...values) => {
-    const candidates = [];
-    for (const value of values) {
-      if (value === undefined || value === null) continue;
-      if (typeof value === 'object') {
-        if ('wins' in value) {
-          const parsed = toScore(value.wins, null);
-          if (parsed !== null) candidates.push(parsed);
-        }
-        if ('count' in value) {
-          const parsed = toScore(value.count, null);
-          if (parsed !== null) candidates.push(parsed);
-        }
-        if ('value' in value) {
-          const parsed = toScore(value.value, null);
-          if (parsed !== null) candidates.push(parsed);
-        }
-      }
-      const parsed = toScore(value, null);
-      if (parsed !== null) candidates.push(parsed);
-    }
-    if (candidates.length === 0) return fallback;
-    return Math.max(...candidates);
-  };
-
   async function emitSpectateUpdate(matchId) {
     const id = toId(matchId);
     if (!id) return;
     const roomName = `spectate:${id}`;
-    const rooms = adminNamespace?.adapter?.rooms;
-    let hasListeners = false;
-    if (rooms) {
-      if (typeof rooms.get === 'function') {
-        const room = rooms.get(roomName);
-        hasListeners = Boolean(room && room.size > 0);
-      } else if (rooms[roomName]) {
-        const clientsInRoom = rooms[roomName];
-        if (clientsInRoom && typeof clientsInRoom.size === 'number') {
-          hasListeners = clientsInRoom.size > 0;
-        } else {
-          hasListeners = true;
-        }
-      }
-    }
+    const hasListeners =
+      getRoomSize(defaultNamespace?.adapter, roomName) > 0 ||
+      getRoomSize(adminNamespace?.adapter, roomName) > 0;
     if (!hasListeners) return;
 
     try {
       const snapshot = await buildSpectateSnapshot(id);
       if (!snapshot) {
-        adminNamespace.to(roomName).emit('spectate:error', {
+        emitSpectateEvent(roomName, 'spectate:error', {
           matchId: id,
           message: 'Match not found',
         });
         return;
       }
-      adminNamespace.to(roomName).emit('spectate:update', snapshot);
+      emitSpectateEvent(roomName, 'spectate:update', snapshot);
     } catch (err) {
       console.error('Error emitting spectate update:', err);
     }
@@ -614,23 +632,7 @@ function initSocket(httpServer) {
 
   function buildAdminMatchPayload(payload = {}) {
     try {
-      const matchId = toId(payload.matchId || payload.id || payload._id);
-      if (!matchId) return null;
-      const players = Array.isArray(payload.players)
-        ? payload.players.map((id) => toId(id)).filter(Boolean)
-        : [];
-      const normalized = {
-        id: matchId,
-        type: resolveMatchType(payload),
-        players,
-        player1Score: resolveScore(0, payload.player1Score, payload.player1_score, payload.scores?.[0], payload.scores?.player1, payload.results?.player1?.wins),
-        player2Score: resolveScore(0, payload.player2Score, payload.player2_score, payload.scores?.[1], payload.scores?.player2, payload.results?.player2?.wins),
-        drawCount: resolveScore(0, payload.drawCount, payload.draws, payload.scores?.[2], payload.scores?.draws, payload.results?.draws),
-      };
-      if (payload.isActive !== undefined) {
-        normalized.isActive = Boolean(payload.isActive);
-      }
-      return normalized;
+      return normalizeActiveMatch(payload);
     } catch (err) {
       console.error('Error normalizing admin match payload:', err);
       return null;
@@ -863,6 +865,9 @@ function initSocket(httpServer) {
     socket.emit('user:init', { userId, username: userInfo.username, guest: userInfo.isGuest });
     console.log('Client connected', socket.id);
 
+    socket.data = socket.data || {};
+    socket.data.spectating = new Set();
+
     // Emit updated metrics to admin dashboard on new connection
     emitAdminMetrics();
 
@@ -924,6 +929,14 @@ function initSocket(httpServer) {
       const nextName = typeof payload === 'string' ? payload : payload.username;
       if (typeof nextName !== 'string') return;
       setConnectedUsername(userId, nextName);
+    });
+
+    socket.on('spectate:join', (payload = {}) => {
+      joinSpectateRoom(socket, payload);
+    });
+
+    socket.on('spectate:leave', (payload = {}) => {
+      leaveSpectateRoom(socket, payload);
     });
 
     socket.on('custom:invite', async (payload) => {
@@ -1047,6 +1060,9 @@ function initSocket(httpServer) {
 
     socket.on('disconnect', async () => {
       console.log('Client disconnected', socket.id);
+      if (socket.data?.spectating) {
+        socket.data.spectating.clear();
+      }
       if (userId) {
         const current = clients.get(userId);
         const isCurrent = !current || current.id === socket.id;
@@ -1085,49 +1101,17 @@ function initSocket(httpServer) {
     socket.data = socket.data || {};
     socket.data.spectating = new Set();
 
-    socket.on('spectate:join', async (payload = {}) => {
-      try {
-        const matchId = payload.matchId || payload.id;
-        const id = toId(matchId);
-        if (!id) {
-          socket.emit('spectate:error', { matchId: null, message: 'matchId is required' });
-          return;
-        }
-        const roomName = `spectate:${id}`;
-        socket.join(roomName);
-        socket.data.spectating.add(id);
-        const snapshot = await buildSpectateSnapshot(id);
-        if (!snapshot) {
-          socket.emit('spectate:error', { matchId: id, message: 'Match not found' });
-          socket.leave(roomName);
-          socket.data.spectating.delete(id);
-          return;
-        }
-        socket.emit('spectate:snapshot', snapshot);
-      } catch (err) {
-        console.error('Error handling spectate:join:', err);
-        const matchId = payload?.matchId ? toId(payload.matchId) : null;
-        socket.emit('spectate:error', { matchId, message: 'Failed to load match' });
-      }
+    socket.on('spectate:join', (payload = {}) => {
+      joinSpectateRoom(socket, payload);
     });
 
     socket.on('spectate:leave', (payload = {}) => {
-      const matchId = payload.matchId || payload.id;
-      const id = toId(matchId);
-      if (!id) return;
-      const roomName = `spectate:${id}`;
-      socket.leave(roomName);
-      if (socket.data?.spectating) {
-        socket.data.spectating.delete(id);
-      }
+      leaveSpectateRoom(socket, payload);
     });
 
     socket.on('disconnect', () => {
       console.log('Admin disconnected', socket.id);
       if (socket.data?.spectating) {
-        socket.data.spectating.forEach((id) => {
-          socket.leave(`spectate:${id}`);
-        });
         socket.data.spectating.clear();
       }
     });
@@ -1151,18 +1135,8 @@ function initSocket(httpServer) {
       }
 
       try {
-        const Match = require('./models/Match');
-        const activeMatches = await Match.find({ isActive: true })
-          .select('player1 player2 _id type player1Score player2Score drawCount')
-          .lean();
-        matchesList = activeMatches.map((m) => ({
-          id: m._id.toString(),
-          type: resolveMatchType(m),
-          players: [m.player1?.toString(), m.player2?.toString()].filter(Boolean),
-          player1Score: resolveScore(0, m.player1Score, m.player1_score, m.scores?.[0], m.scores?.player1, m.results?.player1?.wins),
-          player2Score: resolveScore(0, m.player2Score, m.player2_score, m.scores?.[1], m.scores?.player2, m.results?.player2?.wins),
-          drawCount: resolveScore(0, m.drawCount, m.draws, m.scores?.[2], m.scores?.draws, m.results?.draws),
-        }));
+        const results = await fetchMatchList({ status: 'active' });
+        matchesList = Array.isArray(results) ? results : [];
       } catch (err) {
         console.error('Error fetching active matches for admin metrics:', err);
       }

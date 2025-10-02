@@ -1,17 +1,10 @@
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
-import { renderBars } from '/js/modules/render/bars.js';
-import { createBoardView } from '/js/modules/components/boardView.js';
-import { computeBoardMetrics } from '/js/modules/layout.js';
-import { PIECE_IMAGES, ACTIONS, WIN_REASONS } from '/js/modules/constants.js';
-import { formatClock, describeTimeControl } from '/js/modules/utils/timeControl.js';
-import { computeGameClockState } from '/js/modules/utils/clockState.js';
 import { getCookie } from '/js/modules/utils/cookies.js';
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
-import { getBubbleAsset } from '/js/modules/ui/icons.js';
-import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
-import { createOverlay } from '/js/modules/ui/overlays.js';
+import { createSpectateController } from '/js/modules/spectate/controller.js';
+import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/spectate/activeMatches.js';
 
 (function () {
   preloadAssets();
@@ -96,20 +89,6 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
   const spectateMetaEl = document.getElementById('spectateMeta');
   const spectateCloseBtn = document.getElementById('spectateCloseBtn');
 
-  const spectateRefs = { boardCells: [], activeBubbles: [] };
-  let spectateGameBannerOverlay = null;
-  const spectateBoardView = spectateBoardEl
-    ? createBoardView({
-        container: spectateBoardEl,
-        identityMap: PIECE_IMAGES,
-        refs: spectateRefs,
-        alwaysAttachGameRefs: true
-      })
-    : null;
-  if (spectateBoardView) {
-    spectateBoardView.setReadOnly(true);
-  }
-
   const historyMatchesListEl = document.getElementById('historyMatchesList');
   const historyFilterButtons = Array.from(document.querySelectorAll('[data-history-filter]'));
   const historySummaryEls = {
@@ -132,7 +111,8 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
   };
 
   const usernameMap = {};
-  const activeMatchesState = new Map();
+  const activeMatchesStore = createActiveMatchesStore();
+  activeMatchesStore.subscribe(handleActiveMatchesChange);
   let latestMetrics = null;
   let historyMatches = [];
   let historyGames = [];
@@ -141,189 +121,6 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
   let historyLoaded = false;
   let isFetchingHistory = false;
   const historyGamesByMatch = new Map();
-
-  const spectateState = {
-    matchId: null,
-    data: null,
-    loading: false,
-    resizeHandler: null,
-    clockTimer: null,
-    clockBase: null,
-    clockDisplay: { whiteMs: 0, blackMs: 0, label: null },
-    clockRefs: { top: null, bottom: null },
-    lastBoardGame: null,
-    lastCompletedGame: null
-  };
-
-  const confirmModal = createConfirmationModal();
-
-  function stopSpectateClockTimer() {
-    if (spectateState.clockTimer) {
-      clearInterval(spectateState.clockTimer);
-      spectateState.clockTimer = null;
-    }
-  }
-
-  function updateSpectateClockElements() {
-    const topEl = spectateState.clockRefs?.top;
-    const bottomEl = spectateState.clockRefs?.bottom;
-    const display = spectateState.clockDisplay || { whiteMs: 0, blackMs: 0 };
-    if (topEl) {
-      topEl.textContent = formatClock(display.blackMs || 0);
-    }
-    if (bottomEl) {
-      bottomEl.textContent = formatClock(display.whiteMs || 0);
-    }
-  }
-
-  function updateSpectateClockDisplay() {
-    const base = spectateState.clockBase;
-    if (!base) {
-      spectateState.clockDisplay = { whiteMs: 0, blackMs: 0, label: null };
-      updateSpectateClockElements();
-      return;
-    }
-    const now = Date.now();
-    const elapsed = Math.max(0, now - base.receivedAt);
-    let white = base.whiteMs;
-    let black = base.blackMs;
-    if (base.tickingWhite) {
-      white -= elapsed;
-    }
-    if (base.tickingBlack) {
-      black -= elapsed;
-    }
-    spectateState.clockDisplay = {
-      whiteMs: Math.max(0, Math.round(white)),
-      blackMs: Math.max(0, Math.round(black)),
-      label: base.label || null,
-    };
-    updateSpectateClockElements();
-  }
-
-  function resetSpectateClockState() {
-    stopSpectateClockTimer();
-    spectateState.clockBase = null;
-    spectateState.clockDisplay = { whiteMs: 0, blackMs: 0, label: null };
-    updateSpectateClockElements();
-  }
-
-  function syncSpectateClocks(snapshot) {
-    const game = snapshot?.game || null;
-    if (!game) {
-      resetSpectateClockState();
-      return;
-    }
-
-    const baseTime = Number(game.timeControlStart);
-    if (!Number.isFinite(baseTime) || baseTime <= 0) {
-      resetSpectateClockState();
-      return;
-    }
-
-    const matchActive = snapshot?.match?.isActive !== false;
-    const now = Date.now();
-    const computed = computeGameClockState({
-      baseTime,
-      increment: game.increment,
-      startTime: game.startTime,
-      endTime: game.endTime,
-      actions: game.actions,
-      setupComplete: game.setupComplete,
-      playerTurn: game.playerTurn ?? snapshot?.clocks?.activeColor,
-      isActive: Boolean(game.isActive && matchActive),
-      now,
-    });
-
-    const setupFlags = Array.isArray(computed.setupComplete)
-      ? computed.setupComplete
-      : [false, false];
-    const whiteSetupComplete = setupFlags[0] ?? false;
-    const blackSetupComplete = setupFlags[1] ?? false;
-    const bothSetupComplete = whiteSetupComplete && blackSetupComplete;
-    const clocksActive = Boolean(game.isActive && matchActive);
-    const tickWhite = clocksActive && (bothSetupComplete ? computed.activeColor === 0 : !whiteSetupComplete);
-    const tickBlack = clocksActive && (bothSetupComplete ? computed.activeColor === 1 : !blackSetupComplete);
-
-    const whiteMs = Number.isFinite(computed.whiteMs) ? computed.whiteMs : 0;
-    const blackMs = Number.isFinite(computed.blackMs) ? computed.blackMs : 0;
-    const label = snapshot?.clocks?.label
-      || describeTimeControl(game.timeControlStart, game.increment)
-      || null;
-
-    spectateState.clockBase = {
-      whiteMs,
-      blackMs,
-      activeColor: computed.activeColor,
-      label,
-      receivedAt: now,
-      tickingWhite: tickWhite,
-      tickingBlack: tickBlack,
-    };
-    updateSpectateClockDisplay();
-    stopSpectateClockTimer();
-    if (tickWhite || tickBlack) {
-      spectateState.clockTimer = setInterval(updateSpectateClockDisplay, 200);
-    }
-  }
-
-  function clearSpectateBubbles() {
-    if (!Array.isArray(spectateRefs.activeBubbles)) {
-      spectateRefs.activeBubbles = [];
-      return;
-    }
-    spectateRefs.activeBubbles.forEach((img) => {
-      try {
-        if (img && img.parentNode) {
-          img.parentNode.removeChild(img);
-        }
-      } catch (_) {}
-    });
-    spectateRefs.activeBubbles = [];
-  }
-
-  function makeSpectateBubbleImg(type, squareSize) {
-    const src = getBubbleAsset(type);
-    if (!src) return null;
-    const img = document.createElement('img');
-    img.dataset.bubble = '1';
-    img.dataset.bubbleType = type;
-    img.draggable = false;
-    img.style.position = 'absolute';
-    img.style.pointerEvents = 'none';
-    img.style.zIndex = '1001';
-    const size = Math.max(0, Math.floor(squareSize * 1.08));
-    img.style.width = `${size}px`;
-    img.style.height = 'auto';
-    const offsetX = Math.floor(squareSize * 0.6);
-    const offsetY = Math.floor(squareSize * 0.5);
-    if (typeof type === 'string' && type.endsWith('Right')) {
-      img.style.right = `${-offsetX}px`;
-      img.style.left = 'auto';
-    } else {
-      img.style.left = `${-offsetX}px`;
-      img.style.right = 'auto';
-    }
-    img.style.top = `${-offsetY}px`;
-    img.src = src;
-    img.alt = '';
-    return img;
-  }
-
-  function applySpectateMoveOverlay(squareSize, overlay) {
-    if (!spectateRefs.boardCells) return;
-    clearSpectateBubbles();
-    if (!overlay) return;
-    const cellRef = spectateRefs.boardCells?.[overlay.uiR]?.[overlay.uiC];
-    if (!cellRef || !cellRef.el) return;
-    overlay.types.forEach((type) => {
-      const img = makeSpectateBubbleImg(type, squareSize);
-      if (!img) return;
-      try { cellRef.el.style.position = 'relative'; } catch (_) {}
-      cellRef.el.appendChild(img);
-      spectateRefs.activeBubbles.push(img);
-    });
-  }
 
   function getUsername(id) {
     if (!id) return 'Unknown';
@@ -520,1099 +317,57 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       actionCells.push(actionEl);
       frag.appendChild(row);
     });
-    targetEl.appendChild(frag);
-    let eloWidth = 0;
-    let matchWidth = 0;
-    let connWidth = 0;
-    let actionWidth = 0;
-    eloCells.forEach(cell => {
-      eloWidth = Math.max(eloWidth, Math.ceil(cell.getBoundingClientRect().width));
-    });
-    matchCells.forEach(cell => {
-      matchWidth = Math.max(matchWidth, Math.ceil(cell.getBoundingClientRect().width));
-    });
-    connCells.forEach(cell => {
-      connWidth = Math.max(connWidth, Math.ceil(cell.getBoundingClientRect().width));
-    });
-    actionCells.forEach(cell => {
-      actionWidth = Math.max(actionWidth, Math.ceil(cell.getBoundingClientRect().width));
-    });
-    const setColumnWidth = (cells, width) => {
-      if (!width) return;
-      cells.forEach(cell => {
-        cell.style.flex = `0 0 ${width}px`;
-        cell.style.maxWidth = `${width}px`;
-        cell.style.minWidth = `${width}px`;
-      });
-    };
-    setColumnWidth(eloCells, eloWidth);
-    setColumnWidth(matchCells, matchWidth);
-    setColumnWidth(connCells, connWidth);
-    setColumnWidth(actionCells, actionWidth);
-  }
-
-  async function requestUserDeletion(user) {
-    if (!user) return;
-    const normalizedId = normalizeId(user.id || user.userId || user);
-    if (!normalizedId) {
-      alert('Unable to delete user: missing identifier.');
-      return;
-    }
-
-    const username = typeof user.username === 'string' && user.username.trim()
-      ? user.username.trim()
-      : getUsername(normalizedId);
-
-    const confirmed = await confirmModal.show({
-      title: 'Delete Account',
-      message: `Delete account "${username}"? This cannot be undone.`,
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
-    });
-
-    if (!confirmed) return;
-
-    try {
-      const res = await authFetch('/api/v1/users/delete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
-        },
-        body: JSON.stringify({ userId: normalizedId })
-      });
-
-      if (!res.ok) {
-        let errorMessage = 'Failed to delete user account.';
-        try {
-          const errorData = await res.json();
-          if (errorData && typeof errorData.message === 'string') {
-            errorMessage = errorData.message;
-          }
-        } catch (err) {
-          // ignore JSON parse errors
-        }
-        alert(`${errorMessage} (status ${res.status})`);
-        return;
-      }
-
-      alert(`Account for "${username}" deleted successfully.`);
-    } catch (err) {
-      console.error('Error deleting user account:', err);
-      alert('Error deleting user account. Check console for details.');
-    } finally {
-      fetchAllUsers();
-    }
-  }
-
-  function createConfirmationModal() {
-    const overlay = document.createElement('div');
-    overlay.className = 'admin-modal-overlay';
-    overlay.hidden = true;
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
-
-    const dialog = document.createElement('div');
-    dialog.className = 'admin-modal';
-
-    const titleEl = document.createElement('h3');
-    titleEl.className = 'admin-modal-title';
-    titleEl.textContent = 'Confirm Action';
-
-    const messageEl = document.createElement('p');
-    messageEl.className = 'admin-modal-message';
-    messageEl.textContent = '';
-
-    const actionsEl = document.createElement('div');
-    actionsEl.className = 'admin-modal-actions';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'admin-modal-button';
-    cancelBtn.textContent = 'Cancel';
-
-    const confirmBtn = document.createElement('button');
-    confirmBtn.type = 'button';
-    confirmBtn.className = 'admin-modal-button admin-modal-button--danger';
-    confirmBtn.textContent = 'Confirm';
-
-    actionsEl.appendChild(cancelBtn);
-    actionsEl.appendChild(confirmBtn);
-
-    dialog.appendChild(titleEl);
-    dialog.appendChild(messageEl);
-    dialog.appendChild(actionsEl);
-
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-
-    let resolver = null;
-    let lastActiveElement = null;
-
-    function close(result) {
-      if (overlay.hidden) return;
-      overlay.hidden = true;
-      overlay.setAttribute('aria-hidden', 'true');
-      document.removeEventListener('keydown', handleKeyDown, true);
-      if (typeof resolver === 'function') {
-        resolver(result);
-      }
-      resolver = null;
-      if (lastActiveElement && typeof lastActiveElement.focus === 'function') {
-        lastActiveElement.focus();
-      }
-      lastActiveElement = null;
-    }
-
-    function handleKeyDown(event) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        close(false);
-      }
-    }
-
-    cancelBtn.addEventListener('click', () => close(false));
-    confirmBtn.addEventListener('click', () => close(true));
-    overlay.addEventListener('click', event => {
-      if (event.target === overlay) {
-        close(false);
-      }
-    });
-
-    return {
-      show(options = {}) {
-        const { title, message, confirmText, cancelText } = options;
-        if (typeof title === 'string' && title.trim()) {
-          titleEl.textContent = title.trim();
-        } else {
-          titleEl.textContent = 'Confirm Action';
-        }
-        if (typeof message === 'string' && message.trim()) {
-          messageEl.textContent = message.trim();
-        } else {
-          messageEl.textContent = 'Are you sure?';
-        }
-        if (typeof confirmText === 'string' && confirmText.trim()) {
-          confirmBtn.textContent = confirmText.trim();
-        } else {
-          confirmBtn.textContent = 'Confirm';
-        }
-        if (typeof cancelText === 'string' && cancelText.trim()) {
-          cancelBtn.textContent = cancelText.trim();
-        } else {
-          cancelBtn.textContent = 'Cancel';
-        }
-
-        overlay.hidden = false;
-        overlay.removeAttribute('aria-hidden');
-        lastActiveElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        document.addEventListener('keydown', handleKeyDown, true);
-
-        setTimeout(() => {
-          confirmBtn.focus();
-        }, 0);
-
-        return new Promise(resolve => {
-          resolver = resolve;
-        });
-      }
-    };
-  }
-
-  async function fetchAllUsers() {
-    if (!usersListEl) return;
-    try {
-      const res = await authFetch('/api/v1/users/getList', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-      });
-      if (!res.ok) {
-        console.error('Failed to fetch user accounts:', res.status);
-        return;
-      }
-      const data = await res.json();
-      const users = [];
-      if (Array.isArray(data)) {
-        data.forEach(u => {
-          const id = u._id ? u._id.toString() : '';
-          if (!id) return;
-          const username = u.username || 'Unknown';
-          const numericElo = Number(u.elo);
-          const elo = Number.isFinite(numericElo) ? numericElo : null;
-          usernameMap[id] = username;
-          users.push({ id, username, elo });
-        });
-      }
-      renderUsersList(
-        usersListEl,
-        users,
-        latestMetrics ? latestMetrics.connectedUserIds : [],
-        latestMetrics ? latestMetrics.matches : []
-      );
-      if (latestMetrics) {
-        renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
-        renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
-        renderActiveMatchesFromState();
-      }
-      if (historyLoaded) {
-        renderHistoryList();
-      }
-    } catch (err) {
-      console.error('Error fetching user accounts:', err);
-    }
-  }
-
-  function normalizeScoreValue(value) {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric : 0;
-  }
-
-  function resolveMatchType(source) {
-    if (!source) return null;
-    const candidates = [
-      source.type,
-      source.matchType,
-      source.mode,
-      source.matchMode,
-      source.gameMode,
-      source?.settings?.type,
-      source?.settings?.mode,
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate.trim().toUpperCase();
-      }
-    }
-    return null;
-  }
-
-  function resolveScoreValue(...values) {
-    const candidates = [];
-    values.forEach(value => {
-      if (value === undefined || value === null) return;
-      if (typeof value === 'object') {
-        if ('wins' in value) {
-          const parsed = normalizeScoreValue(value.wins);
-          if (Number.isFinite(parsed)) candidates.push(parsed);
-        }
-        if ('count' in value) {
-          const parsed = normalizeScoreValue(value.count);
-          if (Number.isFinite(parsed)) candidates.push(parsed);
-        }
-        if ('value' in value) {
-          const parsed = normalizeScoreValue(value.value);
-          if (Number.isFinite(parsed)) candidates.push(parsed);
-        }
-      }
-      const parsed = normalizeScoreValue(value);
-      if (Number.isFinite(parsed)) candidates.push(parsed);
-    });
-    if (candidates.length === 0) return null;
-    return Math.max(...candidates);
-  }
-
-  function normalizeActiveMatchRecord(match) {
-    if (!match) return null;
-    const id = normalizeId(match.id || match._id || match.matchId);
-    if (!id) return null;
-    const primaryPlayers = Array.isArray(match.players)
-      ? match.players.map(playerId => normalizeId(playerId)).filter(Boolean)
-      : [];
-    const fallbackPlayers = [match.player1, match.player2]
-      .map(playerId => normalizeId(playerId))
-      .filter(Boolean);
-    const players = primaryPlayers.length > 0 ? primaryPlayers : fallbackPlayers;
-    const normalized = {
-      id,
-      type: resolveMatchType(match),
-      players,
-      player1Score: resolveScoreValue(
-        match.player1Score,
-        match.player1_score,
-        match.scores?.[0],
-        match.scores?.player1,
-        match.results?.player1?.wins,
-      ),
-      player2Score: resolveScoreValue(
-        match.player2Score,
-        match.player2_score,
-        match.scores?.[1],
-        match.scores?.player2,
-        match.results?.player2?.wins,
-      ),
-      drawCount: resolveScoreValue(
-        match.drawCount,
-        match.draws,
-        match.scores?.[2],
-        match.scores?.draws,
-        match.results?.draws,
-      ),
-    };
-    if (match.isActive !== undefined) {
-      normalized.isActive = Boolean(match.isActive);
-    }
-    return normalized;
-  }
-
-  function updateLatestMetricsMatches() {
-    if (latestMetrics) {
-      latestMetrics.matches = Array.from(activeMatchesState.values());
-    }
-  }
-
-  function replaceActiveMatches(matches) {
-    activeMatchesState.clear();
-    if (Array.isArray(matches)) {
-      matches.forEach(item => {
-        const normalized = normalizeActiveMatchRecord(item);
-        if (!normalized || normalized.isActive === false) return;
-        activeMatchesState.set(normalized.id, {
-          id: normalized.id,
-          type: normalized.type,
-          players: normalized.players,
-          player1Score: Number.isFinite(normalized.player1Score) ? normalized.player1Score : 0,
-          player2Score: Number.isFinite(normalized.player2Score) ? normalized.player2Score : 0,
-          drawCount: Number.isFinite(normalized.drawCount) ? normalized.drawCount : 0,
-        });
-      });
-    }
-    updateLatestMetricsMatches();
-  }
-
-  function applyActiveMatchUpdate(match) {
-    const normalized = normalizeActiveMatchRecord(match);
-    if (!normalized) return false;
-    const existing = activeMatchesState.get(normalized.id);
-    if (normalized.isActive === false) {
-      const removed = activeMatchesState.delete(normalized.id);
-      if (removed) updateLatestMetricsMatches();
-      return removed;
-    }
-    const next = {
-      id: normalized.id,
-      type: normalized.type || existing?.type || null,
-      players: normalized.players.length > 0 ? normalized.players : (existing?.players || []),
-      player1Score: Number.isFinite(normalized.player1Score)
-        ? normalized.player1Score
-        : (existing?.player1Score ?? 0),
-      player2Score: Number.isFinite(normalized.player2Score)
-        ? normalized.player2Score
-        : (existing?.player2Score ?? 0),
-      drawCount: Number.isFinite(normalized.drawCount)
-        ? normalized.drawCount
-        : (existing?.drawCount ?? 0),
-    };
-    const changed =
-      !existing
-      || existing.type !== next.type
-      || existing.player1Score !== next.player1Score
-      || existing.player2Score !== next.player2Score
-      || existing.drawCount !== next.drawCount
-      || existing.players.length !== next.players.length
-      || existing.players.some((value, idx) => value !== next.players[idx]);
-    if (changed || !existing) {
-      activeMatchesState.set(next.id, next);
-      updateLatestMetricsMatches();
-      return true;
-    }
-    return false;
-  }
-
-  function renderActiveMatchesFromState() {
-    renderActiveMatchesList(matchesListEl, Array.from(activeMatchesState.values()));
-  }
-
-  function formatMatchTypeLabel(type) {
-    if (!type) return 'Match';
-    const upper = String(type).trim().toUpperCase();
-    if (upper === 'RANKED') return 'Ranked';
-    if (upper === 'QUICKPLAY') return 'Quickplay';
-    if (upper === 'CUSTOM') return 'Custom';
-    return `${String(type).charAt(0).toUpperCase()}${String(type).slice(1).toLowerCase()}`;
-  }
-
-  function renderActiveMatchesList(targetEl, items) {
-    if (!targetEl) return;
-    targetEl.innerHTML = '';
-    if (!Array.isArray(items) || items.length === 0) return;
-
-    const frag = document.createDocumentFragment();
-
-    items.forEach(item => {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.style.display = 'flex';
-      row.style.alignItems = 'center';
-      row.style.gap = '12px';
-
-      const typePill = document.createElement('span');
-      typePill.className = 'matchTypePill';
-      typePill.textContent = formatMatchTypeLabel(item?.type);
-      row.appendChild(typePill);
-
-      const players = Array.isArray(item?.players) ? item.players : [];
-      const player1Id = players[0] || null;
-      const player2Id = players[1] || null;
-      const player1Name = getUsername(player1Id);
-      const player2Name = getUsername(player2Id);
-
-      const player1Score = normalizeScoreValue(item?.player1Score);
-      const player2Score = normalizeScoreValue(item?.player2Score);
-      const drawCount = normalizeScoreValue(item?.drawCount);
-
-      const scoreLine = document.createElement('div');
-      scoreLine.className = 'matchScoreLine';
-      scoreLine.style.flex = '1 1 auto';
-      scoreLine.style.minWidth = '0';
-      const opponentLine = [player1Name || player1Id || 'Player 1', 'vs', player2Name || player2Id || 'Player 2']
-        .filter(Boolean)
-        .join(' ');
-      scoreLine.title = opponentLine;
-
-      const player1Label = document.createElement('span');
-      player1Label.className = 'matchPlayerName';
-      player1Label.textContent = player1Name || player1Id || 'Player 1';
-      scoreLine.appendChild(player1Label);
-
-      const player1ScoreEl = document.createElement('span');
-      player1ScoreEl.className = 'matchScoreValue';
-      player1ScoreEl.textContent = player1Score;
-      scoreLine.appendChild(player1ScoreEl);
-
-      const separatorEl = document.createElement('span');
-      separatorEl.className = 'matchScoreSeparator';
-      separatorEl.textContent = '-';
-      scoreLine.appendChild(separatorEl);
-
-      const player2ScoreEl = document.createElement('span');
-      player2ScoreEl.className = 'matchScoreValue';
-      player2ScoreEl.textContent = player2Score;
-      scoreLine.appendChild(player2ScoreEl);
-
-      const player2Label = document.createElement('span');
-      player2Label.className = 'matchPlayerName';
-      player2Label.textContent = player2Name || player2Id || 'Player 2';
-      scoreLine.appendChild(player2Label);
-
-      row.appendChild(scoreLine);
-
-      const drawLine = document.createElement('div');
-      drawLine.className = 'matchDrawLine';
-      drawLine.title = `Draws: ${drawCount}`;
-
-      const drawIcon = document.createElement('img');
-      drawIcon.src = 'assets/images/draw.png';
-      drawIcon.alt = 'Draws';
-      drawIcon.className = 'matchDrawIcon';
-      drawLine.appendChild(drawIcon);
-
-      const drawValue = document.createElement('span');
-      drawValue.className = 'matchScoreValue';
-      drawValue.textContent = drawCount;
-      drawLine.appendChild(drawValue);
-
-      row.appendChild(drawLine);
-
-      const spectateBtn = document.createElement('button');
-      spectateBtn.type = 'button';
-      spectateBtn.className = 'spectateBtn';
-      spectateBtn.textContent = 'Spectate';
-      spectateBtn.setAttribute('aria-label', `Spectate match ${item?.id || ''}`.trim());
-      spectateBtn.addEventListener('click', () => {
-        if (item?.id) {
-          openSpectateModal(item.id);
-        }
-      });
-      row.appendChild(spectateBtn);
-
-      frag.appendChild(row);
-    });
 
     targetEl.appendChild(frag);
   }
 
-  function clearSpectateVisuals() {
-    if (spectateStatusEl) spectateStatusEl.textContent = '';
-    if (spectateScoreEl) spectateScoreEl.textContent = '';
-    if (spectateBannerEl) {
-      spectateBannerEl.textContent = '';
-      spectateBannerEl.hidden = true;
-      spectateBannerEl.className = 'spectate-banner';
-    }
-    if (spectateMetaEl) spectateMetaEl.textContent = '';
-    if (spectateTopBar) spectateTopBar.innerHTML = '';
-    if (spectateBottomBar) spectateBottomBar.innerHTML = '';
-    if (spectateBoardView) spectateBoardView.destroy();
-    spectateRefs.boardCells = [];
-    clearSpectateBubbles();
-    resetSpectateClockState();
-    spectateState.clockRefs = { top: null, bottom: null };
-    spectateState.data = null;
-    spectateState.lastBoardGame = null;
-    spectateState.lastCompletedGame = null;
-    hideSpectateGameBanner();
-  }
-
-  function resolveSpectatePlayer(snapshot, id, fallbackLabel) {
-    if (!id) return { name: fallbackLabel, elo: null };
-    const key = String(id);
-    const playersMap = snapshot?.players || {};
-    const entry = playersMap[key] || playersMap[id] || null;
-    const username = entry?.username || getUsername(key) || fallbackLabel;
-    const elo = Number.isFinite(entry?.elo) ? entry.elo : null;
-    return { name: username, elo };
-  }
-
-  function renderSpectateMeta(snapshot) {
-    if (!spectateMetaEl) return;
-    spectateMetaEl.textContent = '';
-    const match = snapshot?.match || {};
-    const pieces = [];
-    if (match.type) pieces.push(`Type: ${formatMatchTypeLabel(match.type)}`);
-    if (snapshot?.game?.id) pieces.push(`Game ID: ${snapshot.game.id}`);
-    if (match.isActive === false) {
-      pieces.push('Match complete');
-    } else if (snapshot?.game && snapshot.game.isActive === false) {
-      pieces.push('Game complete');
-    }
-    spectateMetaEl.textContent = pieces.join(' • ');
-  }
-
-  function renderSpectateScore(snapshot) {
-    if (!spectateScoreEl) return;
-    spectateScoreEl.innerHTML = '';
-    const match = snapshot?.match;
-    if (!match) return;
-    const player1Id = match.player1Id || match.player1?.id;
-    const player2Id = match.player2Id || match.player2?.id;
-    const player1 = resolveSpectatePlayer(snapshot, player1Id, 'Player 1');
-    const player2 = resolveSpectatePlayer(snapshot, player2Id, 'Player 2');
-    const scoreWrap = document.createDocumentFragment();
-    const span1 = document.createElement('span');
-    span1.textContent = player1.name;
-    span1.style.fontWeight = '700';
-    const scoreSpan = document.createElement('span');
-    scoreSpan.textContent = `${Number(match.player1Score || 0)} - ${Number(match.player2Score || 0)}`;
-    const span2 = document.createElement('span');
-    span2.textContent = player2.name;
-    span2.style.fontWeight = '700';
-    scoreWrap.appendChild(span1);
-    scoreWrap.appendChild(scoreSpan);
-    scoreWrap.appendChild(span2);
-    const draws = Number(match.drawCount || 0);
-    if (draws > 0) {
-      const drawSpan = document.createElement('span');
-      drawSpan.textContent = `Draws: ${draws}`;
-      scoreWrap.appendChild(drawSpan);
-    }
-    spectateScoreEl.appendChild(scoreWrap);
-  }
-
-  function renderSpectateBanner(snapshot) {
-    if (!spectateBannerEl) return;
-    spectateBannerEl.hidden = true;
-    spectateBannerEl.textContent = '';
-    spectateBannerEl.className = 'spectate-banner';
-    const match = snapshot?.match;
-    if (!match) return;
-    if (match.isActive === false) {
-      const winnerId = match.winnerId || match.winner || match.winner?._id;
-      const winner = resolveSpectatePlayer(snapshot, winnerId, 'Winner');
-      const p1Score = Number(match.player1Score || 0);
-      const p2Score = Number(match.player2Score || 0);
-      const draws = Number(match.drawCount || 0);
-      const parts = [`${winner.name} wins the match ${p1Score}-${p2Score}`];
-      if (draws > 0) {
-        parts.push(`with ${draws} draw${draws === 1 ? '' : 's'}`);
+  const spectateController = createSpectateController({
+    overlayEl: spectateOverlay,
+    playAreaEl: spectatePlayArea,
+    boardEl: spectateBoardEl,
+    topBarEl: spectateTopBar,
+    bottomBarEl: spectateBottomBar,
+    statusEl: spectateStatusEl,
+    scoreEl: spectateScoreEl,
+    bannerEl: spectateBannerEl,
+    metaEl: spectateMetaEl,
+    closeButtonEl: spectateCloseBtn,
+    socket,
+    getUsername,
+    setUsername: (id, username) => {
+      if (!id) return;
+      if (typeof username === 'string' && username.trim()) {
+        usernameMap[id] = username.trim();
       }
-      spectateBannerEl.textContent = parts.join(' ');
-      spectateBannerEl.classList.add('spectate-banner--success');
-      spectateBannerEl.hidden = false;
-    } else if (snapshot?.game && snapshot.game.isActive === false) {
-      spectateBannerEl.textContent = 'Awaiting the next game in this match…';
-      spectateBannerEl.classList.add('spectate-banner--info');
-      spectateBannerEl.hidden = false;
-    }
-  }
+    },
+  });
 
-  function getSpectatePlayerNameForColor(snapshot, colorIdx) {
-    const fallback = colorIdx === 0 ? 'White' : 'Black';
-    if (!snapshot || typeof snapshot !== 'object') return fallback;
-    const game = snapshot.game || {};
-    const match = snapshot.match || {};
-    const players = Array.isArray(game.players) ? game.players : [];
-    let playerId = players[colorIdx];
-    if (!playerId) {
-      if (colorIdx === 0) {
-        playerId = match.player1Id || match.player1?._id || match.player1?.id;
-      } else {
-        playerId = match.player2Id || match.player2?._id || match.player2?.id;
-      }
-    }
-    const resolved = resolveSpectatePlayer(snapshot, playerId, fallback);
-    return resolved?.name || fallback;
-  }
-
-  function ensureSpectateGameBannerOverlay() {
-    if (spectateGameBannerOverlay) return spectateGameBannerOverlay;
-    spectateGameBannerOverlay = createOverlay({
-      baseClass: 'cg-overlay banner-overlay',
-      dialogClass: 'banner-overlay__dialog',
-      contentClass: 'banner-overlay__content',
-      backdropClass: 'cg-overlay__backdrop banner-overlay-backdrop',
-      closeButtonClass: 'banner-overlay__close',
-      openClass: 'cg-overlay--open banner-overlay--open',
-      bodyOpenClass: 'cg-overlay-open',
-      showCloseButton: false,
-      closeOnBackdrop: false,
-      closeOnEscape: false,
-      trapFocus: false
-    });
-    return spectateGameBannerOverlay;
-  }
-
-  function hideSpectateGameBanner() {
-    if (!spectateGameBannerOverlay) {
-      return;
-    }
-    try {
-      if (spectateGameBannerOverlay.content) {
-        spectateGameBannerOverlay.content.innerHTML = '';
-      }
-      spectateGameBannerOverlay.hide();
-    } catch (err) {
-      console.warn('Failed to hide spectate banner overlay', err);
-    }
-  }
-
-  function showSpectateGameBanner(snapshot) {
-    if (!snapshot) {
-      hideSpectateGameBanner();
-      return;
-    }
-    const overlay = ensureSpectateGameBannerOverlay();
-    if (!overlay) return;
-    const { content, dialog } = overlay;
-    if (dialog) {
-      dialog.style.alignItems = 'center';
-      dialog.style.justifyContent = 'flex-end';
-    }
-    if (content) {
-      content.innerHTML = '';
-      content.style.alignItems = 'center';
-      content.style.justifyContent = 'flex-end';
-      content.style.width = '100%';
-      content.style.minHeight = '100%';
-    }
-
-    const match = snapshot.match || {};
-    const game = snapshot.game || {};
-    const winnerIdx = Number.isInteger(game.winner) ? game.winner : -1;
-    const winnerColor = winnerIdx === 0 || winnerIdx === 1 ? winnerIdx : null;
-    const loserColor = winnerColor === 0 ? 1 : winnerColor === 1 ? 0 : null;
-    const isDraw = winnerColor === null;
-    const winnerName = isDraw ? null : getSpectatePlayerNameForColor(snapshot, winnerColor);
-    const loserName = isDraw || loserColor === null ? null : getSpectatePlayerNameForColor(snapshot, loserColor);
-    const whiteName = getSpectatePlayerNameForColor(snapshot, 0);
-    const blackName = getSpectatePlayerNameForColor(snapshot, 1);
-    const winnerLabel = winnerColor === null
-      ? null
-      : (winnerName || (winnerColor === 0 ? whiteName : blackName) || (winnerColor === 0 ? 'White' : 'Black'));
-    const loserLabel = loserColor === null
-      ? null
-      : (loserName || (loserColor === 0 ? whiteName : blackName) || 'their opponent');
-
-    const card = document.createElement('div');
-    card.style.width = '100%';
-    card.style.maxWidth = '100%';
-    card.style.height = '160px';
-    card.style.padding = '18px 26px';
-    card.style.borderRadius = '0';
-    card.style.borderTop = '2px solid var(--CG-deep-gold)';
-    card.style.borderBottom = '2px solid var(--CG-deep-gold)';
-    card.style.marginTop = 'auto';
-    card.style.marginBottom = 'clamp(12px, 2vh, 40px)';
-    card.style.marginLeft = 'auto';
-    card.style.marginRight = 'auto';
-    card.style.background = isDraw ? 'var(--CG-gray)' : 'var(--CG-dark-red)';
-    card.style.color = 'var(--CG-white)';
-    card.style.boxShadow = '0 10px 30px var(--CG-black)';
-    card.style.textAlign = 'center';
-    card.style.position = 'relative';
-
-    const title = document.createElement('div');
-    if (isDraw) {
-      title.textContent = 'Draw';
-    } else {
-      const colorLabel = winnerColor === 0 ? 'White' : 'Black';
-      title.textContent = `${winnerLabel || colorLabel} Victory`;
-    }
-    title.style.fontSize = '32px';
-    title.style.fontWeight = '800';
-    title.style.marginBottom = '10px';
-
-    const desc = document.createElement('div');
-    const reason = Number(game.winReason);
-    let descText;
-    if (isDraw || reason === WIN_REASONS.DRAW) {
-      descText = `${whiteName} and ${blackName} agreed to a draw.`;
-    } else {
-      switch (reason) {
-        case WIN_REASONS.KING_CAPTURE:
-        case 0:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by capturing ${loserLabel}'s king.`;
-          break;
-        case WIN_REASONS.KING_ADVANCE:
-        case 1:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by advancing their king to the final rank.`;
-          break;
-        case WIN_REASONS.TRUE_KING:
-        case 2:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} challenged the true king.`;
-          break;
-        case WIN_REASONS.DAGGER_PENALTY:
-        case 3:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} accumulated 3 dagger tokens.`;
-          break;
-        case WIN_REASONS.TIME:
-        case 4:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} ran out of time.`;
-          break;
-        case WIN_REASONS.DISCONNECT:
-        case 5:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} disconnected.`;
-          break;
-        case WIN_REASONS.RESIGNATION:
-        case 6:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by resignation.`;
-          break;
-        default:
-          descText = `${winnerLabel || 'The winner'} prevailed.`;
-      }
-    }
-    desc.textContent = descText;
-    desc.style.fontSize = '20px';
-    desc.style.fontWeight = '500';
-    desc.id = 'spectateGameOverDesc';
-
-    const footer = document.createElement('div');
-    footer.textContent = match?.isActive === false
-      ? 'Match complete. Close the spectate view to exit.'
-      : 'Awaiting the next game…';
-    footer.style.fontSize = '14px';
-    footer.style.fontWeight = '600';
-    footer.style.position = 'absolute';
-    footer.style.bottom = '12px';
-    footer.style.left = '50%';
-    footer.style.transform = 'translateX(-50%)';
-    footer.style.opacity = '0.85';
-
-    card.appendChild(title);
-    card.appendChild(desc);
-    card.appendChild(footer);
-    if (content) {
-      content.appendChild(card);
-    }
-    overlay.show();
-  }
-
-  function updateSpectateGameBanner(rawSnapshot, displaySnapshot) {
-    const match = (displaySnapshot && displaySnapshot.match)
-      || (rawSnapshot && rawSnapshot.match)
-      || {};
-    const matchId = normalizeId(match?._id || match?.id || rawSnapshot?.matchId || displaySnapshot?.matchId);
-    const storedMatchId = spectateState.lastCompletedGame?.matchId || null;
-    if (storedMatchId && matchId && storedMatchId !== matchId) {
-      spectateState.lastCompletedGame = null;
-    }
-
-    if (rawSnapshot?.game && rawSnapshot.game.isActive) {
-      spectateState.lastCompletedGame = null;
-      hideSpectateGameBanner();
-      return;
-    }
-
-    if (rawSnapshot?.game && rawSnapshot.game.isActive === false) {
-      const snapshotForDisplay = displaySnapshot || rawSnapshot;
-      spectateState.lastCompletedGame = {
-        matchId,
-        snapshot: snapshotForDisplay
-      };
-      showSpectateGameBanner(snapshotForDisplay);
-      return;
-    }
-
-    if (!rawSnapshot?.game) {
-      if (
-        spectateState.lastCompletedGame
-        && (!matchId || !spectateState.lastCompletedGame.matchId || spectateState.lastCompletedGame.matchId === matchId)
-      ) {
-        showSpectateGameBanner(spectateState.lastCompletedGame.snapshot);
-        return;
-      }
-      if (displaySnapshot?.game && displaySnapshot.game.isActive === false) {
-        spectateState.lastCompletedGame = {
-          matchId,
-          snapshot: displaySnapshot
-        };
-        showSpectateGameBanner(displaySnapshot);
-        return;
-      }
-    }
-
-    if (match?.isActive === false && displaySnapshot?.game && displaySnapshot.game.isActive === false) {
-      spectateState.lastCompletedGame = {
-        matchId,
-        snapshot: displaySnapshot
-      };
-      showSpectateGameBanner(displaySnapshot);
-      return;
-    }
-
-    hideSpectateGameBanner();
-  }
-
-  function renderSpectateBarsForSnapshot(snapshot, baseSizes) {
-    if (!spectateBoardView || !spectateTopBar || !spectateBottomBar) return;
-    spectateTopBar.innerHTML = '';
-    spectateBottomBar.innerHTML = '';
-    if (!snapshot) return;
-    const game = snapshot.game;
-    if (!game) return;
-    const match = snapshot.match || {};
-    const players = Array.isArray(game.players) ? game.players.map(id => id && id.toString()) : [];
-    const whiteId = players[0] || match.player1Id || match.player1?.id;
-    const blackId = players[1] || match.player2Id || match.player2?.id;
-    const white = resolveSpectatePlayer(snapshot, whiteId, 'White');
-    const black = resolveSpectatePlayer(snapshot, blackId, 'Black');
-    const isRankedMatch = String(match.type || '').toUpperCase() === 'RANKED';
-    const p1Score = Number(match.player1Score || 0);
-    const p2Score = Number(match.player2Score || 0);
-    const daggers = Array.isArray(game.daggers) ? game.daggers : [0, 0];
-    const captured = Array.isArray(game.captured) ? game.captured : [[], []];
-    const lastAction = Array.isArray(game.actions) ? game.actions[game.actions.length - 1] : null;
-    const challengeOutcome = lastAction?.details?.outcome;
-    const challengeActive = lastAction?.type === ACTIONS.CHALLENGE
-      && (!challengeOutcome || String(challengeOutcome).toUpperCase() === 'PENDING');
-    const showChallengeTop = challengeActive && lastAction.player === 1;
-    const showChallengeBottom = challengeActive && lastAction.player === 0;
-    const displayClocks = spectateState.clockDisplay || {};
-    const clockLabel = displayClocks.label
-      || snapshot?.clocks?.label
-      || describeTimeControl(game.timeControlStart, game.increment);
-    const whiteMs = Number.isFinite(displayClocks.whiteMs) ? displayClocks.whiteMs : 0;
-    const blackMs = Number.isFinite(displayClocks.blackMs) ? displayClocks.blackMs : 0;
-
-    const bars = renderBars({
-      topBar: spectateTopBar,
-      bottomBar: spectateBottomBar,
-      sizes: {
-        squareSize: baseSizes.squareSize,
-        boardWidth: baseSizes.boardWidth,
-        boardHeight: baseSizes.boardHeight,
-        boardLeft: baseSizes.boardLeft,
-        boardTop: baseSizes.boardTop,
-        playAreaHeight: spectatePlayArea?.clientHeight || (baseSizes.boardHeight * 2)
-      },
-      state: {
-        currentIsWhite: true,
-        currentCaptured: captured,
-        currentDaggers: daggers,
-        showChallengeTop,
-        showChallengeBottom,
-        clockTop: formatClock(blackMs),
-        clockBottom: formatClock(whiteMs),
-        clockLabel,
-        nameTop: black.name,
-        nameBottom: white.name,
-        winsTop: p2Score,
-        winsBottom: p1Score,
-        connectionTop: null,
-        connectionBottom: null,
-        isRankedMatch,
-        eloTop: black.elo,
-        eloBottom: white.elo
-      },
-      identityMap: PIECE_IMAGES
-    });
-    spectateState.clockRefs = {
-      top: bars?.topClockEl || null,
-      bottom: bars?.bottomClockEl || null,
-    };
-    updateSpectateClockElements();
-  }
-
-  function renderSpectateBoard(snapshot) {
-    if (!spectateBoardView || !spectatePlayArea) return;
-    const game = snapshot?.game;
-    if (!game || !Array.isArray(game.board) || !game.board.length) {
-      spectateBoardView.destroy();
-      spectateRefs.boardCells = [];
-      if (spectateTopBar) spectateTopBar.innerHTML = '';
-      if (spectateBottomBar) spectateBottomBar.innerHTML = '';
-      return;
-    }
-    const viewState = deriveSpectateView(game);
-    const rows = viewState.rows;
-    const cols = viewState.cols;
-    if (!rows || !cols) return;
-    const boardForRender = viewState.board;
-    const pendingMoveFrom = viewState.pendingMoveFrom;
-    const pendingCapture = viewState.pendingCapture;
-    const challengeRemoved = viewState.challengeRemoved;
-    const overlay = viewState.overlay;
-    const metrics = computeBoardMetrics(
-      spectatePlayArea.clientWidth,
-      spectatePlayArea.clientHeight,
-      cols,
-      rows
-    );
-    spectateRefs.boardCells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null));
-    spectateBoardView.render({
-      sizes: {
-        rows,
-        cols,
-        squareSize: metrics.squareSize,
-        boardLeft: metrics.boardLeft,
-        boardTop: metrics.boardTop
-      },
-      state: {
-        currentBoard: boardForRender,
-        currentIsWhite: true,
-        selected: null,
-        isInSetup: false,
-        workingRank: new Array(cols).fill(null),
-        pendingCapture,
-        pendingMoveFrom,
-        challengeRemoved
-      },
-      onAttachGameHandlers: (cell, uiR, uiC) => {
-        if (!spectateRefs.boardCells[uiR]) {
-          spectateRefs.boardCells[uiR] = [];
+  function renderActiveMatchesFromState(items) {
+    const list = Array.isArray(items) ? items : activeMatchesStore.getItems();
+    renderActiveMatchesList(matchesListEl, list, {
+      getUsername,
+      onSpectate: (item) => {
+        if (item?.id && spectateController) {
+          spectateController.open(item.id);
         }
-        spectateRefs.boardCells[uiR][uiC] = { el: cell, uiR, uiC };
       },
-      labelFont: Math.max(10, Math.floor(0.024 * spectatePlayArea.clientHeight)),
-      fileLetters: ['A', 'B', 'C', 'D', 'E'],
-      readOnly: true,
-        deploymentLines: true
-    });
-    renderSpectateBarsForSnapshot(snapshot, {
-      squareSize: metrics.squareSize,
-      boardWidth: metrics.boardWidth,
-      boardHeight: metrics.boardHeight,
-      boardLeft: metrics.boardLeft,
-      boardTop: metrics.boardTop
-    });
-    applySpectateMoveOverlay(metrics.squareSize, overlay);
-  }
-
-  function getSpectateDisplaySnapshot(snapshot) {
-    const isObject = snapshot && typeof snapshot === 'object';
-    const game = isObject ? snapshot.game : null;
-    if (game && Array.isArray(game.board) && game.board.length) {
-      spectateState.lastBoardGame = game;
-      return snapshot;
-    }
-
-    const fallbackGame = spectateState.lastBoardGame;
-    if (!fallbackGame) {
-      return snapshot;
-    }
-
-    let base = isObject ? { ...snapshot } : null;
-    if (!base) {
-      const stored = spectateState.lastCompletedGame?.snapshot;
-      if (stored && typeof stored === 'object') {
-        base = { ...stored };
-      } else {
-        base = {};
-      }
-    }
-    base.game = fallbackGame;
-    return base;
-  }
-
-  function renderSpectateContent(snapshot) {
-    if (!spectateOverlay || spectateOverlay.hidden) return;
-    const displaySnapshot = getSpectateDisplaySnapshot(snapshot);
-    spectateState.data = displaySnapshot;
-    syncSpectateClocks(snapshot);
-    renderSpectateMeta(displaySnapshot);
-    renderSpectateScore(displaySnapshot);
-    renderSpectateBanner(displaySnapshot);
-    if (spectateStatusEl) {
-      const match = displaySnapshot?.match;
-      const game = displaySnapshot?.game;
-      if (!game) {
-        spectateStatusEl.textContent = match?.isActive ? 'No active game for this match.' : 'Match complete.';
-      } else if (game.isActive) {
-        spectateStatusEl.textContent = 'Live game in progress';
-      } else {
-        spectateStatusEl.textContent = match?.isActive ? 'Game finished. Awaiting next game.' : 'Final game complete.';
-      }
-    }
-    renderSpectateBoard(displaySnapshot);
-    updateSpectateGameBanner(snapshot, displaySnapshot);
-  }
-
-  function openSpectateModal(matchId) {
-    if (!spectateOverlay || !spectateBoardView) return;
-    const normalizedId = normalizeId(matchId);
-    if (!normalizedId) return;
-    if (spectateState.matchId && spectateState.matchId !== normalizedId) {
-      socket.emit('spectate:leave', { matchId: spectateState.matchId });
-    }
-    spectateState.matchId = normalizedId;
-    spectateState.loading = true;
-    spectateState.data = null;
-    clearSpectateVisuals();
-    spectateOverlay.hidden = false;
-    if (spectateStatusEl) spectateStatusEl.textContent = 'Loading live game state…';
-    socket.emit('spectate:join', { matchId: normalizedId });
-    if (spectateState.resizeHandler) {
-      window.removeEventListener('resize', spectateState.resizeHandler);
-    }
-    spectateState.resizeHandler = () => {
-      if (!spectateOverlay.hidden && spectateState.data) {
-        renderSpectateBoard(spectateState.data);
-      }
-    };
-    window.addEventListener('resize', spectateState.resizeHandler);
-  }
-
-  function closeSpectateModal() {
-    if (!spectateOverlay || spectateOverlay.hidden) return;
-    const currentId = spectateState.matchId;
-    if (currentId) {
-      socket.emit('spectate:leave', { matchId: currentId });
-    }
-    spectateOverlay.hidden = true;
-    spectateState.matchId = null;
-    spectateState.data = null;
-    spectateState.loading = false;
-    clearSpectateVisuals();
-    if (spectateState.resizeHandler) {
-      window.removeEventListener('resize', spectateState.resizeHandler);
-      spectateState.resizeHandler = null;
-    }
-  }
-
-  if (spectateOverlay) {
-    spectateOverlay.addEventListener('mousedown', (event) => {
-      if (event.target === spectateOverlay) {
-        closeSpectateModal();
-      }
     });
   }
-  if (spectateCloseBtn) {
-    spectateCloseBtn.addEventListener('click', () => closeSpectateModal());
+
+  function updateLatestMetricsMatches(items) {
+    if (!latestMetrics) return;
+    const list = Array.isArray(items) ? items : activeMatchesStore.getItems();
+    latestMetrics.matches = list.slice();
   }
+
+  function handleActiveMatchesChange(items) {
+    updateLatestMetricsMatches(items);
+    renderActiveMatchesFromState(items);
+  }
+
   document.addEventListener('keydown', (event) => {
-    if ((event.key === 'Escape' || event.key === 'Esc') && spectateOverlay && !spectateOverlay.hidden) {
-      closeSpectateModal();
+    if ((event.key === 'Escape' || event.key === 'Esc') && spectateController && spectateController.isOpen && spectateController.isOpen()) {
+      spectateController.close();
     }
   });
 
@@ -1646,6 +401,50 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
       renderHistoryList();
     });
   });
+
+  async function fetchAllUsers() {
+    if (!usersListEl) return;
+    try {
+      const res = await authFetch('/api/v1/users/getList', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        console.error('Failed to fetch user accounts:', res.status);
+        return;
+      }
+      const data = await res.json();
+      const users = [];
+      if (Array.isArray(data)) {
+        data.forEach(u => {
+          const id = u._id ? u._id.toString() : '';
+          if (!id) return;
+          const username = u.username || 'Unknown';
+          const numericElo = Number(u.elo);
+          const elo = Number.isFinite(numericElo) ? numericElo : null;
+          usernameMap[id] = username;
+          users.push({ id, username, elo });
+        });
+      }
+      renderUsersList(
+        usersListEl,
+        users,
+        latestMetrics ? latestMetrics.connectedUserIds : [],
+        latestMetrics ? latestMetrics.matches : [],
+      );
+      if (latestMetrics) {
+        renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
+        renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
+      }
+      renderActiveMatchesFromState();
+      if (historyLoaded) {
+        renderHistoryList();
+      }
+    } catch (err) {
+      console.error('Error fetching user accounts:', err);
+    }
+  }
 
   async function ensureHistoryLoaded() {
     if (historyLoaded || isFetchingHistory) return;
@@ -1962,8 +761,7 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
     if (rankedQueueEl) rankedQueueEl.textContent = payload.rankedQueue ?? 0;
     renderList(quickplayQueueListEl, payload.quickplayQueueUserIds);
     renderList(rankedQueueListEl, payload.rankedQueueUserIds);
-    replaceActiveMatches(payload.matches);
-    renderActiveMatchesFromState();
+    activeMatchesStore.replaceAll(payload.matches);
     fetchAllUsers();
     if (historyLoaded) {
       fetchHistoryData();
@@ -1971,38 +769,24 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
   });
 
   socket.on('admin:matchUpdated', payload => {
-    if (applyActiveMatchUpdate(payload)) {
-      renderActiveMatchesFromState();
-    }
+    activeMatchesStore.applyUpdate(payload);
   });
 
   socket.on('spectate:snapshot', (payload) => {
-    const payloadId = normalizeId(payload?.matchId);
-    if (!payloadId || payloadId !== spectateState.matchId) return;
-    spectateState.loading = false;
-    renderSpectateContent({ ...payload, matchId: payloadId });
+    if (spectateController) {
+      spectateController.handleSnapshot(payload);
+    }
   });
 
   socket.on('spectate:update', (payload) => {
-    const payloadId = normalizeId(payload?.matchId);
-    if (!payloadId || payloadId !== spectateState.matchId) return;
-    spectateState.loading = false;
-    renderSpectateContent({ ...payload, matchId: payloadId });
+    if (spectateController) {
+      spectateController.handleUpdate(payload);
+    }
   });
 
   socket.on('spectate:error', (payload) => {
-    const payloadId = normalizeId(payload?.matchId);
-    if (!payloadId || payloadId !== spectateState.matchId) return;
-    spectateState.loading = false;
-    resetSpectateClockState();
-    clearSpectateBubbles();
-    if (spectateStatusEl) {
-      spectateStatusEl.textContent = payload?.message || 'Unable to spectate match.';
-    }
-    if (spectateBannerEl) {
-      spectateBannerEl.textContent = payload?.message || 'Unable to spectate match.';
-      spectateBannerEl.className = 'spectate-banner spectate-banner--info';
-      spectateBannerEl.hidden = false;
+    if (spectateController) {
+      spectateController.handleError(payload);
     }
   });
 
@@ -2046,6 +830,10 @@ import { createOverlay } from '/js/modules/ui/overlays.js';
         const matchCount = data && typeof data.deletedMatches === 'number' ? data.deletedMatches : (data && data.deleted) || 0;
         const gameCount = data && typeof data.deletedGames === 'number' ? data.deletedGames : 0;
         alert('Purged active matches: ' + matchCount + ' (games removed: ' + gameCount + ')');
+        activeMatchesStore.replaceAll([]);
+        if (spectateController && spectateController.isOpen && spectateController.isOpen()) {
+          spectateController.close();
+        }
         if (historyLoaded) fetchHistoryData();
       } catch (err) {
         console.error(err);

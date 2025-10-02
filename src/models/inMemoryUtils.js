@@ -209,6 +209,7 @@ class QueryBase {
     this._select = null;
     this._populate = [];
     this._sort = null;
+    this._limit = null;
   }
 
   select(fields) {
@@ -235,6 +236,16 @@ class QueryBase {
     return this;
   }
 
+  limit(count) {
+    const numeric = Number(count);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      this._limit = null;
+    } else {
+      this._limit = Math.floor(numeric);
+    }
+    return this;
+  }
+
   async exec() {
     let docsArray;
     if (this.multi) {
@@ -252,6 +263,9 @@ class QueryBase {
           }
           return 0;
         });
+      }
+      if (Number.isInteger(this._limit) && this._limit >= 0) {
+        docsArray = this._limit === 0 ? [] : docsArray.slice(0, this._limit);
       }
       if (!this._lean && this._select) {
         // For non-lean queries, return shallow clones when select is used to avoid mutating originals
@@ -273,7 +287,11 @@ class QueryBase {
           return 0;
         });
       }
-      docsArray = docsArray.length > 0 ? [docsArray[0]] : [];
+      if (Number.isInteger(this._limit) && this._limit >= 0) {
+        docsArray = this._limit === 0 ? [] : docsArray.slice(0, this._limit);
+      } else {
+        docsArray = docsArray.length > 0 ? [docsArray[0]] : [];
+      }
     } else {
       docsArray = this.docs ? [this.docs] : [];
     }

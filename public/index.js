@@ -28,6 +28,8 @@ import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
 import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
 import { computeGameClockState } from '/js/modules/utils/clockState.js';
+import { renderActiveMatchesList, createActiveMatchesStore, fetchActiveMatchesList } from '/js/modules/spectate/activeMatches.js';
+import { createSpectateController } from '/js/modules/spectate/controller.js';
 
 preloadAssets();
 
@@ -47,9 +49,33 @@ preloadAssets();
   const accountPanelContent = document.getElementById('accountPanelContent');
   const accountBtnImg = accountBtn.querySelector('img');
 
+  const spectateOverlay = document.getElementById('spectateOverlay');
+  const spectatePlayArea = document.getElementById('spectatePlayArea');
+  const spectateBoardEl = document.getElementById('spectateBoard');
+  const spectateTopBar = document.getElementById('spectateTopBar');
+  const spectateBottomBar = document.getElementById('spectateBottomBar');
+  const spectateStatusEl = document.getElementById('spectateStatus');
+  const spectateScoreEl = document.getElementById('spectateScore');
+  const spectateBannerEl = document.getElementById('spectateBanner');
+  const spectateMetaEl = document.getElementById('spectateMeta');
+  const spectateCloseBtn = document.getElementById('spectateCloseBtn');
+
   const ACCOUNT_ICON_SRC = getAvatarAsset('account') || '/assets/images/account.png';
   const LOGGED_IN_AVATAR_SRC = getAvatarAsset('loggedInDefault') || '/assets/images/cloakHood.jpg';
   const GOOGLE_ICON_SRC = getIconAsset('google') || '/assets/images/google-icon.png';
+
+  let spectateController = null;
+  const spectateUsernameMap = {};
+  let spectatePickerOverlay = null;
+  let spectatePickerStatusEl = null;
+  let spectateMatchListEl = null;
+  const spectateMatchesStore = createActiveMatchesStore();
+  let spectateMatchesLoading = false;
+  let spectateMatchesStatusMessage = '';
+  spectateMatchesStore.subscribe((items) => {
+    renderSpectateMatchList(items);
+    updateSpectatePickerStatus(items);
+  });
 
   let menuOpen = false;
   const PANEL_WIDTH = 180;
@@ -1783,17 +1809,19 @@ preloadAssets();
 
   function wireSocket() {
     bindSocket(socket, {
-      onConnect() { console.log('[socket] connected'); },
+      onConnect() {
+        console.log('[socket] connected');
+      },
       async onInitialState(payload) {
-      console.log('[socket] initialState', payload);
-      queuedState.quickplay = Boolean(payload?.queued?.quickplay);
-      queuedState.ranked = Boolean(payload?.queued?.ranked);
-      queueStatusKnown = true;
-      pendingAction = null;
-      if (!(queuedState.quickplay || queuedState.ranked)) {
-        stopQueueTimer();
-      }
-      updateFindButton();
+        console.log('[socket] initialState', payload);
+        queuedState.quickplay = Boolean(payload?.queued?.quickplay);
+        queuedState.ranked = Boolean(payload?.queued?.ranked);
+        queueStatusKnown = true;
+        pendingAction = null;
+        if (!(queuedState.quickplay || queuedState.ranked)) {
+          stopQueueTimer();
+        }
+        updateFindButton();
 
       // Reconnect flow: if server says we already have an active game, show play area now
       try {
@@ -2174,6 +2202,24 @@ preloadAssets();
       },
       onDisconnect() { /* keep UI; server handles grace */ }
     });
+    socket.on('spectate:snapshot', (payload) => {
+      if (spectateController) {
+        spectateController.handleSnapshot(payload);
+      }
+    });
+
+    socket.on('spectate:update', (payload) => {
+      if (spectateController) {
+        spectateController.handleUpdate(payload);
+      }
+    });
+
+    socket.on('spectate:error', (payload) => {
+      if (spectateController) {
+        spectateController.handleError(payload);
+      }
+    });
+
     socket.on('user:init', (payload) => {
       ensureAuthToken();
       const payloadUserId = payload?.userId ? String(payload.userId) : null;
@@ -2240,8 +2286,13 @@ preloadAssets();
   queueBtn.addEventListener('click', async function() {
     let mode = modeSelect.value;
 
-    if (mode === 'bots' || mode === 'spectate') {
-      window.alert(`${mode === 'spectate' ? 'Spectating' : 'Bots'} coming soon!`);
+    if (mode === 'spectate') {
+      openSpectatePicker();
+      return;
+    }
+
+    if (mode === 'bots') {
+      window.alert('Bots coming soon!');
       return;
     }
 
@@ -2328,11 +2379,152 @@ preloadAssets();
         userId = handshakeUserId;
       }
       socket = io('/', { auth: socketAuth });
+      spectateController = createSpectateController({
+        overlayEl: spectateOverlay,
+        playAreaEl: spectatePlayArea,
+        boardEl: spectateBoardEl,
+        topBarEl: spectateTopBar,
+        bottomBarEl: spectateBottomBar,
+        statusEl: spectateStatusEl,
+        scoreEl: spectateScoreEl,
+        bannerEl: spectateBannerEl,
+        metaEl: spectateMetaEl,
+        closeButtonEl: spectateCloseBtn,
+        socket,
+        getUsername: getSpectateUsername,
+        setUsername: setSpectateUsername,
+      });
       wireSocket();
     } catch (e) {
       console.error(e);
     }
   })();
+
+
+  // ------- Spectate helpers -------
+  function getSpectateUsername(id) {
+    if (!id) return 'Unknown';
+    const key = String(id);
+    if (!key) return 'Unknown';
+    return spectateUsernameMap[key] || key;
+  }
+
+  function setSpectateUsername(id, username) {
+    if (!id) return;
+    const key = String(id);
+    if (!key) return;
+    if (typeof username === 'string' && username.trim()) {
+      spectateUsernameMap[key] = username.trim();
+    }
+  }
+
+  function ensureSpectatePickerOverlay() {
+    if (spectatePickerOverlay) return spectatePickerOverlay;
+    spectatePickerOverlay = createOverlay({
+      baseClass: 'cg-overlay spectate-picker-overlay',
+      dialogClass: 'history-modal',
+      contentClass: 'history-modal-content',
+      backdropClass: 'cg-overlay__backdrop history-overlay-backdrop',
+      closeButtonClass: 'history-close-btn',
+      closeLabel: 'Close spectate browser',
+      closeText: '✕',
+      openClass: 'open cg-overlay--open',
+      bodyOpenClass: 'history-overlay-open cg-overlay-open',
+    });
+    const { content } = spectatePickerOverlay;
+    if (content) {
+      content.innerHTML = '';
+      const header = document.createElement('div');
+      header.className = 'spectate-picker-header';
+      const title = document.createElement('h2');
+      title.id = 'spectatePickerTitle';
+      title.className = 'spectate-picker-title';
+      title.textContent = 'Active Matches';
+      header.appendChild(title);
+      const status = document.createElement('div');
+      status.id = 'spectatePickerStatus';
+      status.className = 'spectate-picker-status';
+      header.appendChild(status);
+      content.appendChild(header);
+      const list = document.createElement('div');
+      list.id = 'spectateMatchList';
+      list.className = 'tableList';
+      content.appendChild(list);
+      spectatePickerStatusEl = status;
+      spectateMatchListEl = list;
+      if (typeof spectatePickerOverlay.setLabelledBy === 'function') {
+        spectatePickerOverlay.setLabelledBy(title.id);
+      }
+    }
+    return spectatePickerOverlay;
+  }
+
+  function renderSpectateMatchList(items) {
+    if (!spectateMatchListEl) return;
+    const list = Array.isArray(items) ? items : spectateMatchesStore.getItems();
+    renderActiveMatchesList(spectateMatchListEl, list, {
+      getUsername: getSpectateUsername,
+      onSpectate: (item) => {
+        if (spectatePickerOverlay) spectatePickerOverlay.hide();
+        if (item?.id && spectateController) {
+          spectateController.open(item.id);
+        }
+      },
+    });
+  }
+
+  function updateSpectatePickerStatus(items) {
+    if (!spectatePickerStatusEl) return;
+    const list = Array.isArray(items) ? items : spectateMatchesStore.getItems();
+    if (spectateMatchesStatusMessage) {
+      spectatePickerStatusEl.textContent = spectateMatchesStatusMessage;
+      return;
+    }
+    if (spectateMatchesLoading) {
+      spectatePickerStatusEl.textContent = 'Loading matches…';
+      return;
+    }
+    spectatePickerStatusEl.textContent = list.length ? '' : 'No active matches available right now.';
+  }
+
+  async function fetchSpectateMatches() {
+    spectateMatchesLoading = true;
+    spectateMatchesStatusMessage = 'Loading matches…';
+    updateSpectatePickerStatus();
+    try {
+      const data = await fetchActiveMatchesList({ includeUsers: true });
+      if (Array.isArray(data)) {
+        data.forEach((match) => {
+          const details = match?.playerDetails || {};
+          const p1 = details.player1;
+          const p2 = details.player2;
+          if (p1?.id) setSpectateUsername(p1.id, p1.username || p1.id);
+          if (p2?.id) setSpectateUsername(p2.id, p2.username || p2.id);
+        });
+      }
+      spectateMatchesLoading = false;
+      spectateMatchesStatusMessage = '';
+      spectateMatchesStore.replaceAll(Array.isArray(data) ? data : []);
+      updateSpectatePickerStatus();
+    } catch (err) {
+      console.error('Failed to load active matches for spectating', err);
+      spectateMatchesLoading = false;
+      spectateMatchesStatusMessage = 'Unable to load active matches.';
+      spectateMatchesStore.clear();
+      updateSpectatePickerStatus();
+    }
+  }
+
+  function openSpectatePicker() {
+    const overlay = ensureSpectatePickerOverlay();
+    if (!overlay) return;
+    overlay.show();
+    spectateMatchesLoading = true;
+    spectateMatchesStatusMessage = 'Loading matches…';
+    renderSpectateMatchList();
+    updateSpectatePickerStatus();
+    fetchSpectateMatches();
+  }
 
   // ------- Match Found Banner helpers -------
   function ensureBannerOverlay() {

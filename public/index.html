@@ -38,6 +38,50 @@
       select.mode option { background: var(--purple); color: var(--CG-white); }
       .caret { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; font-size: 22px; }
 
+      .tableList { display: flex; flex-direction: column; gap: 12px; }
+      .tableList .row { display: flex; align-items: center; gap: 12px; border: 2px solid var(--CG-deep-gold); border-radius: 10px; padding: 10px 14px; background: rgba(24,9,38,0.85); box-shadow: 0 4px 18px rgba(0,0,0,0.25); }
+      .tableList .matchTypePill { display: inline-flex; align-items: center; justify-content: center; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(255,215,0,0.55); background: rgba(255,215,0,0.12); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; color: var(--CG-white); }
+      .tableList .matchScoreLine { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; letter-spacing: 0.04em; color: var(--CG-white); }
+      .tableList .matchPlayerName { font-weight: 600; }
+      .tableList .matchScoreValue { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; padding: 2px 6px; border-radius: 6px; background: rgba(255,215,0,0.15); color: var(--CG-white); font-weight: 700; font-variant-numeric: tabular-nums; }
+      .tableList .matchScoreSeparator { opacity: 0.8; }
+      .tableList .matchDrawLine { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(255,215,0,0.3); background: rgba(255,215,0,0.08); color: var(--CG-white); font-size: 12px; }
+      .tableList .matchDrawIcon { width: 16px; height: 16px; object-fit: contain; }
+      .tableList .spectateBtn { margin-left: auto; border: 2px solid var(--CG-deep-gold); background: var(--CG-light-gold, var(--CG-white)); color: var(--forest); padding: 6px 12px; border-radius: 6px; font-weight: 700; cursor: pointer; transition: transform 0.15s ease, background 0.2s ease; }
+      .tableList .spectateBtn:hover { background: rgba(255,230,156,0.95); transform: translateY(-1px); }
+      .tableList .spectateBtn:active { transform: translateY(0); }
+
+      .spectate-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 3000; }
+      .spectate-overlay[hidden] { display: none; }
+      .spectate-modal { background: rgba(24,9,38,0.95); border: 4px solid var(--CG-deep-gold); border-radius: 12px; width: 100%; max-width: 960px; max-height: 90vh; overflow: hidden; box-shadow: 0 18px 45px rgba(0,0,0,0.45); display: flex; flex-direction: column; color: var(--CG-white); }
+      .spectate-modal-content { padding: 20px; display: flex; flex-direction: column; gap: 16px; overflow: auto; }
+      .spectate-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+      .spectate-title { margin: 0; font-size: 24px; font-weight: 800; color: var(--CG-white); }
+      .spectate-close-btn { border: none; background: transparent; color: var(--CG-white); font-size: 26px; cursor: pointer; line-height: 1; padding: 4px 6px; border-radius: 6px; transition: background 0.2s ease, color 0.2s ease; }
+      .spectate-close-btn:hover { background: rgba(255,215,0,0.15); color: var(--CG-deep-gold); }
+      .spectate-close-btn:focus-visible { outline: 2px solid var(--CG-deep-gold); outline-offset: 2px; }
+      .spectate-status { font-size: 14px; color: rgba(255,215,0,0.85); }
+      .spectate-board-area { display: flex; justify-content: center; align-items: center; }
+      .spectate-play-area { position: relative; width: min(100%, 640px); height: min(70vh, 640px); min-height: 360px; background: rgba(0,0,0,0.1); border: 2px solid rgba(255,215,0,0.35); border-radius: 10px; box-sizing: border-box; }
+      .spectate-top-bar, .spectate-bottom-bar { position: absolute; left: 0; right: 0; pointer-events: none; }
+      .spectate-board { position: absolute; top: 0; left: 0; }
+      .spectate-score { display: flex; justify-content: center; align-items: center; gap: 16px; font-weight: 700; font-size: 18px; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+      .spectate-score span { display: inline-flex; align-items: center; gap: 6px; }
+      .spectate-score strong { font-size: 20px; }
+      .spectate-banner { padding: 10px 14px; border-radius: 8px; font-weight: 700; text-align: center; }
+      .spectate-banner--success { background: rgba(34,197,94,0.25); border: 2px solid rgba(34,197,94,0.85); color: #bbf7d0; }
+      .spectate-banner--info { background: rgba(59,130,246,0.18); border: 2px solid rgba(59,130,246,0.75); color: #bfdbfe; }
+      .spectate-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: rgba(255,215,0,0.75); }
+
+      .spectate-picker-overlay .spectate-picker-title { font-size: 24px; font-weight: 800; margin: 0; color: var(--CG-white); }
+      .spectate-picker-overlay .spectate-picker-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+      .spectate-picker-status { font-size: 14px; color: rgba(255,215,0,0.85); }
+
+      @media (max-width: 720px) {
+        .spectate-modal-content { padding: 16px; }
+        .spectate-play-area { width: 100%; height: min(65vh, 520px); }
+      }
+
       /* Pulse glow for on-deck square */
       @keyframes onDeckPulse {
         0% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.6); }
@@ -324,6 +368,28 @@
           <option value="spectate">Spectate</option>
         </select>
         <div class="caret">▾</div>
+      </div>
+    </div>
+
+    <div id="spectateOverlay" class="spectate-overlay" hidden>
+      <div class="spectate-modal" role="dialog" aria-modal="true" aria-labelledby="spectateTitle">
+        <div class="spectate-modal-content">
+          <div class="spectate-header">
+            <h2 id="spectateTitle" class="spectate-title">Spectating Match</h2>
+            <button type="button" id="spectateCloseBtn" class="spectate-close-btn" aria-label="Close spectate view">&times;</button>
+          </div>
+          <div id="spectateMeta" class="spectate-meta"></div>
+          <div id="spectateBanner" class="spectate-banner" hidden></div>
+          <div id="spectateScore" class="spectate-score"></div>
+          <div id="spectateStatus" class="spectate-status"></div>
+          <div class="spectate-board-area">
+            <div id="spectatePlayArea" class="spectate-play-area">
+              <div id="spectateTopBar" class="spectate-top-bar"></div>
+              <div id="spectateBoard" class="spectate-board"></div>
+              <div id="spectateBottomBar" class="spectate-bottom-bar"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
