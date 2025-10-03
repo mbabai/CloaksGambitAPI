@@ -2592,16 +2592,16 @@ preloadAssets();
   function ensureBannerOverlay() {
     if (bannerOverlay) return bannerOverlay;
     bannerOverlay = createOverlay({
-      baseClass: 'cg-overlay banner-overlay',
-      dialogClass: 'banner-overlay__dialog',
-      contentClass: 'banner-overlay__content',
-      backdropClass: 'cg-overlay__backdrop banner-overlay-backdrop',
-      closeButtonClass: 'banner-overlay__close',
+      baseClass: 'cg-overlay cg-overlay--banner',
+      dialogClass: 'cg-overlay__dialog cg-overlay__dialog--banner',
+      contentClass: 'cg-overlay__content cg-overlay__content--banner',
+      backdropClass: 'cg-overlay__backdrop cg-overlay__backdrop--banner',
+      closeButtonClass: 'cg-overlay__close cg-overlay__close--banner',
       closeLabel: 'Close banner',
       closeText: '✕',
       showCloseButton: false,
       closeOnBackdrop: false,
-      openClass: 'cg-overlay--open banner-overlay--open',
+      openClass: 'cg-overlay--open cg-overlay--banner-open',
       bodyOpenClass: 'cg-overlay-open',
       trapFocus: true
     });

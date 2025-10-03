@@ -68,9 +68,9 @@
       .spectate-score { display: flex; justify-content: center; align-items: center; gap: 16px; font-weight: 700; font-size: 18px; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
       .spectate-score span { display: inline-flex; align-items: center; gap: 6px; }
       .spectate-score strong { font-size: 20px; }
-      .spectate-banner { padding: 10px 14px; border-radius: 8px; font-weight: 700; text-align: center; }
-      .spectate-banner--success { background: rgba(34,197,94,0.25); border: 2px solid rgba(34,197,94,0.85); color: #bbf7d0; }
-      .spectate-banner--info { background: rgba(59,130,246,0.18); border: 2px solid rgba(59,130,246,0.75); color: #bfdbfe; }
+      .cg-banner { padding: 10px 14px; border-radius: 8px; font-weight: 700; text-align: center; }
+      .cg-banner--success { background: rgba(34,197,94,0.25); border: 2px solid rgba(34,197,94,0.85); color: #bbf7d0; }
+      .cg-banner--info { background: rgba(59,130,246,0.18); border: 2px solid rgba(59,130,246,0.75); color: #bfdbfe; }
       .spectate-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: rgba(255,215,0,0.75); }
 
       .spectate-picker-overlay .spectate-picker-title { font-size: 24px; font-weight: 800; margin: 0; color: var(--CG-white); }
@@ -353,7 +353,7 @@
         min-width: var(--history-match-square-min);
         max-width: var(--history-match-square-base);
       }
-      .history-match-square .history-status-icon {
+      .history-match-square .cg-status-icon {
         max-width: 70%;
         max-height: 70%;
       }
@@ -361,7 +361,7 @@
       .history-match-square.color-black { background: linear-gradient(135deg, rgba(10,10,10,0.9), rgba(40,40,40,0.9)); }
       .history-match-square.color-unknown { background: rgba(0,0,0,0.35); }
       .history-match-square img { width: 24px; height: 24px; object-fit: contain; }
-      .history-status-icon { pointer-events: none; }
+      .cg-status-icon { pointer-events: none; }
       .history-match-empty { font-size: 13px; color: rgba(255,215,0,0.75); white-space: nowrap; }
 
       @media (max-width: 720px) {
@@ -434,7 +434,7 @@
             <h2 id="spectateTitle" class="spectate-title">Spectating Quickplay Match</h2>
             <button type="button" id="spectateCloseBtn" class="spectate-close-btn" aria-label="Close spectate view">&times;</button>
           </div>
-          <div id="spectateBanner" class="spectate-banner" hidden></div>
+          <div id="spectateBanner" class="cg-banner cg-banner--spectate" hidden></div>
           <div class="spectate-board-area">
             <div id="spectatePlayArea" class="spectate-play-area">
               <div id="spectateTopBar" class="spectate-top-bar"></div>

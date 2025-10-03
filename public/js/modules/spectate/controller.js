@@ -316,7 +316,7 @@ export function createSpectateController(options) {
     if (bannerEl) {
       bannerEl.textContent = '';
       bannerEl.hidden = true;
-      bannerEl.className = 'spectate-banner';
+      bannerEl.className = 'cg-banner cg-banner--spectate';
     }
     if (metaEl) metaEl.textContent = '';
     if (topBarEl) topBarEl.innerHTML = '';
@@ -393,7 +393,7 @@ export function createSpectateController(options) {
     if (!bannerEl) return;
     bannerEl.hidden = true;
     bannerEl.textContent = '';
-    bannerEl.className = 'spectate-banner';
+    bannerEl.className = 'cg-banner cg-banner--spectate';
     const match = snapshot?.match;
     if (!match) return;
     if (match.isActive === false) {
@@ -401,7 +401,7 @@ export function createSpectateController(options) {
     }
     if (snapshot?.game && snapshot.game.isActive === false) {
       bannerEl.textContent = 'Awaiting the next game in this match…';
-      bannerEl.classList.add('spectate-banner--info');
+      bannerEl.classList.add('cg-banner--info');
       bannerEl.hidden = false;
     }
   }
@@ -427,12 +427,12 @@ export function createSpectateController(options) {
   function ensureSpectateGameBannerOverlay() {
     if (spectateGameBannerOverlay) return spectateGameBannerOverlay;
     spectateGameBannerOverlay = createOverlay({
-      baseClass: 'cg-overlay banner-overlay',
-      dialogClass: 'banner-overlay__dialog',
-      contentClass: 'banner-overlay__content',
-      backdropClass: 'cg-overlay__backdrop banner-overlay-backdrop',
-      closeButtonClass: 'banner-overlay__close',
-      openClass: 'cg-overlay--open banner-overlay--open',
+      baseClass: 'cg-overlay cg-overlay--banner',
+      dialogClass: 'cg-overlay__dialog cg-overlay__dialog--banner',
+      contentClass: 'cg-overlay__content cg-overlay__content--banner',
+      backdropClass: 'cg-overlay__backdrop cg-overlay__backdrop--banner',
+      closeButtonClass: 'cg-overlay__close cg-overlay__close--banner',
+      openClass: 'cg-overlay--open cg-overlay--banner-open',
       bodyOpenClass: 'cg-overlay-open',
       showCloseButton: false,
       closeOnBackdrop: false,
@@ -900,7 +900,7 @@ export function createSpectateController(options) {
     }
     if (bannerEl) {
       bannerEl.textContent = payload?.message || 'Unable to spectate match.';
-      bannerEl.className = 'spectate-banner spectate-banner--info';
+    bannerEl.className = 'cg-banner cg-banner--spectate cg-banner--info';
       bannerEl.hidden = false;
     }
   }

@@ -264,17 +264,17 @@ function computeHistorySummary(matches, games, { userId } = {}) {
 function createStatusIcon(status, { size = 20 } = {}) {
   if (status === 'win') {
     const icon = createThroneIcon({ size, alt: 'Win' });
-    icon.className = 'history-status-icon history-status-win';
+    icon.className = 'cg-status-icon cg-status-icon--win';
     return icon;
   }
   if (status === 'loss') {
     const tokenGroup = createDaggerCounter({ count: 1, size, gap: 0, alt: 'Loss' });
-    tokenGroup.className = 'history-status-icon history-status-loss';
+    tokenGroup.className = 'cg-status-icon cg-status-icon--loss';
     return tokenGroup;
   }
   if (status === 'draw') {
     const icon = createDrawIcon({ size, alt: 'Draw' });
-    icon.className = 'history-status-icon history-status-draw';
+    icon.className = 'cg-status-icon cg-status-icon--draw';
     return icon;
   }
   return null;
