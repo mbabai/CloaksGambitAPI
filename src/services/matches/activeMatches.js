@@ -112,14 +112,31 @@ function extractPlayerIds(source = {}) {
   return unique;
 }
 
+function normalizeDate(value) {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Date(value.getTime());
+  }
+  if (value && typeof value.toDate === 'function') {
+    const result = value.toDate();
+    if (result instanceof Date && !Number.isNaN(result.getTime())) {
+      return new Date(result.getTime());
+    }
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
 function normalizeActiveMatch(source = {}) {
   const id = normalizeId(source.id || source._id || source.matchId);
   if (!id) return null;
 
+  const players = extractPlayerIds(source);
   const normalized = {
     id,
     type: resolveMatchType(source),
-    players: extractPlayerIds(source),
+    players,
     player1Score: resolveScoreValue(
       source.player1Score,
       source.player1_score,
@@ -145,6 +162,38 @@ function normalizeActiveMatch(source = {}) {
 
   if (source.isActive !== undefined) {
     normalized.isActive = Boolean(source.isActive);
+  }
+
+  normalized.startTime = normalizeDate(source.startTime || source.startedAt);
+  normalized.endTime = normalizeDate(source.endTime || source.endedAt);
+
+  const player1Id = normalizeId(source.player1) || players[0] || null;
+  const player2Id = normalizeId(source.player2) || players[1] || null;
+
+  normalized.player1 = player1Id;
+  normalized.player2 = player2Id;
+
+  if (source.winner === null) {
+    normalized.winner = null;
+  } else {
+    const winnerId = normalizeId(source.winner);
+    if (winnerId) {
+      normalized.winner = winnerId;
+    }
+  }
+
+  const player1Start = parseNumericCandidate(source.player1StartElo);
+  const player2Start = parseNumericCandidate(source.player2StartElo);
+  const player1End = parseNumericCandidate(source.player1EndElo);
+  const player2End = parseNumericCandidate(source.player2EndElo);
+
+  normalized.player1StartElo = player1Start !== null ? player1Start : null;
+  normalized.player2StartElo = player2Start !== null ? player2Start : null;
+  normalized.player1EndElo = player1End !== null ? player1End : null;
+  normalized.player2EndElo = player2End !== null ? player2End : null;
+
+  if (Array.isArray(source.games)) {
+    normalized.games = source.games.slice();
   }
 
   return normalized;
