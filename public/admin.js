@@ -576,6 +576,16 @@ import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/s
     }
   }
 
+  function formatMatchTypeLabel(type) {
+    if (!type) return 'Match';
+    const upper = String(type).trim().toUpperCase();
+    if (upper === 'RANKED') return 'Ranked';
+    if (upper === 'QUICKPLAY') return 'Quickplay';
+    if (upper === 'CUSTOM') return 'Custom';
+    const typeString = String(type);
+    return `${typeString.charAt(0).toUpperCase()}${typeString.slice(1).toLowerCase()}`;
+  }
+
   function formatMatchType(type) {
     const baseLabel = formatMatchTypeLabel(type);
     if (!baseLabel || baseLabel === 'Match') return 'Match';
