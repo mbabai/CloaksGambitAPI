@@ -167,9 +167,36 @@
         gap: 8px;
         text-decoration: none;
       }
+      #googleLoginBtn {
+        border: 4px solid var(--CG-deep-gold);
+        background: var(--CG-deep-green);
+        color: var(--CG-white);
+        border-radius: 0;
+        font-weight: 700;
+        font-size: 16px;
+        justify-content: center;
+        gap: 14px;
+        padding: 8px 18px;
+        margin: 12px auto;
+        width: auto;
+        align-self: center;
+        transition: background 0.2s ease, transform 0.15s ease;
+      }
+      #googleLoginBtn:hover {
+        background: var(--forest);
+        transform: translateY(-1px);
+      }
+      #googleLoginBtn:active {
+        background: var(--CG-deep-green);
+        transform: translateY(0);
+      }
       .menu-button img {
         width: 24px;
         height: 24px;
+      }
+      #googleLoginBtn img {
+        width: 28px;
+        height: 28px;
       }
       .menu-button.active { background: var(--purple-pressed); }
       .menu-footer {
@@ -352,7 +379,7 @@
       <div id="menuAccountPanel" class="menu-panel" style="display:none">
         <div class="menu-spacer"></div>
         <div class="menu-buttons" id="accountPanelContent">
-          <button id="googleLoginBtn" class="menu-button"><img src="assets/images/google-icon.png" alt="Google" /> Sign in with Google</button>
+          <button id="googleLoginBtn" class="menu-button"><img src="assets/images/google-icon.png" alt="Google" /> Sign in</button>
           <div class="menu-message">Log in to see account history, statistics, elo, and participate in ranked matches.</div>
         </div>
       </div>
