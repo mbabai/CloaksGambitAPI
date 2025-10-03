@@ -3756,7 +3756,7 @@ preloadAssets();
       position: 'relative'
     });
     btn.id = 'gameOverNextBtn';
-    btn.style.marginTop = '15px';
+    btn.style.margin = '15px auto 0';
     btn.style.setProperty('--cg-button-background', 'var(--CG-dark-red)');
     btn.style.setProperty('--cg-button-border', '2px solid var(--CG-deep-gold)');
     btn.style.setProperty('--cg-button-padding', '6px 12px');
