@@ -79,7 +79,7 @@ Supporting primitives expose additional hooks:
 - `.cg-clock-panel` uses `--cg-clock-panel-background`, `--cg-clock-panel-color`, and `--cg-clock-panel-border` to drive light/dark themes.
 - `.cg-dagger-counter` relies on `--cg-dagger-counter-gap` for spacing between tokens.
 - `.cg-challenge-bubble` accepts `--cg-challenge-bubble-offset-y` and `--cg-challenge-bubble-z-index` for positioning.
-- `.cg-elo-badge` now renders via CSS custom properties (`--cg-elo-badge-width`, `--cg-elo-badge-font-size`, etc.) so `createEloBadge` no longer emits inline styles.
+- `.cg-elo-badge` sizing is driven by CSS custom properties (`--cg-elo-badge-width`, `--cg-elo-badge-font-size`, etc.) populated by `createEloBadge` so the shield consistently frames the Elo value regardless of digit count.
 - `.cg-active-match*` classes power the active match list rows used on the dashboard and admin console. Adjust spacing via `--cg-active-match-gap`, tweak pill typography with the `--cg-active-match-pill-*` namespace, and tune button padding with `--cg-active-match-action-*`.
 - `.cg-spectate-bubble` drives the move overlays on the board. Size the art with `--cg-spectate-bubble-size` and tweak offsets using `--cg-spectate-bubble-offset-x`/`--cg-spectate-bubble-offset-y`.
 - `.cg-spectate-score` prints the match tally. Player labels read `--cg-spectate-score-player-*`, the numeric value uses `--cg-spectate-score-value-*`, and draw summaries pull from the `--cg-spectate-score-draw-*` namespace.

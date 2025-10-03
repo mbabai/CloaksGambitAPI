@@ -644,18 +644,16 @@ body.history-overlay-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--cg-elo-badge-width, 32px);
-  height: var(--cg-elo-badge-height, 26px);
+  width: var(--cg-elo-badge-width, 44px);
+  height: var(--cg-elo-badge-height, 32px);
   box-sizing: border-box;
-  padding: var(--cg-elo-badge-padding, 0 4px);
+  padding: var(--cg-elo-badge-padding, 2px 6px);
   flex-shrink: 0;
   overflow: visible;
 }
 
 .cg-elo-badge__icon {
   position: absolute;
-  width: var(--cg-elo-badge-icon-size, 36px);
-  height: var(--cg-elo-badge-icon-size, 36px);
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
@@ -663,16 +661,21 @@ body.history-overlay-open {
   pointer-events: none;
 }
 
+.cg-elo-badge .cg-elo-badge__icon {
+  width: var(--cg-elo-badge-icon-size, 52px);
+  height: var(--cg-elo-badge-icon-size, 52px);
+}
+
 .cg-elo-badge__value {
   position: relative;
   z-index: 1;
   color: var(--cg-elo-badge-color, #ffd700);
-  font-weight: var(--cg-elo-badge-font-weight, 400);
-  font-size: var(--cg-elo-badge-font-size, 12px);
+  font-weight: var(--cg-elo-badge-font-weight, 500);
+  font-size: var(--cg-elo-badge-font-size, 13px);
   line-height: 1;
   letter-spacing: var(--cg-elo-badge-letter-spacing, -0.25px);
   text-align: center;
-  padding: var(--cg-elo-badge-value-padding, 0 2px);
+  padding: var(--cg-elo-badge-value-padding, 0 4px);
   text-shadow: var(--cg-elo-badge-text-shadow, 0 0 4px rgba(0, 0, 0, 0.85));
   user-select: none;
   pointer-events: none;
