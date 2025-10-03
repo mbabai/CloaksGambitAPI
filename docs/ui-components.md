@@ -6,6 +6,8 @@ The shared stylesheet [`public/ui.css`](../public/ui.css) centralizes the presen
 
 All helpers in [`public/js/modules/ui/buttons.js`](../public/js/modules/ui/buttons.js) output elements with the `.cg-button` class and, when a palette name is supplied, a modifier such as `.cg-button--primary` or `.cg-button--danger`. The class applies the shared border, cursor, typography, and box-model rules so renderers only need to provide dynamic measurements (position, width, height, font size).
 
+Existing static markup can be normalized by calling `upgradeButton(element, { variant, position })`, which swaps in the shared class names and datasets while preserving the original DOM. Inline renderers that need a fresh element can continue to call `createButton`/`renderButton`, now with an optional `position` override that feeds the `--cg-button-position` custom property (defaulting to `absolute`).
+
 The fill color can be tuned via the CSS custom property `--cg-button-background`. Recognized variants update this property automatically, but custom colors can be injected by setting the property directly:
 
 ```css
@@ -22,6 +24,8 @@ Additional hooks:
 | `--cg-button-border` | Border declaration (`3px solid var(--CG-deep-gold)` by default). |
 | `--cg-button-color` | Text color (defaults to `var(--CG-white)`). |
 | `--cg-button-font-weight` | Font weight (`800`). |
+| `--cg-button-position` | Layout context (`absolute` by default, often overridden to `relative` for inline buttons). |
+| `--cg-button-padding` | Internal padding; defaults to `0` so board overlays can size buttons explicitly. |
 
 See [`docs/ui-buttons.md`](./ui-buttons.md) for the rendering API.
 
@@ -40,6 +44,9 @@ Specialized overlays extend the base class:
 
 - `.history-overlay` raises the z-index and increases padding.
 - `.cg-overlay--banner` removes padding and stretches the dialog to the viewport; the supporting elements use the matching modifiers (`.cg-overlay__dialog--banner`, `.cg-overlay__content--banner`, `.cg-overlay__backdrop--banner`, and `.cg-overlay__close--banner`).
+- `.cg-overlay--spectate-result` disables pointer events on the shell so only the result card remains interactive.
+
+All close buttons are upgraded through `upgradeButton`, so they inherit `.cg-button` styling. The helper primes `--cg-button-background`, `--cg-button-border`, and padding defaults, but variants can override those custom properties as needed.
 
 Legacy selectors such as `.banner-overlay` remain in [`public/ui.css`](../public/ui.css) as aliases so older markup continues to render correctly while pages transition to the normalized naming scheme.
 
@@ -72,6 +79,17 @@ Supporting primitives expose additional hooks:
 - `.cg-clock-panel` uses `--cg-clock-panel-background`, `--cg-clock-panel-color`, and `--cg-clock-panel-border` to drive light/dark themes.
 - `.cg-dagger-counter` relies on `--cg-dagger-counter-gap` for spacing between tokens.
 - `.cg-challenge-bubble` accepts `--cg-challenge-bubble-offset-y` and `--cg-challenge-bubble-z-index` for positioning.
+- `.cg-elo-badge` now renders via CSS custom properties (`--cg-elo-badge-width`, `--cg-elo-badge-font-size`, etc.) so `createEloBadge` no longer emits inline styles.
+- `.cg-active-match*` classes power the active match list rows used on the dashboard and admin console. Adjust spacing via `--cg-active-match-gap`, tweak pill typography with the `--cg-active-match-pill-*` namespace, and tune button padding with `--cg-active-match-action-*`.
+- `.cg-spectate-bubble` drives the move overlays on the board. Size the art with `--cg-spectate-bubble-size` and tweak offsets using `--cg-spectate-bubble-offset-x`/`--cg-spectate-bubble-offset-y`.
+- `.cg-spectate-score` prints the match tally. Player labels read `--cg-spectate-score-player-*`, the numeric value uses `--cg-spectate-score-value-*`, and draw summaries pull from the `--cg-spectate-score-draw-*` namespace.
+- `.cg-spectate-result-card` powers the post-game overlay. Palette and spacing tokens live under `--cg-spectate-result-*`, while the modifier `.cg-spectate-result-card--draw` swaps in a neutral background.
+
+To simplify banner management, the module now exports:
+
+- `createBanner({ text, variant, icon })` – returns a detached `.cg-banner` element with optional variant modifiers (accepting a string or array).
+- `setBannerState(banner, { text, variant, hidden })` – clears existing content, applies modifiers, and toggles visibility based on supplied text.
+- `applyBannerVariant(banner, variant)` – a lightweight helper for hydrating pre-existing DOM nodes with the standardized modifier classes.
 
 These classes enable renderer modules to focus on measurements (widths, heights, offsets) while the shared stylesheet handles typography, flex alignment, and stacking.
 
@@ -83,4 +101,4 @@ Match history tiles also emit `.cg-status-icon` with result modifiers (`.cg-stat
 
 ## QA Showcase
 
-The static gallery [`public/ui-library.html`](../public/ui-library.html) imports the modules above and renders sample buttons, banner rows, overlays, and icons with descriptive annotations. QA can load the page after a refactor to validate the visual output and inspect the emitted classes/custom properties in DevTools.
+The static gallery [`public/ui-library.html`](../public/ui-library.html) imports the modules above and renders sample buttons, banner rows, overlays, and icons with descriptive annotations. QA can load the page after a refactor to validate the visual output and inspect the emitted classes/custom properties in DevTools. Use the new active-match showcase to verify pill spacing and button variants after design tweaks.

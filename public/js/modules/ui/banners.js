@@ -21,6 +21,9 @@ const DEFAULT_BANNER_ASSETS = Object.freeze({
   createChallengeBubble: defaultCreateChallengeBubble
 });
 
+const BANNER_CLASS = 'cg-banner';
+const BANNER_VARIANT_PREFIX = `${BANNER_CLASS}--`;
+
 function resolveBannerAssets(overrides) {
   if (!overrides) return DEFAULT_BANNER_ASSETS;
   return { ...DEFAULT_BANNER_ASSETS, ...overrides };
@@ -34,6 +37,69 @@ function createDocument(documentRef) {
   return documentRef && typeof documentRef.createElement === 'function'
     ? documentRef
     : document;
+}
+
+function clearBannerVariants(node) {
+  if (!node || !node.classList) return;
+  Array.from(node.classList).forEach((className) => {
+    if (className.startsWith(BANNER_VARIANT_PREFIX)) {
+      node.classList.remove(className);
+    }
+  });
+}
+
+function toVariantList(variant) {
+  if (!variant) return [];
+  if (Array.isArray(variant)) {
+    return variant.flatMap(toVariantList).filter(Boolean);
+  }
+  return [String(variant).trim()].filter(Boolean);
+}
+
+export function applyBannerVariant(node, variant) {
+  if (!node) return;
+  if (!node.classList.contains(BANNER_CLASS)) {
+    node.classList.add(BANNER_CLASS);
+  }
+  clearBannerVariants(node);
+  toVariantList(variant).forEach((name) => {
+    node.classList.add(`${BANNER_VARIANT_PREFIX}${name}`);
+  });
+}
+
+export function createBanner({ documentRef, text = '', variant, icon } = {}) {
+  const doc = createDocument(documentRef);
+  const banner = doc.createElement('div');
+  banner.classList.add(BANNER_CLASS);
+  toVariantList(variant).forEach((name) => {
+    banner.classList.add(`${BANNER_VARIANT_PREFIX}${name}`);
+  });
+  if (icon) {
+    banner.appendChild(icon);
+  }
+  if (text) {
+    banner.appendChild(doc.createTextNode(text));
+  }
+  return banner;
+}
+
+export function setBannerState(banner, { text, variant, icon, hidden } = {}) {
+  if (!banner) return;
+  applyBannerVariant(banner, variant);
+  while (banner.firstChild) {
+    banner.removeChild(banner.firstChild);
+  }
+  if (icon) {
+    banner.appendChild(icon);
+  }
+  if (text) {
+    banner.appendChild(banner.ownerDocument.createTextNode(text));
+  }
+  if (hidden !== undefined) {
+    banner.hidden = Boolean(hidden);
+  } else {
+    banner.hidden = !text;
+  }
 }
 
 /**

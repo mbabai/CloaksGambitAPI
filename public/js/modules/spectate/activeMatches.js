@@ -1,4 +1,6 @@
 import { normalizeId } from '../history/dashboard.js';
+import { createButton } from '../ui/buttons.js';
+import { createDrawIcon } from '../ui/icons.js';
 
 function normalizeScoreValue(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -120,13 +122,10 @@ function renderActiveMatchesList(targetEl, items, options = {}) {
 
   items.forEach((item) => {
     const row = document.createElement('div');
-    row.className = 'row';
-    row.style.display = 'flex';
-    row.style.alignItems = 'center';
-    row.style.gap = '12px';
+    row.classList.add('row', 'cg-active-match');
 
     const typePill = document.createElement('span');
-    typePill.className = 'matchTypePill';
+    typePill.classList.add('matchTypePill', 'cg-active-match__pill');
     typePill.textContent = formatMatchTypeLabel(item?.type);
     row.appendChild(typePill);
 
@@ -141,62 +140,62 @@ function renderActiveMatchesList(targetEl, items, options = {}) {
     const drawCount = normalizeScoreValue(item?.drawCount);
 
     const scoreLine = document.createElement('div');
-    scoreLine.className = 'matchScoreLine';
-    scoreLine.style.flex = '1 1 auto';
-    scoreLine.style.minWidth = '0';
+    scoreLine.classList.add('matchScoreLine', 'cg-active-match__score');
     const opponentLine = [player1Name || player1Id || 'Player 1', 'vs', player2Name || player2Id || 'Player 2']
       .filter(Boolean)
       .join(' ');
     scoreLine.title = opponentLine;
 
     const player1Label = document.createElement('span');
-    player1Label.className = 'matchPlayerName';
+    player1Label.classList.add('matchPlayerName', 'cg-active-match__player');
     player1Label.textContent = player1Name || player1Id || 'Player 1';
     scoreLine.appendChild(player1Label);
 
     const player1ScoreEl = document.createElement('span');
-    player1ScoreEl.className = 'matchScoreValue';
+    player1ScoreEl.classList.add('matchScoreValue', 'cg-active-match__score-value');
     player1ScoreEl.textContent = player1Score;
     scoreLine.appendChild(player1ScoreEl);
 
     const separatorEl = document.createElement('span');
-    separatorEl.className = 'matchScoreSeparator';
+    separatorEl.classList.add('matchScoreSeparator', 'cg-active-match__score-separator');
     separatorEl.textContent = '-';
     scoreLine.appendChild(separatorEl);
 
     const player2ScoreEl = document.createElement('span');
-    player2ScoreEl.className = 'matchScoreValue';
+    player2ScoreEl.classList.add('matchScoreValue', 'cg-active-match__score-value');
     player2ScoreEl.textContent = player2Score;
     scoreLine.appendChild(player2ScoreEl);
 
     const player2Label = document.createElement('span');
-    player2Label.className = 'matchPlayerName';
+    player2Label.classList.add('matchPlayerName', 'cg-active-match__player');
     player2Label.textContent = player2Name || player2Id || 'Player 2';
     scoreLine.appendChild(player2Label);
 
     row.appendChild(scoreLine);
 
     const drawLine = document.createElement('div');
-    drawLine.className = 'matchDrawLine';
+    drawLine.classList.add('matchDrawLine', 'cg-active-match__draw');
     drawLine.title = `Draws: ${drawCount}`;
 
-    const drawIcon = document.createElement('img');
-    drawIcon.src = 'assets/images/draw.png';
-    drawIcon.alt = 'Draws';
-    drawIcon.className = 'matchDrawIcon';
-    drawLine.appendChild(drawIcon);
+    const drawIcon = createDrawIcon({ size: 18, alt: 'Draws' });
+    if (drawIcon) {
+      drawIcon.classList.add('cg-active-match__draw-icon');
+      drawLine.appendChild(drawIcon);
+    }
 
     const drawValue = document.createElement('span');
-    drawValue.className = 'matchScoreValue';
+    drawValue.classList.add('matchScoreValue', 'cg-active-match__score-value');
     drawValue.textContent = drawCount;
     drawLine.appendChild(drawValue);
 
     row.appendChild(drawLine);
 
-    const spectateBtn = document.createElement('button');
-    spectateBtn.type = 'button';
-    spectateBtn.className = 'spectateBtn';
-    spectateBtn.textContent = buttonLabel;
+    const spectateBtn = createButton({
+      label: buttonLabel,
+      variant: 'primary',
+      position: 'relative'
+    });
+    spectateBtn.classList.add('spectateBtn', 'cg-active-match__action');
     spectateBtn.setAttribute('aria-label', `Spectate match ${item?.id || ''}`.trim());
     if (item?.id) {
       spectateBtn.addEventListener('click', () => {

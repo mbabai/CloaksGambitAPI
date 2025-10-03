@@ -6,6 +6,7 @@ import { computeBoardMetrics } from '../layout.js';
 import { formatClock, describeTimeControl } from '../utils/timeControl.js';
 import { computeGameClockState } from '../utils/clockState.js';
 import { getBubbleAsset } from '../ui/icons.js';
+import { setBannerState, applyBannerVariant } from '../ui/banners.js';
 import { createOverlay } from '../ui/overlays.js';
 import { deriveSpectateView } from './viewModel.js';
 import { formatMatchTypeLabel } from './activeMatches.js';
@@ -115,6 +116,11 @@ export function createSpectateController(options) {
 
   const spectateRefs = { boardCells: [], activeBubbles: [] };
   let spectateGameBannerOverlay = null;
+
+  if (bannerEl) {
+    applyBannerVariant(bannerEl, ['spectate']);
+    bannerEl.hidden = true;
+  }
 
   const boardView = boardEl
     ? createBoardView({
@@ -274,22 +280,16 @@ export function createSpectateController(options) {
     img.dataset.bubble = '1';
     img.dataset.bubbleType = type;
     img.draggable = false;
-    img.style.position = 'absolute';
-    img.style.pointerEvents = 'none';
-    img.style.zIndex = '1001';
+    img.classList.add('cg-spectate-bubble');
     const size = Math.max(0, Math.floor(squareSize * 1.08));
-    img.style.width = `${size}px`;
-    img.style.height = 'auto';
+    img.style.setProperty('--cg-spectate-bubble-size', `${size}px`);
     const offsetX = Math.floor(squareSize * 0.6);
     const offsetY = Math.floor(squareSize * 0.5);
+    img.style.setProperty('--cg-spectate-bubble-offset-x', `${offsetX}px`);
+    img.style.setProperty('--cg-spectate-bubble-offset-y', `${offsetY}px`);
     if (typeof type === 'string' && type.endsWith('Right')) {
-      img.style.right = `${-offsetX}px`;
-      img.style.left = 'auto';
-    } else {
-      img.style.left = `${-offsetX}px`;
-      img.style.right = 'auto';
+      img.classList.add('cg-spectate-bubble--right');
     }
-    img.style.top = `${-offsetY}px`;
     img.src = src;
     img.alt = '';
     return img;
@@ -314,9 +314,7 @@ export function createSpectateController(options) {
     if (statusEl) statusEl.textContent = '';
     if (scoreEl) scoreEl.textContent = '';
     if (bannerEl) {
-      bannerEl.textContent = '';
-      bannerEl.hidden = true;
-      bannerEl.className = 'cg-banner cg-banner--spectate';
+      setBannerState(bannerEl, { text: '', variant: ['spectate'], hidden: true });
     }
     if (metaEl) metaEl.textContent = '';
     if (topBarEl) topBarEl.innerHTML = '';
@@ -369,20 +367,23 @@ export function createSpectateController(options) {
     const player1 = resolveSpectatePlayer(snapshot, player1Id, 'Player 1');
     const player2 = resolveSpectatePlayer(snapshot, player2Id, 'Player 2');
     const frag = createDocumentFragment();
-    const span1 = document.createElement('span');
-    span1.textContent = player1.name;
-    span1.style.fontWeight = '700';
-    const scoreSpan = document.createElement('span');
-    scoreSpan.textContent = `${Number(match.player1Score || 0)} - ${Number(match.player2Score || 0)}`;
-    const span2 = document.createElement('span');
-    span2.textContent = player2.name;
-    span2.style.fontWeight = '700';
-    frag.appendChild(span1);
-    frag.appendChild(scoreSpan);
-    frag.appendChild(span2);
+    scoreEl.classList.add('cg-spectate-score');
+    const player1Label = document.createElement('span');
+    player1Label.className = 'cg-spectate-score__player';
+    player1Label.textContent = player1.name;
+    const scoreValue = document.createElement('span');
+    scoreValue.className = 'cg-spectate-score__value';
+    scoreValue.textContent = `${Number(match.player1Score || 0)} - ${Number(match.player2Score || 0)}`;
+    const player2Label = document.createElement('span');
+    player2Label.className = 'cg-spectate-score__player';
+    player2Label.textContent = player2.name;
+    frag.appendChild(player1Label);
+    frag.appendChild(scoreValue);
+    frag.appendChild(player2Label);
     const draws = Number(match.drawCount || 0);
     if (draws > 0) {
       const drawSpan = document.createElement('span');
+      drawSpan.className = 'cg-spectate-score__draws';
       drawSpan.textContent = `Draws: ${draws}`;
       frag.appendChild(drawSpan);
     }
@@ -391,18 +392,18 @@ export function createSpectateController(options) {
 
   function renderSpectateBanner(snapshot) {
     if (!bannerEl) return;
-    bannerEl.hidden = true;
-    bannerEl.textContent = '';
-    bannerEl.className = 'cg-banner cg-banner--spectate';
+    setBannerState(bannerEl, { text: '', variant: ['spectate'], hidden: true });
     const match = snapshot?.match;
     if (!match) return;
     if (match.isActive === false) {
       return;
     }
     if (snapshot?.game && snapshot.game.isActive === false) {
-      bannerEl.textContent = 'Awaiting the next game in this match…';
-      bannerEl.classList.add('cg-banner--info');
-      bannerEl.hidden = false;
+      setBannerState(bannerEl, {
+        text: 'Awaiting the next game in this match…',
+        variant: ['spectate', 'info'],
+        hidden: false
+      });
     }
   }
 
@@ -427,9 +428,9 @@ export function createSpectateController(options) {
   function ensureSpectateGameBannerOverlay() {
     if (spectateGameBannerOverlay) return spectateGameBannerOverlay;
     spectateGameBannerOverlay = createOverlay({
-      baseClass: 'cg-overlay cg-overlay--banner',
-      dialogClass: 'cg-overlay__dialog cg-overlay__dialog--banner',
-      contentClass: 'cg-overlay__content cg-overlay__content--banner',
+      baseClass: 'cg-overlay cg-overlay--banner cg-overlay--spectate-result',
+      dialogClass: 'cg-overlay__dialog cg-overlay__dialog--banner cg-overlay__dialog--spectate-result',
+      contentClass: 'cg-overlay__content cg-overlay__content--banner cg-overlay__content--spectate-result',
       backdropClass: 'cg-overlay__backdrop cg-overlay__backdrop--banner',
       closeButtonClass: 'cg-overlay__close cg-overlay__close--banner',
       openClass: 'cg-overlay--open cg-overlay--banner-open',
@@ -447,18 +448,6 @@ export function createSpectateController(options) {
       return;
     }
     try {
-      if (spectateGameBannerOverlay.element) {
-        spectateGameBannerOverlay.element.style.pointerEvents = '';
-      }
-      if (spectateGameBannerOverlay.backdrop) {
-        spectateGameBannerOverlay.backdrop.style.pointerEvents = '';
-      }
-      if (spectateGameBannerOverlay.dialog) {
-        spectateGameBannerOverlay.dialog.style.pointerEvents = '';
-      }
-      if (spectateGameBannerOverlay.content) {
-        spectateGameBannerOverlay.content.style.pointerEvents = '';
-      }
       if (spectateGameBannerOverlay.content) {
         spectateGameBannerOverlay.content.innerHTML = '';
       }
@@ -475,25 +464,9 @@ export function createSpectateController(options) {
     }
     const overlay = ensureSpectateGameBannerOverlay();
     if (!overlay) return;
-    const { content, dialog } = overlay;
-    if (overlay.element) {
-      overlay.element.style.pointerEvents = 'none';
-    }
-    if (overlay.backdrop) {
-      overlay.backdrop.style.pointerEvents = 'none';
-    }
-    if (dialog) {
-      dialog.style.alignItems = 'center';
-      dialog.style.justifyContent = 'flex-end';
-      dialog.style.pointerEvents = 'none';
-    }
+    const { content } = overlay;
     if (content) {
       content.innerHTML = '';
-      content.style.alignItems = 'center';
-      content.style.justifyContent = 'flex-end';
-      content.style.width = '100%';
-      content.style.minHeight = '100%';
-      content.style.pointerEvents = 'none';
     }
 
     const match = snapshot.match || {};
@@ -514,36 +487,22 @@ export function createSpectateController(options) {
       : (loserName || (loserColor === 0 ? whiteName : blackName) || 'their opponent');
 
     const card = document.createElement('div');
-    card.style.width = '100%';
-    card.style.maxWidth = '100%';
-    card.style.height = '160px';
-    card.style.padding = '18px 26px';
-    card.style.borderRadius = '0';
-    card.style.borderTop = '2px solid var(--CG-deep-gold)';
-    card.style.borderBottom = '2px solid var(--CG-deep-gold)';
-    card.style.marginTop = 'auto';
-    card.style.marginBottom = 'clamp(12px, 2vh, 40px)';
-    card.style.marginLeft = 'auto';
-    card.style.marginRight = 'auto';
-    card.style.background = isDraw ? 'var(--CG-gray)' : 'var(--CG-dark-red)';
-    card.style.color = 'var(--CG-white)';
-    card.style.boxShadow = '0 10px 30px var(--CG-black)';
-    card.style.textAlign = 'center';
-    card.style.position = 'relative';
-    card.style.pointerEvents = 'auto';
+    card.className = 'cg-spectate-result-card';
+    if (isDraw) {
+      card.classList.add('cg-spectate-result-card--draw');
+    }
 
     const title = document.createElement('div');
+    title.className = 'cg-spectate-result-card__title';
     if (isDraw) {
       title.textContent = 'Draw';
     } else {
       const colorLabel = winnerColor === 0 ? 'White' : 'Black';
       title.textContent = `${winnerLabel || colorLabel} Victory`;
     }
-    title.style.fontSize = '32px';
-    title.style.fontWeight = '800';
-    title.style.marginBottom = '10px';
 
     const desc = document.createElement('div');
+    desc.className = 'cg-spectate-result-card__desc';
     const reason = Number(game.winReason);
     let descText;
     if (isDraw || reason === WIN_REASONS.DRAW) {
@@ -583,21 +542,13 @@ export function createSpectateController(options) {
       }
     }
     desc.textContent = descText;
-    desc.style.fontSize = '20px';
-    desc.style.fontWeight = '500';
     desc.id = 'spectateGameOverDesc';
 
     const footer = document.createElement('div');
+    footer.className = 'cg-spectate-result-card__footer';
     footer.textContent = match?.isActive === false
       ? 'Match complete. Close the spectate view to exit.'
       : 'Awaiting the next game…';
-    footer.style.fontSize = '14px';
-    footer.style.fontWeight = '600';
-    footer.style.position = 'absolute';
-    footer.style.bottom = '12px';
-    footer.style.left = '50%';
-    footer.style.transform = 'translateX(-50%)';
-    footer.style.opacity = '0.85';
 
     card.appendChild(title);
     card.appendChild(desc);
@@ -899,9 +850,11 @@ export function createSpectateController(options) {
       statusEl.textContent = payload?.message || 'Unable to spectate match.';
     }
     if (bannerEl) {
-      bannerEl.textContent = payload?.message || 'Unable to spectate match.';
-    bannerEl.className = 'cg-banner cg-banner--spectate cg-banner--info';
-      bannerEl.hidden = false;
+      setBannerState(bannerEl, {
+        text: payload?.message || 'Unable to spectate match.',
+        variant: ['spectate', 'info'],
+        hidden: false
+      });
     }
   }
 

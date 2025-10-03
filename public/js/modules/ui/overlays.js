@@ -1,3 +1,5 @@
+import { upgradeButton } from './buttons.js';
+
 const DEFAULT_FOCUSABLE_SELECTOR = [
   'a[href]','area[href]','button:not([disabled])','input:not([disabled]):not([type="hidden"])',
   'select:not([disabled])','textarea:not([disabled])','[tabindex]:not([tabindex="-1"])'
@@ -58,6 +60,7 @@ export function createOverlay({
   contentClass = 'cg-overlay__content',
   backdropClass = 'cg-overlay__backdrop',
   closeButtonClass = 'cg-overlay__close',
+  closeButtonVariant = 'dark',
   closeLabel = 'Close dialog',
   closeText = 'Close',
   showCloseButton = true,
@@ -104,9 +107,17 @@ export function createOverlay({
   if (showCloseButton) {
     closeButton = doc.createElement('button');
     closeButton.type = 'button';
-    closeButton.className = closeButtonClass;
-    closeButton.textContent = closeText;
+    if (closeText !== undefined && closeText !== null) {
+      closeButton.textContent = closeText;
+    }
     closeButton.setAttribute('aria-label', closeLabel || closeText || 'Close');
+    const normalized = upgradeButton(closeButton, {
+      variant: closeButtonVariant
+    });
+    if (normalized) {
+      closeButton = normalized;
+    }
+    addClasses(closeButton, toClassList(closeButtonClass));
   }
 
   let focusStart = null;

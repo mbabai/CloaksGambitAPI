@@ -90,6 +90,14 @@
         border-radius: 10px;
         border: 1px dashed rgba(245, 230, 167, 0.35);
       }
+      .ui-card__stage--list {
+        align-items: stretch;
+        justify-content: flex-start;
+        padding: 16px;
+      }
+      .ui-card__stage--center {
+        padding: 24px;
+      }
       .ui-button-stage {
         position: relative;
         width: 220px;
@@ -110,6 +118,12 @@
         background: rgba(255, 255, 255, 0.08);
         padding: 6px 12px;
         border-radius: 8px;
+      }
+      .ui-spectate-result-samples {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 24px;
       }
       .ui-banner-clocks {
         display: flex;
@@ -137,16 +151,34 @@
         gap: 12px;
         flex-wrap: wrap;
       }
-      .ui-overlay-actions button {
-        padding: 10px 16px;
+      .active-matches-demo {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 100%;
+      }
+      .active-matches-demo .cg-active-match {
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(245, 230, 167, 0.35);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .active-matches-status {
+        margin-top: 12px;
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.75);
+      }
+      .ui-overlay-trigger {
+        --cg-button-position: relative;
+        --cg-button-padding: 10px 16px;
+        --cg-button-font-weight: 600;
         border-radius: 999px;
         border: 1px solid rgba(245, 230, 167, 0.45);
         background: rgba(255, 255, 255, 0.08);
         color: var(--CG-white);
-        font-weight: 600;
         cursor: pointer;
       }
-      .ui-overlay-actions button:hover {
+      .ui-overlay-trigger:hover {
         background: rgba(245, 230, 167, 0.2);
         color: var(--CG-black);
       }
@@ -203,6 +235,31 @@
         </div>
       </section>
 
+      <section class="ui-section" id="activeMatchesSection">
+        <h2>Active Match Rows</h2>
+        <p>Queue and spectate drawers share the `.cg-active-match` primitives for consistent player labels, score pills, and action buttons.</p>
+        <div class="ui-card ui-card--wide">
+          <h3>Spectate Drawer Preview</h3>
+          <div class="ui-card__stage ui-card__stage--list">
+            <div class="active-matches-demo" id="activeMatchesDemo"></div>
+            <div class="active-matches-status" id="activeMatchesStatus">Select a match to see the logged payload.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="ui-section" id="spectateHudSection">
+        <h2>Spectate HUD</h2>
+        <p>Spectate overlays reuse `.cg-spectate-score`, `.cg-spectate-bubble`, and `.cg-spectate-result-card` for scoreboard and endgame treatments.</p>
+        <div class="ui-card ui-card--wide">
+          <h3>Score Summary</h3>
+          <div class="ui-card__stage ui-card__stage--center" id="spectateScoreStage"></div>
+        </div>
+        <div class="ui-card ui-card--wide">
+          <h3>Result Card Variants</h3>
+          <div class="ui-card__stage ui-card__stage--center" id="spectateResultStage"></div>
+        </div>
+      </section>
+
       <section class="ui-section" id="overlaysSection">
         <h2>Overlays</h2>
         <p>Use the triggers below to preview shared overlay chrome. The dialogs reuse <code>.cg-overlay</code> and palette-aware backdrop styles.</p>
@@ -219,7 +276,7 @@
     </main>
 
     <script type="module">
-      import { renderButton } from './js/modules/ui/buttons.js';
+      import { renderButton, createButton } from './js/modules/ui/buttons.js';
       import { createOverlay } from './js/modules/ui/overlays.js';
       import {
         createNameRow,
@@ -233,6 +290,16 @@
         createDaggerToken,
         createReconnectSpinner
       } from './js/modules/ui/icons.js';
+      import { renderActiveMatchesList } from './js/modules/spectate/activeMatches.js';
+
+      const describeMatchType = (type) => {
+        if (!type) return 'Match';
+        const upper = String(type).trim().toUpperCase();
+        if (upper === 'RANKED') return 'Ranked';
+        if (upper === 'QUICKPLAY') return 'Quickplay';
+        if (upper === 'CUSTOM') return 'Custom';
+        return `${upper.charAt(0)}${upper.slice(1).toLowerCase()}`;
+      };
 
       const buttonSamples = [
         { label: 'Find Match', variant: 'primary', size: 'action', note: 'Primary palette with action preset.' },
@@ -339,6 +406,87 @@
       bannerStage.appendChild(daggerCounter);
       bannerStage.appendChild(clockRow);
 
+      const activeMatchesDemo = document.getElementById('activeMatchesDemo');
+      const activeMatchesStatus = document.getElementById('activeMatchesStatus');
+      if (activeMatchesDemo) {
+        const usernames = {
+          aurora: 'AuroraFox',
+          duskblade: 'DuskBlade',
+          ember: 'EmberMage',
+          nightwind: 'Nightwind'
+        };
+        const demoMatches = [
+          {
+            id: 'ranked-4812',
+            type: 'ranked',
+            players: ['aurora', 'duskblade'],
+            player1Score: 2,
+            player2Score: 1,
+            drawCount: 1
+          },
+          {
+            id: 'quick-9921',
+            type: 'quickplay',
+            players: ['ember', 'nightwind'],
+            player1Score: 0,
+            player2Score: 0,
+            drawCount: 2
+          }
+        ];
+        renderActiveMatchesList(activeMatchesDemo, demoMatches, {
+          getUsername: (id) => usernames[id] || id,
+          buttonLabel: 'Watch',
+          onSpectate: (item) => {
+            if (activeMatchesStatus) {
+              activeMatchesStatus.textContent = `Spectate requested for ${item?.id || 'unknown'} (${describeMatchType(item?.type)})`;
+            }
+            console.log('Spectate demo payload:', item);
+          }
+        });
+      }
+
+      const spectateScoreStage = document.getElementById('spectateScoreStage');
+      if (spectateScoreStage) {
+        const score = document.createElement('div');
+        score.className = 'cg-spectate-score';
+        const playerA = document.createElement('span');
+        playerA.className = 'cg-spectate-score__player';
+        playerA.textContent = 'AuroraFox';
+        const scoreValue = document.createElement('span');
+        scoreValue.className = 'cg-spectate-score__value';
+        scoreValue.textContent = '2 - 1';
+        const playerB = document.createElement('span');
+        playerB.className = 'cg-spectate-score__player';
+        playerB.textContent = 'StormCaller';
+        const draws = document.createElement('span');
+        draws.className = 'cg-spectate-score__draws';
+        draws.textContent = 'Draws: 1';
+        score.append(playerA, scoreValue, playerB, draws);
+        spectateScoreStage.appendChild(score);
+      }
+
+      const spectateResultStage = document.getElementById('spectateResultStage');
+      if (spectateResultStage) {
+        const samples = document.createElement('div');
+        samples.className = 'ui-spectate-result-samples';
+        samples.appendChild(
+          createResultCardDemo({
+            title: 'AuroraFox Victory',
+            desc: 'AuroraFox (White) won by capturing StormCaller\'s king.',
+            footer: 'Match complete. Close the spectate view to exit.'
+          })
+        );
+        samples.appendChild(
+          createResultCardDemo({
+            title: 'Draw',
+            desc: 'AuroraFox and StormCaller agreed to a draw.',
+            footer: 'Awaiting the next game…',
+            draw: true
+          })
+        );
+        spectateResultStage.appendChild(samples);
+      }
+
       const overlayActions = document.getElementById('overlayActions');
       const overlaySamples = [
         {
@@ -395,9 +543,12 @@
       overlaySamples.forEach((sample) => {
         const overlay = createOverlay(sample.options);
         sample.buildContent(overlay);
-        const trigger = document.createElement('button');
-        trigger.type = 'button';
-        trigger.textContent = sample.label;
+        const trigger = createButton({
+          label: sample.label,
+          variant: 'neutral',
+          position: 'relative'
+        });
+        trigger.classList.add('ui-overlay-trigger');
         trigger.addEventListener('click', () => {
           overlay.show();
         });
@@ -422,6 +573,25 @@
         swatch.appendChild(caption);
         iconsGrid.appendChild(swatch);
       });
+
+      function createResultCardDemo({ title, desc, footer, draw } = {}) {
+        const card = document.createElement('div');
+        card.className = 'cg-spectate-result-card';
+        if (draw) {
+          card.classList.add('cg-spectate-result-card--draw');
+        }
+        const titleEl = document.createElement('div');
+        titleEl.className = 'cg-spectate-result-card__title';
+        titleEl.textContent = title || 'Result';
+        const descEl = document.createElement('div');
+        descEl.className = 'cg-spectate-result-card__desc';
+        descEl.textContent = desc || 'Description text';
+        const footerEl = document.createElement('div');
+        footerEl.className = 'cg-spectate-result-card__footer';
+        footerEl.textContent = footer || 'Footer copy';
+        card.append(titleEl, descEl, footerEl);
+        return card;
+      }
     </script>
   </body>
 </html>

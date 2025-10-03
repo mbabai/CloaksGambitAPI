@@ -5,6 +5,7 @@ import { getCookie } from '/js/modules/utils/cookies.js';
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { createSpectateController } from '/js/modules/spectate/controller.js';
 import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/spectate/activeMatches.js';
+import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
 
 (function () {
   preloadAssets();
@@ -66,7 +67,9 @@ import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/s
     return fetch(input, { ...init, headers });
   }
 
-  const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
+  const tabButtons = Array.from(document.querySelectorAll('.tab-button'))
+    .map((btn) => upgradeButton(btn, { variant: 'neutral', position: 'relative' }))
+    .filter(Boolean);
   const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
 
   const connectedUsersEl = document.getElementById('connectedUsers');
@@ -76,7 +79,10 @@ import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/s
   const rankedQueueListEl = document.getElementById('rankedQueueList');
   const usersListEl = document.getElementById('usersList');
   const matchesListEl = document.getElementById('matchesList');
-  const purgeActiveMatchesBtn = document.getElementById('purgeActiveMatchesBtn');
+  const purgeActiveMatchesBtn = upgradeButton(document.getElementById('purgeActiveMatchesBtn'), {
+    variant: 'danger',
+    position: 'relative'
+  });
 
   const spectateOverlay = document.getElementById('spectateOverlay');
   const spectatePlayArea = document.getElementById('spectatePlayArea');
@@ -87,10 +93,15 @@ import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/s
   const spectateScoreEl = document.getElementById('spectateScore');
   const spectateBannerEl = document.getElementById('spectateBanner');
   const spectateMetaEl = document.getElementById('spectateMeta');
-  const spectateCloseBtn = document.getElementById('spectateCloseBtn');
+  const spectateCloseBtn = upgradeButton(document.getElementById('spectateCloseBtn'), {
+    variant: 'dark',
+    position: 'relative'
+  });
 
   const historyMatchesListEl = document.getElementById('historyMatchesList');
-  const historyFilterButtons = Array.from(document.querySelectorAll('[data-history-filter]'));
+  const historyFilterButtons = Array.from(document.querySelectorAll('[data-history-filter]'))
+    .map((btn) => upgradeButton(btn, { variant: 'neutral', position: 'relative' }))
+    .filter(Boolean);
   const historySummaryEls = {
     totalGames: document.getElementById('historyTotalGames'),
     totalGamesWins: document.getElementById('historyTotalGamesWins'),
@@ -294,12 +305,14 @@ import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/s
       actionEl.style.wordBreak = 'keep-all';
       actionEl.style.padding = '0 2px';
 
-      const deleteBtn = document.createElement('button');
-      deleteBtn.type = 'button';
-      deleteBtn.className = 'user-delete-btn';
+      const deleteBtn = createButton({
+        label: '🗑',
+        variant: 'danger',
+        position: 'relative'
+      });
+      deleteBtn.classList.add('user-delete-btn');
       deleteBtn.setAttribute('aria-label', `Delete ${username}`);
       deleteBtn.title = `Delete ${username}`;
-      deleteBtn.textContent = '🗑';
       deleteBtn.addEventListener('click', () => {
         requestUserDeletion({ id: u.id, username });
       });
@@ -729,12 +742,14 @@ import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/s
       header.appendChild(date);
       meta.appendChild(header);
 
-      const deleteBtn = document.createElement('button');
-      deleteBtn.type = 'button';
-      deleteBtn.className = 'history-delete-btn';
+      const deleteBtn = createButton({
+        label: '🗑',
+        variant: 'danger',
+        position: 'relative'
+      });
+      deleteBtn.classList.add('history-delete-btn');
       deleteBtn.setAttribute('aria-label', 'Delete match');
       deleteBtn.title = 'Delete this match';
-      deleteBtn.textContent = '🗑';
       if (matchId) {
         deleteBtn.addEventListener('click', () => {
           requestMatchDeletion(matchId);

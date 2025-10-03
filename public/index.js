@@ -11,6 +11,7 @@ import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
+import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
 import { randomizeSetup } from '/js/modules/setup/randomize.js';
 import { DRAG_PX_THRESHOLD as DRAG_PX_THRESHOLD_CFG, DRAG_PX_THRESHOLD_TOUCH as DRAG_PX_THRESHOLD_TOUCH_CFG, CLICK_TIME_MAX_MS as CLICK_TIME_MAX_MS_CFG } from '/js/modules/interactions/config.js';
 import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as performMoveM } from '/js/modules/state/moves.js';
@@ -36,7 +37,10 @@ preloadAssets();
 (function() {
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
-  const queueBtn = document.getElementById('queueBtn');
+  const queueBtn = upgradeButton(document.getElementById('queueBtn'), {
+    variant: 'primary',
+    position: 'relative'
+  });
   const modeSelect = document.getElementById('modeSelect');
 
   const isLocalDevelopmentHost = (() => {
@@ -81,10 +85,15 @@ preloadAssets();
   const allowGuestRankedQueue = isLocalDevelopmentHost;
   const selectWrap = document.getElementById('selectWrap');
 
-  const menuToggle = document.getElementById('menuToggle');
+  const menuToggle = upgradeButton(document.getElementById('menuToggle'), {
+    variant: 'dark'
+  });
   const menuContainer = document.getElementById('menuContainer');
   const menuMain = document.getElementById('menuMain');
-  const accountBtn = document.getElementById('accountBtn');
+  const accountBtn = upgradeButton(document.getElementById('accountBtn'), {
+    variant: 'neutral',
+    position: 'relative'
+  });
   const accountPanel = document.getElementById('menuAccountPanel');
   const usernameDisplay = document.getElementById('usernameDisplay');
   const accountPanelContent = document.getElementById('accountPanelContent');
@@ -99,11 +108,19 @@ preloadAssets();
   const spectateScoreEl = document.getElementById('spectateScore');
   const spectateBannerEl = document.getElementById('spectateBanner');
   const spectateMetaEl = document.getElementById('spectateMeta');
-  const spectateCloseBtn = document.getElementById('spectateCloseBtn');
+  const spectateCloseBtn = upgradeButton(document.getElementById('spectateCloseBtn'), {
+    variant: 'dark',
+    position: 'relative'
+  });
 
   const ACCOUNT_ICON_SRC = getAvatarAsset('account') || '/assets/images/account.png';
   const LOGGED_IN_AVATAR_SRC = getAvatarAsset('loggedInDefault') || '/assets/images/cloakHood.jpg';
   const GOOGLE_ICON_SRC = getIconAsset('google') || '/assets/images/google-icon.png';
+
+  upgradeButton(document.getElementById('googleLoginBtn'), {
+    variant: 'neutral',
+    position: 'relative'
+  });
 
   let spectateController = null;
   const spectateUsernameMap = {};
@@ -957,23 +974,24 @@ preloadAssets();
       usernameSpan.style.whiteSpace = 'nowrap';
       usernameSpan.style.overflow = 'hidden';
       usernameSpan.style.textOverflow = 'ellipsis';
-      const editBtn = document.createElement('button');
-      editBtn.id = 'editUsername';
-      editBtn.type = 'button';
-      editBtn.className = 'account__edit-button';
-      editBtn.textContent = 'Edit';
+      const editBtn = createButton({
+        id: 'editUsername',
+        label: 'Edit',
+        variant: 'neutral',
+        position: 'relative'
+      });
+      editBtn.classList.add('account__edit-button');
 
       usernameRow.appendChild(usernameSpan);
       usernameRow.appendChild(editBtn);
 
-      const statsBtn = document.createElement('button');
-      statsBtn.id = 'statsBtn';
-      statsBtn.className = 'menu-button';
-      statsBtn.style.display = 'flex';
-      statsBtn.style.alignItems = 'center';
-      statsBtn.style.justifyContent = 'space-between';
-      statsBtn.style.width = '100%';
-      statsBtn.style.gap = '12px';
+      const statsBtn = createButton({
+        id: 'statsBtn',
+        variant: 'neutral',
+        position: 'relative'
+      });
+      statsBtn.classList.add('menu-button', 'menu-button--split');
+      statsBtn.innerHTML = '';
       const statsLabel = document.createElement('span');
       statsLabel.textContent = 'Stats';
       statsLabel.style.flex = '1';
@@ -983,14 +1001,13 @@ preloadAssets();
       statsBtn.appendChild(statsLabel);
       statsBtn.appendChild(statsBadge);
 
-      const logoutBtn = document.createElement('button');
-      logoutBtn.id = 'logoutBtn';
-      logoutBtn.className = 'menu-button';
-      logoutBtn.style.display = 'flex';
-      logoutBtn.style.alignItems = 'center';
-      logoutBtn.style.justifyContent = 'space-between';
-      logoutBtn.style.width = '100%';
-      logoutBtn.style.gap = '12px';
+      const logoutBtn = createButton({
+        id: 'logoutBtn',
+        variant: 'danger',
+        position: 'relative'
+      });
+      logoutBtn.classList.add('menu-button', 'menu-button--split');
+      logoutBtn.innerHTML = '';
       const googleImg = document.createElement('img');
       googleImg.src = GOOGLE_ICON_SRC;
       googleImg.alt = 'Google';
@@ -1001,7 +1018,6 @@ preloadAssets();
       logoutLabel.textContent = 'Logout';
       logoutLabel.style.flex = '1';
       logoutLabel.style.textAlign = 'left';
-      googleImg.style.marginLeft = 'auto';
       logoutBtn.appendChild(logoutLabel);
       logoutBtn.appendChild(googleImg);
 
@@ -1101,24 +1117,18 @@ preloadAssets();
       accountPanelContent.style.gap = '8px';
       accountPanelContent.innerHTML = '';
 
-      const loginBtn = document.createElement('button');
-      loginBtn.id = 'googleLoginBtn';
-      loginBtn.className = 'menu-button';
-      loginBtn.style.display = 'flex';
-      loginBtn.style.alignItems = 'center';
-      loginBtn.style.justifyContent = 'flex-start';
-      loginBtn.style.gap = '12px';
-      loginBtn.style.width = '100%';
+      const loginBtn = createButton({
+        id: 'googleLoginBtn',
+        variant: 'neutral',
+        position: 'relative'
+      });
+      loginBtn.classList.add('menu-button');
+      loginBtn.innerHTML = '';
       const loginImg = document.createElement('img');
       loginImg.src = GOOGLE_ICON_SRC;
       loginImg.alt = 'Google';
-      loginImg.style.width = '18px';
-      loginImg.style.height = '18px';
-      loginImg.style.objectFit = 'contain';
       const loginLabel = document.createElement('span');
       loginLabel.textContent = 'Sign in';
-      loginLabel.style.flex = '1';
-      loginLabel.style.textAlign = 'left';
       loginBtn.appendChild(loginImg);
       loginBtn.appendChild(loginLabel);
       accountPanelContent.appendChild(loginBtn);
@@ -2686,15 +2696,14 @@ preloadAssets();
     buttons.style.justifyContent = 'center';
     buttons.style.marginTop = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
 
-    const okBtn = document.createElement('button');
-    okBtn.textContent = 'OK';
-    okBtn.style.background = 'var(--CG-forest)';
-    okBtn.style.color = 'var(--CG-white)';
-    okBtn.style.border = '2px solid var(--CG-deep-gold)';
-    okBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(18 * modalScale), 12, 18)}px`;
+    const okBtn = createButton({
+      label: 'OK',
+      variant: 'primary',
+      position: 'relative'
+    });
+    okBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(18 * modalScale), 12, 18)}px`);
     okBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
-    okBtn.style.fontWeight = '700';
-    okBtn.style.cursor = 'pointer';
+    okBtn.style.setProperty('--cg-button-font-weight', '700');
     okBtn.style.minWidth = '120px';
 
     buttons.appendChild(okBtn);
@@ -2791,29 +2800,27 @@ preloadAssets();
     buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
     buttons.style.justifyContent = 'center';
 
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
+    const cancelBtn = createButton({
+      label: 'Cancel',
+      variant: 'danger',
+      position: 'relative'
+    });
     cancelBtn.style.flex = '1';
     cancelBtn.style.minWidth = '0';
-    cancelBtn.style.background = 'var(--CG-dark-red)';
-    cancelBtn.style.color = 'var(--CG-white)';
-    cancelBtn.style.border = '2px solid var(--CG-deep-gold)';
-    cancelBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`;
+    cancelBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
     cancelBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
-    cancelBtn.style.fontWeight = '700';
-    cancelBtn.style.cursor = 'pointer';
+    cancelBtn.style.setProperty('--cg-button-font-weight', '700');
 
-    const sendBtn = document.createElement('button');
-    sendBtn.textContent = 'Send invite';
+    const sendBtn = createButton({
+      label: 'Send invite',
+      variant: 'primary',
+      position: 'relative'
+    });
     sendBtn.style.flex = '1';
     sendBtn.style.minWidth = '0';
-    sendBtn.style.background = 'var(--CG-forest)';
-    sendBtn.style.color = 'var(--CG-white)';
-    sendBtn.style.border = '2px solid var(--CG-deep-gold)';
-    sendBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`;
+    sendBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
     sendBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
-    sendBtn.style.fontWeight = '700';
-    sendBtn.style.cursor = 'pointer';
+    sendBtn.style.setProperty('--cg-button-font-weight', '700');
 
     function resetButtons() {
       sendBtn.disabled = false;
@@ -3051,29 +3058,27 @@ preloadAssets();
     buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
     buttons.style.justifyContent = 'center';
 
-    const declineBtn = document.createElement('button');
-    declineBtn.textContent = 'Decline';
+    const declineBtn = createButton({
+      label: 'Decline',
+      variant: 'danger',
+      position: 'relative'
+    });
     declineBtn.style.flex = '1';
     declineBtn.style.minWidth = '0';
-    declineBtn.style.background = 'var(--CG-dark-red)';
-    declineBtn.style.color = 'var(--CG-white)';
-    declineBtn.style.border = '2px solid var(--CG-deep-gold)';
-    declineBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`;
+    declineBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
     declineBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
-    declineBtn.style.fontWeight = '700';
-    declineBtn.style.cursor = 'pointer';
+    declineBtn.style.setProperty('--cg-button-font-weight', '700');
 
-    const acceptBtn = document.createElement('button');
-    acceptBtn.textContent = 'Accept';
+    const acceptBtn = createButton({
+      label: 'Accept',
+      variant: 'primary',
+      position: 'relative'
+    });
     acceptBtn.style.flex = '1';
     acceptBtn.style.minWidth = '0';
-    acceptBtn.style.background = 'var(--CG-forest)';
-    acceptBtn.style.color = 'var(--CG-white)';
-    acceptBtn.style.border = '2px solid var(--CG-deep-gold)';
-    acceptBtn.style.padding = `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`;
+    acceptBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
     acceptBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
-    acceptBtn.style.fontWeight = '700';
-    acceptBtn.style.cursor = 'pointer';
+    acceptBtn.style.setProperty('--cg-button-font-weight', '700');
 
     acceptBtn.addEventListener('click', () => {
       acceptBtn.disabled = true;
@@ -3160,29 +3165,28 @@ preloadAssets();
     buttons.style.gap = '12px';
     buttons.style.justifyContent = 'center';
 
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
+    const cancelBtn = createButton({
+      label: 'Cancel',
+      variant: 'primary',
+      position: 'relative'
+    });
     cancelBtn.style.flex = '1';
     cancelBtn.style.minWidth = '0';
-    cancelBtn.style.background = 'var(--CG-forest)';
-    cancelBtn.style.color = 'var(--CG-white)';
-    cancelBtn.style.border = '2px solid var(--CG-deep-gold)';
-    cancelBtn.style.padding = '10px 16px';
+    cancelBtn.style.setProperty('--cg-button-padding', '10px 16px');
     cancelBtn.style.fontSize = '18px';
-    cancelBtn.style.fontWeight = '700';
-    cancelBtn.style.cursor = 'pointer';
+    cancelBtn.style.setProperty('--cg-button-font-weight', '700');
+    cancelBtn.style.setProperty('--cg-button-background', 'var(--CG-forest)');
 
-    const resignBtn = document.createElement('button');
-    resignBtn.textContent = 'Resign';
+    const resignBtn = createButton({
+      label: 'Resign',
+      variant: 'danger',
+      position: 'relative'
+    });
     resignBtn.style.flex = '1';
     resignBtn.style.minWidth = '0';
-    resignBtn.style.background = 'var(--CG-dark-red)';
-    resignBtn.style.color = 'var(--CG-white)';
-    resignBtn.style.border = '2px solid var(--CG-deep-gold)';
-    resignBtn.style.padding = '10px 16px';
+    resignBtn.style.setProperty('--cg-button-padding', '10px 16px');
     resignBtn.style.fontSize = '18px';
-    resignBtn.style.fontWeight = '700';
-    resignBtn.style.cursor = 'pointer';
+    resignBtn.style.setProperty('--cg-button-font-weight', '700');
 
     buttons.appendChild(cancelBtn);
     buttons.appendChild(resignBtn);
@@ -3271,29 +3275,28 @@ preloadAssets();
     const btnPadX = clamp(Math.round(16 * modalScale), 10, 16);
     const btnFontSize = clamp(Math.round(18 * modalScale), 12, 18);
 
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
+    const cancelBtn = createButton({
+      label: 'Cancel',
+      variant: 'primary',
+      position: 'relative'
+    });
     cancelBtn.style.flex = '1';
     cancelBtn.style.minWidth = '0';
-    cancelBtn.style.background = 'var(--CG-forest)';
-    cancelBtn.style.color = 'var(--CG-white)';
-    cancelBtn.style.border = '2px solid var(--CG-deep-gold)';
-    cancelBtn.style.padding = `${btnPadY}px ${btnPadX}px`;
+    cancelBtn.style.setProperty('--cg-button-padding', `${btnPadY}px ${btnPadX}px`);
     cancelBtn.style.fontSize = btnFontSize + 'px';
-    cancelBtn.style.fontWeight = '700';
-    cancelBtn.style.cursor = 'pointer';
+    cancelBtn.style.setProperty('--cg-button-font-weight', '700');
+    cancelBtn.style.setProperty('--cg-button-background', 'var(--CG-forest)');
 
-    const confirmBtn = document.createElement('button');
-    confirmBtn.textContent = 'Yes';
+    const confirmBtn = createButton({
+      label: 'Yes',
+      variant: 'neutral',
+      position: 'relative'
+    });
     confirmBtn.style.flex = '1';
     confirmBtn.style.minWidth = '0';
-    confirmBtn.style.background = 'var(--CG-gray)';
-    confirmBtn.style.color = 'var(--CG-white)';
-    confirmBtn.style.border = '2px solid var(--CG-deep-gold)';
-    confirmBtn.style.padding = `${btnPadY}px ${btnPadX}px`;
+    confirmBtn.style.setProperty('--cg-button-padding', `${btnPadY}px ${btnPadX}px`);
     confirmBtn.style.fontSize = btnFontSize + 'px';
-    confirmBtn.style.fontWeight = '700';
-    confirmBtn.style.cursor = 'pointer';
+    confirmBtn.style.setProperty('--cg-button-font-weight', '700');
 
     buttons.appendChild(cancelBtn);
     buttons.appendChild(confirmBtn);
@@ -3641,17 +3644,17 @@ preloadAssets();
     desc.style.padding = '0 8px';
     desc.id = 'gameOverDesc';
 
-    const btn = document.createElement('button');
-    btn.textContent = 'Next';
-    btn.style.background = 'var(--CG-purple)';
-    btn.style.color = 'var(--CG-white)';
-    btn.style.border = '2px solid #fbbf24';
-    btn.style.borderRadius = '6px';
-    btn.style.padding = '8px 20px';
+    const btn = createButton({
+      id: 'gameOverNextBtn',
+      label: 'Next',
+      variant: 'primary',
+      position: 'relative'
+    });
+    btn.style.setProperty('--cg-button-background', 'var(--CG-purple)');
+    btn.style.setProperty('--cg-button-border', '2px solid #fbbf24');
+    btn.style.setProperty('--cg-button-padding', '8px 20px');
     btn.style.fontSize = '17px';
-    btn.style.cursor = 'pointer';
     btn.style.marginTop = 'auto';
-    btn.id = 'gameOverNextBtn';
     btn.addEventListener('click', async () => {
       if (summaryTimeout) {
         clearTimeout(summaryTimeout);
@@ -3747,17 +3750,19 @@ preloadAssets();
 
     const score = createScoreboard(match);
 
-    const btn = document.createElement('button');
-    btn.textContent = 'Back to Lobby';
+    const btn = createButton({
+      label: 'Back to Lobby',
+      variant: 'danger',
+      position: 'relative'
+    });
+    btn.id = 'gameOverNextBtn';
     btn.style.marginTop = '15px';
-    btn.style.background = 'var(--CG-dark-red)';
-    btn.style.color = 'var(--CG-white)';
-    btn.style.fontWeight = '700';
-    btn.style.border = '2px solid var(--CG-deep-gold)';
-    btn.style.borderRadius = '0';
-    btn.style.padding = '6px 12px';
+    btn.style.setProperty('--cg-button-background', 'var(--CG-dark-red)');
+    btn.style.setProperty('--cg-button-border', '2px solid var(--CG-deep-gold)');
+    btn.style.setProperty('--cg-button-padding', '6px 12px');
+    btn.style.setProperty('--cg-button-font-weight', '700');
     btn.style.fontSize = '16px';
-    btn.style.cursor = 'pointer';
+    btn.style.borderRadius = '0';
     btn.addEventListener('click', () => { returnToLobby(); });
 
     setBannerKeyListener(ev => {
@@ -4407,28 +4412,31 @@ preloadAssets();
     buttonRow.style.flexWrap = 'wrap';
     buttonRow.style.justifyContent = 'center';
 
-    const acceptBtn = document.createElement('button');
-    acceptBtn.textContent = 'Accept';
-    acceptBtn.style.background = 'var(--CG-forest)';
-    acceptBtn.style.color = 'var(--CG-white)';
-    acceptBtn.style.border = '2px solid var(--CG-deep-gold)';
     const btnPadY = clamp(Math.round(8 * scale), 4, 8);
     const btnPadX = clamp(Math.round(18 * scale), 8, 18);
     const btnFontSize = clamp(Math.round(16 * scale), 11, 16);
-    acceptBtn.style.padding = `${btnPadY}px ${btnPadX}px`;
-    acceptBtn.style.fontSize = btnFontSize + 'px';
-    acceptBtn.style.fontWeight = '700';
-    acceptBtn.style.cursor = 'pointer';
 
-    const declineBtn = document.createElement('button');
-    declineBtn.textContent = 'Decline';
-    declineBtn.style.background = 'var(--CG-dark-red)';
-    declineBtn.style.color = 'var(--CG-white)';
-    declineBtn.style.border = '2px solid var(--CG-deep-gold)';
-    declineBtn.style.padding = `${btnPadY}px ${btnPadX}px`;
+    const acceptBtn = createButton({
+      label: 'Accept',
+      variant: 'primary',
+      position: 'relative'
+    });
+    acceptBtn.style.setProperty('--cg-button-background', 'var(--CG-forest)');
+    acceptBtn.style.setProperty('--cg-button-border', '2px solid var(--CG-deep-gold)');
+    acceptBtn.style.setProperty('--cg-button-padding', `${btnPadY}px ${btnPadX}px`);
+    acceptBtn.style.fontSize = btnFontSize + 'px';
+    acceptBtn.style.setProperty('--cg-button-font-weight', '700');
+
+    const declineBtn = createButton({
+      label: 'Decline',
+      variant: 'danger',
+      position: 'relative'
+    });
+    declineBtn.style.setProperty('--cg-button-background', 'var(--CG-dark-red)');
+    declineBtn.style.setProperty('--cg-button-border', '2px solid var(--CG-deep-gold)');
+    declineBtn.style.setProperty('--cg-button-padding', `${btnPadY}px ${btnPadX}px`);
     declineBtn.style.fontSize = btnFontSize + 'px';
-    declineBtn.style.fontWeight = '700';
-    declineBtn.style.cursor = 'pointer';
+    declineBtn.style.setProperty('--cg-button-font-weight', '700');
 
     buttonRow.appendChild(acceptBtn);
     buttonRow.appendChild(declineBtn);

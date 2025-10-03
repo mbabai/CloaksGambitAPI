@@ -30,6 +30,9 @@ const PALETTE_VARIANTS = {
   dark: 'var(--CG-black)'
 };
 
+const BUTTON_CLASS = 'cg-button';
+const BUTTON_VARIANT_PREFIX = `${BUTTON_CLASS}--`;
+
 function resolvePreset(name) {
   if (typeof name === 'string' && SIZE_PRESETS[name]) return SIZE_PRESETS[name];
   return SIZE_PRESETS.auto;
@@ -52,6 +55,44 @@ function resolveMeasurement(spec, { baseRef, width, height }) {
   return clamp(computed, min, max);
 }
 
+function clearVariantClasses(node) {
+  if (!node || !node.classList) return;
+  Array.from(node.classList).forEach((className) => {
+    if (className.startsWith(BUTTON_VARIANT_PREFIX)) {
+      node.classList.remove(className);
+    }
+  });
+}
+
+function applyButtonVariant(node, variant, background) {
+  if (!node || !node.classList) return;
+  node.classList.add(BUTTON_CLASS);
+  clearVariantClasses(node);
+  if (variant) {
+    node.classList.add(`${BUTTON_VARIANT_PREFIX}${variant}`);
+  }
+  const palette = resolvePalette(variant, background);
+  const hasVariant = Boolean(variant && PALETTE_VARIANTS[variant]);
+  if (background || hasVariant) {
+    node.style.setProperty('--cg-button-background', palette);
+  } else if (!node.style.getPropertyValue('--cg-button-background')) {
+    node.style.setProperty('--cg-button-background', PALETTE_VARIANTS.primary);
+  }
+  if (variant) {
+    node.dataset.cgButtonVariant = variant;
+  } else {
+    delete node.dataset.cgButtonVariant;
+  }
+}
+
+function coercePositionValue(position) {
+  if (position === null || position === undefined) {
+    return null;
+  }
+  const value = String(position).trim();
+  return value ? value : null;
+}
+
 export function createButton({
   id,
   label,
@@ -62,32 +103,81 @@ export function createButton({
   fontSize,
   left,
   top,
-  zIndex = 5,
-  onClick
+  zIndex,
+  onClick,
+  position = 'absolute',
+  disabled = false
 }) {
   const btn = document.createElement('button');
   if (id) btn.id = id;
   btn.type = 'button';
-  btn.textContent = label ?? '';
-  btn.classList.add('cg-button');
-  if (variant) {
-    btn.classList.add(`cg-button--${variant}`);
+  if (label !== undefined && label !== null) {
+    btn.textContent = label;
   }
-  btn.style.position = 'absolute';
+  applyButtonVariant(btn, variant, background);
+
+  const resolvedPosition = coercePositionValue(position);
+  if (resolvedPosition) {
+    btn.style.setProperty('--cg-button-position', resolvedPosition);
+  } else {
+    btn.style.removeProperty('--cg-button-position');
+  }
+
   if (typeof left === 'number') btn.style.left = Math.floor(left) + 'px';
   if (typeof top === 'number') btn.style.top = Math.floor(top) + 'px';
   if (typeof width === 'number') btn.style.width = Math.round(width) + 'px';
   if (typeof height === 'number') btn.style.height = Math.round(height) + 'px';
-  const palette = resolvePalette(variant, background);
-  const hasVariant = Boolean(variant && PALETTE_VARIANTS[variant]);
-  if (!hasVariant || background) {
-    btn.style.setProperty('--cg-button-background', palette);
-  }
   if (typeof fontSize === 'number') btn.style.fontSize = Math.round(fontSize) + 'px';
-  btn.style.zIndex = String(zIndex);
-  btn.dataset.cgButtonVariant = variant || '';
+  if (zIndex !== undefined && zIndex !== null) {
+    btn.style.zIndex = String(zIndex);
+  }
+  if (disabled) {
+    btn.disabled = true;
+  }
   if (typeof onClick === 'function') btn.addEventListener('click', onClick);
   return btn;
+}
+
+export function upgradeButton(element, { variant, background, label, position, disabled, onClick } = {}) {
+  if (!element) return null;
+  const isButton = element.tagName && element.tagName.toLowerCase() === 'button';
+  let button = element;
+  if (!isButton) {
+    const replacement = createButton({
+      id: element.id,
+      label: element.textContent,
+      variant,
+      background,
+      position,
+      disabled
+    });
+    replacement.classList.add(...Array.from(element.classList || []));
+    if (element.parentNode) {
+      element.parentNode.replaceChild(replacement, element);
+    }
+    button = replacement;
+  } else {
+    button.type = 'button';
+    if (label !== undefined && label !== null) {
+      button.textContent = label;
+    }
+    applyButtonVariant(button, variant, background);
+    const resolvedPosition = coercePositionValue(position);
+    if (resolvedPosition) {
+      button.style.setProperty('--cg-button-position', resolvedPosition);
+    } else if (position !== undefined) {
+      button.style.removeProperty('--cg-button-position');
+    }
+    if (disabled !== undefined) {
+      button.disabled = Boolean(disabled);
+    }
+  }
+
+  if (typeof onClick === 'function') {
+    button.addEventListener('click', onClick);
+  }
+
+  return button;
 }
 
 export function renderButton({
@@ -155,7 +245,7 @@ export function renderButton({
     fontSize: resolvedFontSize,
     left,
     top,
-    zIndex,
+    zIndex: zIndex === undefined ? 5 : zIndex,
     onClick
   });
 
