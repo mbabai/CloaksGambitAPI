@@ -22,6 +22,9 @@
  */
 
 :root {
+  --cg-font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --cg-font-weight-regular: 400;
+  --cg-font-weight-strong: 700;
   --cg-overlay-padding: 16px;
   --cg-overlay-z-index: 2500;
   --cg-overlay-dialog-max-height: 90vh;
@@ -29,10 +32,38 @@
   --cg-button-border: 3px solid var(--CG-deep-gold);
   --cg-button-background: var(--CG-purple-pressed);
   --cg-button-color: var(--CG-white);
-  --cg-button-font-weight: 800;
+  --cg-button-font-weight: var(--cg-font-weight-strong);
   --cg-icon-object-fit: contain;
   --cg-icon-display: block;
   --cg-clock-panel-border-width: 2px;
+}
+
+html {
+  font-family: var(--cg-font-family);
+  font-weight: var(--cg-font-weight-regular);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: inherit;
+  font-weight: inherit;
+}
+
+body,
+body * {
+  font-family: var(--cg-font-family);
+}
+
+body :where(*):not(button):not(.cg-button):not(.cg-button *) {
+  font-weight: var(--cg-font-weight-regular) !important;
+}
+
+button,
+.cg-button,
+.cg-button * {
+  font-weight: var(--cg-button-font-weight) !important;
 }
 
 :root,
@@ -270,7 +301,7 @@ body.history-overlay-open {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  font-family: 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--cg-font-family);
   font-variant-numeric: lining-nums;
 }
 

@@ -17,7 +17,8 @@
       html, body { height: 100%; }
       body {
         margin: 0;
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        font-family: var(--cg-font-family);
+        font-weight: var(--cg-font-weight-regular);
         color: var(--CG-white);
         background: radial-gradient(circle at top, rgba(20, 90, 42, 0.85), var(--ui-page-background));
       }
@@ -171,7 +172,6 @@
       .ui-overlay-trigger {
         --cg-button-position: relative;
         --cg-button-padding: 10px 16px;
-        --cg-button-font-weight: 600;
         border-radius: 999px;
         border: 1px solid rgba(245, 230, 167, 0.45);
         background: rgba(255, 255, 255, 0.08);
