@@ -6,16 +6,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const isProduction = NODE_ENV === 'production';
-
-// Load environment variables from a file based on NODE_ENV. Default to
-// `.env.development` so local development has Google OAuth credentials
-// without needing to manually copy them to `.env`.
-if (!isProduction) {
-  const envFile = `.env.${NODE_ENV}`;
-  require('dotenv').config({ path: path.resolve(__dirname, '..', envFile) });
-}
+const { NODE_ENV, isProduction } = require('./config/loadEnv');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;

@@ -1,5 +1,6 @@
 const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
+const { isProduction } = require('../../config/loadEnv');
 const User = require('../../models/User');
 const ensureUser = require('../../utils/ensureUser');
 const {
@@ -9,8 +10,6 @@ const {
   resolveUserFromToken,
   parseCookies,
 } = require('../../utils/authTokens');
-
-const isProduction = (process.env.NODE_ENV || 'development') === 'production';
 
 const router = express.Router();
 
