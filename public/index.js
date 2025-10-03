@@ -1132,7 +1132,7 @@ preloadAssets();
       loginImg.style.height = '18px';
       loginImg.style.objectFit = 'contain';
       const loginLabel = document.createElement('span');
-      loginLabel.textContent = 'Sign in with Google';
+      loginLabel.textContent = 'Sign in';
       loginLabel.style.flex = '1';
       loginLabel.style.textAlign = 'left';
       loginBtn.appendChild(loginImg);
