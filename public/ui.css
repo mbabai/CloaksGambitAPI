@@ -460,8 +460,8 @@ body.history-overlay-open {
   }
   50% {
     box-shadow:
-      0 0 16px rgba(255, 215, 0, 0.7),
-      0 0 32px rgba(255, 215, 0, 0.35);
+      0 0 32px rgba(255, 215, 0, 0.7),
+      0 0 64px rgba(255, 215, 0, 0.35);
   }
 }
 
