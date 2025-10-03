@@ -77,6 +77,35 @@
       .spectate-picker-overlay .spectate-picker-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
       .spectate-picker-status { font-size: 14px; color: rgba(255,215,0,0.85); }
 
+      .account__edit-button {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 700;
+        padding: 8px 14px;
+        border-radius: 10px;
+        border: 2px solid var(--CG-deep-gold);
+        background: var(--CG-black);
+        color: var(--CG-white);
+        cursor: pointer;
+        transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+      }
+
+      .account__edit-button:hover {
+        background: rgba(0, 0, 0, 0.85);
+        transform: translateY(-1px);
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+      }
+
+      .account__edit-button:active {
+        transform: translateY(0);
+        background: rgba(0, 0, 0, 0.92);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+      }
+
       @media (max-width: 720px) {
         .spectate-modal-content { padding: 16px; }
         .spectate-play-area { width: 100%; height: min(65vh, 520px); }

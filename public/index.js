@@ -962,22 +962,6 @@ preloadAssets();
       editBtn.type = 'button';
       editBtn.className = 'account__edit-button';
       editBtn.textContent = 'Edit';
-      editBtn.style.flex = '0 0 auto';
-      editBtn.style.fontSize = '14px';
-      editBtn.style.padding = '6px 10px';
-      editBtn.style.border = '1px solid rgba(255, 255, 255, 0.2)';
-      editBtn.style.borderRadius = '12px';
-      editBtn.style.background = 'rgba(0, 0, 0, 0.3)';
-      editBtn.style.color = 'white';
-      editBtn.style.cursor = 'pointer';
-      editBtn.style.transition = 'background 0.2s ease';
-
-      editBtn.addEventListener('mouseenter', () => {
-        editBtn.style.background = 'rgba(255, 255, 255, 0.1)';
-      });
-      editBtn.addEventListener('mouseleave', () => {
-        editBtn.style.background = 'rgba(0, 0, 0, 0.3)';
-      });
 
       usernameRow.appendChild(usernameSpan);
       usernameRow.appendChild(editBtn);
