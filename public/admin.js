@@ -412,6 +412,46 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     }
   }
 
+  async function requestUserDeletion({ id, username }) {
+    const userId = id ? String(id) : '';
+    if (!userId) {
+      alert('Unable to delete user: missing identifier.');
+      return;
+    }
+
+    const displayName = username || 'this user';
+    if (!confirm(`Are you sure you want to permanently delete ${displayName}? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const res = await authFetch('/api/v1/users/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': localStorage.getItem('ADMIN_SECRET') || ''
+        },
+        body: JSON.stringify({ userId })
+      });
+
+      if (!res.ok) {
+        const message = res.status === 404
+          ? 'User not found.'
+          : `Failed to delete user. (${res.status})`;
+        alert(message);
+        return;
+      }
+
+      await res.json().catch(() => null);
+      alert(`${displayName} has been deleted.`);
+      fetchAllUsers();
+      if (historyLoaded) fetchHistoryData();
+    } catch (err) {
+      console.error('Error deleting user:', err);
+      alert('An error occurred while deleting the user. Check console for details.');
+    }
+  }
+
   async function ensureHistoryLoaded() {
     if (historyLoaded || isFetchingHistory) return;
     isFetchingHistory = true;
@@ -485,6 +525,55 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     }
     updateHistorySummary();
     renderHistoryList();
+  }
+
+  async function requestMatchDeletion(matchId) {
+    const id = matchId ? String(matchId) : '';
+    if (!id) {
+      alert('Unable to delete match: missing identifier.');
+      return;
+    }
+
+    if (!confirm('Are you sure you want to delete this match? This will also remove associated games.')) {
+      return;
+    }
+
+    try {
+      const res = await authFetch('/api/v1/matches/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': localStorage.getItem('ADMIN_SECRET') || ''
+        },
+        body: JSON.stringify({ matchId: id })
+      });
+
+      if (!res.ok) {
+        const message = res.status === 404
+          ? 'Match not found.'
+          : `Failed to delete match. (${res.status})`;
+        alert(message);
+        return;
+      }
+
+      const data = await res.json().catch(() => null);
+      const deletedGames = data && typeof data.deletedGames === 'number' ? data.deletedGames : 0;
+      const adjustments = Array.isArray(data?.eloAdjustments) ? data.eloAdjustments.length : 0;
+      const summaryParts = ['Match deleted.'];
+      if (deletedGames > 0) {
+        summaryParts.push(`${deletedGames} game${deletedGames === 1 ? '' : 's'} removed.`);
+      }
+      if (adjustments > 0) {
+        summaryParts.push(`${adjustments} Elo adjustment${adjustments === 1 ? '' : 's'} applied.`);
+      }
+      alert(summaryParts.join(' '));
+
+      fetchAllUsers();
+      fetchHistoryData();
+    } catch (err) {
+      console.error('Error deleting match:', err);
+      alert('An error occurred while deleting the match. Check console for details.');
+    }
   }
 
   function updateHistorySummary() {
