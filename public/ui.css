@@ -444,6 +444,27 @@ body.history-overlay-open {
   font-size: var(--cg-clock-panel-font-size, 18px);
 }
 
+.cg-clock-panel--active {
+  animation: cg-clock-panel-glow 1.4s ease-in-out infinite;
+  box-shadow:
+    0 0 12px rgba(255, 215, 0, 0.45),
+    0 0 24px rgba(255, 215, 0, 0.3);
+}
+
+@keyframes cg-clock-panel-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 8px rgba(255, 215, 0, 0.4),
+      0 0 20px rgba(255, 215, 0, 0.2);
+  }
+  50% {
+    box-shadow:
+      0 0 16px rgba(255, 215, 0, 0.7),
+      0 0 32px rgba(255, 215, 0, 0.35);
+  }
+}
+
 .cg-dagger-counter {
   display: flex;
   align-items: center;

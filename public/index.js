@@ -1398,6 +1398,8 @@ preloadAssets();
   let bottomClockEl = null;
   let timeExpiredSent = false;
 
+  const CLOCK_ACTIVE_CLASS = 'cg-clock-panel--active';
+
   // Pointer interaction thresholds
   const DRAG_PX_THRESHOLD = DRAG_PX_THRESHOLD_CFG; // from config import (kept names for legacy usage)
   const CLICK_TIME_MAX_MS = CLICK_TIME_MAX_MS_CFG;  // from config import
@@ -1684,6 +1686,41 @@ preloadAssets();
     if (bottomClockEl) {
       const ms = getDisplayClockMsForColor(bottomColor);
       bottomClockEl.textContent = formatClock(ms);
+    }
+
+    updateClockGlow();
+  }
+
+  function updateClockGlow() {
+    if (topClockEl) topClockEl.classList.remove(CLOCK_ACTIVE_CLASS);
+    if (bottomClockEl) bottomClockEl.classList.remove(CLOCK_ACTIVE_CLASS);
+
+    const isPlayersClock = Boolean(
+      Array.isArray(currentPlayerIds)
+        && currentPlayerIds.length > myColor
+        && currentPlayerIds[myColor]
+        && userId
+        && currentPlayerIds[myColor] === userId
+    );
+
+    if (!isPlayersClock || isInSetup || gameFinished) {
+      return;
+    }
+
+    if (!(currentPlayerTurn === 0 || currentPlayerTurn === 1) || currentPlayerTurn !== myColor) {
+      return;
+    }
+
+    const topColor = currentIsWhite ? 1 : 0;
+    const bottomColor = currentIsWhite ? 0 : 1;
+
+    if (myColor === topColor && topClockEl) {
+      topClockEl.classList.add(CLOCK_ACTIVE_CLASS);
+      return;
+    }
+
+    if (myColor === bottomColor && bottomClockEl) {
+      bottomClockEl.classList.add(CLOCK_ACTIVE_CLASS);
     }
   }
 
