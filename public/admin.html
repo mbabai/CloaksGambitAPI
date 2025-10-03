@@ -25,10 +25,17 @@
       .listCard { border: 4px solid var(--deep-gold); border-radius: 6px; padding: 12px; background: var(--deep-purple); }
       .listCard .title { color: var(--light-gold); font-size: 14px; margin: 0 0 8px; font-weight: 700; }
       .tableList { height: 200px; overflow: auto; border: 1px solid rgba(184,134,11,0.55); border-radius: 4px; background: transparent; }
-      .tableList .row { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; word-break: break-all; display: flex; align-items: center; gap: 8px; }
-      .tableList .row:last-child { border-bottom: 0; }
-      .tableList .headerRow { font-weight: 700; justify-content: space-between; gap: 0; }
-      .tableList .userActionCell { display: inline-flex; justify-content: center; align-items: center; gap: 4px; white-space: nowrap; }
+      .userTable { width: 100%; border-collapse: collapse; min-width: 0; }
+      .userTable thead { position: sticky; top: 0; background: var(--deep-purple); z-index: 1; }
+      .userTable th, .userTable td { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; }
+      .userTable tbody tr:last-child td { border-bottom: 0; }
+      .userTable th { font-weight: 700; text-align: left; }
+      .userTable th:not(:first-child), .userTable td:not(:first-child) { text-align: center; white-space: nowrap; }
+      .userTable td { vertical-align: middle; }
+      .userTable__name { word-break: break-word; }
+      .userTable__inline { display: inline-flex; justify-content: center; align-items: center; gap: 4px; white-space: nowrap; }
+      .userTable__inline img { display: block; }
+      .userTable__actions { justify-content: center; }
       .user-delete-btn { border: none; background: transparent; color: rgba(255,215,0,0.85); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 6px; border-radius: 6px; font-size: 18px; line-height: 1; transition: transform 0.15s ease, color 0.2s ease, background 0.2s ease; }
       .user-delete-btn:hover { color: var(--deep-green); background: var(--light-gold); transform: scale(1.08); }
       .user-delete-btn:focus-visible { outline: 2px solid var(--light-gold); outline-offset: 2px; }

@@ -177,80 +177,39 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       return (connectedSet.has(b.id) - connectedSet.has(a.id)) || (a.username || '').localeCompare(b.username || '');
     });
     const frag = document.createDocumentFragment();
-    const eloCells = [];
-    const matchCells = [];
-    const connCells = [];
-    const actionCells = [];
-    const columnGap = '20px';
+    const table = document.createElement('table');
+    table.className = 'userTable';
 
-    const header = document.createElement('div');
-    header.className = 'row headerRow';
-    header.style.display = 'flex';
-    header.style.alignItems = 'center';
-    header.style.justifyContent = 'flex-start';
-    header.style.gap = columnGap;
-    const hName = document.createElement('span');
-    hName.textContent = 'Username';
-    hName.style.flex = '1 1 auto';
-    hName.style.minWidth = '0';
-    const hElo = document.createElement('span');
-    hElo.textContent = 'ELO';
-    hElo.style.display = 'inline-grid';
-    hElo.style.placeItems = 'center';
-    hElo.style.whiteSpace = 'nowrap';
-    hElo.style.wordBreak = 'keep-all';
-    const hMatch = document.createElement('span');
-    hMatch.textContent = 'In Match';
-    hMatch.style.display = 'inline-flex';
-    hMatch.style.justifyContent = 'center';
-    hMatch.style.alignItems = 'center';
-    hMatch.style.whiteSpace = 'nowrap';
-    hMatch.style.wordBreak = 'keep-all';
-    const hConn = document.createElement('span');
-    hConn.textContent = 'Connected';
-    hConn.style.display = 'inline-flex';
-    hConn.style.justifyContent = 'center';
-    hConn.style.alignItems = 'center';
-    hConn.style.whiteSpace = 'nowrap';
-    hConn.style.wordBreak = 'keep-all';
-    const hAction = document.createElement('span');
-    hAction.textContent = 'Delete';
-    hAction.style.display = 'inline-flex';
-    hAction.style.justifyContent = 'center';
-    hAction.style.alignItems = 'center';
-    hAction.style.whiteSpace = 'nowrap';
-    hAction.style.wordBreak = 'keep-all';
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    const headers = [
+      { label: 'Username', className: 'userTable__name' },
+      { label: 'ELO' },
+      { label: 'In Match' },
+      { label: 'Connected' },
+      { label: 'Delete', className: 'userTable__actions' },
+    ];
 
-    header.appendChild(hName);
-    header.appendChild(hElo);
-    header.appendChild(hMatch);
-    header.appendChild(hConn);
-    header.appendChild(hAction);
-    eloCells.push(hElo);
-    matchCells.push(hMatch);
-    connCells.push(hConn);
-    actionCells.push(hAction);
-    frag.appendChild(header);
+    headers.forEach(({ label, className }) => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      if (className) th.classList.add(className);
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
 
     users.forEach(u => {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.style.display = 'flex';
-      row.style.alignItems = 'center';
-      row.style.justifyContent = 'flex-start';
-      row.style.gap = columnGap;
+      const row = document.createElement('tr');
       const username = u.username || 'Unknown';
       const nameEl = document.createElement(adminUserId && u.id === adminUserId ? 'strong' : 'span');
       nameEl.textContent = username;
       nameEl.title = u.id;
-      nameEl.style.flex = '1 1 auto';
-      nameEl.style.minWidth = '0';
+      nameEl.classList.add('userTable__name');
       const eloEl = document.createElement('span');
-      eloEl.style.display = 'inline-grid';
-      eloEl.style.placeItems = 'center';
-      eloEl.style.whiteSpace = 'nowrap';
-      eloEl.style.wordBreak = 'keep-all';
-      eloEl.style.padding = '0 2px';
+      eloEl.classList.add('userTable__inline');
       if (!isAnonymousUsername(username)) {
         const eloValue = Number.isFinite(u.elo) ? u.elo : null;
         const badge = createEloBadge({ elo: eloValue, size: 24, alt: `${username} Elo` });
@@ -267,12 +226,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         }
       }
       const matchEl = document.createElement('span');
-      matchEl.style.display = 'inline-flex';
-      matchEl.style.justifyContent = 'center';
-      matchEl.style.alignItems = 'center';
-      matchEl.style.whiteSpace = 'nowrap';
-      matchEl.style.wordBreak = 'keep-all';
-      matchEl.style.padding = '0 2px';
+      matchEl.classList.add('userTable__inline');
       if (inMatchSet.has(u.id)) {
         const daggers = createDaggerCounter({ count: 1, size: 18, gap: 0, alt: 'In active match' });
         matchEl.appendChild(daggers);
@@ -282,12 +236,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         matchEl.setAttribute('aria-label', 'Not in active match');
       }
       const connEl = document.createElement('span');
-      connEl.style.display = 'inline-flex';
-      connEl.style.justifyContent = 'center';
-      connEl.style.alignItems = 'center';
-      connEl.style.whiteSpace = 'nowrap';
-      connEl.style.wordBreak = 'keep-all';
-      connEl.style.padding = '0 2px';
+      connEl.classList.add('userTable__inline');
       if (connectedSet.has(u.id)) {
         const img = document.createElement('img');
         img.src = 'assets/images/GoldThrone.svg';
@@ -297,13 +246,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         connEl.appendChild(img);
       }
       const actionEl = document.createElement('span');
-      actionEl.className = 'userActionCell';
-      actionEl.style.display = 'inline-flex';
-      actionEl.style.justifyContent = 'center';
-      actionEl.style.alignItems = 'center';
-      actionEl.style.whiteSpace = 'nowrap';
-      actionEl.style.wordBreak = 'keep-all';
-      actionEl.style.padding = '0 2px';
+      actionEl.className = 'userTable__inline userTable__actions';
 
       const deleteBtn = createButton({
         label: '🗑',
@@ -319,17 +262,27 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
 
       actionEl.appendChild(deleteBtn);
 
-      row.appendChild(nameEl);
-      row.appendChild(eloEl);
-      row.appendChild(matchEl);
-      row.appendChild(connEl);
-      row.appendChild(actionEl);
-      eloCells.push(eloEl);
-      matchCells.push(matchEl);
-      connCells.push(connEl);
-      actionCells.push(actionEl);
-      frag.appendChild(row);
+      const nameCell = document.createElement('td');
+      nameCell.appendChild(nameEl);
+      const eloCell = document.createElement('td');
+      eloCell.appendChild(eloEl);
+      const matchCell = document.createElement('td');
+      matchCell.appendChild(matchEl);
+      const connCell = document.createElement('td');
+      connCell.appendChild(connEl);
+      const actionCell = document.createElement('td');
+      actionCell.appendChild(actionEl);
+
+      row.appendChild(nameCell);
+      row.appendChild(eloCell);
+      row.appendChild(matchCell);
+      row.appendChild(connCell);
+      row.appendChild(actionCell);
+      tbody.appendChild(row);
     });
+
+    table.appendChild(tbody);
+    frag.appendChild(table);
 
     targetEl.appendChild(frag);
   }

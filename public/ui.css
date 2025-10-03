@@ -35,6 +35,17 @@
   --cg-clock-panel-border-width: 2px;
 }
 
+:root,
+:root * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .cg-overlay {
   position: fixed;
   inset: 0;
