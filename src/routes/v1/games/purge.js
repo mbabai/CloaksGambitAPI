@@ -3,13 +3,11 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const eventBus = require('../../../eventBus');
 const lobbyStore = require('../../../state/lobby');
+const ensureAdminSecret = require('../../../utils/adminSecret');
 
 router.post('/', async (req, res) => {
 	try {
-		const adminSecret = process.env.ADMIN_SECRET;
-		if (adminSecret && req.header('x-admin-secret') !== adminSecret) {
-			return res.status(403).json({ message: 'Forbidden' });
-		}
+                if (!ensureAdminSecret(req, res)) return;
 
                 const result = await Game.deleteMany({});
                 const before = lobbyStore.getState();

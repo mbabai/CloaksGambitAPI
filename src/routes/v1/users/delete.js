@@ -1,24 +1,13 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const router = express.Router();
 const User = require('../../../models/User');
 const eventBus = require('../../../eventBus');
-
-function toObjectId(value) {
-  if (!value) return null;
-  if (value instanceof mongoose.Types.ObjectId) return value;
-  if (mongoose.Types.ObjectId.isValid(value)) {
-    return new mongoose.Types.ObjectId(value);
-  }
-  return null;
-}
+const ensureAdminSecret = require('../../../utils/adminSecret');
+const toObjectId = require('../../../utils/toObjectId');
 
 router.post('/', async (req, res) => {
   try {
-    const adminSecret = process.env.ADMIN_SECRET;
-    if (adminSecret && req.header('x-admin-secret') !== adminSecret) {
-      return res.status(403).json({ message: 'Forbidden' });
-    }
+    if (!ensureAdminSecret(req, res)) return;
 
     const userId = req.body?.userId;
     if (!userId) {

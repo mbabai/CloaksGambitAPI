@@ -2,13 +2,11 @@ const express = require('express');
 const router = express.Router();
 const User = require('../../../models/User');
 const eventBus = require('../../../eventBus');
+const ensureAdminSecret = require('../../../utils/adminSecret');
 
 router.post('/', async (req, res) => {
   try {
-    const adminSecret = process.env.ADMIN_SECRET;
-    if (adminSecret && req.header('x-admin-secret') !== adminSecret) {
-      return res.status(403).json({ message: 'Forbidden' });
-    }
+    if (!ensureAdminSecret(req, res)) return;
 
     const result = await User.deleteMany({});
 
