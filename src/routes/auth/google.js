@@ -261,6 +261,7 @@ router.get('/session', async (req, res) => {
       return res.json({
         userId: session.userId,
         username: session.username,
+        email: session.user?.email || '',
         isGuest: false,
         authenticated: true,
       });
@@ -270,6 +271,7 @@ router.get('/session', async (req, res) => {
     return res.json({
       userId: session.userId,
       username: session.username,
+      email: null,
       isGuest: true,
       authenticated: false,
     });

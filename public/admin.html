@@ -16,6 +16,16 @@
       }
       body { font-family: var(--cg-font-family); font-weight: var(--cg-font-weight-regular); margin: 0; background-color: var(--deep-green); color: var(--light-gold); position: relative; }
       body::before { content: ""; position: fixed; inset: 0; background: url('assets/images/Background.png') center/cover no-repeat; filter: brightness(0.8) contrast(0.65); z-index: -1; }
+      [hidden] { display: none !important; }
+      .admin-access-panel { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
+      .admin-access-card { background: rgba(24,9,38,0.85); border: 4px solid var(--deep-gold); border-radius: 12px; padding: 32px 28px; max-width: 420px; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 18px; text-align: center; box-shadow: 0 12px 32px rgba(0,0,0,0.35); }
+      .admin-access-title { margin: 0; font-size: 30px; color: var(--light-gold); }
+      .admin-access-message { margin: 0; font-size: 16px; color: rgba(255,215,0,0.85); line-height: 1.5; }
+      .admin-access-button { display: inline-flex; align-items: center; justify-content: center; gap: 12px; border: 3px solid var(--deep-gold); border-radius: 999px; padding: 12px 22px; background: rgba(38,17,58,0.78); color: var(--light-gold); font-size: 18px; font-weight: var(--cg-button-font-weight); cursor: pointer; font-family: inherit; transition: transform 0.15s ease, background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease; }
+      .admin-access-button:hover { background: rgba(255,215,0,0.15); color: var(--light-gold); box-shadow: 0 6px 18px rgba(0,0,0,0.35); }
+      .admin-access-button:active { transform: translateY(1px); }
+      .admin-access-button img { width: 20px; height: 20px; object-fit: contain; }
+      .admin-access-card--compact { gap: 12px; padding: 28px 24px; }
       .container { padding: 24px; max-width: 1100px; margin: 0 auto; box-sizing: border-box; }
       h2 { margin: 0 0 16px; color: var(--light-gold); }
       .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
@@ -227,7 +237,20 @@
     </style>
   </head>
   <body>
-    <div class="container">
+    <div id="adminLoginContainer" class="admin-access-panel">
+      <div class="admin-access-card">
+        <h1 class="admin-access-title">Admin Dashboard</h1>
+        <p class="admin-access-message">Sign in with Google using the authorized account to view admin data.</p>
+        <button id="adminGoogleLoginBtn" class="admin-access-button"><img src="assets/images/google-icon.png" alt="Google" /> Sign in</button>
+      </div>
+    </div>
+    <div id="adminUnauthorizedContainer" class="admin-access-panel" hidden>
+      <div class="admin-access-card admin-access-card--compact">
+        <h1 class="admin-access-title" style="font-size: 26px;">Admin Dashboard</h1>
+        <p class="admin-access-message" style="font-size: 15px;">No admin data is available for this account.</p>
+      </div>
+    </div>
+    <div id="adminDashboardContainer" class="container" hidden>
       <h1 style="margin: 0 0 16px; font-size: 32px; color: var(--light-gold); font-family: var(--cg-font-family); font-weight: var(--cg-font-weight-regular);">Admin Dashboard</h1>
       <div class="tab-header">
         <button class="tab-button active" data-tab="live">Live</button>
