@@ -3,6 +3,9 @@
 A REST API application built with Node.js and MongoDB. Real-time match and move
 updates are delivered through WebSocket events.
 
+> **Local AI Trainer:** optional FastAPI + Gradio service located in `/ml_backend`.
+> Runs separately from the Node.js game server. Does not affect normal gameplay.
+
 ## Prerequisites
 
 - Node.js (v14 or higher)

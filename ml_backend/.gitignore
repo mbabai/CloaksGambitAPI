@@ -1,0 +1,6 @@
+models/
+training_runs/
+simulations/
+__pycache__/
+*.pt
+*.onnx

@@ -1,0 +1,10 @@
+learning_rate: 3e-4
+batch_size: 256
+epochs: 20
+optimizer: Adam
+weight_decay: 1e-4
+λ_guess: 0.7
+replay_buffer_size: 20000
+mcts_simulations: 400
+c_puct: 1.5
+dirichlet_alpha: 0.3
