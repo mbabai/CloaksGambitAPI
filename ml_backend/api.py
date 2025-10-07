@@ -213,6 +213,18 @@ def build_interface() -> gr.Blocks:
             game server are placeholders and need to be integrated with the official API."""
         )
 
+        with gr.Tab("Models"):
+            model_name = gr.Textbox(label="Model name")
+            model_desc = gr.Textbox(label="Description")
+            create_btn = gr.Button("Create Model")
+            create_out = gr.JSON(label="Response")
+
+            create_btn.click(
+                fn=training_manager.create_model_record,
+                inputs=[model_name, model_desc],
+                outputs=create_out,
+            )
+
         with gr.Tab("Simulation"):
             model_ids = gr.Textbox(label="Model IDs (comma separated)")
             num_games = gr.Number(value=10, label="Number of games", precision=0)

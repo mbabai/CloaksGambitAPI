@@ -42,8 +42,7 @@ class MCTSSimulationRunner:
             "options": options,
         }
 
-        # TODO: Replace placeholder endpoint with the official route.
-        endpoint = f"{self.game_server_url}/simulations"
+        endpoint = f"{self.game_server_url}/simulate"
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(endpoint, json=payload)
