@@ -1234,7 +1234,17 @@ function initSocket(httpServer) {
 
   async function emitAdminMetrics() {
     try {
-      const connectedIds = Array.from(clients.keys());
+      const connectedEntries = Array.from(clients.entries());
+      const connectedIds = [];
+      let connectedUserCount = 0;
+      connectedEntries.forEach(([id, socket]) => {
+        if (socket?.data?.isBot) {
+          return;
+        }
+        connectedUserCount += 1;
+        connectedIds.push(id);
+      });
+      const allConnectedIds = connectedEntries.map(([id]) => id);
       // Build in-game user list from active games
       let inGameIds = [];
       let matchesList = [];
@@ -1257,7 +1267,7 @@ function initSocket(httpServer) {
       }
 
       const allIds = new Set([
-        ...connectedIds,
+        ...allConnectedIds,
         ...lobbyState.quickplayQueue,
         ...lobbyState.botQueue,
         ...lobbyState.rankedQueue,
@@ -1272,7 +1282,7 @@ function initSocket(httpServer) {
       });
 
       adminNamespace.emit('admin:metrics', {
-        connectedUsers: connectedIds.length,
+        connectedUsers: connectedUserCount,
         quickplayQueue: lobbyState.quickplayQueue.length,
         botQueue: lobbyState.botQueue.length,
         rankedQueue: lobbyState.rankedQueue.length,

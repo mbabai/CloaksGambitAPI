@@ -391,9 +391,11 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
           const id = u._id ? u._id.toString() : '';
           if (!id) return;
           const username = u.username || 'Unknown';
+          const isBot = Boolean(u.isBot);
           const numericElo = Number(u.elo);
           const elo = Number.isFinite(numericElo) ? numericElo : null;
           usernameMap[id] = username;
+          if (isBot) return;
           users.push({ id, username, elo });
         });
       }
