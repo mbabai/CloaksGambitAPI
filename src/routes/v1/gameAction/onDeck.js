@@ -3,10 +3,30 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { resolveUserFromRequest } = require('../../../utils/authTokens');
+const User = require('../../../models/User');
 
 router.post('/', async (req, res) => {
   try {
     const { gameId, color, piece } = req.body;
+
+    const requester = await resolveUserFromRequest(req).catch(() => null);
+    let requesterRecord = null;
+    if (requester?.userId) {
+      requesterRecord = await User.findById(requester.userId).lean().catch(() => null);
+    }
+    const requesterDetails = {
+      userId: requester?.userId || null,
+      username: requester?.username || requesterRecord?.username || null,
+      isBot: requesterRecord?.isBot || false,
+      botDifficulty: requesterRecord?.botDifficulty || null,
+    };
+    console.log('[gameAction:onDeck] incoming request', {
+      gameId,
+      color,
+      identity: piece?.identity,
+      ...requesterDetails,
+    });
 
     const game = await Game.findById(gameId);
     if (!game) {

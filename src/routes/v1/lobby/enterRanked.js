@@ -61,6 +61,9 @@ router.post('/', async (req, res) => {
         .status(400)
         .json({ message: 'User already in quickplay queue' });
     }
+    if (lobbyStore.isInQueue('bot', userId)) {
+      return res.status(400).json({ message: 'User already in bot queue' });
+    }
 
     const { added, state: updatedState } = lobbyStore.addToQueue('ranked', userId);
     if (added) {

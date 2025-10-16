@@ -3,6 +3,8 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { resolveUserFromRequest } = require('../../../utils/authTokens');
+const User = require('../../../models/User');
 
 // Helper function to resolve a move
 async function resolveMove(game, move, config) {
@@ -50,6 +52,34 @@ async function resolveMove(game, move, config) {
 router.post('/', async (req, res) => {
   try {
     const { gameId, color, from, to, declaration } = req.body;
+
+    const requester = await resolveUserFromRequest(req).catch(() => null);
+    let requesterRecord = null;
+    if (requester?.userId) {
+      requesterRecord = await User.findById(requester.userId).lean().catch(() => null);
+    }
+    const requesterDetails = {
+      userId: requester?.userId || null,
+      username: requester?.username || requesterRecord?.username || null,
+      isBot: requesterRecord?.isBot || false,
+      botDifficulty: requesterRecord?.botDifficulty || null,
+    };
+    console.log('[gameAction:move] incoming request', {
+      gameId,
+      color,
+      from,
+      to,
+      declaration,
+      ...requesterDetails,
+    });
+
+    const initiator = {
+      action: 'move',
+      userId: requesterDetails.userId,
+      username: requesterDetails.username,
+      isBot: requesterDetails.isBot,
+      botDifficulty: requesterDetails.botDifficulty,
+    };
 
     const game = await Game.findById(gameId);
     if (!game) {
@@ -117,6 +147,7 @@ router.post('/', async (req, res) => {
             eventBus.emit('gameChanged', {
               game: typeof game.toObject === 'function' ? game.toObject() : game,
               affectedUsers: (game.players || []).map(p => p.toString()),
+              initiator,
             });
             return res.json({ message: 'Game ended during move resolution' });
           }
@@ -168,7 +199,8 @@ router.post('/', async (req, res) => {
         }
         break;
       case idents.get('ROOK'):
-        // Rook moves horizontally or vertically up to 3 squares
+      case idents.get('BOMB'):
+        // Rook and Bomb moves horizontally or vertically up to 3 squares
         if ((dr === 0 || dc === 0) && (absDr + absDc > 0) && absDr <= 3 && absDc <= 3) {
           legal = true;
           // Calculate step direction for checking path
@@ -219,6 +251,7 @@ router.post('/', async (req, res) => {
           eventBus.emit('gameChanged', {
             game: typeof game.toObject === 'function' ? game.toObject() : game,
             affectedUsers: (game.players || []).map(p => p.toString()),
+            initiator,
           });
           return res.json({ message: 'Game ended during move resolution' });
         }
@@ -239,6 +272,7 @@ router.post('/', async (req, res) => {
     eventBus.emit('gameChanged', {
       game: typeof game.toObject === 'function' ? game.toObject() : game,
       affectedUsers: (game.players || []).map(p => p.toString()),
+      initiator,
     });
 
     res.json({ message: 'Move recorded' });

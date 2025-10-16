@@ -87,6 +87,7 @@ const routes = require('./routes');
 const initSocket = require('./socket');
 const lobbyStore = require('./state/lobby');
 const getServerConfig = require('./utils/getServerConfig');
+const { startInternalBots } = require('./services/bots/internalBots');
 
 // Middleware
 app.use(cors());
@@ -192,6 +193,7 @@ async function startServer() {
 
   server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
+    startInternalBots({ port: PORT });
   });
 }
 

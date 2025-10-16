@@ -51,6 +51,9 @@ router.post('/', async (req, res) => {
     if (lobbyStore.isInQueue('ranked', userId)) {
       return res.status(400).json({ message: 'User already in ranked queue' });
     }
+    if (lobbyStore.isInQueue('bot', userId)) {
+      return res.status(400).json({ message: 'User already in bot queue' });
+    }
 
     const { added, state: updatedState } = lobbyStore.addToQueue('quickplay', userId);
     if (added) {

@@ -3,11 +3,30 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { resolveUserFromRequest } = require('../../../utils/authTokens');
+const User = require('../../../models/User');
 
 router.post('/', async (req, res) => {
   try {
     const { gameId, color, pieces, onDeck } = req.body;
-    
+
+    const requester = await resolveUserFromRequest(req).catch(() => null);
+    let requesterRecord = null;
+    if (requester?.userId) {
+      requesterRecord = await User.findById(requester.userId).lean().catch(() => null);
+    }
+    const requesterDetails = {
+      userId: requester?.userId || null,
+      username: requester?.username || requesterRecord?.username || null,
+      isBot: requesterRecord?.isBot || false,
+      botDifficulty: requesterRecord?.botDifficulty || null,
+    };
+    console.log('[gameAction:setup] incoming request', {
+      gameId,
+      color,
+      ...requesterDetails,
+    });
+
     const game = await Game.findById(gameId);
     if (!game) {
       return res.status(404).json({ message: 'Game not found' });
@@ -218,6 +237,13 @@ router.post('/', async (req, res) => {
     eventBus.emit('gameChanged', {
       game: typeof game.toObject === 'function' ? game.toObject() : game,
       affectedUsers: (game.players || []).map(p => p.toString()),
+      initiator: {
+        action: 'setup',
+        userId: requesterDetails.userId,
+        username: requesterDetails.username,
+        isBot: requesterDetails.isBot,
+        botDifficulty: requesterDetails.botDifficulty,
+      },
     });
 
     res.json({ message: 'Setup completed successfully' });

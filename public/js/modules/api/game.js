@@ -132,6 +132,10 @@ export async function apiExitRankedQueue(payload = {}) {
   return sendQueueRequest('/api/v1/lobby/exitRanked', payload);
 }
 
+export async function apiEnterBotQueue(payload = {}) {
+  return sendQueueRequest('/api/v1/lobby/enterBot', payload);
+}
+
 export async function apiMove({ gameId, color, from, to, declaration }) {
   return authFetch('/api/v1/gameAction/move', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

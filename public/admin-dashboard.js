@@ -111,6 +111,10 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     quickplayWins: document.getElementById('historyQuickplayWins'),
     quickplayDraws: document.getElementById('historyQuickplayDraws'),
     quickplayLosses: document.getElementById('historyQuickplayLosses'),
+    botMatches: document.getElementById('historyBotMatches'),
+    botWins: document.getElementById('historyBotWins'),
+    botDraws: document.getElementById('historyBotDraws'),
+    botLosses: document.getElementById('historyBotLosses'),
     rankedMatches: document.getElementById('historyRankedMatches'),
     rankedWins: document.getElementById('historyRankedWins'),
     rankedDraws: document.getElementById('historyRankedDraws'),
@@ -583,6 +587,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     const quickplay = summary.quickplayGames;
     const ranked = summary.rankedMatches;
     const custom = summary.customMatches;
+    const bots = summary.botMatches;
 
     historySummaryEls.totalGames.textContent = games.total;
     if (historySummaryEls.totalGamesWins) {
@@ -604,6 +609,18 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     }
     if (historySummaryEls.quickplayLosses) {
       historySummaryEls.quickplayLosses.textContent = quickplay.losses;
+    }
+    if (historySummaryEls.botMatches) {
+      historySummaryEls.botMatches.textContent = bots.total;
+    }
+    if (historySummaryEls.botWins) {
+      historySummaryEls.botWins.textContent = bots.wins;
+    }
+    if (historySummaryEls.botDraws) {
+      historySummaryEls.botDraws.textContent = bots.draws;
+    }
+    if (historySummaryEls.botLosses) {
+      historySummaryEls.botLosses.textContent = bots.losses;
     }
 
     historySummaryEls.rankedMatches.textContent = ranked.total;
@@ -744,6 +761,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       if (!match || match.isActive) return false;
       const type = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
       if (historyFilter === 'quickplay') return type === 'QUICKPLAY';
+      if (historyFilter === 'bot') return type === 'AI';
       if (historyFilter === 'custom') return type === 'CUSTOM';
       if (historyFilter === 'ranked') return type === 'RANKED';
       return true;

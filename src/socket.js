@@ -362,10 +362,27 @@ function initSocket(httpServer) {
     matches.forEach((matchId) => markPlayerDisconnected(pid, matchId));
   }
 
-  function registerMatch(matchId, players = []) {
+  function registerMatch(matchId, players = [], options = {}) {
     const mid = toId(matchId);
     if (!mid) return;
     const state = getMatchState(mid);
+    const forceConnectedIds = new Set();
+    const { forceConnected } = options || {};
+    if (forceConnected instanceof Set) {
+      forceConnected.forEach((value) => {
+        const id = toId(value);
+        if (id) forceConnectedIds.add(id);
+      });
+    } else if (Array.isArray(forceConnected)) {
+      forceConnected.forEach((value) => {
+        const id = toId(value);
+        if (id) forceConnectedIds.add(id);
+      });
+    } else if (forceConnected) {
+      const id = toId(forceConnected);
+      if (id) forceConnectedIds.add(id);
+    }
+
     players.forEach((player) => {
       const pid = toId(player);
       if (!pid) return;
@@ -373,10 +390,22 @@ function initSocket(httpServer) {
         state.players[pid] = { cumulativeMs: 0, disconnectedSince: null, timer: null, handled: false };
       }
       addPlayerMatch(pid, mid);
-      if (clients.has(pid)) {
+      if (forceConnectedIds.has(pid) || clients.has(pid)) {
         markPlayerConnected(pid, mid);
+        console.log('[match] tracking player connected', {
+          matchId: mid,
+          playerId: pid,
+          forced: forceConnectedIds.has(pid),
+          hasSocket: clients.has(pid),
+        });
       } else {
         markPlayerDisconnected(pid, mid);
+        console.log('[match] tracking player disconnected', {
+          matchId: mid,
+          playerId: pid,
+          forced: forceConnectedIds.has(pid),
+          hasSocket: clients.has(pid),
+        });
       }
     });
   }
@@ -551,12 +580,14 @@ function initSocket(httpServer) {
   eventBus.on('queueChanged', (payload) => {
     let newQuick = [];
     let newRanked = [];
+    let newBots = [];
     const affected = new Set();
 
     if (payload.fullDocument) {
-      const { quickplayQueue = [], rankedQueue = [] } = payload.fullDocument;
+      const { quickplayQueue = [], rankedQueue = [], botQueue = [] } = payload.fullDocument;
       newQuick = quickplayQueue.map(id => id.toString());
       newRanked = rankedQueue.map(id => id.toString());
+      newBots = botQueue.map(id => id.toString());
 
       const added = new Set();
       const removed = new Set();
@@ -565,11 +596,14 @@ function initSocket(httpServer) {
       lobbyState.quickplayQueue.forEach(id => { if (!newQuick.includes(id)) removed.add(id); });
       newRanked.forEach(id => { if (!lobbyState.rankedQueue.includes(id)) added.add(id); });
       lobbyState.rankedQueue.forEach(id => { if (!newRanked.includes(id)) removed.add(id); });
+      newBots.forEach(id => { if (!lobbyState.botQueue.includes(id)) added.add(id); });
+      lobbyState.botQueue.forEach(id => { if (!newBots.includes(id)) removed.add(id); });
 
       [...added, ...removed].forEach(id => affected.add(id));
     } else {
       newQuick = (payload.quickplayQueue || []).map(id => id.toString());
       newRanked = (payload.rankedQueue || []).map(id => id.toString());
+      newBots = (payload.botQueue || []).map(id => id.toString());
       (payload.affectedUsers || []).forEach(id => affected.add(id.toString()));
     }
 
@@ -579,20 +613,30 @@ function initSocket(httpServer) {
         socket.emit('queue:update', {
           quickplay: newQuick.includes(id),
           ranked: newRanked.includes(id),
+          bots: newBots.includes(id),
         });
       }
     });
 
-      lobbyState.quickplayQueue = newQuick;
-      lobbyState.rankedQueue = newRanked;
+    lobbyState.quickplayQueue = newQuick;
+    lobbyState.rankedQueue = newRanked;
+    lobbyState.botQueue = newBots;
 
-      // Emit updated metrics to admin dashboard
-      emitAdminMetrics();
-    });
+    // Emit updated metrics to admin dashboard
+    emitAdminMetrics();
+  });
 
   eventBus.on('match:created', (payload) => {
     if (!payload) return;
-    registerMatch(payload.matchId, payload.players || []);
+    const forceConnected = new Set(payload.forceConnected || payload.botPlayers || []);
+    console.log('[match] created event', {
+      matchId: payload.matchId,
+      players: payload.players,
+      type: payload.type,
+      botPlayers: payload.botPlayers,
+      forceConnected: Array.from(forceConnected),
+    });
+    registerMatch(payload.matchId, payload.players || [], { forceConnected });
   });
 
   eventBus.on('match:ended', (payload) => {
@@ -695,9 +739,27 @@ function initSocket(httpServer) {
     const gameIdStr = game._id.toString();
     const players = (payload.affectedUsers || game.players || []).map(id => id.toString());
 
+    const initiator = payload?.initiator || {};
+    const botTargets = Array.isArray(payload?.botPlayers)
+      ? payload.botPlayers.map(id => id.toString())
+      : [];
+    console.log('[socket] gameChanged broadcast', {
+      gameId: gameIdStr,
+      matchId,
+      players,
+      initiator,
+      botTargets,
+      setupComplete: game.setupComplete,
+      playersReady: game.playersReady,
+      playerTurn: game.playerTurn,
+    });
+
     players.forEach((playerId) => {
       const socket = clients.get(playerId);
-      if (!socket) return;
+      if (!socket) {
+        console.warn('[socket] gameChanged target missing socket', { playerId, gameId: gameIdStr });
+        return;
+      }
       const idx = game.players.findIndex(p => p.toString() === playerId);
       const masked = maskGameForColor(JSON.parse(JSON.stringify(game)), idx);
       socket.emit('game:update', {
@@ -802,6 +864,11 @@ function initSocket(httpServer) {
 
   // Relay both-next signal to affected users with their color
   eventBus.on('players:bothNext', async (payload) => {
+    console.log('[socket] players:bothNext event', {
+      gameId: payload?.gameId?.toString?.() || payload?.gameId,
+      affectedUsers: (payload?.affectedUsers || []).map(id => id.toString()),
+      botPlayers: payload?.botPlayers,
+    });
     let game = payload.game;
     if (!game) {
       const gameId = payload?.gameId;
@@ -814,9 +881,12 @@ function initSocket(httpServer) {
     if (!game) return;
     const gameIdStr = game._id.toString();
     (payload?.affectedUsers || game.players || []).forEach((id, idx) => {
-      const socket = clients.get(id.toString());
+      const userId = id.toString();
+      const socket = clients.get(userId);
       if (socket) {
         socket.emit('players:bothNext', { gameId: gameIdStr, color: idx });
+      } else {
+        console.warn('[socket] players:bothNext target not connected', { userId, gameId: gameIdStr });
       }
     });
   });
@@ -852,8 +922,18 @@ function initSocket(httpServer) {
       }
     }
 
+    const userRecord = await User.findById(userId).lean().catch(() => null);
+    const isBotUser = Boolean(userRecord?.isBot);
+    const usernameForLog = userRecord?.username || userInfo?.username;
     const connectionLabel = authenticated ? 'logged-in' : 'anonymous';
-    console.log(`[socket] Connection ${socket.id} authenticated=${authenticated} (${connectionLabel}) user=${userId}`);
+    console.log('[socket] connection established', {
+      socketId: socket.id,
+      userId,
+      username: usernameForLog,
+      authenticated,
+      label: connectionLabel,
+      isBot: isBotUser,
+    });
     // If a user reconnects quickly, keep the most recent socket only
     const prev = clients.get(userId);
     if (prev && prev.id !== socket.id) {
@@ -863,9 +943,11 @@ function initSocket(httpServer) {
     setConnectedUsername(userId, userInfo.username);
     markPlayerConnectedToAllMatches(userId);
     socket.emit('user:init', { userId, username: userInfo.username, guest: userInfo.isGuest });
+    socket.data = socket.data || {};
+    socket.data.isBot = isBotUser;
+    socket.data.username = usernameForLog;
     console.log('Client connected', socket.id);
 
-    socket.data = socket.data || {};
     socket.data.spectating = new Set();
 
     // Emit updated metrics to admin dashboard on new connection
@@ -876,11 +958,13 @@ function initSocket(httpServer) {
       const queued = {
         quickplay: lobby.quickplayQueue.some(id => id === userId),
         ranked: lobby.rankedQueue.some(id => id === userId),
+        bots: lobby.botQueue.some(id => id === userId),
       };
 
       const games = await Game.find({ players: userId, isActive: true }).lean();
 
       const matchPlayers = new Map();
+      const uniquePlayerIds = new Set();
       games.forEach((game) => {
         const matchId = toId(game?.match);
         if (!matchId) return;
@@ -891,11 +975,27 @@ function initSocket(httpServer) {
           const pid = toId(p);
           if (pid) {
             matchPlayers.get(matchId).add(pid);
+            uniquePlayerIds.add(pid);
           }
         });
       });
+      let botIds = new Set();
+      if (uniquePlayerIds.size > 0) {
+        try {
+          const users = await User.find({ _id: { $in: Array.from(uniquePlayerIds) } }, { _id: 1, isBot: 1 }).lean();
+          botIds = new Set(users.filter(user => user && user.isBot).map(user => user._id.toString()));
+        } catch (err) {
+          console.error('Failed to resolve bot users for connection status:', err);
+        }
+      }
       matchPlayers.forEach((playersSet, matchId) => {
-        registerMatch(matchId, Array.from(playersSet));
+        const forceConnected = new Set();
+        playersSet.forEach((pid) => {
+          if (botIds.has(pid)) {
+            forceConnected.add(pid);
+          }
+        });
+        registerMatch(matchId, Array.from(playersSet), { forceConnected });
       });
 
       const maskedGames = games.map((game) => {
@@ -911,6 +1011,14 @@ function initSocket(httpServer) {
           increment: game.increment,
         };
       });
+
+      if (socket.data?.isBot) {
+        console.log('[socket] bot initialState snapshot', {
+          userId,
+          username: socket.data?.username,
+          activeGames: maskedGames.map(g => g?._id?.toString?.() || g?._id),
+        });
+      }
 
       socket.emit('initialState', { queued, games: maskedGames });
 
@@ -1058,8 +1166,15 @@ function initSocket(httpServer) {
       }
     });
 
-    socket.on('disconnect', async () => {
-      console.log('Client disconnected', socket.id);
+    socket.on('disconnect', async (reason) => {
+      const disconnectLog = {
+        socketId: socket.id,
+        userId,
+        username: socket.data?.username,
+        isBot: socket.data?.isBot || false,
+        reason: reason || null,
+      };
+      console.log('[socket] disconnect', disconnectLog);
       if (socket.data?.spectating) {
         socket.data.spectating.clear();
       }
@@ -1144,6 +1259,7 @@ function initSocket(httpServer) {
       const allIds = new Set([
         ...connectedIds,
         ...lobbyState.quickplayQueue,
+        ...lobbyState.botQueue,
         ...lobbyState.rankedQueue,
         ...inGameIds,
       ]);
@@ -1158,10 +1274,12 @@ function initSocket(httpServer) {
       adminNamespace.emit('admin:metrics', {
         connectedUsers: connectedIds.length,
         quickplayQueue: lobbyState.quickplayQueue.length,
+        botQueue: lobbyState.botQueue.length,
         rankedQueue: lobbyState.rankedQueue.length,
         inGameUsers: inGameIds.length,
         connectedUserIds: connectedIds,
         quickplayQueueUserIds: lobbyState.quickplayQueue,
+        botQueueUserIds: lobbyState.botQueue,
         rankedQueueUserIds: lobbyState.rankedQueue,
         inGameUserIds: inGameIds,
         matches: matchesList,

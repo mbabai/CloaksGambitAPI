@@ -7,7 +7,7 @@ import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -357,6 +357,20 @@ preloadAssets();
       </div>
       <div class="history-card">
         <div class="history-card-label">
+          <span class="history-card-label-line">Bot</span>
+          <span class="history-card-label-line">Matches</span>
+        </div>
+        <div class="history-card-stats">
+          <span id="playerHistoryBotMatches" class="history-card-total history-card-value">0</span>
+          <div class="history-card-splits">
+            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryBotWins">0</span></span>
+            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryBotDraws">0</span></span>
+            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryBotLosses">0</span></span>
+          </div>
+        </div>
+      </div>
+      <div class="history-card">
+        <div class="history-card-label">
           <span class="history-card-label-line">Ranked</span>
           <span class="history-card-label-line">Matches</span>
         </div>
@@ -390,6 +404,7 @@ preloadAssets();
     filters.innerHTML = `
       <button class="history-filter-btn active" data-history-filter="all">All</button>
       <button class="history-filter-btn" data-history-filter="quickplay">Quickplay</button>
+      <button class="history-filter-btn" data-history-filter="bot">Bots</button>
       <button class="history-filter-btn" data-history-filter="custom">Custom</button>
       <button class="history-filter-btn" data-history-filter="ranked">Ranked</button>`;
     content.appendChild(filters);
@@ -415,6 +430,10 @@ preloadAssets();
       quickplayWins: summary.querySelector('#playerHistoryQuickplayWins'),
       quickplayDraws: summary.querySelector('#playerHistoryQuickplayDraws'),
       quickplayLosses: summary.querySelector('#playerHistoryQuickplayLosses'),
+      botMatches: summary.querySelector('#playerHistoryBotMatches'),
+      botWins: summary.querySelector('#playerHistoryBotWins'),
+      botDraws: summary.querySelector('#playerHistoryBotDraws'),
+      botLosses: summary.querySelector('#playerHistoryBotLosses'),
       rankedMatches: summary.querySelector('#playerHistoryRankedMatches'),
       rankedWins: summary.querySelector('#playerHistoryRankedWins'),
       rankedDraws: summary.querySelector('#playerHistoryRankedDraws'),
@@ -479,6 +498,7 @@ preloadAssets();
     const quickplay = summary.quickplayGames;
     const ranked = summary.rankedMatches;
     const custom = summary.customMatches;
+    const bots = summary.botMatches;
 
     statsOverlaySummaryEls.totalGames.textContent = games.total;
     statsOverlaySummaryEls.totalGamesWins.textContent = games.wins;
@@ -489,6 +509,19 @@ preloadAssets();
     statsOverlaySummaryEls.quickplayWins.textContent = quickplay.wins;
     statsOverlaySummaryEls.quickplayDraws.textContent = quickplay.draws;
     statsOverlaySummaryEls.quickplayLosses.textContent = quickplay.losses;
+
+    if (statsOverlaySummaryEls.botMatches) {
+      statsOverlaySummaryEls.botMatches.textContent = bots.total;
+    }
+    if (statsOverlaySummaryEls.botWins) {
+      statsOverlaySummaryEls.botWins.textContent = bots.wins;
+    }
+    if (statsOverlaySummaryEls.botDraws) {
+      statsOverlaySummaryEls.botDraws.textContent = bots.draws;
+    }
+    if (statsOverlaySummaryEls.botLosses) {
+      statsOverlaySummaryEls.botLosses.textContent = bots.losses;
+    }
 
     statsOverlaySummaryEls.rankedMatches.textContent = ranked.total;
     statsOverlaySummaryEls.rankedWins.textContent = ranked.wins;
@@ -515,6 +548,7 @@ preloadAssets();
     if (upper === 'RANKED') return 'Ranked Match';
     if (upper === 'QUICKPLAY') return 'Quickplay Match';
     if (upper === 'CUSTOM') return 'Custom Match';
+    if (upper === 'AI') return 'Bot Match';
     return `${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()} Match`;
   }
 
@@ -543,6 +577,7 @@ preloadAssets();
       if (!match || match.isActive) return false;
       const type = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
       if (statsHistoryFilter === 'quickplay') return type === 'QUICKPLAY';
+      if (statsHistoryFilter === 'bot') return type === 'AI';
       if (statsHistoryFilter === 'custom') return type === 'CUSTOM';
       if (statsHistoryFilter === 'ranked') return type === 'RANKED';
       return true;
@@ -1340,6 +1375,7 @@ preloadAssets();
   let currentPlayerIds = [];
   const connectionStatusByPlayer = new Map();
   let customInvitePrompt = null;
+  let botMatchPrompt = null;
   let activeIncomingInvite = null;
   const pendingOutgoingInvites = new Map();
   let lastInviteTargetName = null;
@@ -1422,7 +1458,7 @@ preloadAssets();
   }
 
   // Track server truth and optimistic intent to avoid flicker
-  const queuedState = { quickplay: false, ranked: false };
+  const queuedState = { quickplay: false, ranked: false, bots: false };
   let pendingAction = null; // 'join' | 'leave' | null
 
   function isBombActive() {
@@ -1819,7 +1855,7 @@ preloadAssets();
 
   function updateFindButton() {
     const awaitingServerQueueState = !queueStatusKnown && queueStartTime != null;
-    const anyQueued = queuedState.quickplay || queuedState.ranked;
+    const anyQueued = queuedState.quickplay || queuedState.ranked || queuedState.bots;
     let mode = modeSelect.value;
     const activeMode = queueStatusKnown
       ? (queuedState.quickplay ? 'quickplay' : queuedState.ranked ? 'ranked' : null)
@@ -1835,7 +1871,7 @@ preloadAssets();
       persistQueueMode(activeMode);
     }
 
-    const isQueued = queuedState[mode];
+    const isQueued = Boolean(queuedState[mode]);
     const showSearching =
       pendingAction === 'join' ||
       isQueued ||
@@ -1888,6 +1924,7 @@ preloadAssets();
         console.log('[socket] initialState', payload);
         queuedState.quickplay = Boolean(payload?.queued?.quickplay);
         queuedState.ranked = Boolean(payload?.queued?.ranked);
+        queuedState.bots = Boolean(payload?.queued?.bots);
         queueStatusKnown = true;
         pendingAction = null;
         if (!(queuedState.quickplay || queuedState.ranked)) {
@@ -2021,6 +2058,7 @@ preloadAssets();
       if (!payload) return;
       queuedState.quickplay = Boolean(payload.quickplay);
       queuedState.ranked = Boolean(payload.ranked);
+      queuedState.bots = Boolean(payload.bots);
       queueStatusKnown = true;
       pendingAction = null;
       updateFindButton();
@@ -2056,8 +2094,9 @@ preloadAssets();
           dragging = null;
         }
 
-        // As soon as we are in a game, hide the Find Game UI
+        // As soon as we are in a game, hide the Find Game UI and reveal the play area
         hideQueuer();
+        showPlayArea();
         loadPlayerNames(payload.players);
         currentIsWhite = (color === 0);
 
@@ -2364,7 +2403,7 @@ preloadAssets();
     }
 
     if (mode === 'bots') {
-      window.alert('Bots coming soon!');
+      showBotMatchPrompt();
       return;
     }
 
@@ -2895,6 +2934,230 @@ preloadAssets();
     input.focus();
     if (input.value) {
       input.setSelectionRange(0, input.value.length);
+    }
+  }
+
+  function showBotMatchPrompt() {
+    if (botMatchPrompt && botMatchPrompt.overlay && botMatchPrompt.overlay.isOpen()) {
+      try {
+        botMatchPrompt.select?.focus();
+      } catch (_) {}
+      return;
+    }
+
+    const prompt = {};
+    const overlay = createOverlay({
+      baseClass: 'cg-overlay cg-overlay--banner bot-overlay',
+      dialogClass: 'cg-overlay__dialog cg-overlay__dialog--banner bot-overlay__dialog',
+      contentClass: 'cg-overlay__content cg-overlay__content--banner bot-overlay__content',
+      backdropClass: 'cg-overlay__backdrop cg-overlay__backdrop--banner bot-overlay__backdrop',
+      closeButtonClass: 'cg-overlay__close cg-overlay__close--banner bot-overlay__close',
+      closeLabel: 'Close bot selection',
+      closeText: '✕',
+      openClass: 'cg-overlay--open cg-overlay--banner-open bot-overlay--open',
+      bodyOpenClass: 'cg-overlay-open bot-overlay-open',
+      closeOnBackdrop: true,
+      trapFocus: true,
+      onHide() {
+        if (botMatchPrompt === prompt) {
+          botMatchPrompt = null;
+        }
+      }
+    });
+
+    botMatchPrompt = prompt;
+    prompt.overlay = overlay;
+
+    const { content, dialog, closeButton } = overlay;
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+
+    function closePrompt({ restoreFocus = true } = {}) {
+      try {
+        overlay.hide({ restoreFocus });
+      } catch (_) {
+        overlay.hide();
+      }
+    }
+
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => closePrompt({ restoreFocus: true });
+    }
+
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const card = document.createElement('div');
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '360px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = cardGap + 'px';
+
+    const title = document.createElement('div');
+    title.textContent = 'Play vs Bot';
+    title.style.fontSize = clamp(Math.round(24 * modalScale), 16, 24) + 'px';
+    title.style.fontWeight = '700';
+
+    const description = document.createElement('div');
+    description.textContent = 'Choose a bot difficulty to start a match.';
+    description.style.fontSize = clamp(Math.round(16 * modalScale), 12, 16) + 'px';
+    description.style.lineHeight = '1.4';
+
+    const select = document.createElement('select');
+    select.style.padding = `${clamp(Math.round(10 * modalScale), 8, 12)}px ${clamp(Math.round(12 * modalScale), 10, 16)}px`;
+    select.style.border = '2px solid var(--CG-deep-gold)';
+    select.style.borderRadius = '6px';
+    select.style.fontSize = clamp(Math.round(18 * modalScale), 14, 18) + 'px';
+    select.style.fontWeight = '600';
+    select.style.background = 'var(--CG-white)';
+    select.style.color = 'var(--CG-black)';
+    select.style.textAlign = 'center';
+    select.style.cursor = 'pointer';
+
+    const difficulties = [
+      { value: 'easy', label: 'Easy' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'hard', label: 'Hard' }
+    ];
+    difficulties.forEach(({ value, label }) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      select.appendChild(option);
+    });
+
+    const statusEl = document.createElement('div');
+    statusEl.style.minHeight = clamp(Math.round(18 * modalScale), 14, 18) + 'px';
+    statusEl.style.fontSize = clamp(Math.round(14 * modalScale), 12, 14) + 'px';
+    statusEl.style.fontWeight = '600';
+    statusEl.style.color = 'var(--CG-light-gold)';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
+    buttons.style.justifyContent = 'center';
+
+    const cancelBtn = createButton({
+      label: 'Cancel',
+      variant: 'danger',
+      position: 'relative'
+    });
+    cancelBtn.style.flex = '1';
+    cancelBtn.style.minWidth = '0';
+    cancelBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
+    cancelBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    cancelBtn.style.setProperty('--cg-button-font-weight', '700');
+
+    const goBtn = createButton({
+      label: 'Go',
+      variant: 'primary',
+      position: 'relative'
+    });
+    goBtn.style.flex = '1';
+    goBtn.style.minWidth = '0';
+    goBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
+    goBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    goBtn.style.setProperty('--cg-button-font-weight', '700');
+
+    function setStatus(message, tone = 'info') {
+      statusEl.textContent = message || '';
+      if (!message) return;
+      if (tone === 'error') {
+        statusEl.style.color = 'var(--CG-scarlet, #ff6b6b)';
+      } else {
+        statusEl.style.color = 'var(--CG-light-gold)';
+      }
+    }
+
+    function setLoading(loading) {
+      goBtn.disabled = loading;
+      cancelBtn.disabled = loading;
+      goBtn.textContent = loading ? 'Starting…' : 'Go';
+    }
+
+    async function handleStart() {
+      const difficulty = select.value || 'easy';
+      if (difficulty === 'medium' || difficulty === 'hard') {
+        const label = difficulty.charAt(0).toUpperCase() + difficulty.slice(1);
+        window.alert(`${label} bot still under construction`);
+        return;
+      }
+
+      setStatus('Starting match…');
+      setLoading(true);
+      try {
+        await startBotMatch(difficulty, {
+          close: () => closePrompt({ restoreFocus: true }),
+          setStatus,
+        });
+      } catch (err) {
+        const message = (err && err.data && err.data.message) || err?.message || 'Failed to start bot match.';
+        setStatus(message, 'error');
+        setLoading(false);
+        return;
+      }
+    }
+
+    cancelBtn.addEventListener('click', () => closePrompt({ restoreFocus: true }));
+    goBtn.addEventListener('click', () => { handleStart(); });
+    select.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        handleStart();
+      }
+    });
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(goBtn);
+
+    card.appendChild(title);
+    card.appendChild(description);
+    card.appendChild(select);
+    card.appendChild(statusEl);
+    card.appendChild(buttons);
+    content.innerHTML = '';
+    content.appendChild(card);
+
+    prompt.overlay = overlay;
+    prompt.close = closePrompt;
+    prompt.setStatus = setStatus;
+    prompt.setLoading = setLoading;
+    prompt.select = select;
+
+    overlay.show({ initialFocus: select });
+    select.focus();
+  }
+
+  async function startBotMatch(difficulty, promptHandle) {
+    try {
+      const result = await apiEnterBotQueue({ difficulty });
+      if (result && (result.userId || result.username)) {
+        updateSessionInfo({
+          ...(result.userId ? { userId: result.userId } : {}),
+          ...(result.username ? { username: result.username } : {}),
+        }, { syncCookies: Boolean(result?.userId) });
+        userId = sessionInfo.userId || result.userId || userId;
+      }
+      if (promptHandle && typeof promptHandle.close === 'function') {
+        promptHandle.close();
+      }
+    } catch (err) {
+      if (promptHandle && typeof promptHandle.setStatus === 'function') {
+        const message = (err && err.data && err.data.message) || err?.message || 'Failed to start bot match.';
+        promptHandle.setStatus(message, 'error');
+      }
+      throw err;
     }
   }
 
@@ -3917,6 +4180,7 @@ preloadAssets();
     clearBannerOverlay({ restoreFocus: false });
     queuedState.quickplay = false;
     queuedState.ranked = false;
+    queuedState.bots = false;
     pendingAction = null;
     queueStatusKnown = true;
     stopClockInterval();
@@ -5003,12 +5267,51 @@ preloadAssets();
       }
       if (u.startTime) gameStartTime = new Date(u.startTime).getTime();
       if (Array.isArray(u.actions)) {
-        actionHistory = u.actions;
-        lastAction = u.actions[u.actions.length - 1] || null;
+        actionHistory = u.actions.map((action) => {
+          if (!action || typeof action !== 'object') return action;
+          const normalized = { ...action };
+          if (typeof normalized.player === 'string') {
+            const parsedPlayer = parseInt(normalized.player, 10);
+            if (!Number.isNaN(parsedPlayer)) normalized.player = parsedPlayer;
+          }
+          if (normalized.details && typeof normalized.details === 'object') {
+            const details = { ...normalized.details };
+            if (typeof details.declaration === 'string') {
+              const parsedDecl = parseInt(details.declaration, 10);
+              if (!Number.isNaN(parsedDecl)) details.declaration = parsedDecl;
+            }
+            normalized.details = details;
+          }
+          return normalized;
+        });
+        lastAction = actionHistory[actionHistory.length - 1] || null;
       }
       if (Array.isArray(u.moves)) {
-        lastMove = u.moves[u.moves.length - 1] || null;
+        const normalizedMoves = u.moves.map((move) => {
+          if (!move || typeof move !== 'object') return move;
+          const normalized = { ...move };
+          if (typeof normalized.player === 'string') {
+            const parsedPlayer = parseInt(normalized.player, 10);
+            if (!Number.isNaN(parsedPlayer)) normalized.player = parsedPlayer;
+          }
+          if (typeof normalized.declaration === 'string') {
+            const parsedDecl = parseInt(normalized.declaration, 10);
+            if (!Number.isNaN(parsedDecl)) normalized.declaration = parsedDecl;
+          }
+          return normalized;
+        });
+        lastMove = normalizedMoves[normalizedMoves.length - 1] || null;
         const last = lastMove;
+        if (
+          last &&
+          (last.declaration === undefined || last.declaration === null) &&
+          lastAction &&
+          lastAction.type === ACTIONS.MOVE &&
+          lastAction.details &&
+          typeof lastAction.details.declaration === 'number'
+        ) {
+          last.declaration = lastAction.details.declaration;
+        }
         if (last && last.state === MOVE_STATES.PENDING) {
           const from = last.from || {};
           const to = last.to || {};
@@ -5050,7 +5353,7 @@ preloadAssets();
 
       // Determine red tint square for successful challenges
       challengeRemoved = null;
-      const prevAction = Array.isArray(u.actions) ? u.actions[u.actions.length - 2] : null;
+      const prevAction = Array.isArray(actionHistory) ? actionHistory[actionHistory.length - 2] : null;
       if (
         lastAction &&
         lastAction.type === ACTIONS.CHALLENGE &&

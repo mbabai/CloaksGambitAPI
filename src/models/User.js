@@ -25,6 +25,15 @@ const userSchema = new mongoose.Schema({
     default: 800,
     min: 0
   },
+  isBot: {
+    type: Boolean,
+    default: false
+  },
+  botDifficulty: {
+    type: String,
+    enum: ['easy', 'medium', 'hard'],
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

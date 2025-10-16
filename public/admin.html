@@ -326,6 +326,20 @@
           </div>
           <div class="history-card">
             <div class="history-card-label">
+              <span class="history-card-label-line">Bot</span>
+              <span class="history-card-label-line">Matches</span>
+            </div>
+            <div class="history-card-stats">
+              <span id="historyBotMatches" class="history-card-total history-card-value">0</span>
+              <div class="history-card-splits">
+                <span class="history-card-split history-card-split--wins">W:<span id="historyBotWins">0</span></span>
+                <span class="history-card-split history-card-split--draws">D:<span id="historyBotDraws">0</span></span>
+                <span class="history-card-split history-card-split--losses">L:<span id="historyBotLosses">0</span></span>
+              </div>
+            </div>
+          </div>
+          <div class="history-card">
+            <div class="history-card-label">
               <span class="history-card-label-line">Ranked</span>
               <span class="history-card-label-line">Matches</span>
             </div>
@@ -357,6 +371,7 @@
         <div class="history-filters">
           <button class="history-filter-btn active" data-history-filter="all">All</button>
           <button class="history-filter-btn" data-history-filter="quickplay">Quickplay</button>
+          <button class="history-filter-btn" data-history-filter="bot">Bots</button>
           <button class="history-filter-btn" data-history-filter="custom">Custom</button>
           <button class="history-filter-btn" data-history-filter="ranked">Ranked</button>
         </div>

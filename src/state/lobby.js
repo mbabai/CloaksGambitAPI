@@ -10,6 +10,7 @@ function toId(value) {
 const state = {
   quickplayQueue: [],
   rankedQueue: [],
+  botQueue: [],
   inGame: [],
 };
 
@@ -17,6 +18,7 @@ function cloneState() {
   return {
     quickplayQueue: [...state.quickplayQueue],
     rankedQueue: [...state.rankedQueue],
+    botQueue: [...state.botQueue],
     inGame: [...state.inGame],
   };
 }
@@ -27,6 +29,7 @@ function emitQueueChanged(affectedUsers = []) {
   eventBus.emit('queueChanged', {
     quickplayQueue: snapshot.quickplayQueue,
     rankedQueue: snapshot.rankedQueue,
+    botQueue: snapshot.botQueue,
     affectedUsers: unique,
   });
   return snapshot;
@@ -35,12 +38,17 @@ function emitQueueChanged(affectedUsers = []) {
 function isInQueue(queueName, userId) {
   const id = toId(userId);
   if (!id) return false;
-  const queueKey = queueName === 'ranked' ? 'rankedQueue' : 'quickplayQueue';
+  let queueKey = 'quickplayQueue';
+  if (queueName === 'ranked') {
+    queueKey = 'rankedQueue';
+  } else if (queueName === 'bot' || queueName === 'bots') {
+    queueKey = 'botQueue';
+  }
   return state[queueKey].includes(id);
 }
 
 function isInAnyQueue(userId) {
-  return isInQueue('quickplay', userId) || isInQueue('ranked', userId);
+  return isInQueue('quickplay', userId) || isInQueue('ranked', userId) || isInQueue('bot', userId);
 }
 
 function isInGame(userId) {
@@ -52,7 +60,12 @@ function isInGame(userId) {
 function addToQueue(queueName, userId, { allowDuplicate = false, toFront = false } = {}) {
   const id = toId(userId);
   if (!id) return { added: false, state: cloneState() };
-  const queueKey = queueName === 'ranked' ? 'rankedQueue' : 'quickplayQueue';
+  let queueKey = 'quickplayQueue';
+  if (queueName === 'ranked') {
+    queueKey = 'rankedQueue';
+  } else if (queueName === 'bot' || queueName === 'bots') {
+    queueKey = 'botQueue';
+  }
   const queue = state[queueKey];
   if (!allowDuplicate && queue.includes(id)) {
     return { added: false, state: cloneState() };
@@ -72,7 +85,12 @@ function addToQueue(queueName, userId, { allowDuplicate = false, toFront = false
 function removeFromQueue(queueName, userId) {
   const id = toId(userId);
   if (!id) return { removed: false, state: cloneState() };
-  const queueKey = queueName === 'ranked' ? 'rankedQueue' : 'quickplayQueue';
+  let queueKey = 'quickplayQueue';
+  if (queueName === 'ranked') {
+    queueKey = 'rankedQueue';
+  } else if (queueName === 'bot' || queueName === 'bots') {
+    queueKey = 'botQueue';
+  }
   const queue = state[queueKey];
   const initialLength = queue.length;
   const filtered = queue.filter(item => item !== id);
@@ -90,7 +108,12 @@ function removeFromAllQueues(userId) {
   state.quickplayQueue = state.quickplayQueue.filter(item => item !== id);
   const beforeRanked = state.rankedQueue.length;
   state.rankedQueue = state.rankedQueue.filter(item => item !== id);
-  const changed = beforeQuick !== state.quickplayQueue.length || beforeRanked !== state.rankedQueue.length;
+  const beforeBot = state.botQueue.length;
+  state.botQueue = state.botQueue.filter(item => item !== id);
+  const changed =
+    beforeQuick !== state.quickplayQueue.length ||
+    beforeRanked !== state.rankedQueue.length ||
+    beforeBot !== state.botQueue.length;
   return { removed: changed, state: cloneState() };
 }
 
@@ -122,6 +145,7 @@ function removeInGame(userIds = []) {
 function clear() {
   state.quickplayQueue = [];
   state.rankedQueue = [];
+  state.botQueue = [];
   state.inGame = [];
   return cloneState();
 }

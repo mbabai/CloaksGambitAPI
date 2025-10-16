@@ -360,8 +360,12 @@ async function updateMatchAfterGame(game, createNextGame) {
     }
 
     const config = getServerConfig.getServerConfigSnapshotSync();
+    const quickplayDefaults = config.gameModeSettings.QUICKPLAY
+      || config.gameModeSettings.get?.('QUICKPLAY')
+      || {};
     const typeSettings = config.gameModeSettings[match.type]
-      || config.gameModeSettings.get?.(match.type);
+      || config.gameModeSettings.get?.(match.type)
+      || quickplayDefaults;
     const winScore = typeSettings?.WIN_SCORE;
     const drawWins = Number.isFinite(winScore) && (match.drawCount || 0) >= winScore;
 

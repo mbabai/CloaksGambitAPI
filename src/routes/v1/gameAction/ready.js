@@ -3,11 +3,28 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { resolveUserFromRequest } = require('../../../utils/authTokens');
+const User = require('../../../models/User');
 
 router.post('/', async (req, res) => {
   try {
     const { gameId, color } = req.body;
-    console.log('Ready endpoint called with:', { gameId, color });
+    const requester = await resolveUserFromRequest(req).catch(() => null);
+    let requesterRecord = null;
+    if (requester?.userId) {
+      requesterRecord = await User.findById(requester.userId).lean().catch(() => null);
+    }
+    const requesterDetails = {
+      userId: requester?.userId || null,
+      username: requester?.username || requesterRecord?.username || null,
+      isBot: requesterRecord?.isBot || false,
+      botDifficulty: requesterRecord?.botDifficulty || null,
+    };
+    console.log('Ready endpoint called with:', {
+      gameId,
+      color,
+      ...requesterDetails,
+    });
 
     const normalizedColor = parseInt(color, 10);
     if (normalizedColor !== 0 && normalizedColor !== 1) {
@@ -57,6 +74,13 @@ router.post('/', async (req, res) => {
     eventBus.emit('gameChanged', {
       game: finalGame,
       affectedUsers: (finalGame.players || []).map(p => p.toString()),
+      initiator: {
+        action: 'ready',
+        userId: requesterDetails.userId,
+        username: requesterDetails.username,
+        isBot: requesterDetails.isBot,
+        botDifficulty: requesterDetails.botDifficulty,
+      },
     });
 
     // If both players are now ready, emit explicit signal (once)
