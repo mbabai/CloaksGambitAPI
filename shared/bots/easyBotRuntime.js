@@ -128,7 +128,13 @@ class GameController {
     this.actions = Array.isArray(payload.actions) ? [...payload.actions] : [];
     this.moves = Array.isArray(payload.moves) ? [...payload.moves] : [];
     this.playerTurn = typeof payload.playerTurn === 'number' ? payload.playerTurn : this.playerTurn;
-    this.onDeckingPlayer = typeof payload.onDeckingPlayer === 'number' ? payload.onDeckingPlayer : null;
+    if (Object.prototype.hasOwnProperty.call(payload, 'onDeckingPlayer')) {
+      const { onDeckingPlayer } = payload;
+      this.onDeckingPlayer =
+        onDeckingPlayer === null || typeof onDeckingPlayer === 'number'
+          ? onDeckingPlayer
+          : this.onDeckingPlayer;
+    }
     this.isActive = typeof payload.isActive === 'boolean' ? payload.isActive : this.isActive;
 
     if (this.color === null) {
