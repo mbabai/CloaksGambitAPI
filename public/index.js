@@ -1390,6 +1390,7 @@ preloadAssets();
   let currentPlayerTurn = null; // 0 or 1
   let currentOnDeckingPlayer = null; // player index currently selecting on-deck piece
   let postMoveOverlay = null; // { uiR, uiC, types: string[] }
+  let lastPostMoveKey = null; // fingerprint of the last move we attached overlays for
   let pendingCapture = null; // { row, col, piece }
   let lastAction = null; // last action from server
   let lastMove = null;   // last move from server
@@ -5214,6 +5215,46 @@ preloadAssets();
     return [];
   }
 
+  function makeMoveKey(move) {
+    if (!move) return null;
+    const from = move.from || {};
+    const to = move.to || {};
+    const parts = [
+      typeof move.player === 'number' ? move.player : 'x',
+      Number.isFinite(from.row) ? from.row : 'x',
+      Number.isFinite(from.col) ? from.col : 'x',
+      Number.isFinite(to.row) ? to.row : 'x',
+      Number.isFinite(to.col) ? to.col : 'x',
+      typeof move.declaration === 'number' ? move.declaration : 'x',
+    ];
+    return parts.join(':');
+  }
+
+  function buildPostMoveOverlayForMove(move, action) {
+    if (!move || !move.to) return null;
+    try {
+      const from = move.from || {};
+      const to = move.to || {};
+      const hasOrigin = Number.isFinite(from.row) && Number.isFinite(from.col);
+      const originUI = hasOrigin
+        ? serverToUICoords(from.row, from.col, currentRows, currentCols, currentIsWhite)
+        : null;
+      const destUI = serverToUICoords(to.row, to.col, currentRows, currentCols, currentIsWhite);
+      if (!destUI) return null;
+      if (action && action.type === ACTIONS.BOMB) {
+        return { uiR: destUI.uiR, uiC: destUI.uiC, types: ['bombSpeechLeft'] };
+      }
+      const declaration = typeof move.declaration === 'number'
+        ? move.declaration
+        : (typeof action?.details?.declaration === 'number' ? action.details.declaration : null);
+      const types = declaration ? bubbleTypesForMove(originUI || destUI, destUI, declaration) : [];
+      if (!types || types.length === 0) return null;
+      return { uiR: destUI.uiR, uiC: destUI.uiC, types };
+    } catch (_) {
+      return null;
+    }
+  }
+
   function setStateFromServer(u) {
     try {
       // Avoid overwriting optimistic in-game moves while a drag or selection is active
@@ -5312,6 +5353,7 @@ preloadAssets();
         ) {
           last.declaration = lastAction.details.declaration;
         }
+        const lastMoveKey = makeMoveKey(last);
         if (last && last.state === MOVE_STATES.PENDING) {
           const from = last.from || {};
           const to = last.to || {};
@@ -5335,19 +5377,21 @@ preloadAssets();
             }
           } catch (_) { pendingCapture = null; }
           try {
-            const originUI = serverToUICoords(from.row, from.col);
-            const destUI = serverToUICoords(to.row, to.col);
-            if (lastAction && lastAction.type === ACTIONS.BOMB) {
-              postMoveOverlay = { uiR: destUI.uiR, uiC: destUI.uiC, types: ['bombSpeechLeft'] };
-            } else {
-              const types = bubbleTypesForMove(originUI, destUI, last.declaration);
-              postMoveOverlay = { uiR: destUI.uiR, uiC: destUI.uiC, types };
-            }
+            const overlay = buildPostMoveOverlayForMove(last, lastAction);
+            postMoveOverlay = overlay ? { ...overlay, interactive: false } : null;
+            lastPostMoveKey = lastMoveKey;
           } catch (_) {}
         } else {
-          postMoveOverlay = null;
           pendingCapture = null;
           pendingMoveFrom = null;
+          if (!lastMoveKey) {
+            postMoveOverlay = null;
+            lastPostMoveKey = null;
+          } else if (lastMoveKey !== lastPostMoveKey) {
+            const overlay = buildPostMoveOverlayForMove(last, lastAction);
+            postMoveOverlay = overlay;
+            lastPostMoveKey = lastMoveKey;
+          }
         }
       }
 
