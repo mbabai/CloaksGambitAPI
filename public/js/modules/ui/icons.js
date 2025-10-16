@@ -81,7 +81,9 @@ export function createDaggerToken({ size = 24, label = '⚔', alt = 'Loss', titl
   const token = document.createElement('div');
   token.classList.add('cg-token');
   applySquareSize(token, size);
-  token.style.fontSize = Number.isFinite(size) ? `${Math.max(10, Math.floor(size * 0.45))}px` : '12px';
+  const resolvedSize = Number.isFinite(size) ? Number(size) : null;
+  const daggerScale = resolvedSize ? Math.max(10, Math.round(resolvedSize * 0.74)) : 12;
+  token.style.fontSize = `${daggerScale}px`;
   token.textContent = label;
   if (alt) {
     token.setAttribute('aria-label', alt);

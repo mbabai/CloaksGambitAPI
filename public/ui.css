@@ -696,6 +696,7 @@ body.history-overlay-open {
   align-items: center;
   justify-content: center;
   font-weight: 700;
+  line-height: 1;
   pointer-events: none;
 }
 
