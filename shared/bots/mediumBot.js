@@ -268,7 +268,7 @@ class MediumBotController extends BaseBotController {
 
     let score = 0;
     const protectors = this.countProtectorsAfterMove(move);
-    score += protectors * 7;
+    score += protectors * 10;
 
     const forwardDelta = this.color === 0
       ? move.to.row - move.from.row
@@ -277,8 +277,12 @@ class MediumBotController extends BaseBotController {
       score += forwardDelta;
     }
 
+    const opponent = this.identifyOpponent();
+    const opponentCount = opponent == null ? 0 : this.countPieces(opponent);
+
     if (move.capture) {
-      score += 20;
+      const pieceDeficit = Math.max(0, opponentCount - myCount);
+      score += 10 + pieceDeficit * 5;
     }
 
     if (declaration === movingPiece.identity) {
