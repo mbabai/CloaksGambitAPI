@@ -5842,17 +5842,15 @@ preloadAssets();
   function showFinalSpeechOnly(origin, dest, declaration, opts) {
     try {
       currentPlayerTurn = null;
-      const dx = Math.abs(dest.uiR - origin.uiR);
-      const dy = Math.abs(dest.uiC - origin.uiC);
-      const movedDistance = Math.max(dx, dy);
       let types = [];
       if (declaration === Declaration.KNIGHT) types = ['knightSpeechLeft'];
       else if (declaration === Declaration.ROOK) {
-        // For rook, show speech if either alwaysShow or moved beyond 1 square
-        if ((opts && opts.alwaysShow) || movedDistance > 1) types = ['rookSpeechLeft'];
+        // Always show the rook declaration speech bubble once a move is final
+        types = ['rookSpeechLeft'];
       }
       else if (declaration === Declaration.BISHOP) {
-        if ((opts && opts.alwaysShow) || movedDistance > 1) types = ['bishopSpeechLeft'];
+        // Always show the bishop declaration speech bubble once a move is final
+        types = ['bishopSpeechLeft'];
       }
       else if (declaration === Declaration.KING) {
         // Show king speech on the left for king declaration
