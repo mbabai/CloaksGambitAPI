@@ -177,8 +177,33 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         });
       });
     }
+
+    function getSortableElo(user) {
+      if (!user) return null;
+      const username = typeof user.username === 'string' ? user.username : '';
+      if (isAnonymousUsername(username)) return null;
+      const numericElo = Number(user.elo);
+      return Number.isFinite(numericElo) ? numericElo : null;
+    }
+
     users.sort((a, b) => {
-      return (connectedSet.has(b.id) - connectedSet.has(a.id)) || (a.username || '').localeCompare(b.username || '');
+      const aConnected = connectedSet.has(a.id);
+      const bConnected = connectedSet.has(b.id);
+      if (aConnected !== bConnected) {
+        return aConnected ? -1 : 1;
+      }
+
+      const aElo = getSortableElo(a);
+      const bElo = getSortableElo(b);
+      if (aElo !== bElo) {
+        if (aElo == null) return 1;
+        if (bElo == null) return -1;
+        return aElo > bElo ? -1 : 1;
+      }
+
+      const aName = (a.username || '').toLowerCase();
+      const bName = (b.username || '').toLowerCase();
+      return aName.localeCompare(bName);
     });
     const frag = document.createDocumentFragment();
     const table = document.createElement('table');
