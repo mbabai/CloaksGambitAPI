@@ -1,4 +1,4 @@
-const { startBotClient } = require('../shared/bots/easyBotRuntime');
+const { startBotClient } = require('../shared/bots');
 
 const SERVER_URL = process.env.BOT_SERVER_URL || 'http://localhost:3000';
 const BOT_DIFFICULTY = (process.env.BOT_DIFFICULTY || 'easy').toLowerCase();

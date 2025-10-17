@@ -3089,7 +3089,7 @@ preloadAssets();
 
     async function handleStart() {
       const difficulty = select.value || 'easy';
-      if (difficulty === 'medium' || difficulty === 'hard') {
+      if (difficulty === 'hard') {
         const label = difficulty.charAt(0).toUpperCase() + difficulty.slice(1);
         window.alert(`${label} bot still under construction`);
         return;

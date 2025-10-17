@@ -28,8 +28,11 @@ router.post('/', async (req, res) => {
   try {
     let { userId, difficulty } = req.body || {};
     const diffKey = normalizeDifficulty(difficulty);
-    if (diffKey !== 'easy') {
-      return res.status(400).json({ message: 'Only easy bots are currently available.' });
+    const allowedDifficulties = new Set(['easy', 'medium']);
+    if (!allowedDifficulties.has(diffKey)) {
+      return res
+        .status(400)
+        .json({ message: 'Only easy and medium bots are currently available.' });
     }
 
     let userInfo = await resolveUserFromRequest(req);
