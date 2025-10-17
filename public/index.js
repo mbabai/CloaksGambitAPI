@@ -1393,6 +1393,7 @@ preloadAssets();
   let lastPostMoveKey = null; // fingerprint of the last move we attached overlays for
   let pendingCapture = null; // { row, col, piece }
   let lastAction = null; // last action from server
+  let lastMoveAction = null; // most recent MOVE or BOMB action from server
   let lastMove = null;   // last move from server
   let pendingMoveFrom = null; // server coords of last move origin when pending
   let challengeRemoved = null; // server coords of last piece removed by successful challenge
@@ -5230,6 +5231,18 @@ preloadAssets();
     return parts.join(':');
   }
 
+  function findLatestMoveAction(actions) {
+    if (!Array.isArray(actions)) return null;
+    for (let idx = actions.length - 1; idx >= 0; idx -= 1) {
+      const candidate = actions[idx];
+      if (!candidate || typeof candidate !== 'object') continue;
+      if (candidate.type === ACTIONS.MOVE || candidate.type === ACTIONS.BOMB) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
   function buildPostMoveOverlayForMove(move, action) {
     if (!move || !move.to) return null;
     try {
@@ -5326,6 +5339,7 @@ preloadAssets();
           return normalized;
         });
         lastAction = actionHistory[actionHistory.length - 1] || null;
+        lastMoveAction = findLatestMoveAction(actionHistory);
       }
       if (Array.isArray(u.moves)) {
         const normalizedMoves = u.moves.map((move) => {
@@ -5343,15 +5357,16 @@ preloadAssets();
         });
         lastMove = normalizedMoves[normalizedMoves.length - 1] || null;
         const last = lastMove;
+        const overlayAction = lastMoveAction || lastAction;
         if (
           last &&
           (last.declaration === undefined || last.declaration === null) &&
-          lastAction &&
-          lastAction.type === ACTIONS.MOVE &&
-          lastAction.details &&
-          typeof lastAction.details.declaration === 'number'
+          lastMoveAction &&
+          lastMoveAction.type === ACTIONS.MOVE &&
+          lastMoveAction.details &&
+          typeof lastMoveAction.details.declaration === 'number'
         ) {
-          last.declaration = lastAction.details.declaration;
+          last.declaration = lastMoveAction.details.declaration;
         }
         const lastMoveKey = makeMoveKey(last);
         if (last && last.state === MOVE_STATES.PENDING) {
@@ -5365,7 +5380,7 @@ preloadAssets();
               currentBoard = currentBoard.map(row => row.slice());
               currentBoard[to.row] = currentBoard[to.row].slice();
               currentBoard[from.row] = currentBoard[from.row].slice();
-              if (lastAction && lastAction.type === ACTIONS.BOMB) {
+              if (overlayAction && overlayAction.type === ACTIONS.BOMB) {
                 const attackerPiece = moving || { color: last.player, identity: last.declaration };
                 currentBoard[to.row][to.col] = target || moving;
                 pendingCapture = attackerPiece ? { row: to.row, col: to.col, piece: attackerPiece } : null;
@@ -5377,7 +5392,7 @@ preloadAssets();
             }
           } catch (_) { pendingCapture = null; }
           try {
-            const overlay = buildPostMoveOverlayForMove(last, lastAction);
+            const overlay = buildPostMoveOverlayForMove(last, overlayAction);
             postMoveOverlay = overlay ? { ...overlay, interactive: false } : null;
             lastPostMoveKey = lastMoveKey;
           } catch (_) {}
@@ -5388,7 +5403,7 @@ preloadAssets();
             postMoveOverlay = null;
             lastPostMoveKey = null;
           } else if (lastMoveKey !== lastPostMoveKey) {
-            const overlay = buildPostMoveOverlayForMove(last, lastAction);
+            const overlay = buildPostMoveOverlayForMove(last, overlayAction);
             postMoveOverlay = overlay;
             lastPostMoveKey = lastMoveKey;
           }
