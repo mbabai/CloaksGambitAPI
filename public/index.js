@@ -4853,7 +4853,7 @@ preloadAssets();
       strip.style.display = 'flex';
       strip.style.alignItems = 'center';
       strip.style.gap = '4px';
-      const pieces = (currentCaptured?.[colorIdx] || []);
+      const pieces = (currentCaptured?.[1 - colorIdx] || []);
       pieces.forEach(piece => {
         const cap = Math.floor(0.365 * s); // ~36.5% of square
         const img = modulePieceGlyph(piece, cap, PIECE_IMAGES);
