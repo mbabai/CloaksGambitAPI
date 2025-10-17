@@ -924,6 +924,7 @@ function initSocket(httpServer) {
 
     const userRecord = await User.findById(userId).lean().catch(() => null);
     const isBotUser = Boolean(userRecord?.isBot);
+    const isGuestUser = Boolean(userInfo?.isGuest ?? userRecord?.isGuest);
     const usernameForLog = userRecord?.username || userInfo?.username;
     const connectionLabel = authenticated ? 'logged-in' : 'anonymous';
     console.log('[socket] connection established', {
@@ -933,6 +934,7 @@ function initSocket(httpServer) {
       authenticated,
       label: connectionLabel,
       isBot: isBotUser,
+      isGuest: isGuestUser,
     });
     // If a user reconnects quickly, keep the most recent socket only
     const prev = clients.get(userId);
@@ -942,11 +944,20 @@ function initSocket(httpServer) {
     clients.set(userId, socket);
     setConnectedUsername(userId, userInfo.username);
     markPlayerConnectedToAllMatches(userId);
-    socket.emit('user:init', { userId, username: userInfo.username, guest: userInfo.isGuest });
+    socket.emit('user:init', { userId, username: userInfo.username, guest: Boolean(userInfo.isGuest) });
     socket.data = socket.data || {};
     socket.data.isBot = isBotUser;
+    socket.data.isGuest = isGuestUser;
     socket.data.username = usernameForLog;
     console.log('Client connected', socket.id);
+
+    if (isGuestUser && !isBotUser) {
+      try {
+        await User.updateOne({ _id: userId }, { $set: { lastDisconnectedAt: null } });
+      } catch (err) {
+        console.error('Failed to clear guest disconnect timestamp on connect:', err);
+      }
+    }
 
     socket.data.spectating = new Set();
 
@@ -1187,6 +1198,14 @@ function initSocket(httpServer) {
           clients.delete(userId);
           markPlayerDisconnectedFromAllMatches(userId);
           removeConnectedUsername(userId);
+
+          if (socket.data?.isGuest && !socket.data?.isBot) {
+            try {
+              await User.updateOne({ _id: userId }, { $set: { lastDisconnectedAt: new Date() } });
+            } catch (err) {
+              console.error('Failed to record guest disconnect timestamp:', err);
+            }
+          }
         }
         setTimeout(() => {
           // If user reconnected, skip cleanup

@@ -78,13 +78,12 @@ async function resolveUserFromToken(token) {
 
   const userId = user._id.toString();
   const username = user.username || 'Anonymous';
-  const email = user.email || '';
-  const isGuest = email.endsWith('@guest.local');
+  const isGuest = Boolean(user.isGuest);
 
   return {
     userId,
     username,
-    email,
+    email: user.email || '',
     isGuest,
     user,
   };

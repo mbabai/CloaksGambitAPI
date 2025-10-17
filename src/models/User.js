@@ -11,10 +11,10 @@ const userSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: true,
     unique: true,
+    sparse: true,
     trim: true,
-    lowercase: true
+    lowercase: true,
   },
   photoUrl: {
     type: String,
@@ -34,9 +34,17 @@ const userSchema = new mongoose.Schema({
     enum: ['easy', 'medium', 'hard'],
     default: null
   },
+  isGuest: {
+    type: Boolean,
+    default: false,
+  },
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  lastDisconnectedAt: {
+    type: Date,
+    default: null
   }
 });
 

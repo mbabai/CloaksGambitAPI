@@ -42,17 +42,19 @@ async function ensureBotUser(difficulty = 'easy') {
   const existingByUsername = await User.findOne({ username: def.username }).lean();
   if (existingByUsername) {
     bot = existingByUsername;
-    if (!bot.email || bot.email.endsWith('@guest.local')) {
+    if (!bot.email || bot.isGuest) {
       await User.updateOne({ _id: bot._id }, {
         $set: {
           email: def.email,
           isBot: true,
           botDifficulty: key,
+          isGuest: false,
         },
       });
       bot.email = def.email;
       bot.isBot = true;
       bot.botDifficulty = key;
+      bot.isGuest = false;
     }
     return { user: bot, token: createAuthToken(bot) };
   }
@@ -63,6 +65,7 @@ async function ensureBotUser(difficulty = 'easy') {
     elo: def.elo,
     isBot: true,
     botDifficulty: key,
+    isGuest: false,
   };
 
   const created = await User.create(payload);
