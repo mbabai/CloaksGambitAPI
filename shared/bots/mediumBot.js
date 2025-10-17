@@ -299,6 +299,14 @@ class MediumBotController extends BaseBotController {
       score += (forwardPosition * forwardPosition) / opponentPieces;
     }
 
+    if (movingPiece.identity === GAME_CONSTANTS.identities.KING) {
+      score -= 5;
+    }
+
+    if (score < 0) {
+      score = 0;
+    }
+
     return score;
   }
 
