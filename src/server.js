@@ -88,6 +88,7 @@ const initSocket = require('./socket');
 const lobbyStore = require('./state/lobby');
 const getServerConfig = require('./utils/getServerConfig');
 const { startInternalBots } = require('./services/bots/internalBots');
+const { startGuestCleanupTask } = require('./services/guestCleanup');
 
 // Middleware
 app.use(cors());
@@ -189,6 +190,7 @@ async function startServer() {
     }
 
     await resetLobbyQueues();
+    startGuestCleanupTask();
   }
 
   server.listen(PORT, () => {
