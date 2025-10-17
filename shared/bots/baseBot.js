@@ -115,6 +115,11 @@ class BaseBotController {
     this.pendingStateEvaluation = false;
   }
 
+  async waitBeforeMoveSubmission() {
+    const delayMs = 2000;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+
   updateFromPayload(payload) {
     this.matchId = payload.matchId ?? this.matchId;
     this.board = cloneBoard(payload.board || []);
@@ -1365,6 +1370,7 @@ class BaseBotController {
           declaration,
           capture: move.capture,
         });
+        await this.waitBeforeMoveSubmission();
         await postJSON(this.serverUrl, '/api/v1/gameAction/move', this.token, {
           gameId: this.gameId,
           color: this.color,

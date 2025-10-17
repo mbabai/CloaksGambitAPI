@@ -335,6 +335,7 @@ class MediumBotController extends BaseBotController {
   async submitMoveAction(move, declaration) {
     this.pendingAction = true;
     try {
+      await this.waitBeforeMoveSubmission();
       await postJSON(this.serverUrl, '/api/v1/gameAction/move', this.token, {
         gameId: this.gameId,
         color: this.color,
