@@ -449,7 +449,7 @@ class MediumBotController extends BaseBotController {
     } catch (err) {
       console.error('Medium bot failed to place on deck', err);
     } finally {
-      this.pendingAction = false;
+      this.finalizeAction();
     }
   }
 }
