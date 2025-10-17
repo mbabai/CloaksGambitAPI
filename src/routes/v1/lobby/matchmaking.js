@@ -59,6 +59,10 @@ async function runMatchmaking() {
       break;
     }
 
+    const gamePlayers = Math.random() < 0.5
+      ? [player1, player2]
+      : [player2, player1];
+
     console.log('Creating quickplay match for players:', {
       player1: player1.toString(),
       player2: player2.toString(),
@@ -78,7 +82,7 @@ async function runMatchmaking() {
       });
 
       const game = await Game.create({
-        players: [player1, player2],
+        players: gamePlayers,
         match: match._id,
         timeControlStart: quickplayTimeControl,
         increment,
@@ -86,12 +90,12 @@ async function runMatchmaking() {
 
       eventBus.emit('gameChanged', {
         game: typeof game.toObject === 'function' ? game.toObject() : game,
-        affectedUsers: [player1.toString(), player2.toString()],
+        affectedUsers: gamePlayers.map(id => id.toString()),
       });
 
       eventBus.emit('players:bothNext', {
         game: typeof game.toObject === 'function' ? game.toObject() : game,
-        affectedUsers: [player1.toString(), player2.toString()],
+        affectedUsers: gamePlayers.map(id => id.toString()),
       });
 
       match.games.push(game._id);
@@ -99,7 +103,7 @@ async function runMatchmaking() {
 
       eventBus.emit('match:created', {
         matchId: match._id.toString(),
-        players: [player1.toString(), player2.toString()],
+        players: gamePlayers.map(id => id.toString()),
         type: match.type,
       });
 
@@ -141,6 +145,20 @@ async function runMatchmaking() {
       User.findById(player2).lean().catch(() => null),
     ]);
 
+    const gamePlayers = Math.random() < 0.5
+      ? [player1, player2]
+      : [player2, player1];
+
+    const eloLookup = new Map([
+      [player1.toString(), Number.isFinite(p1User?.elo) ? p1User.elo : DEFAULT_ELO],
+      [player2.toString(), Number.isFinite(p2User?.elo) ? p2User.elo : DEFAULT_ELO],
+    ]);
+
+    const resolveElo = (id) => {
+      const key = id?.toString?.() ? id.toString() : id;
+      return eloLookup.get(key) ?? DEFAULT_ELO;
+    };
+
     console.log('Creating ranked match for players:', {
       player1: player1.toString(),
       player2: player2.toString(),
@@ -157,14 +175,14 @@ async function runMatchmaking() {
         player1Score: 0,
         player2Score: 0,
         games: [],
-        player1StartElo: p1User?.elo ?? DEFAULT_ELO,
-        player2StartElo: p2User?.elo ?? DEFAULT_ELO,
-        player1EndElo: p1User?.elo ?? DEFAULT_ELO,
-        player2EndElo: p2User?.elo ?? DEFAULT_ELO,
+        player1StartElo: resolveElo(player1),
+        player2StartElo: resolveElo(player2),
+        player1EndElo: resolveElo(player1),
+        player2EndElo: resolveElo(player2),
       });
 
       const game = await Game.create({
-        players: [player1, player2],
+        players: gamePlayers,
         match: match._id,
         timeControlStart: rankedTimeControl,
         increment,
@@ -172,12 +190,12 @@ async function runMatchmaking() {
 
       eventBus.emit('gameChanged', {
         game: typeof game.toObject === 'function' ? game.toObject() : game,
-        affectedUsers: [player1.toString(), player2.toString()],
+        affectedUsers: gamePlayers.map(id => id.toString()),
       });
 
       eventBus.emit('players:bothNext', {
         game: typeof game.toObject === 'function' ? game.toObject() : game,
-        affectedUsers: [player1.toString(), player2.toString()],
+        affectedUsers: gamePlayers.map(id => id.toString()),
       });
 
       match.games.push(game._id);
@@ -185,7 +203,7 @@ async function runMatchmaking() {
 
       eventBus.emit('match:created', {
         matchId: match._id.toString(),
-        players: [player1.toString(), player2.toString()],
+        players: gamePlayers.map(id => id.toString()),
         type: match.type,
       });
 

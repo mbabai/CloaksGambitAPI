@@ -168,6 +168,10 @@ function initSocket(httpServer) {
       }
     });
 
+    const gamePlayers = Math.random() < 0.5
+      ? [players[0], players[1]]
+      : [players[1], players[0]];
+
     const { added: addedInGame } = lobbyStore.addInGame(players);
     if (addedInGame) {
       lobbyChanged = true;
@@ -187,7 +191,7 @@ function initSocket(httpServer) {
     });
 
     const game = await Game.create({
-      players,
+      players: gamePlayers,
       match: match._id,
       timeControlStart: timeControl,
       increment,
@@ -196,7 +200,7 @@ function initSocket(httpServer) {
     match.games.push(game._id);
     await match.save();
 
-    const affected = players.map(id => id.toString());
+    const affected = gamePlayers.map(id => id.toString());
     eventBus.emit('gameChanged', {
       game: typeof game.toObject === 'function' ? game.toObject() : game,
       affectedUsers: affected,
