@@ -72,7 +72,7 @@ class MediumBotController extends BaseBotController {
       score += (history.size - 1) * 4;
     }
 
-    score -= myDaggers * 3;
+    score -= myDaggers * 8;
     if (score < 0) score = 0;
     return score;
   }
