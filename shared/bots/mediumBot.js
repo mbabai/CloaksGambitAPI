@@ -72,7 +72,7 @@ class MediumBotController extends BaseBotController {
       score += (history.size - 1) * 4;
     }
 
-    score -= myDaggers * 8;
+    score -= myDaggers * 12;
     if (score < 0) score = 0;
     return score;
   }
@@ -261,6 +261,7 @@ class MediumBotController extends BaseBotController {
     const movingPiece = this.board[move.from.row][move.from.col];
     if (!movingPiece || movingPiece.color !== this.color) return 0;
 
+    const myDaggers = this.daggers[this.color] ?? 0;
     const myCount = this.countPieces(this.color);
     if (myCount <= 1 && declaration !== GAME_CONSTANTS.identities.KING) {
       return 0;
@@ -287,6 +288,13 @@ class MediumBotController extends BaseBotController {
 
     if (declaration === movingPiece.identity) {
       score += 10;
+    }
+
+    if (
+      declaration === GAME_CONSTANTS.identities.BOMB &&
+      movingPiece.identity !== GAME_CONSTANTS.identities.BOMB
+    ) {
+      score -= myDaggers * 10;
     }
 
     if (movingPiece.identity === GAME_CONSTANTS.identities.KING && declaration === GAME_CONSTANTS.identities.KING) {
