@@ -292,14 +292,19 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       actionEl.appendChild(deleteBtn);
 
       const nameCell = document.createElement('td');
+      nameCell.dataset.label = 'Username';
       nameCell.appendChild(nameEl);
       const eloCell = document.createElement('td');
+      eloCell.dataset.label = 'ELO';
       eloCell.appendChild(eloEl);
       const matchCell = document.createElement('td');
+      matchCell.dataset.label = 'In Match';
       matchCell.appendChild(matchEl);
       const connCell = document.createElement('td');
+      connCell.dataset.label = 'Connected';
       connCell.appendChild(connEl);
       const actionCell = document.createElement('td');
+      actionCell.dataset.label = 'Delete';
       actionCell.appendChild(actionEl);
 
       row.appendChild(nameCell);
