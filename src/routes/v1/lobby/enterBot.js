@@ -70,6 +70,9 @@ router.post('/', async (req, res) => {
     const { timeControl, increment, type } = await resolveQuickplaySettings();
 
     const players = [userId, botUser._id.toString()];
+    const gamePlayers = Math.random() < 0.5
+      ? [players[0], players[1]]
+      : [players[1], players[0]];
 
     const match = await Match.create({
       player1: players[0],
@@ -81,7 +84,7 @@ router.post('/', async (req, res) => {
     });
 
     const game = await Game.create({
-      players,
+      players: gamePlayers,
       match: match._id,
       timeControlStart: timeControl,
       increment,
@@ -93,7 +96,7 @@ router.post('/', async (req, res) => {
     lobbyStore.addInGame([userId]);
     lobbyStore.emitQueueChanged([userId]);
 
-    const affectedUsers = players.map((id) => id.toString());
+    const affectedUsers = gamePlayers.map((id) => id.toString());
     const gamePayload = typeof game.toObject === 'function' ? game.toObject() : game;
 
     console.log('[bot-match] created', {
