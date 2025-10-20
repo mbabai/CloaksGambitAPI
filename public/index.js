@@ -2094,6 +2094,7 @@ preloadAssets();
           stopClockInterval();
           selected = null;
           dragging = null;
+          purgeDanglingDragArtifacts();
         }
 
         // As soon as we are in a game, hide the Find Game UI and reveal the play area
@@ -2136,6 +2137,7 @@ preloadAssets();
         stopClockInterval();
         selected = null;
         dragging = null;
+        purgeDanglingDragArtifacts();
         currentDrawOffer = null;
         drawOfferCooldowns = [null, null];
         clearDrawCooldownTimeout();
@@ -4199,6 +4201,7 @@ preloadAssets();
 
   function renderBoardAndBars() {
     if (!playAreaRoot || !boardRoot || !boardView || !currentRows || !currentCols) return;
+    purgeDanglingDragArtifacts();
     // Reset interactive refs each render
     refs.bottomCells = [];
     refs.stashSlots = [];
@@ -4601,6 +4604,7 @@ preloadAssets();
           setupComplete[myColor] = true;
           isInSetup = false;
           selected = null; dragging = null;
+          purgeDanglingDragArtifacts();
           renderBoardAndBars();
         } catch (e) { console.error('setup error', e); }
       }
@@ -5130,6 +5134,31 @@ preloadAssets();
   function clearDragPreviewImgs() {
     try { dragPreviewImgs.forEach(function(n){ try { document.body.removeChild(n); } catch(_) {} }); } catch(_) {}
     dragPreviewImgs = [];
+  }
+
+  function safeRemoveNode(node) {
+    if (!node) return;
+    try {
+      if (typeof node.remove === 'function') {
+        node.remove();
+        return;
+      }
+    } catch (_) {}
+    try {
+      if (node.parentNode) {
+        node.parentNode.removeChild(node);
+      }
+    } catch (_) {}
+  }
+
+  function purgeDanglingDragArtifacts(options) {
+    const force = Boolean(options && options.force);
+    if (!force && dragging) return;
+    try { clearDragPreviewImgs(); } catch (_) {}
+    try {
+      const ghosts = Array.from(document.querySelectorAll('[data-drag-ghost]'));
+      ghosts.forEach(function(node) { safeRemoveNode(node); });
+    } catch (_) {}
   }
 
   function showDragPreviewAtPointer(types, x, y) {
@@ -5969,6 +5998,7 @@ preloadAssets();
 
   function startDrag(e, origin, piece) {
     if (gameFinished) return;
+    purgeDanglingDragArtifacts({ force: true });
     try { if (e && typeof e.preventDefault === 'function') e.preventDefault(); } catch (_) {}
     try { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); } catch (_) {}
     selected = { ...origin };
@@ -5979,6 +6009,7 @@ preloadAssets();
     ghost.style.transform = 'translate(-50%, -50%)';
     ghost.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
     ghost.style.zIndex = '99999';
+    try { ghost.setAttribute('data-drag-ghost', '1'); } catch (_) {}
     // Position the ghost at the pointer immediately to avoid top-left flash
     const startCX = (e && e.clientX !== undefined)
       ? e.clientX
@@ -6078,6 +6109,7 @@ preloadAssets();
       try { document.body.removeChild(ghost); } catch (_) {}
       try { restoreOriginEl(dragging.originEl); } catch(_) {}
       dragging = null; selected = null; renderBoardAndBars();
+      purgeDanglingDragArtifacts();
       suppressMouseUntil = Date.now() + 400; // brief suppression post-drag
     };
     document.addEventListener('mousemove', move);
