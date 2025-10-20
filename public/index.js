@@ -7,6 +7,7 @@ import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
+import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
 import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings } from '/js/modules/api/game.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
@@ -1384,7 +1385,7 @@ preloadAssets();
   let currentBoard = null;        // 2D array of cells
   let currentStashes = [[], []];  // [white[], black[]]
   let currentOnDecks = [null, null];
-  let currentCaptured = [[], []]; // pieces captured by [white, black]
+  let currentCaptured = [[], []]; // pieces grouped by color index [white, black]
   let currentDaggers = [0, 0];
   let currentSquareSize = 0; // last computed board square size
   let currentPlayerTurn = null; // 0 or 1
@@ -4853,12 +4854,14 @@ preloadAssets();
       return wrap;
     }
 
+    const capturedByColor = groupCapturedPiecesByColor(currentCaptured);
+
     function makeCapturedForColor(colorIdx) {
       const strip = document.createElement('div');
       strip.style.display = 'flex';
       strip.style.alignItems = 'center';
       strip.style.gap = '4px';
-      const pieces = (currentCaptured?.[1 - colorIdx] || []);
+      const pieces = capturedByColor?.[colorIdx] || [];
       pieces.forEach(piece => {
         const cap = Math.floor(0.365 * s); // ~36.5% of square
         const img = modulePieceGlyph(piece, cap, PIECE_IMAGES);
@@ -5305,7 +5308,11 @@ preloadAssets();
       }
       if (Array.isArray(u.stashes)) currentStashes = u.stashes;
       if (Array.isArray(u.onDecks)) currentOnDecks = u.onDecks;
-      if (Array.isArray(u.captured)) currentCaptured = u.captured;
+      if (Array.isArray(u.captured)) {
+        currentCaptured = groupCapturedPiecesByColor(u.captured);
+      } else if (u.captured === null) {
+        currentCaptured = [[], []];
+      }
       if (Array.isArray(u.daggers)) currentDaggers = u.daggers;
       if (Array.isArray(u.setupComplete)) setupComplete = u.setupComplete;
       if (u.playerTurn === 0 || u.playerTurn === 1) currentPlayerTurn = u.playerTurn;

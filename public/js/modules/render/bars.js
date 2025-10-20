@@ -5,6 +5,7 @@ import {
   createDaggerCounter,
   createChallengeBubbleElement
 } from '../ui/banners.js';
+import { groupCapturedPiecesByColor } from '../utils/captured.js';
 
 export function renderBars({
   topBar,
@@ -35,6 +36,8 @@ export function renderBars({
   } = state;
 
   if (!topBar || !bottomBar) return;
+
+  const capturedByColor = groupCapturedPiecesByColor(currentCaptured);
 
   const gap = 6;
   const topGap = 10;
@@ -119,7 +122,7 @@ export function renderBars({
     strip.style.display = 'flex';
     strip.style.alignItems = 'center';
     strip.style.gap = '0px';
-    const pieces = (currentCaptured?.[colorIdx] || []);
+    const pieces = (capturedByColor?.[colorIdx] || []);
     pieces.forEach((piece, idx) => {
       const cap = Math.floor(0.6 * s);
       const img = makePieceGlyph(piece, cap, identityMap);
