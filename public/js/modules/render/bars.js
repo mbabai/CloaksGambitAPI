@@ -12,7 +12,9 @@ export function renderBars({
   bottomBar,
   sizes,
   state,
-  identityMap
+  identityMap,
+  onNameClick,
+  shouldAllowPlayerClick
 }) {
   const { squareSize: s, boardWidth: bW, boardHeight: bH, boardLeft: leftPx, boardTop: topPx, playAreaHeight: H } = sizes;
   const {
@@ -90,6 +92,46 @@ export function renderBars({
       });
       if (bubble) {
         row.appendChild(bubble);
+      }
+    }
+
+    if (typeof onNameClick === 'function') {
+      const playerId = isTopBar ? state.playerIdTop : state.playerIdBottom;
+      const allowInteraction = () => {
+        if (!playerId) return false;
+        if (typeof shouldAllowPlayerClick === 'function') {
+          try {
+            return shouldAllowPlayerClick(playerId, { position: isTopBar ? 'top' : 'bottom' });
+          } catch (err) {
+            console.warn('Error evaluating player click allowance', err);
+            return false;
+          }
+        }
+        return true;
+      };
+      if (playerId && allowInteraction()) {
+        const label = row.querySelector('.cg-name-row__label');
+        if (label) {
+          label.classList.add('cg-name-row__label--interactive');
+          label.setAttribute('role', 'button');
+          label.setAttribute('tabindex', '0');
+          const payload = {
+            userId: playerId,
+            name: nameText,
+            elo: eloValue,
+            position: isTopBar ? 'top' : 'bottom'
+          };
+          label.addEventListener('click', (event) => {
+            event.stopPropagation();
+            onNameClick(payload, event);
+          });
+          label.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onNameClick(payload, event);
+            }
+          });
+        }
       }
     }
 

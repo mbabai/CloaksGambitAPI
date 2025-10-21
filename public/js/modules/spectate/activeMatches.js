@@ -116,6 +116,8 @@ function renderActiveMatchesList(targetEl, items, options = {}) {
     getUsername = (id) => id || 'Unknown',
     onSpectate = () => {},
     buttonLabel = 'Spectate',
+    onPlayerClick = null,
+    shouldAllowPlayerClick = null,
   } = options;
 
   const frag = document.createDocumentFragment();
@@ -149,6 +151,33 @@ function renderActiveMatchesList(targetEl, items, options = {}) {
     const player1Label = document.createElement('span');
     player1Label.classList.add('matchPlayerName', 'cg-active-match__player');
     player1Label.textContent = player1Name || player1Id || 'Player 1';
+    const normalizedP1Id = normalizeId(player1Id);
+    const allowPlayer1Click = typeof shouldAllowPlayerClick === 'function'
+      ? (() => {
+          try {
+            return shouldAllowPlayerClick(normalizedP1Id, { match: item, playerIndex: 0 });
+          } catch (err) {
+            console.warn('Error evaluating player click allowance', err);
+            return false;
+          }
+        })()
+      : true;
+    if (typeof onPlayerClick === 'function' && normalizedP1Id && allowPlayer1Click) {
+      player1Label.classList.add('cg-active-match__player--interactive');
+      player1Label.setAttribute('role', 'button');
+      player1Label.setAttribute('tabindex', '0');
+      const payload = { userId: normalizedP1Id, username: player1Name || player1Id, position: 'top' };
+      player1Label.addEventListener('click', (event) => {
+        event.stopPropagation();
+        onPlayerClick(payload, event);
+      });
+      player1Label.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onPlayerClick(payload, event);
+        }
+      });
+    }
     scoreLine.appendChild(player1Label);
 
     const player1ScoreEl = document.createElement('span');
@@ -169,6 +198,33 @@ function renderActiveMatchesList(targetEl, items, options = {}) {
     const player2Label = document.createElement('span');
     player2Label.classList.add('matchPlayerName', 'cg-active-match__player');
     player2Label.textContent = player2Name || player2Id || 'Player 2';
+    const normalizedP2Id = normalizeId(player2Id);
+    const allowPlayer2Click = typeof shouldAllowPlayerClick === 'function'
+      ? (() => {
+          try {
+            return shouldAllowPlayerClick(normalizedP2Id, { match: item, playerIndex: 1 });
+          } catch (err) {
+            console.warn('Error evaluating player click allowance', err);
+            return false;
+          }
+        })()
+      : true;
+    if (typeof onPlayerClick === 'function' && normalizedP2Id && allowPlayer2Click) {
+      player2Label.classList.add('cg-active-match__player--interactive');
+      player2Label.setAttribute('role', 'button');
+      player2Label.setAttribute('tabindex', '0');
+      const payload = { userId: normalizedP2Id, username: player2Name || player2Id, position: 'bottom' };
+      player2Label.addEventListener('click', (event) => {
+        event.stopPropagation();
+        onPlayerClick(payload, event);
+      });
+      player2Label.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onPlayerClick(payload, event);
+        }
+      });
+    }
     scoreLine.appendChild(player2Label);
 
     row.appendChild(scoreLine);

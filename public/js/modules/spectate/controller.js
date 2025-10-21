@@ -110,6 +110,8 @@ export function createSpectateController(options) {
     socket,
     getUsername = (id) => id || 'Unknown',
     setUsername = () => {},
+    onPlayerClick = () => {},
+    shouldAllowPlayerClick = () => true,
     onOpen = () => {},
     onClose = () => {},
   } = options || {};
@@ -646,6 +648,9 @@ export function createSpectateController(options) {
     const whiteMs = Number.isFinite(displayClocks.whiteMs) ? displayClocks.whiteMs : 0;
     const blackMs = Number.isFinite(displayClocks.blackMs) ? displayClocks.blackMs : 0;
 
+    const topPlayerId = normalizeId(blackId);
+    const bottomPlayerId = normalizeId(whiteId);
+
     const bars = renderBars({
       topBar: topBarEl,
       bottomBar: bottomBarEl,
@@ -675,8 +680,32 @@ export function createSpectateController(options) {
         isRankedMatch,
         eloTop: black.elo,
         eloBottom: white.elo,
+        playerIdTop: topPlayerId,
+        playerIdBottom: bottomPlayerId,
       },
       identityMap: PIECE_IMAGES,
+      onNameClick: (info) => {
+        if (!info || !info.userId) return;
+        try {
+          onPlayerClick({
+            userId: info.userId,
+            username: info.name,
+            elo: info.elo,
+            position: info.position || 'top',
+            source: 'spectate'
+          });
+        } catch (_) {
+          // ignore handler errors to avoid breaking render
+        }
+      },
+      shouldAllowPlayerClick: (id, context) => {
+        try {
+          return shouldAllowPlayerClick(id, context);
+        } catch (err) {
+          console.warn('Error evaluating spectate player click allowance', err);
+          return false;
+        }
+      },
     });
     spectateState.clockRefs = {
       top: bars?.topClockEl || null,

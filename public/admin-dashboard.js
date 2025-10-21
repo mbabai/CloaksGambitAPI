@@ -1,4 +1,5 @@
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
+import { createPlayerStatsOverlay } from '/js/modules/history/playerStatsOverlay.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { getCookie } from '/js/modules/utils/cookies.js';
@@ -15,6 +16,11 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   const params = new URLSearchParams(window.location.search);
   const adminIdParam = params.get('adminId');
   const adminUserId = adminIdParam || localStorage.getItem('cg_userId') || null;
+
+  let statsOverlayController = null;
+  const botUserIds = new Set();
+  const botStatusCache = new Map();
+  const botStatusRequests = new Map();
 
   const TOKEN_STORAGE_KEY = 'cg_token';
   const TOKEN_COOKIE_NAME = 'cgToken';
@@ -65,6 +71,109 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       headers.Authorization = `Bearer ${token}`;
     }
     return fetch(input, { ...init, headers });
+  }
+
+  if (!statsOverlayController) {
+    statsOverlayController = createPlayerStatsOverlay({
+      authFetch,
+      getPreferredWidth: () => {
+        const maxWidth = Math.min(window.innerWidth - 48, 960);
+        return Number.isFinite(maxWidth) ? Math.max(320, Math.round(maxWidth)) : null;
+      }
+    });
+  }
+
+  function normalizeBotId(id) {
+    const normalized = normalizeId(id);
+    return normalized ? String(normalized) : null;
+  }
+
+  function markBotStatus(id, isBot) {
+    const normalized = normalizeBotId(id);
+    if (!normalized) return;
+    if (isBot) {
+      botUserIds.add(normalized);
+      botStatusCache.set(normalized, 'bot');
+    } else {
+      botUserIds.delete(normalized);
+      botStatusCache.set(normalized, 'human');
+    }
+    if (statsOverlayController && typeof statsOverlayController.registerBotUser === 'function') {
+      statsOverlayController.registerBotUser(normalized, Boolean(isBot));
+    }
+  }
+
+  function isKnownBotId(id) {
+    const normalized = normalizeBotId(id);
+    if (!normalized) return false;
+    return botUserIds.has(normalized);
+  }
+
+  function isLikelyBotName(name) {
+    if (typeof name !== 'string') return false;
+    return /bot$/i.test(name.trim());
+  }
+
+  async function ensureBotStatus(normalizedId) {
+    if (!normalizedId) return false;
+    const cached = botStatusCache.get(normalizedId);
+    if (cached === 'bot') return true;
+    if (cached === 'human') return false;
+    if (botStatusRequests.has(normalizedId)) {
+      return botStatusRequests.get(normalizedId);
+    }
+    const promise = (async () => {
+      try {
+        const res = await authFetch('/api/v1/users/getDetails', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: normalizedId }),
+        });
+        if (res && res.ok) {
+          const data = await res.json().catch(() => null);
+          const detectedBot = Boolean(data?.isBot);
+          markBotStatus(normalizedId, detectedBot);
+          return detectedBot;
+        }
+      } catch (err) {
+        console.warn('Failed to determine bot status for user', normalizedId, err);
+      }
+      markBotStatus(normalizedId, false);
+      return false;
+    })();
+    botStatusRequests.set(normalizedId, promise);
+    const result = await promise;
+    botStatusRequests.delete(normalizedId);
+    return result;
+  }
+
+  async function shouldBlockStatsForUser(normalizedId, username) {
+    if (!normalizedId) return true;
+    if (botUserIds.has(normalizedId)) return true;
+    const cached = botStatusCache.get(normalizedId);
+    if (cached === 'bot') return true;
+    if (cached === 'human') return false;
+    if (isLikelyBotName(username)) {
+      markBotStatus(normalizedId, true);
+      return true;
+    }
+    return ensureBotStatus(normalizedId);
+  }
+
+  async function viewPlayerStats({ userId, username, elo, preventSelf = false } = {}) {
+    if (!statsOverlayController) return;
+    const normalizedId = normalizeId(userId);
+    if (!normalizedId) return;
+    if (preventSelf) {
+      const normalizedAdminId = normalizeId(adminUserId);
+      if (normalizedAdminId && normalizedId === normalizedAdminId) {
+        return;
+      }
+    }
+    if (await shouldBlockStatsForUser(normalizedId, username)) {
+      return;
+    }
+    statsOverlayController.openForUser({ userId: normalizedId, username, elo });
   }
 
   const tabButtons = Array.from(document.querySelectorAll('.tab-button'))
@@ -158,6 +267,23 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       const nameEl = document.createElement(adminUserId && id === adminUserId ? 'strong' : 'span');
       nameEl.textContent = getUsername(id);
       nameEl.title = id;
+      const normalizedId = normalizeId(id);
+      if (normalizedId && !isKnownBotId(normalizedId)) {
+        nameEl.classList.add('userTable__name--interactive');
+        nameEl.setAttribute('role', 'button');
+        nameEl.setAttribute('tabindex', '0');
+        const payload = { userId: normalizedId, username: getUsername(id) };
+        nameEl.addEventListener('click', (event) => {
+          event.stopPropagation();
+          viewPlayerStats(payload);
+        });
+        nameEl.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            viewPlayerStats(payload);
+          }
+        });
+      }
       row.appendChild(nameEl);
       frag.appendChild(row);
     });
@@ -237,6 +363,23 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       nameEl.textContent = username;
       nameEl.title = u.id;
       nameEl.classList.add('userTable__name');
+      const normalizedUserId = normalizeId(u.id);
+      if (normalizedUserId && !isKnownBotId(normalizedUserId)) {
+        nameEl.classList.add('userTable__name--interactive');
+        nameEl.setAttribute('role', 'button');
+        nameEl.setAttribute('tabindex', '0');
+        const payload = { userId: normalizedUserId, username, elo: u.elo };
+        nameEl.addEventListener('click', (event) => {
+          event.stopPropagation();
+          viewPlayerStats(payload);
+        });
+        nameEl.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            viewPlayerStats(payload);
+          }
+        });
+      }
       const eloEl = document.createElement('span');
       eloEl.classList.add('userTable__inline');
       if (!isAnonymousUsername(username)) {
@@ -340,10 +483,27 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         usernameMap[id] = username.trim();
       }
     },
+    shouldAllowPlayerClick: (id) => !isKnownBotId(id),
+    onPlayerClick: (info) => {
+      if (!info || !info.userId) return;
+      if (isKnownBotId(info.userId)) return;
+      viewPlayerStats({
+        userId: info.userId,
+        username: info.username || info.name,
+        elo: info.elo
+      });
+    },
   });
 
   function renderActiveMatchesFromState(items) {
     const list = Array.isArray(items) ? items : activeMatchesStore.getItems();
+    list.forEach((match) => {
+      const details = match?.playerDetails || {};
+      const p1 = details.player1;
+      const p2 = details.player2;
+      if (p1?.id) markBotStatus(p1.id, Boolean(p1?.isBot));
+      if (p2?.id) markBotStatus(p2.id, Boolean(p2?.isBot));
+    });
     renderActiveMatchesList(matchesListEl, list, {
       getUsername,
       onSpectate: (item) => {
@@ -351,6 +511,16 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
           spectateController.open(item.id);
         }
       },
+      onPlayerClick: (info) => {
+        if (!info || !info.userId) return;
+        if (isKnownBotId(info.userId)) return;
+        viewPlayerStats({
+          userId: info.userId,
+          username: info.username || info.userId,
+          elo: info.elo
+        });
+      },
+      shouldAllowPlayerClick: (id) => !isKnownBotId(id),
     });
   }
 
@@ -425,6 +595,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
           const numericElo = Number(u.elo);
           const elo = Number.isFinite(numericElo) ? numericElo : null;
           usernameMap[id] = username;
+          markBotStatus(id, isBot);
           if (isBot) return;
           users.push({ id, username, elo });
         });
@@ -854,7 +1025,17 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       row.appendChild(meta);
 
       const matchForGrid = Object.assign({}, match, { games });
-      const table = buildMatchDetailGrid(matchForGrid, { usernameLookup: getUsername, maxGameCount });
+      const table = buildMatchDetailGrid(matchForGrid, {
+        usernameLookup: getUsername,
+        maxGameCount,
+        currentUserId: adminUserId,
+        onPlayerClick: (info) => {
+          if (!info || !info.id) return;
+          if (isKnownBotId(info.id)) return;
+          viewPlayerStats({ userId: info.id, username: info.name, elo: info.elo });
+        },
+        shouldAllowPlayerClick: (id) => !isKnownBotId(id),
+      });
       row.appendChild(table);
 
       historyMatchesListEl.appendChild(row);
@@ -868,9 +1049,26 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   socket.on('admin:metrics', payload => {
     if (!payload) return;
     latestMetrics = payload;
+    if (Array.isArray(payload.botQueueUserIds)) {
+      payload.botQueueUserIds.forEach((id) => {
+        if (id) markBotStatus(id, true);
+      });
+    }
+    if (Array.isArray(payload.matches)) {
+      payload.matches.forEach((match) => {
+        const details = match?.playerDetails || {};
+        const p1 = details.player1;
+        const p2 = details.player2;
+        if (p1?.id) markBotStatus(p1.id, Boolean(p1?.isBot));
+        if (p2?.id) markBotStatus(p2.id, Boolean(p2?.isBot));
+      });
+    }
     if (payload.usernames) {
       Object.keys(payload.usernames).forEach(k => {
         usernameMap[k] = payload.usernames[k];
+        if (statsOverlayController) {
+          statsOverlayController.registerKnownUsername(k, payload.usernames[k]);
+        }
       });
     }
     if (connectedUsersEl) connectedUsersEl.textContent = payload.connectedUsers ?? 0;
@@ -916,6 +1114,10 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       usernameMap[id] = trimmed;
       if (latestMetrics && latestMetrics.usernames) {
         latestMetrics.usernames[id] = trimmed;
+      }
+      if (statsOverlayController) {
+        statsOverlayController.registerKnownUsername(id, trimmed);
+        statsOverlayController.handleUsernameUpdate({ userId: id, username: trimmed });
       }
       fetchAllUsers();
       renderActiveMatchesFromState();

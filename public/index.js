@@ -19,6 +19,7 @@ import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as pe
 import { Declaration, uiToServerCoords, isWithinPieceRange, isPathClear } from '/js/modules/interactions/moveRules.js';
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
+import { createPlayerStatsOverlay } from '/js/modules/history/playerStatsOverlay.js';
 import {
   ASSET_MANIFEST,
   getIconAsset,
@@ -135,6 +136,9 @@ logBootConstantsOnce();
   const spectateMatchesStore = createActiveMatchesStore();
   let spectateMatchesLoading = false;
   let spectateMatchesStatusMessage = '';
+  const botUserIds = new Set();
+  const botStatusCache = new Map();
+  const botStatusRequests = new Map();
   spectateMatchesStore.subscribe((items) => {
     renderSpectateMatchList(items);
     updateSpectatePickerStatus(items);
@@ -156,21 +160,7 @@ logBootConstantsOnce();
   let queueTimerEl = null;
   let queueStatusKnown = false;
 
-  let statsUserId = null;
-  let statsUserElo = null;
-  let statsHistoryMatches = [];
-  let statsHistoryGames = [];
-  let statsHistoryMaxGameCount = 1;
-  let statsHistoryFilter = 'all';
-  let statsHistoryLoaded = false;
-  let statsOverlayFetching = false;
-  const statsHistoryGamesByMatch = new Map();
-  let statsUsernameMap = {};
-  let statsOverlay = null;
-  let statsOverlayMatchesEl = null;
-  let statsOverlaySummaryEls = null;
-  let statsOverlayFilterButtons = [];
-  let statsOverlayEloValueEl = null;
+  let statsOverlayController = null;
 
   function persistQueueMode(mode) {
     if (mode === 'quickplay' || mode === 'ranked') {
@@ -275,481 +265,111 @@ logBootConstantsOnce();
     return Math.max(0, Math.floor(bounds?.width || 0));
   }
 
-  function applyStatsOverlayWidth() {
-    if (!statsOverlay || !statsOverlay.dialog) return;
-    const width = getDesiredHistoryOverlayWidth();
-    if (width > 0) {
-      statsOverlay.dialog.style.width = width + 'px';
-      statsOverlay.dialog.style.maxWidth = width + 'px';
-    } else {
-      statsOverlay.dialog.style.removeProperty('width');
-      statsOverlay.dialog.style.removeProperty('max-width');
-    }
-  }
-
-  function handleStatsOverlayResize() {
-    applyStatsOverlayWidth();
-  }
-
-  function ensureStatsOverlay() {
-    if (statsOverlay) return statsOverlay;
-
-    statsOverlay = createOverlay({
-      baseClass: 'cg-overlay history-overlay',
-      dialogClass: 'history-modal',
-      contentClass: 'history-modal-content',
-      backdropClass: 'cg-overlay__backdrop history-overlay-backdrop',
-      closeButtonClass: 'history-close-btn',
-      closeLabel: 'Close history',
-      closeText: '✕',
-      openClass: 'open cg-overlay--open',
-      bodyOpenClass: 'history-overlay-open cg-overlay-open',
-      onShow() {
-        applyStatsOverlayWidth();
-        window.addEventListener('resize', handleStatsOverlayResize);
-      },
-      onHide() {
-        window.removeEventListener('resize', handleStatsOverlayResize);
-      }
-    });
-
-    const { content, closeButton } = statsOverlay;
-    if (closeButton) {
-      closeButton.setAttribute('aria-label', 'Close history');
-    }
-
-    const heading = document.createElement('h2');
-    heading.textContent = 'Match History';
-    heading.id = 'historyOverlayTitle';
-    statsOverlay.setLabelledBy(heading.id);
-    content.appendChild(heading);
-
-    const eloRow = document.createElement('div');
-    eloRow.className = 'history-current-elo';
-    eloRow.innerHTML = 'Current ELO: <span id="historyCurrentEloValue">—</span>';
-    content.appendChild(eloRow);
-
-    const summary = document.createElement('div');
-    summary.className = 'history-summary';
-    summary.innerHTML = `
-      <div class="history-card">
-        <div class="history-card-label">
-          <span class="history-card-label-line">Total</span>
-          <span class="history-card-label-line">Games</span>
-        </div>
-        <div class="history-card-stats">
-          <span id="playerHistoryTotalGames" class="history-card-total history-card-value">0</span>
-          <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryTotalGamesWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryTotalGamesDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryTotalGamesLosses">0</span></span>
-          </div>
-        </div>
-      </div>
-      <div class="history-card">
-        <div class="history-card-label">
-          <span class="history-card-label-line">Quickplay</span>
-          <span class="history-card-label-line">Matches</span>
-        </div>
-        <div class="history-card-stats">
-          <span id="playerHistoryQuickplayMatches" class="history-card-total history-card-value">0</span>
-          <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryQuickplayWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryQuickplayDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryQuickplayLosses">0</span></span>
-          </div>
-        </div>
-      </div>
-      <div class="history-card">
-        <div class="history-card-label">
-          <span class="history-card-label-line">Bot</span>
-          <span class="history-card-label-line">Matches</span>
-        </div>
-        <div class="history-card-stats">
-          <span id="playerHistoryBotMatches" class="history-card-total history-card-value">0</span>
-          <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryBotWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryBotDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryBotLosses">0</span></span>
-          </div>
-        </div>
-      </div>
-      <div class="history-card">
-        <div class="history-card-label">
-          <span class="history-card-label-line">Ranked</span>
-          <span class="history-card-label-line">Matches</span>
-        </div>
-        <div class="history-card-stats">
-          <span id="playerHistoryRankedMatches" class="history-card-total history-card-value">0</span>
-          <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryRankedWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryRankedDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryRankedLosses">0</span></span>
-          </div>
-        </div>
-      </div>
-      <div class="history-card">
-        <div class="history-card-label">
-          <span class="history-card-label-line">Custom</span>
-          <span class="history-card-label-line">Matches</span>
-        </div>
-        <div class="history-card-stats">
-          <span id="playerHistoryCustomMatches" class="history-card-total history-card-value">0</span>
-          <div class="history-card-splits">
-            <span class="history-card-split history-card-split--wins">W:<span id="playerHistoryCustomWins">0</span></span>
-            <span class="history-card-split history-card-split--draws">D:<span id="playerHistoryCustomDraws">0</span></span>
-            <span class="history-card-split history-card-split--losses">L:<span id="playerHistoryCustomLosses">0</span></span>
-          </div>
-        </div>
-      </div>`;
-    content.appendChild(summary);
-
-    const filters = document.createElement('div');
-    filters.className = 'history-filters';
-    filters.innerHTML = `
-      <button class="history-filter-btn active" data-history-filter="all">All</button>
-      <button class="history-filter-btn" data-history-filter="quickplay">Quickplay</button>
-      <button class="history-filter-btn" data-history-filter="bot">Bots</button>
-      <button class="history-filter-btn" data-history-filter="custom">Custom</button>
-      <button class="history-filter-btn" data-history-filter="ranked">Ranked</button>`;
-    content.appendChild(filters);
-
-    const contentScroll = document.createElement('div');
-    contentScroll.className = 'history-overlay-content';
-    contentScroll.id = 'historyOverlayContent';
-    const matches = document.createElement('div');
-    matches.className = 'history-matches';
-    matches.id = 'playerHistoryMatches';
-    contentScroll.appendChild(matches);
-    content.appendChild(contentScroll);
-
-    statsOverlayMatchesEl = matches;
-    statsOverlayFilterButtons = Array.from(filters.querySelectorAll('[data-history-filter]'));
-    statsOverlayEloValueEl = eloRow.querySelector('#historyCurrentEloValue');
-    statsOverlaySummaryEls = {
-      totalGames: summary.querySelector('#playerHistoryTotalGames'),
-      totalGamesWins: summary.querySelector('#playerHistoryTotalGamesWins'),
-      totalGamesDraws: summary.querySelector('#playerHistoryTotalGamesDraws'),
-      totalGamesLosses: summary.querySelector('#playerHistoryTotalGamesLosses'),
-      quickplayMatches: summary.querySelector('#playerHistoryQuickplayMatches'),
-      quickplayWins: summary.querySelector('#playerHistoryQuickplayWins'),
-      quickplayDraws: summary.querySelector('#playerHistoryQuickplayDraws'),
-      quickplayLosses: summary.querySelector('#playerHistoryQuickplayLosses'),
-      botMatches: summary.querySelector('#playerHistoryBotMatches'),
-      botWins: summary.querySelector('#playerHistoryBotWins'),
-      botDraws: summary.querySelector('#playerHistoryBotDraws'),
-      botLosses: summary.querySelector('#playerHistoryBotLosses'),
-      rankedMatches: summary.querySelector('#playerHistoryRankedMatches'),
-      rankedWins: summary.querySelector('#playerHistoryRankedWins'),
-      rankedDraws: summary.querySelector('#playerHistoryRankedDraws'),
-      rankedLosses: summary.querySelector('#playerHistoryRankedLosses'),
-      customMatches: summary.querySelector('#playerHistoryCustomMatches'),
-      customWins: summary.querySelector('#playerHistoryCustomWins'),
-      customDraws: summary.querySelector('#playerHistoryCustomDraws'),
-      customLosses: summary.querySelector('#playerHistoryCustomLosses')
-    };
-
-    statsOverlayFilterButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const filter = btn.dataset.historyFilter || 'all';
-        if (filter === statsHistoryFilter) return;
-        statsHistoryFilter = filter;
-        statsOverlayFilterButtons.forEach(b => b.classList.toggle('active', b === btn));
-        renderStatsHistoryMatches();
-      });
-    });
-
-    return statsOverlay;
-  }
-
   function isStatsOverlayOpen() {
-    return Boolean(statsOverlay && statsOverlay.isOpen());
+    return Boolean(statsOverlayController && statsOverlayController.isOpen());
   }
 
   function openStatsOverlay() {
-    if (!statsUserId) return;
-    const overlay = ensureStatsOverlay();
-    if (!overlay) return;
-    applyStatsOverlayWidth();
-    if (statsOverlayEloValueEl) {
-      statsOverlayEloValueEl.textContent = Number.isFinite(statsUserElo) ? String(statsUserElo) : '—';
-    }
-    statsOverlayFilterButtons.forEach(btn => {
-      btn.classList.toggle('active', (btn.dataset.historyFilter || 'all') === statsHistoryFilter);
-    });
-    overlay.show({ initialFocus: overlay.closeButton });
-    fetchStatsHistory();
+    if (!statsOverlayController) return;
+    statsOverlayController.openDefaultUser();
   }
 
   function closeStatsOverlay() {
-    if (!statsOverlay) return;
-    statsOverlay.hide();
+    if (!statsOverlayController) return;
+    statsOverlayController.close();
   }
 
-  function showStatsOverlayMessage(message) {
-    if (!statsOverlayMatchesEl) return;
-    statsOverlayMatchesEl.innerHTML = '';
-    const msg = document.createElement('div');
-    msg.textContent = message;
-    msg.style.padding = '12px 0';
-    msg.style.opacity = '0.85';
-    statsOverlayMatchesEl.appendChild(msg);
+  function normalizeBotId(id) {
+    const normalized = normalizeId(id);
+    return normalized ? String(normalized) : null;
   }
 
-  function updateStatsOverlaySummary() {
-    if (!statsOverlaySummaryEls) return;
-    const summary = computeHistorySummary(statsHistoryMatches, statsHistoryGames, { userId: statsUserId });
-    const games = summary.games;
-    const quickplay = summary.quickplayGames;
-    const ranked = summary.rankedMatches;
-    const custom = summary.customMatches;
-    const bots = summary.botMatches;
-
-    statsOverlaySummaryEls.totalGames.textContent = games.total;
-    statsOverlaySummaryEls.totalGamesWins.textContent = games.wins;
-    statsOverlaySummaryEls.totalGamesDraws.textContent = games.draws;
-    statsOverlaySummaryEls.totalGamesLosses.textContent = games.losses;
-
-    statsOverlaySummaryEls.quickplayMatches.textContent = quickplay.total;
-    statsOverlaySummaryEls.quickplayWins.textContent = quickplay.wins;
-    statsOverlaySummaryEls.quickplayDraws.textContent = quickplay.draws;
-    statsOverlaySummaryEls.quickplayLosses.textContent = quickplay.losses;
-
-    if (statsOverlaySummaryEls.botMatches) {
-      statsOverlaySummaryEls.botMatches.textContent = bots.total;
+  function markBotStatus(id, isBot) {
+    const normalized = normalizeBotId(id);
+    if (!normalized) return;
+    if (isBot) {
+      botUserIds.add(normalized);
+      botStatusCache.set(normalized, 'bot');
+    } else {
+      botUserIds.delete(normalized);
+      botStatusCache.set(normalized, 'human');
     }
-    if (statsOverlaySummaryEls.botWins) {
-      statsOverlaySummaryEls.botWins.textContent = bots.wins;
-    }
-    if (statsOverlaySummaryEls.botDraws) {
-      statsOverlaySummaryEls.botDraws.textContent = bots.draws;
-    }
-    if (statsOverlaySummaryEls.botLosses) {
-      statsOverlaySummaryEls.botLosses.textContent = bots.losses;
-    }
-
-    statsOverlaySummaryEls.rankedMatches.textContent = ranked.total;
-    statsOverlaySummaryEls.rankedWins.textContent = ranked.wins;
-    statsOverlaySummaryEls.rankedDraws.textContent = ranked.draws;
-    statsOverlaySummaryEls.rankedLosses.textContent = ranked.losses;
-
-    if (statsOverlaySummaryEls.customMatches) {
-      statsOverlaySummaryEls.customMatches.textContent = custom.total;
-    }
-    if (statsOverlaySummaryEls.customWins) {
-      statsOverlaySummaryEls.customWins.textContent = custom.wins;
-    }
-    if (statsOverlaySummaryEls.customDraws) {
-      statsOverlaySummaryEls.customDraws.textContent = custom.draws;
-    }
-    if (statsOverlaySummaryEls.customLosses) {
-      statsOverlaySummaryEls.customLosses.textContent = custom.losses;
+    if (statsOverlayController && typeof statsOverlayController.registerBotUser === 'function') {
+      statsOverlayController.registerBotUser(normalized, Boolean(isBot));
     }
   }
 
-  function formatMatchTypeLabel(type) {
-    if (!type) return 'Match';
-    const upper = type.toUpperCase();
-    if (upper === 'RANKED') return 'Ranked Match';
-    if (upper === 'QUICKPLAY') return 'Quickplay Match';
-    if (upper === 'CUSTOM') return 'Custom Match';
-    if (upper === 'AI') return 'Bot Match';
-    return `${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()} Match`;
+  function isKnownBotId(id) {
+    const normalized = normalizeBotId(id);
+    if (!normalized) return false;
+    return botUserIds.has(normalized);
   }
 
-  function formatMatchDateLabel(match) {
-    const end = match?.endedAt instanceof Date ? match.endedAt : (match?.endTime ? new Date(match.endTime) : null);
-    const start = match?.startTime ? new Date(match.startTime) : null;
-    const date = end || start;
-    if (!date) return 'Unknown date';
-    try {
-      return date.toLocaleString();
-    } catch (err) {
-      return date.toISOString();
+  function isLikelyBotName(name) {
+    if (typeof name !== 'string') return false;
+    return /bot$/i.test(name.trim());
+  }
+
+  async function ensureBotStatus(normalizedId) {
+    if (!normalizedId) return false;
+    const cached = botStatusCache.get(normalizedId);
+    if (cached === 'bot') return true;
+    if (cached === 'human') return false;
+    if (botStatusRequests.has(normalizedId)) {
+      return botStatusRequests.get(normalizedId);
     }
-  }
-
-  function renderStatsHistoryMatches() {
-    if (!statsOverlayMatchesEl) return;
-    statsOverlayMatchesEl.innerHTML = '';
-    const matches = Array.isArray(statsHistoryMatches) ? statsHistoryMatches.slice() : [];
-    matches.sort((a, b) => {
-      const aTime = new Date(a?.endTime || a?.startTime || 0).getTime();
-      const bTime = new Date(b?.endTime || b?.startTime || 0).getTime();
-      return bTime - aTime;
-    });
-    const filtered = matches.filter(match => {
-      if (!match || match.isActive) return false;
-      const type = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
-      if (statsHistoryFilter === 'quickplay') return type === 'QUICKPLAY';
-      if (statsHistoryFilter === 'bot') return type === 'AI';
-      if (statsHistoryFilter === 'custom') return type === 'CUSTOM';
-      if (statsHistoryFilter === 'ranked') return type === 'RANKED';
-      return true;
-    });
-
-    if (filtered.length === 0) {
-      showStatsOverlayMessage('No matches recorded yet. Play some games to see your history.');
-      return;
-    }
-
-    const normalizedUserId = normalizeId(statsUserId);
-
-    const matchEntries = filtered.map(match => {
-      const descriptor = describeMatch(match, {
-        usernameLookup: id => statsUsernameMap[id] || id,
-        userId: statsUserId
-      });
-      const matchId = normalizeId(match?._id || match?.id || descriptor.id);
-      const games = matchId ? (statsHistoryGamesByMatch.get(matchId) || []) : [];
-      return { match, descriptor, games };
-    });
-
-    const maxGameCount = Math.max(1, statsHistoryMaxGameCount);
-
-    matchEntries.forEach(({ match, descriptor, games }) => {
-      const row = document.createElement('div');
-      row.className = 'history-row';
-
-      const meta = document.createElement('div');
-      meta.className = 'history-row-top';
-      const pill = document.createElement('span');
-      pill.className = 'history-pill';
-      pill.textContent = formatMatchTypeLabel(descriptor.type);
-      meta.appendChild(pill);
-      const date = document.createElement('span');
-      date.className = 'history-date';
-      date.textContent = formatMatchDateLabel(descriptor);
-      meta.appendChild(date);
-      row.appendChild(meta);
-
-      const matchForGrid = Object.assign({}, match, { games });
-      const table = buildMatchDetailGrid(matchForGrid, {
-        usernameLookup: id => {
-          const normalized = normalizeId(id);
-          const base = statsUsernameMap[id] || statsUsernameMap[normalized] || normalized || 'Unknown';
-          if (normalizedUserId && normalized && normalized === normalizedUserId) {
-            return `${base} (You)`;
-          }
-          return base;
-        },
-        maxGameCount
-      });
-      row.appendChild(table);
-
-      statsOverlayMatchesEl.appendChild(row);
-    });
-  }
-
-  async function fetchStatsUsernames(ids) {
-    const unique = Array.from(new Set((ids || []).filter(Boolean)));
-    const missing = unique.filter(id => !statsUsernameMap[id]);
-    if (missing.length === 0) return;
-    await Promise.all(missing.map(async id => {
+    const promise = (async () => {
       try {
         const res = await authFetch('/api/v1/users/getDetails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: id })
+          body: JSON.stringify({ userId: normalizedId })
         });
-        if (res.ok) {
+        if (res && res.ok) {
           const data = await res.json().catch(() => null);
-          if (data && data.username) {
-            statsUsernameMap[id] = data.username;
-          }
+          const detectedBot = Boolean(data?.isBot);
+          markBotStatus(normalizedId, detectedBot);
+          return detectedBot;
         }
       } catch (err) {
-        console.error('Failed to fetch username for history overlay', err);
+        console.warn('Failed to determine bot status for user', normalizedId, err);
       }
-    }));
+      markBotStatus(normalizedId, false);
+      return false;
+    })();
+    botStatusRequests.set(normalizedId, promise);
+    const result = await promise;
+    botStatusRequests.delete(normalizedId);
+    return result;
   }
 
-  async function fetchStatsHistory() {
-    if (!statsUserId) return;
-    ensureStatsOverlay();
-    if (!statsOverlayMatchesEl) return;
-    if (statsOverlayFetching) return;
-    statsOverlayFetching = true;
-    showStatsOverlayMessage('Loading match history…');
-    try {
-      const requestBody = JSON.stringify({ userId: statsUserId, status: 'completed' });
-      const [matchesRes, gamesRes] = await Promise.all([
-        authFetch('/api/v1/matches/getList', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: requestBody
-        }),
-        authFetch('/api/v1/games/getList', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: requestBody
-        })
-      ]);
-
-      statsHistoryMatches = matchesRes && matchesRes.ok ? await matchesRes.json().catch(() => []) : [];
-      statsHistoryGames = gamesRes && gamesRes.ok ? await gamesRes.json().catch(() => []) : [];
-      statsHistoryMaxGameCount = 1;
-
-      statsHistoryGamesByMatch.clear();
-      if (Array.isArray(statsHistoryGames)) {
-        statsHistoryGames.forEach(game => {
-          const matchId = normalizeId(game?.match);
-          if (!matchId) return;
-          if (!statsHistoryGamesByMatch.has(matchId)) {
-            statsHistoryGamesByMatch.set(matchId, []);
-          }
-          statsHistoryGamesByMatch.get(matchId).push(game);
-        });
-        statsHistoryGamesByMatch.forEach(list => {
-          list.sort((a, b) => {
-            const aTime = new Date(a?.endTime || a?.startTime || a?.createdAt || 0).getTime();
-            const bTime = new Date(b?.endTime || b?.startTime || b?.createdAt || 0).getTime();
-            return aTime - bTime;
-          });
-          const count = Array.isArray(list) ? list.length : 0;
-          if (count > statsHistoryMaxGameCount) {
-            statsHistoryMaxGameCount = count;
-          }
-        });
-      }
-
-      if (Array.isArray(statsHistoryMatches)) {
-        statsHistoryMatches.forEach(match => {
-          const inlineGames = Array.isArray(match?.games) ? match.games.length : 0;
-          if (inlineGames > statsHistoryMaxGameCount) {
-            statsHistoryMaxGameCount = inlineGames;
-          }
-        });
-      }
-
-      statsHistoryMaxGameCount = Math.max(1, Math.round(statsHistoryMaxGameCount));
-
-      const idsToFetch = [];
-      statsHistoryMatches.forEach(match => {
-        idsToFetch.push(normalizeId(match?.player1));
-        idsToFetch.push(normalizeId(match?.player2));
-        idsToFetch.push(normalizeId(match?.winner));
-      });
-      statsHistoryGames.forEach(game => {
-        if (Array.isArray(game?.players)) {
-          game.players.forEach(pid => idsToFetch.push(normalizeId(pid)));
-        }
-      });
-      await fetchStatsUsernames(idsToFetch);
-
-      statsHistoryLoaded = true;
-      updateStatsOverlaySummary();
-      renderStatsHistoryMatches();
-    } catch (err) {
-      console.error('Failed to load player history', err);
-      statsHistoryMatches = [];
-      statsHistoryGames = [];
-      statsHistoryMaxGameCount = 1;
-      statsHistoryGamesByMatch.clear();
-      showStatsOverlayMessage('Unable to load history right now. Please try again later.');
-    } finally {
-      statsOverlayFetching = false;
+  async function shouldBlockStatsForUser(normalizedId, username) {
+    if (!normalizedId) return true;
+    if (botUserIds.has(normalizedId)) return true;
+    const cached = botStatusCache.get(normalizedId);
+    if (cached === 'bot') return true;
+    if (cached === 'human') return false;
+    if (isLikelyBotName(username)) {
+      markBotStatus(normalizedId, true);
+      return true;
     }
+    return ensureBotStatus(normalizedId);
+  }
+
+  async function viewPlayerStats({ userId, username, elo, preventSelf = false } = {}) {
+    if (!statsOverlayController) return;
+    const normalizedId = normalizeId(userId);
+    if (!normalizedId) return;
+    const defaultId = typeof statsOverlayController.getDefaultUserId === 'function'
+      ? statsOverlayController.getDefaultUserId()
+      : null;
+    if (preventSelf && defaultId && normalizedId === String(defaultId)) {
+      return;
+    }
+    if (await shouldBlockStatsForUser(normalizedId, username)) {
+      return;
+    }
+    statsOverlayController.openForUser({ userId: normalizedId, username, elo });
   }
 
   menuToggle.addEventListener('click', ev => {
@@ -965,26 +585,12 @@ logBootConstantsOnce();
         updateSessionInfo({ username: displayName });
       }
 
-      statsUserId = sessionUserId || null;
-      statsUserElo = eloValue;
-      statsUsernameMap = {};
-      if (statsUserId) {
-        statsUsernameMap[statsUserId] = displayName;
-      }
-      statsHistoryMatches = [];
-      statsHistoryGames = [];
-      statsHistoryMaxGameCount = 1;
-      statsHistoryFilter = 'all';
-      statsHistoryLoaded = false;
-      statsHistoryGamesByMatch.clear();
-      ensureStatsOverlay();
-      if (statsOverlayFilterButtons.length) {
-        statsOverlayFilterButtons.forEach(btn => {
-          btn.classList.toggle('active', (btn.dataset.historyFilter || 'all') === statsHistoryFilter);
+      if (statsOverlayController) {
+        statsOverlayController.setDefaultUser({
+          userId: sessionUserId,
+          username: displayName,
+          elo: eloValue
         });
-      }
-      if (statsOverlayEloValueEl) {
-        statsOverlayEloValueEl.textContent = Number.isFinite(statsUserElo) ? String(statsUserElo) : '—';
       }
 
       accountPanelContent.innerHTML = '';
@@ -1142,13 +748,9 @@ logBootConstantsOnce();
         window.location.reload();
       });
     } else {
-      statsUserId = null;
-      statsUserElo = null;
-      statsHistoryMatches = [];
-      statsHistoryGames = [];
-      statsHistoryMaxGameCount = 1;
-      statsHistoryLoaded = false;
-      statsHistoryGamesByMatch.clear();
+      if (statsOverlayController) {
+        statsOverlayController.clearDefaultUser();
+      }
       if (isStatsOverlayOpen()) {
         closeStatsOverlay();
       }
@@ -1333,6 +935,13 @@ logBootConstantsOnce();
     return fetch(input, { ...init, headers });
   }
 
+  if (!statsOverlayController) {
+    statsOverlayController = createPlayerStatsOverlay({
+      authFetch,
+      getPreferredWidth: getDesiredHistoryOverlayWidth
+    });
+  }
+
   // Retrieve stored user ID if present; server assigns one if missing
   async function ensureUserId() {
     if (sessionInfo.userId) {
@@ -1498,6 +1107,13 @@ logBootConstantsOnce();
           const user = await res.json().catch(() => null);
           playerNames[idx] = formatPlayerName(user?.username, idx);
           playerElos[idx] = Number.isFinite(user?.elo) ? user.elo : null;
+          if (statsOverlayController) {
+            const normalized = normalizeId(id);
+            if (normalized) {
+              statsOverlayController.registerKnownUsername(normalized, playerNames[idx]);
+            }
+          }
+          markBotStatus(id, Boolean(user?.isBot));
         }
       } catch (_) {}
     }));
@@ -1511,7 +1127,6 @@ logBootConstantsOnce();
     const normalizedName = updatedName.trim();
     const targetId = payload?.userId ? String(payload.userId) : null;
     const activeUserId = getStoredUserId() || userId;
-    let shouldRefreshStats = false;
 
     if (targetId) {
       const idx = currentPlayerIds.findIndex((id) => id && id.toString() === targetId);
@@ -1519,9 +1134,9 @@ logBootConstantsOnce();
         playerNames[idx] = formatPlayerName(normalizedName, idx);
         renderBoardAndBars();
       }
-      statsUsernameMap[targetId] = normalizedName;
-      if (statsUserId && String(statsUserId) === targetId) {
-        shouldRefreshStats = true;
+      if (statsOverlayController) {
+        statsOverlayController.registerKnownUsername(targetId, normalizedName);
+        statsOverlayController.handleUsernameUpdate({ userId: targetId, username: normalizedName });
       }
     }
 
@@ -1529,15 +1144,10 @@ logBootConstantsOnce();
     if (isSelfUpdate) {
       updateSessionInfo({ username: normalizedName }, { syncCookies: true });
       updateAccountPanel();
-      if (activeUserId) {
-        statsUsernameMap[String(activeUserId)] = normalizedName;
-        shouldRefreshStats = true;
+      if (activeUserId && statsOverlayController) {
+        statsOverlayController.registerKnownUsername(activeUserId, normalizedName);
+        statsOverlayController.handleUsernameUpdate({ userId: activeUserId, username: normalizedName });
       }
-    }
-
-    if (shouldRefreshStats && isStatsOverlayOpen()) {
-      updateStatsOverlaySummary();
-      renderStatsHistoryMatches();
     }
   }
 
@@ -2521,6 +2131,16 @@ logBootConstantsOnce();
         socket,
         getUsername: getSpectateUsername,
         setUsername: setSpectateUsername,
+        shouldAllowPlayerClick: (id) => !isKnownBotId(id),
+        onPlayerClick: (info) => {
+          if (!info || !info.userId) return;
+          if (isKnownBotId(info.userId)) return;
+          viewPlayerStats({
+            userId: info.userId,
+            username: info.username || info.name,
+            elo: info.elo
+          });
+        },
       });
       wireSocket();
     } catch (e) {
@@ -2543,6 +2163,9 @@ logBootConstantsOnce();
     if (!key) return;
     if (typeof username === 'string' && username.trim()) {
       spectateUsernameMap[key] = username.trim();
+      if (statsOverlayController) {
+        statsOverlayController.registerKnownUsername(key, username.trim());
+      }
     }
   }
 
@@ -2598,6 +2221,16 @@ logBootConstantsOnce();
           spectateController.open(item.id);
         }
       },
+      onPlayerClick: (info) => {
+        if (!info || !info.userId) return;
+        if (isKnownBotId(info.userId)) return;
+        viewPlayerStats({
+          userId: info.userId,
+          username: info.username || info.userId,
+          elo: info.elo
+        });
+      },
+      shouldAllowPlayerClick: (id) => !isKnownBotId(id),
     });
   }
 
@@ -2626,8 +2259,14 @@ logBootConstantsOnce();
           const details = match?.playerDetails || {};
           const p1 = details.player1;
           const p2 = details.player2;
-          if (p1?.id) setSpectateUsername(p1.id, p1.username || p1.id);
-          if (p2?.id) setSpectateUsername(p2.id, p2.username || p2.id);
+          if (p1?.id) {
+            setSpectateUsername(p1.id, p1.username || p1.id);
+            markBotStatus(p1.id, Boolean(p1?.isBot));
+          }
+          if (p2?.id) {
+            setSpectateUsername(p2.id, p2.username || p2.id);
+            markBotStatus(p2.id, Boolean(p2?.isBot));
+          }
         });
       }
       spectateMatchesLoading = false;
@@ -4348,9 +3987,21 @@ logBootConstantsOnce();
         connectionBottom,
         isRankedMatch,
         eloTop,
-        eloBottom
+        eloBottom,
+        playerIdTop: topPlayerId,
+        playerIdBottom: bottomPlayerId
       },
-      identityMap: PIECE_IMAGES
+      identityMap: PIECE_IMAGES,
+      onNameClick: (info) => {
+        if (!info || !info.userId) return;
+        if (isKnownBotId(info.userId)) return;
+        viewPlayerStats({
+          userId: info.userId,
+          username: info.name,
+          elo: info.elo
+        });
+      },
+      shouldAllowPlayerClick: (id) => !isKnownBotId(id)
     });
     topClockEl = bars.topClockEl;
     bottomClockEl = bars.bottomClockEl;

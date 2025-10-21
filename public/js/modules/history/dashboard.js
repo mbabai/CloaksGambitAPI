@@ -16,8 +16,19 @@ function normalizeId(value) {
   if (typeof value === 'string') return value;
   if (typeof value === 'number') return String(value);
   if (typeof value === 'object') {
-    if (typeof value._id === 'string') return value._id;
-    if (value._id && typeof value._id.toString === 'function') return value._id.toString();
+    const candidateKeys = ['_id', 'id', 'userId', 'playerId'];
+    for (const key of candidateKeys) {
+      if (!(key in value)) continue;
+      const candidate = value[key];
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed) return trimmed;
+      }
+      if (candidate && typeof candidate.toString === 'function') {
+        const str = candidate.toString();
+        if (str && str !== '[object Object]') return str;
+      }
+    }
     if (typeof value.toString === 'function') {
       const str = value.toString();
       if (str && str !== '[object Object]') return str;
@@ -358,7 +369,10 @@ function buildMatchDetailGrid(match, {
   usernameLookup = id => id,
   squareSize = 34,
   iconSize = 24,
-  maxGameCount = null
+  maxGameCount = null,
+  onPlayerClick = null,
+  currentUserId = null,
+  shouldAllowPlayerClick = null
 } = {}) {
   const lookupName = (id, fallback) => {
     if (!id) return fallback;
@@ -371,6 +385,7 @@ function buildMatchDetailGrid(match, {
   const minimumSquareSize = Math.max(16, Math.round(normalizedSquareSize * 0.6));
   const gameIconSize = Math.max(12, Math.min(iconSize, Math.round(normalizedSquareSize * 0.7)));
   const playerStatusIconSize = Math.max(24, Math.round(normalizedSquareSize * 0.75));
+  const normalizedViewerId = normalizeId(currentUserId);
 
   const container = document.createElement('div');
   container.className = 'history-match-table';
@@ -446,6 +461,42 @@ function buildMatchDetailGrid(match, {
     nameEl.textContent = player.name;
     if (player.name) {
       nameEl.title = player.name;
+    }
+    const normalizedPlayerId = normalizeId(player.id);
+    const allowInteraction = typeof shouldAllowPlayerClick === 'function'
+      ? (() => {
+          try {
+            return shouldAllowPlayerClick(normalizedPlayerId, { match, playerIndex });
+          } catch (err) {
+            console.warn('Error evaluating history player click allowance', err);
+            return false;
+          }
+        })()
+      : true;
+    if (typeof onPlayerClick === 'function'
+      && normalizedPlayerId
+      && normalizedPlayerId !== normalizedViewerId
+      && allowInteraction) {
+      nameEl.classList.add('history-player-name--interactive');
+      nameEl.setAttribute('role', 'button');
+      nameEl.setAttribute('tabindex', '0');
+      const payload = {
+        id: normalizedPlayerId,
+        name: player.name,
+        elo: Number.isFinite(player.endElo)
+          ? player.endElo
+          : (Number.isFinite(player.startElo) ? player.startElo : null)
+      };
+      nameEl.addEventListener('click', (event) => {
+        event.stopPropagation();
+        onPlayerClick(payload, event);
+      });
+      nameEl.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onPlayerClick(payload, event);
+        }
+      });
     }
     labelRow.appendChild(nameEl);
 

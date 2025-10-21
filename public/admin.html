@@ -48,6 +48,8 @@
       .userTable th:not(:first-child), .userTable td:not(:first-child) { text-align: center; white-space: nowrap; }
       .userTable td { vertical-align: middle; }
       .userTable__name { word-break: break-word; }
+      .userTable__name--interactive { cursor: pointer; text-decoration: underline; }
+      .userTable__name--interactive:focus-visible { outline: 2px solid var(--light-gold); outline-offset: 2px; }
       .userTable__inline { display: inline-flex; justify-content: center; align-items: center; gap: 4px; white-space: nowrap; }
       .userTable__inline img { display: block; }
       .userTable__actions { justify-content: center; }

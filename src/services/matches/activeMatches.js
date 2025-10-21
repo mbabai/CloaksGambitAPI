@@ -229,6 +229,7 @@ function attachPlayerDetails(matches, userMap) {
             id: player1Id,
             username: player1User?.username || null,
             elo: Number.isFinite(player1User?.elo) ? player1User.elo : null,
+            isBot: Boolean(player1User?.isBot),
           }
         : null,
       player2: player2Id
@@ -236,6 +237,7 @@ function attachPlayerDetails(matches, userMap) {
             id: player2Id,
             username: player2User?.username || null,
             elo: Number.isFinite(player2User?.elo) ? player2User.elo : null,
+            isBot: Boolean(player2User?.isBot),
           }
         : null,
     };
@@ -324,7 +326,7 @@ async function fetchMatchList(options = {}) {
   let userMap = new Map();
   if (validObjectIds.length > 0) {
     const users = await User.find({ _id: { $in: validObjectIds } })
-      .select('_id username elo')
+      .select('_id username elo isBot')
       .lean();
     userMap = new Map(users.map((user) => [user._id.toString(), user]));
   }

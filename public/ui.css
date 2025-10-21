@@ -205,6 +205,19 @@ body.history-overlay-open {
   flex: 1;
 }
 
+.history-overlay-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history-overlay-player {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(255, 215, 0, 0.85);
+}
+
 .history-overlay-content {
   flex: 1;
   min-height: 0;
@@ -219,6 +232,34 @@ body.history-overlay-open {
 .history-overlay-content::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+.history-close-btn {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: var(--CG-dark-red);
+  color: var(--CG-white);
+  border: 2px solid var(--CG-white);
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
+  font-weight: var(--cg-button-font-weight);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease;
+}
+
+.history-close-btn:hover {
+  background: #b3122d;
+}
+
+.history-close-btn:focus-visible {
+  outline: 2px solid var(--CG-light-gold);
+  outline-offset: 3px;
 }
 
 .history-current-elo {
@@ -542,6 +583,16 @@ body.history-overlay-open {
   min-width: 0;
 }
 
+.cg-active-match__player--interactive {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.cg-active-match__player--interactive:focus-visible {
+  outline: 2px solid var(--CG-light-gold);
+  outline-offset: 2px;
+}
+
 .cg-active-match__score-value {
   display: inline-flex;
   align-items: center;
@@ -772,6 +823,16 @@ body.history-overlay-open {
   z-index: 0;
 }
 
+.cg-name-row__label--interactive {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.cg-name-row__label--interactive:focus-visible {
+  outline: 2px solid var(--CG-light-gold);
+  outline-offset: 2px;
+}
+
 .cg-name-row__connection {
   display: inline-flex;
   align-items: center;
@@ -907,5 +968,16 @@ body.history-overlay-open {
     gap: 5px;
     font-size: 10px;
   }
+}
+
+
+.history-player-name--interactive {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.history-player-name--interactive:focus-visible {
+  outline: 2px solid rgba(255, 215, 0, 0.85);
+  outline-offset: 2px;
 }
 
