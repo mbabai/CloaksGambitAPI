@@ -244,7 +244,13 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   let historyFilter = 'all';
   let historyLoaded = false;
   let isFetchingHistory = false;
+  let historySummaryData = null;
   const historyGamesByMatch = new Map();
+  let historyPagination = { page: 0, totalPages: 0, perPage: 50, totalItems: 0 };
+  let historyHasMore = false;
+  let historyObserver = null;
+  const historyScrollSentinel = document.createElement('div');
+  historyScrollSentinel.className = 'history-scroll-sentinel';
 
   function getUsername(id) {
     if (!id) return 'Unknown';
@@ -288,6 +294,51 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       frag.appendChild(row);
     });
     targetEl.appendChild(frag);
+  }
+
+  function mapHistoryFilterToMatchType(filter) {
+    const value = typeof filter === 'string' ? filter.trim().toLowerCase() : '';
+    if (value === 'quickplay') return 'QUICKPLAY';
+    if (value === 'ranked') return 'RANKED';
+    if (value === 'custom') return 'CUSTOM';
+    if (value === 'bot') return 'AI';
+    return null;
+  }
+
+  function resetHistoryData() {
+    historyMatches = [];
+    historyGames = [];
+    historyMaxGameCount = 1;
+    historyGamesByMatch.clear();
+    historyPagination = { page: 0, totalPages: 0, perPage: 50, totalItems: 0 };
+    historyHasMore = false;
+  }
+
+  function disconnectHistoryObserver() {
+    if (historyObserver) {
+      historyObserver.disconnect();
+      historyObserver = null;
+    }
+  }
+
+  function ensureHistoryObserver() {
+    if (!historyMatchesListEl) return;
+    if (!historyScrollSentinel.isConnected) {
+      historyScrollSentinel.style.display = historyHasMore ? 'block' : 'none';
+      historyMatchesListEl.appendChild(historyScrollSentinel);
+    } else {
+      historyScrollSentinel.style.display = historyHasMore ? 'block' : 'none';
+    }
+    if (historyObserver) return;
+    historyObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        if (!historyHasMore || isFetchingHistory) return;
+        const nextPage = (historyPagination.page || 0) + 1;
+        fetchHistoryData({ page: nextPage, append: true });
+      });
+    }, { root: null, rootMargin: '200px 0px' });
+    historyObserver.observe(historyScrollSentinel);
   }
 
   function renderUsersList(targetEl, users, connectedIds, matches) {
@@ -563,12 +614,18 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   });
 
   historyFilterButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const filter = btn.dataset.historyFilter || 'all';
       if (filter === historyFilter) return;
       historyFilter = filter;
       historyFilterButtons.forEach(b => b.classList.toggle('active', b === btn));
-      renderHistoryList();
+      if (historyLoaded) {
+        await fetchHistorySummary();
+        updateHistorySummary();
+        await fetchHistoryData({ page: 1, forceReset: true });
+      } else {
+        renderHistoryList();
+      }
     });
   });
 
@@ -652,86 +709,205 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       await res.json().catch(() => null);
       alert(`${displayName} has been deleted.`);
       fetchAllUsers();
-      if (historyLoaded) fetchHistoryData();
+      if (historyLoaded) {
+        await fetchHistorySummary();
+        await fetchHistoryData({ page: 1, forceReset: true });
+      }
     } catch (err) {
       console.error('Error deleting user:', err);
       alert('An error occurred while deleting the user. Check console for details.');
     }
   }
 
-  async function ensureHistoryLoaded() {
-    if (historyLoaded || isFetchingHistory) return;
-    isFetchingHistory = true;
+  async function fetchHistorySummary() {
     try {
-      await fetchHistoryData();
-      historyLoaded = true;
-    } finally {
-      isFetchingHistory = false;
+      const res = await authFetch('/api/v1/history/getSummary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'completed' })
+      });
+
+      if (!res || !res.ok) {
+        historySummaryData = null;
+        return;
+      }
+
+      const data = await res.json().catch(() => null);
+      historySummaryData = data && typeof data === 'object' ? data.summary || null : null;
+    } catch (err) {
+      console.error('Failed to fetch history summary', err);
+      historySummaryData = null;
     }
   }
 
-  async function fetchHistoryData() {
+  async function ensureHistoryLoaded() {
+    if (historyLoaded || isFetchingHistory) return;
+    await fetchHistorySummary();
+    await fetchHistoryData({ page: 1, forceReset: true });
+    historyLoaded = true;
+  }
+
+  async function fetchHistoryData({ page = 1, append = false, forceReset = false } = {}) {
+    if (isFetchingHistory) return;
+    const numericPage = Number(page);
+    const safePage = Number.isFinite(numericPage) && numericPage > 0 ? Math.floor(numericPage) : 1;
+    const shouldAppend = append && safePage > 1;
+    const shouldReset = forceReset || !shouldAppend;
+
+    isFetchingHistory = true;
     try {
-      const requestBody = JSON.stringify({ status: 'completed' });
-      const [matchesRes, gamesRes] = await Promise.all([
-        authFetch('/api/v1/matches/getList', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: requestBody
-        }),
-        authFetch('/api/v1/games/getList', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: requestBody
-        })
-      ]);
+      if (shouldReset) {
+        disconnectHistoryObserver();
+        resetHistoryData();
+      }
 
-      historyMatches = matchesRes && matchesRes.ok ? await matchesRes.json().catch(() => []) : [];
-      historyGames = gamesRes && gamesRes.ok ? await gamesRes.json().catch(() => []) : [];
-      historyMaxGameCount = 1;
+      const requestPayload = {
+        status: 'completed',
+        page: safePage,
+        limit: 50,
+      };
+      const typeFilter = mapHistoryFilterToMatchType(historyFilter);
+      if (typeFilter) {
+        requestPayload.type = typeFilter;
+      }
 
-      historyGamesByMatch.clear();
-      if (Array.isArray(historyGames)) {
-        historyGames.forEach(game => {
-          const matchId = normalizeId(game?.match);
-          if (!matchId) return;
-          if (!historyGamesByMatch.has(matchId)) {
-            historyGamesByMatch.set(matchId, []);
-          }
-          historyGamesByMatch.get(matchId).push(game);
-        });
-        historyGamesByMatch.forEach(list => {
-          list.sort((a, b) => {
-            const aTime = new Date(a?.endTime || a?.startTime || a?.createdAt || 0).getTime();
-            const bTime = new Date(b?.endTime || b?.startTime || b?.createdAt || 0).getTime();
-            return aTime - bTime;
+      const matchesRes = await authFetch('/api/v1/matches/getList', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestPayload)
+      });
+
+      let matchesPayload = null;
+      if (matchesRes && matchesRes.ok) {
+        matchesPayload = await matchesRes.json().catch(() => null);
+      }
+
+      const matchItems = Array.isArray(matchesPayload)
+        ? matchesPayload
+        : (Array.isArray(matchesPayload?.items) ? matchesPayload.items : []);
+
+      const pagination = matchesPayload && typeof matchesPayload === 'object' ? matchesPayload.pagination : null;
+      if (pagination && typeof pagination === 'object') {
+        const perPage = Number(pagination.perPage) || 50;
+        const totalItems = Number(pagination.totalItems) || matchItems.length;
+        const totalPages = Number(pagination.totalPages) || (perPage > 0 ? Math.ceil(totalItems / perPage) : 0);
+        const currentPage = Number(pagination.page) || safePage;
+        historyPagination = {
+          page: currentPage,
+          perPage,
+          totalItems,
+          totalPages,
+        };
+        historyHasMore = currentPage < totalPages;
+      } else {
+        const perPage = 50;
+        const totalItems = shouldAppend ? historyMatches.length + matchItems.length : matchItems.length;
+        const totalPages = perPage > 0 ? Math.ceil(totalItems / perPage) : 0;
+        historyPagination = {
+          page: safePage,
+          perPage,
+          totalItems,
+          totalPages,
+        };
+        historyHasMore = safePage < totalPages;
+      }
+
+      const matchIdSet = new Set();
+      matchItems.forEach((match) => {
+        const id = normalizeId(match?._id || match?.id);
+        if (id) matchIdSet.add(id);
+      });
+
+      let gameItems = [];
+      if (matchIdSet.size > 0) {
+        try {
+          const gamesRes = await authFetch('/api/v1/games/getList', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'completed', matchIds: Array.from(matchIdSet) })
           });
-          const count = Array.isArray(list) ? list.length : 0;
-          if (count > historyMaxGameCount) {
-            historyMaxGameCount = count;
+          if (gamesRes && gamesRes.ok) {
+            const gamesPayload = await gamesRes.json().catch(() => null);
+            if (Array.isArray(gamesPayload)) {
+              gameItems = gamesPayload;
+            } else if (gamesPayload && typeof gamesPayload === 'object' && Array.isArray(gamesPayload.items)) {
+              gameItems = gamesPayload.items;
+            }
+          }
+        } catch (err) {
+          console.error('Failed to fetch games for history page', err);
+        }
+      }
+
+      if (!shouldAppend) {
+        historyMatches = matchItems.slice();
+      } else if (matchItems.length > 0) {
+        const existingIndex = new Map(historyMatches.map((match, idx) => [normalizeId(match?._id || match?.id), idx]));
+        matchItems.forEach((match) => {
+          const id = normalizeId(match?._id || match?.id);
+          if (!id) return;
+          if (existingIndex.has(id)) {
+            historyMatches[existingIndex.get(id)] = match;
+          } else {
+            existingIndex.set(id, historyMatches.length);
+            historyMatches.push(match);
           }
         });
       }
 
-      if (Array.isArray(historyMatches)) {
-        historyMatches.forEach(match => {
-          const inlineGames = Array.isArray(match?.games) ? match.games.length : 0;
-          if (inlineGames > historyMaxGameCount) {
-            historyMaxGameCount = inlineGames;
-          }
-        });
+      if (!shouldAppend) {
+        historyGamesByMatch.clear();
       }
 
+      gameItems.forEach((game) => {
+        const matchId = normalizeId(game?.match);
+        if (!matchId) return;
+        if (!historyGamesByMatch.has(matchId)) {
+          historyGamesByMatch.set(matchId, []);
+        }
+        const gamesForMatch = historyGamesByMatch.get(matchId);
+        const gameId = normalizeId(game?._id || game?.id);
+        const existingIdx = gamesForMatch.findIndex((item) => normalizeId(item?._id || item?.id) === gameId);
+        if (existingIdx >= 0) {
+          gamesForMatch[existingIdx] = game;
+        } else {
+          gamesForMatch.push(game);
+        }
+        gamesForMatch.sort((a, b) => {
+          const aTime = new Date(a?.endTime || a?.startTime || a?.createdAt || 0).getTime();
+          const bTime = new Date(b?.endTime || b?.startTime || b?.createdAt || 0).getTime();
+          return aTime - bTime;
+        });
+      });
+
+      historyGames = Array.from(historyGamesByMatch.values()).flat();
+      historyMaxGameCount = 1;
+      historyGamesByMatch.forEach((list) => {
+        const count = Array.isArray(list) ? list.length : 0;
+        if (count > historyMaxGameCount) {
+          historyMaxGameCount = count;
+        }
+      });
+      historyMatches.forEach((match) => {
+        const inlineGames = Array.isArray(match?.games) ? match.games.length : 0;
+        if (inlineGames > historyMaxGameCount) {
+          historyMaxGameCount = inlineGames;
+        }
+      });
       historyMaxGameCount = Math.max(1, Math.round(historyMaxGameCount));
     } catch (err) {
       console.error('Failed to fetch history data', err);
-      historyMatches = [];
-      historyGames = [];
-      historyMaxGameCount = 1;
-      historyGamesByMatch.clear();
+      if (!shouldAppend) {
+        resetHistoryData();
+        historyGames = [];
+      }
+    } finally {
+      isFetchingHistory = false;
     }
+
     updateHistorySummary();
     renderHistoryList();
+    ensureHistoryObserver();
   }
 
   async function requestMatchDeletion(matchId) {
@@ -776,7 +952,8 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       alert(summaryParts.join(' '));
 
       fetchAllUsers();
-      fetchHistoryData();
+      await fetchHistorySummary();
+      await fetchHistoryData({ page: 1, forceReset: true });
     } catch (err) {
       console.error('Error deleting match:', err);
       alert('An error occurred while deleting the match. Check console for details.');
@@ -785,7 +962,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
 
   function updateHistorySummary() {
     if (!historySummaryEls.totalGames) return;
-    const summary = computeHistorySummary(historyMatches, historyGames);
+    const summary = historySummaryData || computeHistorySummary(historyMatches, historyGames);
     const games = summary.games;
     const quickplay = summary.quickplayGames;
     const ranked = summary.rankedMatches;
@@ -947,7 +1124,8 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       console.error(err);
       alert('Error deleting match. Check console for details.');
     } finally {
-      fetchHistoryData();
+      await fetchHistorySummary();
+      await fetchHistoryData({ page: 1, forceReset: true });
     }
   }
 
@@ -1046,7 +1224,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     fetchAllUsers();
   });
 
-  socket.on('admin:metrics', payload => {
+  socket.on('admin:metrics', async payload => {
     if (!payload) return;
     latestMetrics = payload;
     if (Array.isArray(payload.botQueueUserIds)) {
@@ -1079,7 +1257,8 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     activeMatchesStore.replaceAll(payload.matches);
     fetchAllUsers();
     if (historyLoaded) {
-      fetchHistoryData();
+      await fetchHistorySummary();
+      await fetchHistoryData({ page: 1, forceReset: true });
     }
   });
 
@@ -1153,7 +1332,10 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         if (spectateController && spectateController.isOpen && spectateController.isOpen()) {
           spectateController.close();
         }
-        if (historyLoaded) fetchHistoryData();
+        if (historyLoaded) {
+          await fetchHistorySummary();
+          await fetchHistoryData({ page: 1, forceReset: true });
+        }
       } catch (err) {
         console.error(err);
         alert('Error purging active matches. Check console.');

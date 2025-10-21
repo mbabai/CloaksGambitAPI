@@ -26,6 +26,9 @@ const gameGetDetails = require('./games/getDetails');
 const gameCreate = require('./games/create');
 const gamePurge = require('./games/purge');
 
+// History routes
+const historyGetSummary = require('./history/getSummary');
+
 // Game action routes
 const gameActionCheckTimeControl = require('./gameAction/checkTimeControl');
 const gameActionSetup = require('./gameAction/setup');
@@ -75,6 +78,9 @@ router.use('/games/getList', gameGetList);
 router.use('/games/getDetails', gameGetDetails);
 router.use('/games/create', gameCreate);
 router.use('/games/purge', gamePurge);
+
+// History routes
+router.use('/history/getSummary', historyGetSummary);
 
 // Game action routes
 router.use('/gameAction/checkTimeControl', gameActionCheckTimeControl);

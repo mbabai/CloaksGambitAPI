@@ -15,6 +15,9 @@ time match and move data is streamed to clients via WebSocket events.
 - `POST /api/v1/games/getList` – Get a list of games
 - `POST /api/v1/games/getDetails` – Get details for a specific game
 
+## History
+- `POST /api/v1/history/getSummary` – Get aggregated match and game history totals
+
 ## Game Actions
 - `POST /api/v1/gameAction/checkTimeControl` – Check the current player's clock
 - `POST /api/v1/gameAction/setup` – Set up a game board

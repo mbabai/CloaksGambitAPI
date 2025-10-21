@@ -22,6 +22,15 @@ function sanitizeFilter(value) {
   return DEFAULT_FILTER;
 }
 
+function mapFilterToMatchType(filter) {
+  const normalized = sanitizeFilter(filter);
+  if (normalized === 'quickplay') return 'QUICKPLAY';
+  if (normalized === 'bot') return 'AI';
+  if (normalized === 'custom') return 'CUSTOM';
+  if (normalized === 'ranked') return 'RANKED';
+  return null;
+}
+
 function formatMatchTypeLabel(type) {
   if (!type) return 'Match';
   const upper = String(type).toUpperCase();
@@ -77,6 +86,12 @@ export function createPlayerStatsOverlay({
   let historyLoaded = false;
   let historyFetching = false;
   const historyGamesByMatch = new Map();
+  let historySummaryData = null;
+  let historyPagination = { page: 0, totalPages: 0, perPage: 50, totalItems: 0 };
+  let historyHasMore = false;
+  let historyObserver = null;
+  const historyScrollSentinel = document.createElement('div');
+  historyScrollSentinel.className = 'history-scroll-sentinel';
 
   let overlay = null;
   let overlayMatchesEl = null;
@@ -121,6 +136,37 @@ export function createPlayerStatsOverlay({
     historyMaxGameCount = 1;
     historyLoaded = false;
     historyGamesByMatch.clear();
+    historySummaryData = null;
+    historyPagination = { page: 0, totalPages: 0, perPage: 50, totalItems: 0 };
+    historyHasMore = false;
+    disconnectHistoryObserver();
+  }
+
+  function disconnectHistoryObserver() {
+    if (historyObserver) {
+      historyObserver.disconnect();
+      historyObserver = null;
+    }
+  }
+
+  function ensureHistoryObserver() {
+    if (!overlayMatchesEl) return;
+    if (!historyScrollSentinel.isConnected) {
+      historyScrollSentinel.style.display = historyHasMore ? 'block' : 'none';
+      overlayMatchesEl.appendChild(historyScrollSentinel);
+    } else {
+      historyScrollSentinel.style.display = historyHasMore ? 'block' : 'none';
+    }
+    if (historyObserver) return;
+    historyObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        if (!historyHasMore || historyFetching) return;
+        const nextPage = (historyPagination.page || 0) + 1;
+        fetchHistoryPage({ userId: getCurrentUserId(), page: nextPage, append: true });
+      });
+    }, { root: overlayMatchesEl, rootMargin: '200px 0px' });
+    historyObserver.observe(historyScrollSentinel);
   }
 
   function updateFilterButtons() {
@@ -359,7 +405,8 @@ export function createPlayerStatsOverlay({
 
   function updateSummary() {
     if (!overlaySummaryEls) return;
-    const summary = computeHistorySummary(historyMatches, historyGames, { userId: currentUser?.id });
+    const summary = historySummaryData
+      || computeHistorySummary(historyMatches, historyGames, { userId: currentUser?.id });
     const games = summary.games;
     const quickplay = summary.quickplayGames;
     const ranked = summary.rankedMatches;
@@ -508,64 +555,190 @@ export function createPlayerStatsOverlay({
     }));
   }
 
-  async function fetchHistory() {
-    const userId = getCurrentUserId();
-    if (!userId || historyFetching) return;
+  async function fetchHistorySummaryForUser(userId) {
+    const normalizedUserId = normalizeId(userId);
+    if (!normalizedUserId) {
+      historySummaryData = null;
+      return;
+    }
+    try {
+      const res = await authFetch('/api/v1/history/getSummary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'completed', userId: normalizedUserId })
+      });
+
+      if (!res || !res.ok) {
+        historySummaryData = null;
+        return;
+      }
+
+      const data = await res.json().catch(() => null);
+      historySummaryData = data && typeof data === 'object' ? data.summary || null : null;
+    } catch (err) {
+      console.error('Failed to fetch player history summary', err);
+      historySummaryData = null;
+    }
+  }
+
+  async function fetchHistoryPage({ userId, page = 1, append = false, forceReset = false } = {}) {
+    const normalizedUserId = normalizeId(userId);
+    if (!normalizedUserId || historyFetching) return;
     ensureOverlay();
     if (!overlayMatchesEl) return;
+
+    const numericPage = Number(page);
+    const safePage = Number.isFinite(numericPage) && numericPage > 0 ? Math.floor(numericPage) : 1;
+    const shouldAppend = append && safePage > 1;
+    const shouldReset = forceReset || !shouldAppend;
+
     historyFetching = true;
-    showMessage('Loading match history…');
-    try {
-      const requestBody = JSON.stringify({ userId, status: 'completed' });
-      const [matchesRes, gamesRes] = await Promise.all([
-        authFetch('/api/v1/matches/getList', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: requestBody
-        }),
-        authFetch('/api/v1/games/getList', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: requestBody
-        })
-      ]);
-
-      historyMatches = matchesRes && matchesRes.ok ? await matchesRes.json().catch(() => []) : [];
-      historyGames = gamesRes && gamesRes.ok ? await gamesRes.json().catch(() => []) : [];
+    if (shouldReset) {
+      historyMatches = [];
+      historyGames = [];
       historyMaxGameCount = 1;
-
       historyGamesByMatch.clear();
-      if (Array.isArray(historyGames)) {
-        historyGames.forEach((game) => {
-          const matchId = normalizeId(game?.match);
-          if (!matchId) return;
-          if (!historyGamesByMatch.has(matchId)) {
-            historyGamesByMatch.set(matchId, []);
-          }
-          historyGamesByMatch.get(matchId).push(game);
-        });
-        historyGamesByMatch.forEach((list) => {
-          list.sort((a, b) => {
-            const aTime = new Date(a?.endTime || a?.startTime || a?.createdAt || 0).getTime();
-            const bTime = new Date(b?.endTime || b?.startTime || b?.createdAt || 0).getTime();
-            return aTime - bTime;
+      historyPagination = { page: 0, totalPages: 0, perPage: 50, totalItems: 0 };
+      historyHasMore = false;
+      disconnectHistoryObserver();
+      showMessage('Loading match history…');
+    }
+
+    try {
+      const requestPayload = {
+        userId: normalizedUserId,
+        status: 'completed',
+        page: safePage,
+        limit: 50,
+      };
+      const typeFilter = mapFilterToMatchType(historyFilter);
+      if (typeFilter) {
+        requestPayload.type = typeFilter;
+      }
+
+      const matchesRes = await authFetch('/api/v1/matches/getList', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestPayload)
+      });
+
+      let matchesPayload = null;
+      if (matchesRes && matchesRes.ok) {
+        matchesPayload = await matchesRes.json().catch(() => null);
+      }
+
+      const matchItems = Array.isArray(matchesPayload)
+        ? matchesPayload
+        : (Array.isArray(matchesPayload?.items) ? matchesPayload.items : []);
+
+      const pagination = matchesPayload && typeof matchesPayload === 'object' ? matchesPayload.pagination : null;
+      if (pagination && typeof pagination === 'object') {
+        const perPage = Number(pagination.perPage) || 50;
+        const totalItems = Number(pagination.totalItems) || matchItems.length;
+        const totalPages = Number(pagination.totalPages) || (perPage > 0 ? Math.ceil(totalItems / perPage) : 0);
+        const currentPage = Number(pagination.page) || safePage;
+        historyPagination = {
+          page: currentPage,
+          perPage,
+          totalItems,
+          totalPages,
+        };
+        historyHasMore = currentPage < totalPages;
+      } else {
+        const perPage = 50;
+        const totalItems = shouldAppend ? historyMatches.length + matchItems.length : matchItems.length;
+        const totalPages = perPage > 0 ? Math.ceil(totalItems / perPage) : 0;
+        historyPagination = {
+          page: safePage,
+          perPage,
+          totalItems,
+          totalPages,
+        };
+        historyHasMore = safePage < totalPages;
+      }
+
+      const matchIdSet = new Set();
+      matchItems.forEach((match) => {
+        const id = normalizeId(match?._id || match?.id);
+        if (id) matchIdSet.add(id);
+      });
+
+      let gameItems = [];
+      if (matchIdSet.size > 0) {
+        try {
+          const gamesRes = await authFetch('/api/v1/games/getList', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'completed', matchIds: Array.from(matchIdSet) })
           });
-          const count = Array.isArray(list) ? list.length : 0;
-          if (count > historyMaxGameCount) {
-            historyMaxGameCount = count;
+          if (gamesRes && gamesRes.ok) {
+            const gamesPayload = await gamesRes.json().catch(() => null);
+            if (Array.isArray(gamesPayload)) {
+              gameItems = gamesPayload;
+            } else if (gamesPayload && typeof gamesPayload === 'object' && Array.isArray(gamesPayload.items)) {
+              gameItems = gamesPayload.items;
+            }
+          }
+        } catch (err) {
+          console.error('Failed to fetch games for player history', err);
+        }
+      }
+
+      if (!shouldAppend) {
+        historyMatches = matchItems.slice();
+      } else if (matchItems.length > 0) {
+        const existingIndex = new Map(historyMatches.map((match, idx) => [normalizeId(match?._id || match?.id), idx]));
+        matchItems.forEach((match) => {
+          const id = normalizeId(match?._id || match?.id);
+          if (!id) return;
+          if (existingIndex.has(id)) {
+            historyMatches[existingIndex.get(id)] = match;
+          } else {
+            existingIndex.set(id, historyMatches.length);
+            historyMatches.push(match);
           }
         });
       }
 
-      if (Array.isArray(historyMatches)) {
-        historyMatches.forEach((match) => {
-          const inlineGames = Array.isArray(match?.games) ? match.games.length : 0;
-          if (inlineGames > historyMaxGameCount) {
-            historyMaxGameCount = inlineGames;
-          }
-        });
+      if (!shouldAppend) {
+        historyGamesByMatch.clear();
       }
 
+      gameItems.forEach((game) => {
+        const matchId = normalizeId(game?.match);
+        if (!matchId) return;
+        if (!historyGamesByMatch.has(matchId)) {
+          historyGamesByMatch.set(matchId, []);
+        }
+        const gamesForMatch = historyGamesByMatch.get(matchId);
+        const gameId = normalizeId(game?._id || game?.id);
+        const existingIdx = gamesForMatch.findIndex((item) => normalizeId(item?._id || item?.id) === gameId);
+        if (existingIdx >= 0) {
+          gamesForMatch[existingIdx] = game;
+        } else {
+          gamesForMatch.push(game);
+        }
+        gamesForMatch.sort((a, b) => {
+          const aTime = new Date(a?.endTime || a?.startTime || a?.createdAt || 0).getTime();
+          const bTime = new Date(b?.endTime || b?.startTime || b?.createdAt || 0).getTime();
+          return aTime - bTime;
+        });
+      });
+
+      historyGames = Array.from(historyGamesByMatch.values()).flat();
+      historyMaxGameCount = 1;
+      historyGamesByMatch.forEach((list) => {
+        const count = Array.isArray(list) ? list.length : 0;
+        if (count > historyMaxGameCount) {
+          historyMaxGameCount = count;
+        }
+      });
+      historyMatches.forEach((match) => {
+        const inlineGames = Array.isArray(match?.games) ? match.games.length : 0;
+        if (inlineGames > historyMaxGameCount) {
+          historyMaxGameCount = inlineGames;
+        }
+      });
       historyMaxGameCount = Math.max(1, Math.round(historyMaxGameCount));
 
       const idsToFetch = [];
@@ -584,24 +757,42 @@ export function createPlayerStatsOverlay({
       historyLoaded = true;
       updateSummary();
       renderMatches();
+      ensureHistoryObserver();
     } catch (err) {
       console.error('Failed to load player history', err);
-      historyMatches = [];
-      historyGames = [];
-      historyMaxGameCount = 1;
-      historyGamesByMatch.clear();
-      showMessage('Unable to load history right now. Please try again later.');
+      if (shouldReset) {
+        historyMatches = [];
+        historyGames = [];
+        historyMaxGameCount = 1;
+        historyGamesByMatch.clear();
+        showMessage('Unable to load history right now. Please try again later.');
+      }
     } finally {
       historyFetching = false;
     }
   }
 
-  function setFilter(filter) {
+  async function fetchHistory() {
+    const userId = getCurrentUserId();
+    if (!userId) return;
+    await fetchHistorySummaryForUser(userId);
+    updateSummary();
+    await fetchHistoryPage({ userId, page: 1, forceReset: true });
+  }
+
+  async function setFilter(filter) {
     const next = sanitizeFilter(filter);
     if (next === historyFilter) return;
     historyFilter = next;
     updateFilterButtons();
     if (historyLoaded) {
+      const userId = getCurrentUserId();
+      if (userId) {
+        await fetchHistorySummaryForUser(userId);
+        updateSummary();
+      }
+      await fetchHistoryPage({ userId, page: 1, forceReset: true });
+    } else {
       renderMatches();
     }
   }

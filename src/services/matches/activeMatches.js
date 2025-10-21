@@ -254,7 +254,31 @@ function normalizeStatus(status) {
   return value;
 }
 
-function buildMatchQuery({ status, userId }) {
+function normalizeMatchTypeFilter(type) {
+  if (typeof type !== 'string') return null;
+  const value = type.trim();
+  if (!value) return null;
+  const upper = value.toUpperCase();
+  if (upper === 'BOT') return 'AI';
+  return upper;
+}
+
+function buildMatchTypeCriteria(normalizedType) {
+  if (!normalizedType) return null;
+  return {
+    $or: [
+      { type: normalizedType },
+      { matchType: normalizedType },
+      { mode: normalizedType },
+      { matchMode: normalizedType },
+      { gameMode: normalizedType },
+      { 'settings.type': normalizedType },
+      { 'settings.mode': normalizedType },
+    ],
+  };
+}
+
+function buildMatchQuery({ status, userId, type }) {
   const normalizedStatus = normalizeStatus(status);
   const query = {};
 
@@ -278,7 +302,16 @@ function buildMatchQuery({ status, userId }) {
     ];
   }
 
-  return { query, normalizedStatus };
+  const normalizedType = normalizeMatchTypeFilter(type);
+  const typeCriteria = buildMatchTypeCriteria(normalizedType);
+  if (typeCriteria) {
+    if (!query.$and) {
+      query.$and = [];
+    }
+    query.$and.push(typeCriteria);
+  }
+
+  return { query, normalizedStatus, normalizedType };
 }
 
 function buildSort(normalizedStatus) {
@@ -297,9 +330,11 @@ async function fetchMatchList(options = {}) {
     userId = null,
     includeUsers = false,
     limit = 50,
+    page = 1,
+    type = null,
   } = options;
 
-  const { query, normalizedStatus } = buildMatchQuery({ status, userId });
+  const { query, normalizedStatus } = buildMatchQuery({ status, userId, type });
   const sort = buildSort(normalizedStatus);
 
   const numericLimit = Number(limit);
@@ -307,17 +342,59 @@ async function fetchMatchList(options = {}) {
     ? Math.min(Math.floor(numericLimit), 200)
     : 50;
 
-  const rawMatches = await Match.find(query)
-    .sort(sort)
-    .limit(safeLimit)
-    .lean();
+  const numericPage = Number(page);
+  const safePage = Number.isFinite(numericPage) && numericPage > 0
+    ? Math.floor(numericPage)
+    : 1;
+
+  const skip = (safePage - 1) * safeLimit;
+
+  let totalItems = 0;
+  let rawMatches;
+
+  if (normalizedStatus === 'active') {
+    const activeMatches = await Match.find(query)
+      .sort(sort)
+      .lean();
+    totalItems = Array.isArray(activeMatches) ? activeMatches.length : 0;
+    rawMatches = Array.isArray(activeMatches)
+      ? activeMatches.slice(skip, skip + safeLimit)
+      : [];
+  } else {
+    const historyQuery = Match.historyModel.find(query)
+      .sort(sort);
+
+    if (safeLimit > 0) {
+      historyQuery.skip(skip).limit(safeLimit);
+    }
+
+    const [historyMatches, count] = await Promise.all([
+      historyQuery.lean(),
+      Match.historyModel.countDocuments(query),
+    ]);
+
+    rawMatches = historyMatches;
+    totalItems = count;
+  }
+
+  const totalPages = safeLimit > 0
+    ? Math.ceil(totalItems / safeLimit) || (totalItems > 0 ? 1 : 0)
+    : 1;
 
   const normalizedMatches = Array.isArray(rawMatches)
     ? rawMatches.map((match) => normalizeActiveMatch(match)).filter(Boolean)
     : [];
 
   if (!includeUsers || normalizedMatches.length === 0) {
-    return normalizedMatches;
+    return {
+      items: normalizedMatches,
+      pagination: {
+        page: safePage,
+        perPage: safeLimit,
+        totalItems,
+        totalPages,
+      },
+    };
   }
 
   const userIds = collectMatchUserIds(normalizedMatches);
@@ -333,7 +410,15 @@ async function fetchMatchList(options = {}) {
 
   attachPlayerDetails(normalizedMatches, userMap);
 
-  return normalizedMatches;
+  return {
+    items: normalizedMatches,
+    pagination: {
+      page: safePage,
+      perPage: safeLimit,
+      totalItems,
+      totalPages,
+    },
+  };
 }
 
 module.exports = {
@@ -342,4 +427,7 @@ module.exports = {
   resolveMatchType,
   normalizeActiveMatch,
   fetchMatchList,
+  buildMatchQuery,
+  normalizeStatus,
+  normalizeMatchTypeFilter,
 };

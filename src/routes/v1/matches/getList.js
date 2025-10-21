@@ -12,6 +12,8 @@ async function handleGetList(req, res) {
     const rawIncludeUsers = Array.isArray(payload.includeUsers)
       ? payload.includeUsers[payload.includeUsers.length - 1]
       : payload.includeUsers;
+    const rawPage = Array.isArray(payload.page) ? payload.page[0] : payload.page;
+    const rawType = Array.isArray(payload.type) ? payload.type[0] : payload.type;
     const rawLimit = Array.isArray(payload.limit) ? payload.limit[0] : payload.limit;
 
     const includeUserDetails = typeof rawIncludeUsers === 'string'
@@ -19,6 +21,8 @@ async function handleGetList(req, res) {
       : Boolean(rawIncludeUsers);
     const normalizedUserId = typeof rawUserId === 'string' ? rawUserId.trim() : rawUserId;
     const normalizedStatus = typeof rawStatus === 'string' ? rawStatus.trim() : rawStatus;
+    const normalizedPage = typeof rawPage === 'string' ? rawPage.trim() : rawPage;
+    const normalizedType = typeof rawType === 'string' ? rawType.trim() : rawType;
     const normalizedLimit = typeof rawLimit === 'string' ? rawLimit.trim() : rawLimit;
 
     const matches = await fetchMatchList({
@@ -26,6 +30,8 @@ async function handleGetList(req, res) {
       userId: normalizedUserId,
       includeUsers: includeUserDetails,
       limit: normalizedLimit,
+      page: normalizedPage,
+      type: normalizedType,
     });
 
     res.json(matches);

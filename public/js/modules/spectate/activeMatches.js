@@ -326,8 +326,14 @@ async function fetchActiveMatchesList(options = {}) {
     throw error;
   }
 
-  const data = await response.json().catch(() => []);
-  return Array.isArray(data) ? data : [];
+  const data = await response.json().catch(() => null);
+  if (Array.isArray(data)) {
+    return data;
+  }
+  if (data && typeof data === 'object' && Array.isArray(data.items)) {
+    return data.items;
+  }
+  return [];
 }
 
 function createActiveMatchesStore(options = {}) {
