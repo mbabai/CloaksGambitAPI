@@ -1,4 +1,5 @@
 import { ACTIONS, MOVE_STATES } from '../constants.js';
+import { getLatestMoveContext } from '../../shared/latestMoveContext.js';
 import { Declaration } from '../interactions/moveRules.js';
 
 function cloneBoard(board) {
@@ -24,6 +25,8 @@ function bubbleTypesForDeclaration(declaration) {
       return ['bishopSpeechLeft'];
     case Declaration.KING:
       return ['kingSpeechLeft'];
+    case Declaration.BOMB:
+      return ['bombSpeechLeft'];
     default:
       return [];
   }
@@ -89,15 +92,62 @@ export function deriveSpectateView(game) {
   const previousAction = actions.length > 1 ? actions[actions.length - 2] : null;
   const lastMoveAction = getLastAction(actions, (action) => action && (action.type === ACTIONS.MOVE || action.type === ACTIONS.BOMB));
 
+  const latestMoveContext = getLatestMoveContext(game) || null;
+
+  let canonicalMove = null;
+  if (latestMoveContext) {
+    canonicalMove = latestMoveContext.move ? { ...latestMoveContext.move } : {};
+    if (latestMoveContext.from) {
+      canonicalMove.from = latestMoveContext.from;
+    }
+    if (latestMoveContext.to) {
+      canonicalMove.to = latestMoveContext.to;
+    }
+    if (latestMoveContext.declaration !== undefined && latestMoveContext.declaration !== null) {
+      canonicalMove.declaration = latestMoveContext.declaration;
+    }
+    if (latestMoveContext.isPending) {
+      canonicalMove.state = MOVE_STATES.PENDING;
+    } else if (
+      canonicalMove &&
+      canonicalMove.state === undefined &&
+      latestMoveContext.move &&
+      typeof latestMoveContext.move.state === 'number'
+    ) {
+      canonicalMove.state = latestMoveContext.move.state;
+    }
+    if (canonicalMove && typeof canonicalMove.player !== 'number') {
+      if (typeof latestMoveContext.action?.player === 'number') {
+        canonicalMove.player = latestMoveContext.action.player;
+      } else if (typeof latestMoveContext.move?.player === 'number') {
+        canonicalMove.player = latestMoveContext.move.player;
+      } else if (typeof latestMoveContext.actor === 'number') {
+        canonicalMove.player = latestMoveContext.actor;
+      }
+    }
+  } else if (lastMove) {
+    canonicalMove = { ...lastMove };
+  }
+
+  const from = normalizeSquare(canonicalMove?.from);
+  const to = normalizeSquare(canonicalMove?.to);
+  const moveDeclaration =
+    canonicalMove && canonicalMove.declaration !== undefined
+      ? canonicalMove.declaration
+      : (latestMoveContext && latestMoveContext.declaration !== undefined
+        ? latestMoveContext.declaration
+        : (lastMoveAction && lastMoveAction.details && lastMoveAction.details.declaration !== undefined
+          ? lastMoveAction.details.declaration
+          : null));
+  const moveState = canonicalMove ? canonicalMove.state : null;
+  const isPendingMove = Boolean(
+    (latestMoveContext && latestMoveContext.isPending) ||
+    (moveState === MOVE_STATES.PENDING)
+  );
+
   let pendingMoveFrom = null;
   let pendingCapture = null;
   let overlay = null;
-
-  const from = normalizeSquare(lastMove?.from);
-  const to = normalizeSquare(lastMove?.to);
-  const moveDeclaration = lastMove?.declaration ?? lastMoveAction?.details?.declaration;
-  const moveState = lastMove?.state;
-  const isPendingMove = moveState === MOVE_STATES.PENDING;
 
   if (isPendingMove && from && to && rows && cols) {
     pendingMoveFrom = { ...from };
@@ -109,7 +159,7 @@ export function deriveSpectateView(game) {
       board[from.row] = board[from.row].slice();
       board[to.row] = board[to.row].slice();
       if (lastMoveAction && lastMoveAction.type === ACTIONS.BOMB) {
-        const fallbackPiece = movingPiece || targetPiece || (lastMove ? { color: lastMove.player, identity: moveDeclaration } : null);
+        const fallbackPiece = movingPiece || targetPiece || (canonicalMove ? { color: canonicalMove.player, identity: moveDeclaration } : null);
         board[to.row][to.col] = targetPiece || movingPiece || fallbackPiece;
         pendingCapture = fallbackPiece ? { row: to.row, col: to.col, piece: clonePiece(fallbackPiece) } : null;
       } else {
@@ -141,7 +191,7 @@ export function deriveSpectateView(game) {
     }
   }
 
-  const challengeRemoved = resolveChallengeRemoved(lastAction, previousAction, lastMove);
+  const challengeRemoved = resolveChallengeRemoved(lastAction, previousAction, canonicalMove);
 
   if (lastAction?.type === ACTIONS.CHALLENGE) {
     const outcome = lastAction?.details?.outcome;

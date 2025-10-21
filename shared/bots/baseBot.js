@@ -29,7 +29,6 @@ const MOVE_DECLARATIONS = [
   GAME_CONSTANTS.identities.ROOK,
   GAME_CONSTANTS.identities.BISHOP,
   GAME_CONSTANTS.identities.KNIGHT,
-  GAME_CONSTANTS.identities.BOMB,
 ];
 
 function toKey(coord) {
@@ -727,7 +726,6 @@ class BaseBotController {
 
     if ((dr === 0 || dc === 0) && (absDr + absDc > 0) && absDr <= 3 && absDc <= 3) {
       declarations.add(GAME_CONSTANTS.identities.ROOK);
-      declarations.add(GAME_CONSTANTS.identities.BOMB);
     }
 
     return Array.from(declarations);
@@ -864,13 +862,6 @@ class BaseBotController {
     const alternatives = legalDeclarations.filter(identity => identity !== move.declaration);
     if (!alternatives.length) {
       return legalDeclarations.includes(move.declaration) ? move.declaration : legalDeclarations[0];
-    }
-
-    if (myDaggers < 2) {
-      const bombOptions = alternatives.filter(identity => identity === GAME_CONSTANTS.identities.BOMB);
-      if (bombOptions.length && Math.random() < 0.35) {
-        return GAME_CONSTANTS.identities.BOMB;
-      }
     }
 
     const idx = Math.floor(Math.random() * alternatives.length);

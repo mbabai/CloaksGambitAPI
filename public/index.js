@@ -32,8 +32,12 @@ import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/module
 import { computeGameClockState } from '/js/modules/utils/clockState.js';
 import { renderActiveMatchesList, createActiveMatchesStore, fetchActiveMatchesList } from '/js/modules/spectate/activeMatches.js';
 import { createSpectateController } from '/js/modules/spectate/controller.js';
+import { getLatestMoveContext } from '/js/shared/latestMoveContext.js';
+import { logBootConstantsOnce, logGameSnapshot } from '/js/shared/debugLog.js';
 
 preloadAssets();
+
+logBootConstantsOnce();
 
 (function() {
   const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -1396,6 +1400,8 @@ preloadAssets();
   let lastAction = null; // last action from server
   let lastMoveAction = null; // most recent MOVE or BOMB action from server
   let lastMove = null;   // last move from server
+  let latestMoveContext = null; // canonical move context from actions/moves
+  let moveHistory = [];  // cached normalized moves from server
   let pendingMoveFrom = null; // server coords of last move origin when pending
   let challengeRemoved = null; // server coords of last piece removed by successful challenge
   const BUBBLE_PRELOAD = {}; // type -> HTMLImageElement
@@ -2067,8 +2073,10 @@ preloadAssets();
       updateFindButton();
       },
       async onGameUpdate(payload) {
-      try {
-        if (!payload || !payload.gameId || !Array.isArray(payload.players)) return;
+        const snapshot = payload && payload.game ? payload.game : payload;
+        logGameSnapshot('game:update', snapshot);
+        try {
+          if (!payload || !payload.gameId || !Array.isArray(payload.players)) return;
         const gameId = payload.gameId;
         const color = payload.players.findIndex(p => p === userId);
         if (color !== 0 && color !== 1) return;
@@ -2134,6 +2142,8 @@ preloadAssets();
       },
       onGameFinished(payload) {
         console.log('[socket] game:finished', payload);
+        const finishSnapshot = payload && payload.game ? payload.game : payload;
+        logGameSnapshot('game:finished', finishSnapshot);
         gameFinished = payload?.winReason !== undefined && payload?.winReason !== null;
         stopClockInterval();
         selected = null;
@@ -2319,12 +2329,14 @@ preloadAssets();
       onDisconnect() { /* keep UI; server handles grace */ }
     });
     socket.on('spectate:snapshot', (payload) => {
+      logGameSnapshot('spectate:snapshot', payload && payload.game ? payload.game : payload);
       if (spectateController) {
         spectateController.handleSnapshot(payload);
       }
     });
 
     socket.on('spectate:update', (payload) => {
+      logGameSnapshot('spectate:update', payload && payload.game ? payload.game : payload);
       if (spectateController) {
         spectateController.handleUpdate(payload);
       }
@@ -5245,6 +5257,7 @@ preloadAssets();
     if (declaration === Declaration.ROOK) return ['rookSpeechLeft'];
     if (declaration === Declaration.BISHOP) return ['bishopSpeechLeft'];
     if (declaration === Declaration.KING) return ['kingSpeechLeft'];
+    if (declaration === Declaration.BOMB) return ['bombSpeechLeft'];
     return [];
   }
 
@@ -5261,6 +5274,39 @@ preloadAssets();
       typeof move.declaration === 'number' ? move.declaration : 'x',
     ];
     return parts.join(':');
+  }
+
+  function buildCanonicalMoveFromContext(ctx) {
+    if (!ctx) return null;
+    const canonical = ctx.move ? { ...ctx.move } : {};
+    if (ctx.from) {
+      canonical.from = { row: ctx.from.row, col: ctx.from.col };
+    }
+    if (ctx.to) {
+      canonical.to = { row: ctx.to.row, col: ctx.to.col };
+    }
+    if (ctx.declaration !== undefined && ctx.declaration !== null) {
+      canonical.declaration = ctx.declaration;
+    }
+    if (ctx.isPending) {
+      canonical.state = MOVE_STATES.PENDING;
+    } else if (
+      canonical.state === undefined &&
+      ctx.move &&
+      typeof ctx.move.state === 'number'
+    ) {
+      canonical.state = ctx.move.state;
+    }
+    if (typeof canonical.player !== 'number') {
+      if (typeof ctx.action?.player === 'number') {
+        canonical.player = ctx.action.player;
+      } else if (typeof ctx.move?.player === 'number') {
+        canonical.player = ctx.move.player;
+      } else if (typeof ctx.actor === 'number') {
+        canonical.player = ctx.actor;
+      }
+    }
+    return canonical;
   }
 
   function findLatestMoveAction(actions) {
@@ -5378,7 +5424,7 @@ preloadAssets();
         lastMoveAction = findLatestMoveAction(actionHistory);
       }
       if (Array.isArray(u.moves)) {
-        const normalizedMoves = u.moves.map((move) => {
+        moveHistory = u.moves.map((move) => {
           if (!move || typeof move !== 'object') return move;
           const normalized = { ...move };
           if (typeof normalized.player === 'string') {
@@ -5391,34 +5437,51 @@ preloadAssets();
           }
           return normalized;
         });
-        lastMove = normalizedMoves[normalizedMoves.length - 1] || null;
-        const last = lastMove;
-        const overlayAction = lastMoveAction || lastAction;
-        if (
-          last &&
-          (last.declaration === undefined || last.declaration === null) &&
-          lastMoveAction &&
-          lastMoveAction.type === ACTIONS.MOVE &&
-          lastMoveAction.details &&
-          typeof lastMoveAction.details.declaration === 'number'
-        ) {
-          last.declaration = lastMoveAction.details.declaration;
-        }
-        const lastMoveKey = makeMoveKey(last);
-        if (last && last.state === MOVE_STATES.PENDING) {
-          const from = last.from || {};
-          const to = last.to || {};
-          pendingMoveFrom = from;
-          try {
+      }
+      if (!Array.isArray(moveHistory)) {
+        moveHistory = [];
+      }
+
+      latestMoveContext = getLatestMoveContext({ actions: actionHistory, moves: moveHistory }) || null;
+      if (latestMoveContext) {
+        lastMove = buildCanonicalMoveFromContext(latestMoveContext) || null;
+      } else if (moveHistory.length) {
+        lastMove = moveHistory[moveHistory.length - 1] || null;
+      } else {
+        lastMove = null;
+      }
+
+      const last = lastMove;
+      const overlayAction = lastMoveAction || lastAction;
+      if (
+        last &&
+        (last.declaration === undefined || last.declaration === null) &&
+        overlayAction &&
+        overlayAction.type === ACTIONS.MOVE &&
+        overlayAction.details &&
+        typeof overlayAction.details.declaration === 'number'
+      ) {
+        last.declaration = overlayAction.details.declaration;
+      }
+      const lastMoveKey = makeMoveKey(last);
+      if (last && last.state === MOVE_STATES.PENDING) {
+        const from = last.from || {};
+        const to = last.to || {};
+        const hasFromCoords = Number.isFinite(from.row) && Number.isFinite(from.col);
+        const hasToCoords = Number.isFinite(to.row) && Number.isFinite(to.col);
+        pendingMoveFrom = hasFromCoords ? { row: from.row, col: from.col } : null;
+        try {
+          if (hasFromCoords && hasToCoords) {
             const moving = currentBoard?.[from.row]?.[from.col] || null;
             const target = currentBoard?.[to.row]?.[to.col] || null;
             if (moving || target) {
-              currentBoard = currentBoard.map(row => row.slice());
+              currentBoard = currentBoard.map((row) => row.slice());
               currentBoard[to.row] = currentBoard[to.row].slice();
               currentBoard[from.row] = currentBoard[from.row].slice();
               if (overlayAction && overlayAction.type === ACTIONS.BOMB) {
-                const attackerPiece = moving || { color: last.player, identity: last.declaration };
-                currentBoard[to.row][to.col] = target || moving;
+                const attackerPiece = moving || (last ? { color: last.player, identity: last.declaration } : null);
+                const occupant = target || moving || attackerPiece;
+                currentBoard[to.row][to.col] = occupant;
                 pendingCapture = attackerPiece ? { row: to.row, col: to.col, piece: attackerPiece } : null;
               } else {
                 currentBoard[to.row][to.col] = moving || target;
@@ -5426,23 +5489,23 @@ preloadAssets();
               }
               currentBoard[from.row][from.col] = null;
             }
-          } catch (_) { pendingCapture = null; }
-          try {
-            const overlay = buildPostMoveOverlayForMove(last, overlayAction);
-            postMoveOverlay = overlay ? { ...overlay, interactive: false } : null;
-            lastPostMoveKey = lastMoveKey;
-          } catch (_) {}
-        } else {
-          pendingCapture = null;
-          pendingMoveFrom = null;
-          if (!lastMoveKey) {
-            postMoveOverlay = null;
-            lastPostMoveKey = null;
-          } else if (lastMoveKey !== lastPostMoveKey) {
-            const overlay = buildPostMoveOverlayForMove(last, overlayAction);
-            postMoveOverlay = overlay;
-            lastPostMoveKey = lastMoveKey;
           }
+        } catch (_) { pendingCapture = null; }
+        try {
+          const overlay = buildPostMoveOverlayForMove(last, overlayAction);
+          postMoveOverlay = overlay ? { ...overlay, interactive: false } : null;
+          lastPostMoveKey = lastMoveKey;
+        } catch (_) {}
+      } else {
+        pendingCapture = null;
+        pendingMoveFrom = null;
+        if (!lastMoveKey) {
+          postMoveOverlay = null;
+          lastPostMoveKey = null;
+        } else if (lastMoveKey !== lastPostMoveKey) {
+          const overlay = buildPostMoveOverlayForMove(last, overlayAction);
+          postMoveOverlay = overlay;
+          lastPostMoveKey = lastMoveKey;
         }
       }
 

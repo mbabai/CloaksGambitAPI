@@ -173,9 +173,15 @@ router.post('/', async (req, res) => {
     }
 
     const idents = config.identities;
+    const parsedDeclaration = parseInt(declaration, 10);
+
+    if (parsedDeclaration === idents.get('BOMB')) {
+      return res.status(400).json({ message: 'Invalid declaration' });
+    }
+
     let legal = false;
 
-    switch (parseInt(declaration, 10)) {
+    switch (parsedDeclaration) {
       case idents.get('KNIGHT'):
         legal = (absDr === 2 && absDc === 1) || (absDr === 1 && absDc === 2);
         break;
@@ -199,8 +205,7 @@ router.post('/', async (req, res) => {
         }
         break;
       case idents.get('ROOK'):
-      case idents.get('BOMB'):
-        // Rook and Bomb moves horizontally or vertically up to 3 squares
+        // Rook moves horizontally or vertically up to 3 squares
         if ((dr === 0 || dc === 0) && (absDr + absDc > 0) && absDr <= 3 && absDc <= 3) {
           legal = true;
           // Calculate step direction for checking path
@@ -229,7 +234,7 @@ router.post('/', async (req, res) => {
       player: normalizedColor,
       from: { row: fromRow, col: fromCol },
       to: { row: toRow, col: toCol },
-      declaration: parseInt(declaration, 10),
+      declaration: parsedDeclaration,
       state: config.moveStates.get('PENDING'),
       timestamp: new Date()
     };

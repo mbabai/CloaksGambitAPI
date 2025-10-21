@@ -77,6 +77,42 @@ describe('deriveSpectateView', () => {
     expect(view.board[1][1]).toBeNull();
   });
 
+  test('shows bomb speech bubble when the declaration is bomb', () => {
+    const game = {
+      board: [
+        [makePiece(IDENTITIES.UNKNOWN, 1), null],
+        [null, makePiece(IDENTITIES.UNKNOWN, 0)],
+      ],
+      moves: [
+        {
+          player: 0,
+          from: { row: 1, col: 1 },
+          to: { row: 0, col: 1 },
+          declaration: IDENTITIES.BOMB,
+          state: MOVE_STATES.PENDING,
+        },
+      ],
+      actions: [
+        {
+          type: ACTIONS.MOVE,
+          player: 0,
+          timestamp: now,
+          details: {
+            from: { row: 1, col: 1 },
+            to: { row: 0, col: 1 },
+            declaration: IDENTITIES.BOMB,
+          },
+        },
+      ],
+    };
+
+    const view = deriveViaWorker(game);
+    expect(view.overlay).toMatchObject({
+      types: expect.arrayContaining(['bombSpeechLeft']),
+      isPending: true,
+    });
+  });
+
   test('clears overlay after challenge success but marks removed square', () => {
     const game = {
       board: [
