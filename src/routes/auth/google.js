@@ -283,14 +283,12 @@ router.get('/session', async (req, res) => {
 
 router.post('/logout', async (req, res) => {
   try {
-    const guest = await ensureUser();
-    applyGuestCookies(res, guest);
-    res.json({
-      userId: guest.userId,
-      username: guest.username,
-      isGuest: true,
-      authenticated: false,
-    });
+    const options = buildCookieOptions();
+    clearCookie(res, 'userId', options);
+    clearCookie(res, 'username', options);
+    clearCookie(res, 'photo', options);
+    clearCookie(res, TOKEN_COOKIE_NAME, { ...options, httpOnly: false });
+    res.status(204).end();
   } catch (err) {
     console.error('Failed to log out user', err);
     res.status(500).json({ message: 'Failed to log out' });
