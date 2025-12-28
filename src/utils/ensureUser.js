@@ -2,18 +2,26 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 
 const LEGACY_GUEST_EMAIL_REGEX = /@guest\.local$/i;
+const GUEST_EMAIL_DOMAIN = 'guest.local';
+
+function buildGuestEmail(userId) {
+  return `guest-${userId}@${GUEST_EMAIL_DOMAIN}`;
+}
 
 async function normalizeLegacyGuest(user) {
   if (!user) return user;
 
   let changed = false;
 
-  if (user.email && LEGACY_GUEST_EMAIL_REGEX.test(user.email)) {
-    user.email = undefined;
-    changed = true;
+  const guestEmail = buildGuestEmail(user._id.toString());
+  if (!user.email || LEGACY_GUEST_EMAIL_REGEX.test(user.email)) {
+    if (user.email !== guestEmail) {
+      user.email = guestEmail;
+      changed = true;
+    }
   }
 
-  if (user.isGuest !== true && (changed || !user.email)) {
+  if (user.isGuest !== true) {
     user.isGuest = true;
     changed = true;
   }
@@ -49,14 +57,14 @@ async function ensureUser(providedId) {
           };
         }
 
-        let attempt = await User.countDocuments() + 1;
-        while (true) {
-          existing.username = `Anonymous${attempt}`;
-          existing.isGuest = true;
-          existing.email = undefined;
-          try {
-            const saved = await existing.save();
-            return {
+    let attempt = await User.countDocuments() + 1;
+    while (true) {
+      existing.username = `Anonymous${attempt}`;
+      existing.isGuest = true;
+      existing.email = buildGuestEmail(existing._id.toString());
+      try {
+        const saved = await existing.save();
+        return {
               userId: saved._id.toString(),
               username: saved.username,
               isGuest: Boolean(saved.isGuest),
@@ -74,11 +82,16 @@ async function ensureUser(providedId) {
 
     let attempt = await User.countDocuments() + 1;
     while (true) {
+      const guestId = id && mongoose.isValidObjectId(id)
+        ? id
+        : new mongoose.Types.ObjectId();
       const username = `Anonymous${attempt}`;
-      const data = { username, isGuest: true };
-      if (id && mongoose.isValidObjectId(id)) {
-        data._id = id;
-      }
+      const data = {
+        _id: guestId,
+        username,
+        isGuest: true,
+        email: buildGuestEmail(guestId.toString()),
+      };
       try {
         const user = await User.create(data);
         return {
