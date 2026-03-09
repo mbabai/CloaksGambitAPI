@@ -21,6 +21,7 @@ const scopes = [
 
 const FALLBACK_USERNAME = 'GoogleUser';
 const DEFAULT_RETURN_TO = '/';
+const GUEST_EMAIL_REGEX = /@guest\.local$/i;
 
 function clearCookie(res, name, baseOptions = {}) {
   res.cookie(name, '', {
@@ -56,6 +57,13 @@ function applyGuestCookies(req, res, guestInfo) {
   clearCookie(res, TOKEN_COOKIE_NAME, { ...options, httpOnly: false });
 }
 
+function hasRecoverableAuthenticatedUser(user) {
+  if (!user) return false;
+  if (user.isBot) return true;
+  const email = typeof user.email === 'string' ? user.email.trim().toLowerCase() : '';
+  return Boolean(email) && !GUEST_EMAIL_REGEX.test(email);
+}
+
 async function resolveSessionFromRequest(req) {
   const token = extractTokenFromRequest(req);
   if (token) {
@@ -80,6 +88,24 @@ async function resolveSessionFromRequest(req) {
   const cookieUserId = cookies?.userId;
   if (cookieUserId) {
     try {
+      if (process.env.NODE_ENV !== 'production') {
+        const localUser = await User.findById(cookieUserId);
+        if (hasRecoverableAuthenticatedUser(localUser)) {
+          if (localUser.isGuest) {
+            localUser.isGuest = false;
+            if (typeof localUser.save === 'function') {
+              await localUser.save();
+            }
+          }
+          return {
+            type: 'authenticated',
+            user: localUser,
+            userId: localUser._id.toString(),
+            username: localUser.username || FALLBACK_USERNAME,
+            isGuest: false,
+          };
+        }
+      }
       const ensured = await ensureUser(cookieUserId);
       if (ensured && ensured.isGuest) {
         return { type: 'guest', ...ensured };

@@ -3,8 +3,45 @@ const Match = require('../../models/Match');
 const User = require('../../models/User');
 const { toIdString } = require('../../models/inMemoryUtils');
 
-function normalizeId(value) {
+function normalizeId(value, seen = null) {
   if (value === undefined || value === null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === 'object') {
+    const refs = seen || new WeakSet();
+    if (refs.has(value)) {
+      return null;
+    }
+    refs.add(value);
+    if (Buffer.isBuffer(value)) {
+      const hex = value.toString('hex').trim();
+      return hex || null;
+    }
+    try {
+      const direct = toIdString(value);
+      if (direct) {
+        const trimmedDirect = String(direct).trim();
+        if (trimmedDirect && trimmedDirect !== '[object Object]') {
+          return trimmedDirect;
+        }
+      }
+    } catch (err) {
+      // Fall through to candidate key extraction.
+    }
+    const candidateKeys = ['_id', 'id', 'userId', 'playerId'];
+    for (const key of candidateKeys) {
+      if (!(key in value)) continue;
+      const normalizedCandidate = normalizeId(value[key], refs);
+      if (normalizedCandidate) {
+        return normalizedCandidate;
+      }
+    }
+  }
   try {
     const str = toIdString(value);
     if (!str) return null;

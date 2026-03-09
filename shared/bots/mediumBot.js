@@ -386,30 +386,21 @@ class MediumBotController extends BaseBotController {
     if (this.playerTurn !== this.color) return;
 
     const legal = this.collectLegalActions();
+    if (legal.pendingMove) {
+      console.warn('[bot] medium move decision invoked with pending move', {
+        gameId: this.gameId,
+      });
+      return;
+    }
     const moves = Array.isArray(legal.moves) ? legal.moves : [];
     const attemptedDeclarations = new Set();
 
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const options = this.buildMoveActionOptions(moves, attemptedDeclarations);
-      if (legal.canPass) {
-        options.push({
-          type: 'pass',
-          score: this.computePassScore(),
-          reason: 'Medium bot pass turn',
-        });
-      }
 
       const choice = this.selectWeightedAction(options);
       if (!choice) {
         console.log('[bot] medium: no move actions available', { gameId: this.gameId, attempt });
-        return;
-      }
-
-      if (choice.type === 'pass') {
-        const success = await this.issuePass(choice.reason);
-        if (!success) {
-          console.error('[bot] medium: pass failed', { gameId: this.gameId });
-        }
         return;
       }
 
@@ -478,3 +469,4 @@ class MediumBotController extends BaseBotController {
 module.exports = {
   MediumBotController,
 };
+

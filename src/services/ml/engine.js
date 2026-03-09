@@ -757,7 +757,7 @@ function applyPassAction(state, action) {
   state.movesSinceAction = 0;
 
   if (captured && captured.identity === IDENTITIES.KING && state.isActive) {
-    endGame(state, color, 'capture_king');
+    endGame(state, otherColor(color), 'capture_king');
   }
 
   state.ply += 1;

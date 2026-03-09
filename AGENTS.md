@@ -28,6 +28,7 @@
 - Framework: Jest (`jest` + `supertest` available in dev dependencies).
 - Add or update tests for each behavior change, especially in routes, shared constants, and bot logic.
 - Run full suite with `npm test`; run a focused file with `npm test -- tests/sharedGameConstants.test.js`.
+- Do not use port `3000` for test runs or local verification started by the agent; treat `3000` as reserved for the user's active app session and use another port such as `3100`.
 - There is no enforced coverage gate; aim for meaningful assertions on changed paths.
 
 ## Commit & Pull Request Guidelines

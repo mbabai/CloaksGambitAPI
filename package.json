@@ -4,10 +4,11 @@
   "description": "REST API application with Node.js and MongoDB",
   "main": "src/server.js",
   "scripts": {
+    "clean:temp": "node scripts/cleanup-temp-artifacts.js",
     "build:shared": "node scripts/build-shared-constants.js",
-    "start": "npm run build:shared && node src/server.js",
-    "dev": "nodemon --watch shared/constants/game.json --exec \"node scripts/build-shared-constants.js && node src/server.js\"",
-    "test": "npm run build:shared && node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "start": "npm run clean:temp && npm run build:shared && node src/server.js",
+    "dev": "npm run clean:temp && nodemon --watch shared/constants/game.json --exec \"node scripts/build-shared-constants.js && node src/server.js\"",
+    "test": "npm run clean:temp && npm run build:shared && node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "migrate:guests": "node scripts/migrations/mark-guest-accounts.js"
   },
   "dependencies": {

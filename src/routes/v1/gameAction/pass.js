@@ -87,7 +87,7 @@ router.post('/', async (req, res) => {
     game.movesSinceAction = 0;
 
     if (piece.identity === config.identities.get('KING') && game.isActive) {
-      await game.endGame(normalizedColor, config.winReasons.get('CAPTURED_KING'));
+      await game.endGame(normalizedColor === 0 ? 1 : 0, config.winReasons.get('CAPTURED_KING'));
       // Check if game ended and return early
       if (!game.isActive) {
         eventBus.emit('gameChanged', {

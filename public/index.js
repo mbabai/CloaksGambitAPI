@@ -19,7 +19,7 @@ import { DRAG_PX_THRESHOLD as DRAG_PX_THRESHOLD_CFG, DRAG_PX_THRESHOLD_TOUCH as 
 import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as performMoveM } from '/js/modules/state/moves.js';
 import { Declaration, uiToServerCoords, isWithinPieceRange, isPathClear } from '/js/modules/interactions/moveRules.js';
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
-import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId } from '/js/modules/history/dashboard.js';
+import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId, getMatchResult } from '/js/modules/history/dashboard.js';
 import { createPlayerStatsOverlay } from '/js/modules/history/playerStatsOverlay.js';
 import {
   ASSET_MANIFEST,
@@ -1889,52 +1889,10 @@ logBootConstantsOnce();
         (async () => {
           try {
             const winnerIdx = payload?.winner;
-            const ids = Array.isArray(payload?.players) ? payload.players : [];
             if (payload?.matchId) {
               activeMatchId = String(payload.matchId);
             }
-            let match = await apiGetMatchDetails(payload.matchId);
-            if (match?._id) {
-              activeMatchId = String(match._id);
-            }
-            const isDraw = winnerIdx !== 0 && winnerIdx !== 1;
-            if (isDraw) {
-              showGameFinishedBanner({
-                winnerName: null,
-                loserName: null,
-                winnerColor: null,
-                didWin: false,
-                match,
-                winReason: payload.winReason,
-                players: ids
-              });
-              return;
-            }
-
-            const winnerId = ids[winnerIdx];
-            let winnerName = playerNames[winnerIdx] || formatPlayerName(null, winnerIdx);
-            if (winnerId) {
-              try {
-                const res = await authFetch('/api/v1/users/getDetails', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ userId: winnerId })
-                });
-                if (res.ok) {
-                  const user = await res.json();
-                  winnerName = formatPlayerName(user?.username, winnerIdx);
-                } else {
-                  winnerName = formatPlayerName(null, winnerIdx);
-                }
-              } catch (e) {
-                console.error('Failed to fetch winner details', e);
-                winnerName = formatPlayerName(null, winnerIdx);
-              }
-            }
-            if (payload?.matchId) {
-              activeMatchId = String(payload.matchId);
-            }
-            match = await apiGetMatchDetails(payload.matchId);
+            const match = await apiGetMatchDetails(payload.matchId);
             if (match?._id) {
               activeMatchId = String(match._id);
             }
@@ -1942,16 +1900,17 @@ logBootConstantsOnce();
             if (updatedElos) {
               renderBoardAndBars();
             }
-            const loserIdx = winnerIdx === 0 ? 1 : 0;
-            const loserName = playerNames[loserIdx] || formatPlayerName(null, loserIdx);
             showGameFinishedBanner({
-              winnerName,
-              loserName,
+              winnerName: winnerIdx === 0 || winnerIdx === 1
+                ? (playerNames[winnerIdx] || formatPlayerName(null, winnerIdx))
+                : null,
+              loserName: winnerIdx === 0 || winnerIdx === 1
+                ? (playerNames[winnerIdx === 0 ? 1 : 0] || formatPlayerName(null, winnerIdx === 0 ? 1 : 0))
+                : null,
               winnerColor: winnerIdx,
               didWin: winnerIdx === myColor,
               match,
-              winReason: payload.winReason,
-              players: ids
+              winReason: payload.winReason
             });
             await updateAccountPanel();
           } catch (e) {
@@ -2082,12 +2041,11 @@ logBootConstantsOnce();
     });
 
     socket.on('user:init', (payload) => {
-      const token = ensureAuthToken();
       const payloadUserId = payload?.userId ? String(payload.userId) : null;
       const payloadUsername = typeof payload?.username === 'string' ? payload.username : undefined;
       const isGuest = Boolean(payload?.guest);
       const hasAuthenticatedSession = Boolean(sessionInfo?.authenticated && sessionInfo?.userId);
-      const shouldIgnoreGuestDowngrade = Boolean(isGuest && hasAuthenticatedSession && token);
+      const shouldIgnoreGuestDowngrade = Boolean(isGuest && hasAuthenticatedSession);
 
       if (shouldIgnoreGuestDowngrade) {
         // Socket handshakes can race the auth refresh path. Keep the current
@@ -3471,19 +3429,6 @@ logBootConstantsOnce();
   }
 
   function createScoreboard(match) {
-    const formatId = (value) => {
-      if (!value) return null;
-      if (typeof value === 'string') return value;
-      if (typeof value === 'object') {
-        if (typeof value.toString === 'function') {
-          const str = value.toString();
-          if (str !== '[object Object]') return str;
-        }
-        if (value._id) return formatId(value._id);
-      }
-      return null;
-    };
-
     const p1Name = formatPlayerName(match?.player1?.username, 0);
     const p2Name = formatPlayerName(match?.player2?.username, 1);
     const p1Score = Number(match?.player1Score || 0);
@@ -3491,12 +3436,11 @@ logBootConstantsOnce();
     const finishedGames = Array.isArray(match?.games)
       ? match.games.filter(g => !g.isActive).length
       : 0;
-    const draws = Math.max(0, finishedGames - p1Score - p2Score);
+    const draws = Number.isFinite(match?.drawCount)
+      ? match.drawCount
+      : Math.max(0, finishedGames - p1Score - p2Score);
     const isRanked = match?.type === 'RANKED';
-
-    const player1Id = formatId(match?.player1);
-    const player2Id = formatId(match?.player2);
-    const winnerId = formatId(match?.winner);
+    const result = getMatchResult(match);
 
     const player1StartElo = isRanked && Number.isFinite(match?.player1StartElo) ? match.player1StartElo : null;
     const player2StartElo = isRanked && Number.isFinite(match?.player2StartElo) ? match.player2StartElo : null;
@@ -3511,23 +3455,10 @@ logBootConstantsOnce();
 
     let player1Status = 'draw';
     let player2Status = 'draw';
-    if (winnerId && player1Id && player2Id) {
-      if (winnerId === player1Id) {
-        player1Status = 'winner';
-        player2Status = 'loser';
-      } else if (winnerId === player2Id) {
-        player1Status = 'loser';
-        player2Status = 'winner';
-      }
-    } else if (p1Score !== p2Score) {
-      if (p1Score > p2Score) {
-        player1Status = 'winner';
-        player2Status = 'loser';
-      } else {
-        player1Status = 'loser';
-        player2Status = 'winner';
-      }
-    }
+    if (result?.player1Result === 'win') player1Status = 'winner';
+    else if (result?.player1Result === 'loss') player1Status = 'loser';
+    if (result?.player2Result === 'win') player2Status = 'winner';
+    else if (result?.player2Result === 'loss') player2Status = 'loser';
 
     const createScoreCell = ({ score, status, delta }) => {
       const cell = document.createElement('div');
@@ -3596,7 +3527,7 @@ logBootConstantsOnce();
     return container;
   }
 
-  function showGameFinishedBanner({ winnerName, loserName, winnerColor, didWin, match, winReason, players = [] }) {
+  function showGameFinishedBanner({ winnerName, loserName, winnerColor, didWin, match, winReason }) {
     currentMatch = match;
     if (match?._id) {
       activeMatchId = String(match._id);

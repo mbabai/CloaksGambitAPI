@@ -983,7 +983,7 @@ function initSocket(httpServer) {
     clients.set(userId, socket);
     setConnectedUsername(userId, userInfo.username);
     markPlayerConnectedToAllMatches(userId);
-    socket.emit('user:init', { userId, username: userInfo.username, guest: Boolean(userInfo.isGuest) });
+    socket.emit('user:init', { userId, username: userInfo.username, guest: isGuestUser });
     socket.data = socket.data || {};
     socket.data.isBot = isBotUser;
     socket.data.isGuest = isGuestUser;

@@ -28,6 +28,8 @@ logs
 dist/
 build/
 coverage/
+output/
+.playwright-cli/
 
 # Temporary files
 *.tmp

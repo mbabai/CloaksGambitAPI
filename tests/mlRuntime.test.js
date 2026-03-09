@@ -288,6 +288,61 @@ describe('ML runtime', () => {
     expect(['CHALLENGE', 'BOMB', 'PASS']).toContain(choice.action.type);
   });
 
+  test('pass after a bomb awards the win to the bomber when the mover king is exposed', () => {
+    const state = createInitialState({ seed: 9012, maxPlies: 60 });
+    const whiteKingId = Object.keys(state.pieces).find((id) => (
+      state.pieces[id].color === WHITE && state.pieces[id].identity === IDENTITIES.KING
+    ));
+    const blackRookId = Object.keys(state.pieces).find((id) => (
+      state.pieces[id].color === BLACK && state.pieces[id].identity === IDENTITIES.ROOK
+    ));
+
+    state.board = Array.from({ length: 6 }, () => Array.from({ length: 5 }, () => null));
+    Object.values(state.pieces).forEach((piece) => {
+      piece.alive = true;
+      piece.zone = 'stash';
+      piece.row = -1;
+      piece.col = -1;
+      piece.capturedBy = null;
+    });
+    state.stashes = [[], []];
+    state.onDecks = [null, null];
+    state.captured = [[], []];
+    state.moves = [
+      {
+        player: WHITE,
+        pieceId: whiteKingId,
+        from: { row: 0, col: 4 },
+        to: { row: 2, col: 2 },
+        declaration: IDENTITIES.BISHOP,
+        state: 0,
+      },
+    ];
+    state.actions = [
+      { type: 1, player: WHITE, timestamp: 0, details: {} },
+      { type: 3, player: BLACK, timestamp: 1, details: {} },
+    ];
+    state.playerTurn = WHITE;
+    state.toMove = WHITE;
+    state.ply = 2;
+
+    state.board[0][4] = whiteKingId;
+    state.pieces[whiteKingId].zone = 'board';
+    state.pieces[whiteKingId].row = 0;
+    state.pieces[whiteKingId].col = 4;
+
+    state.board[2][2] = blackRookId;
+    state.pieces[blackRookId].zone = 'board';
+    state.pieces[blackRookId].row = 2;
+    state.pieces[blackRookId].col = 2;
+
+    const nextState = applyAction(state, { type: 'PASS', player: WHITE });
+
+    expect(nextState.isActive).toBe(false);
+    expect(nextState.winner).toBe(BLACK);
+    expect(nextState.winReason).toBe('capture_king');
+  });
+
   test('simulations support medium bot participants and alternating colors', async () => {
     const snapshots = await runtime.listSnapshots();
     const baseSnapshotId = snapshots[0].id;

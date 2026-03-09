@@ -8,8 +8,21 @@ function buildGuestEmail(userId) {
   return `guest-${userId}@${GUEST_EMAIL_DOMAIN}`;
 }
 
+function hasRealAccountEmail(user) {
+  const email = typeof user?.email === 'string' ? user.email.trim().toLowerCase() : '';
+  return Boolean(email) && !LEGACY_GUEST_EMAIL_REGEX.test(email);
+}
+
 async function normalizeLegacyGuest(user) {
   if (!user) return user;
+
+  if (user.isBot || hasRealAccountEmail(user)) {
+    if (user.isGuest) {
+      user.isGuest = false;
+      await user.save();
+    }
+    return user;
+  }
 
   let changed = false;
 
