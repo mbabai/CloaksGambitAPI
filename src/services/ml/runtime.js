@@ -7,9 +7,11 @@ const {
   BLACK,
   otherColor,
   createRng,
+  createInitialState,
   getLegalActions,
   applyAction,
   actionKey,
+  toReplayFrame,
 } = require('./engine');
 const {
   createDefaultModelBundle,
@@ -1550,279 +1552,200 @@ class MlRuntime {
     };
     const maxDecisionSafety = Math.max(maxPlies * 6, maxPlies + 24);
 
-    let gameId = '';
-    let matchId = '';
     let game = null;
     const replay = [];
     const decisions = [];
     let forcedStopReason = null;
 
-    const applyApiAction = async (action, color, observationState, gameDoc) => {
-      const type = normalizeActionType(action?.type);
-      if (type === 'MOVE') {
-        return callPostHandler(ROUTE_HANDLERS.move, {
-          gameId,
-          color,
-          from: action.from,
-          to: action.to,
-          declaration: action.declaration,
-        });
-      }
-      if (type === 'CHALLENGE') {
-        return callPostHandler(ROUTE_HANDLERS.challenge, { gameId, color });
-      }
-      if (type === 'BOMB') {
-        return callPostHandler(ROUTE_HANDLERS.bomb, { gameId, color });
-      }
-      if (type === 'PASS') {
-        return callPostHandler(ROUTE_HANDLERS.pass, { gameId, color });
-      }
-      if (type === 'ON_DECK') {
-        let identity = Number.isFinite(action.identity) ? action.identity : null;
-        if (!Number.isFinite(identity) && action.pieceId && observationState?.pieces?.[action.pieceId]) {
-          identity = observationState.pieces[action.pieceId].identity;
-        }
-        if (!Number.isFinite(identity)) {
-          const stashPiece = Array.isArray(gameDoc?.stashes?.[color]) ? gameDoc.stashes[color][0] : null;
-          identity = Number.isFinite(stashPiece?.identity) ? stashPiece.identity : null;
-        }
-        if (!Number.isFinite(identity)) {
-          throw new Error('No valid on-deck identity available');
-        }
-        return callPostHandler(ROUTE_HANDLERS.onDeck, {
-          gameId,
-          color,
-          piece: { identity },
-        });
-      }
-      throw new Error(`Unsupported action type: ${type}`);
-    };
+    game = createInitialState({ seed, maxPlies });
+    replay.push(toReplayFrame(game, {
+      note: 'start',
+      actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
+      moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+    }));
 
-    const forceDrawOrResign = async (fallbackColor) => {
-      const color = Number.isFinite(fallbackColor) ? fallbackColor : WHITE;
-      try {
-        await callPostHandler(ROUTE_HANDLERS.draw, {
-          gameId,
-          color,
-          action: 'offer',
-        });
-        await callPostHandler(ROUTE_HANDLERS.draw, {
-          gameId,
-          color: otherColor(color),
-          action: 'accept',
-        });
-      } catch (_) {
-        try {
-          await callPostHandler(ROUTE_HANDLERS.resign, {
-            gameId,
-            color,
-          });
-        } catch (_) {}
-      }
-    };
-
-    try {
-      const created = await createApiBackedGame(seed);
-      gameId = created.gameId;
-      matchId = created.matchId;
-      game = created.game;
-      const observationConfig = {
-        seed,
-        maxPlies,
-        rows: Number(game?.board?.length) || 6,
-        cols: Number(game?.board?.[0]?.length) || 5,
-      };
-      let observationState = buildMlStateFromGame(game, observationConfig);
-      replay.push(toReplayFrameFromGame(game, { note: 'start' }));
-
-      for (let step = 0; step < maxDecisionSafety; step += 1) {
-        if (!game || !game.isActive) break;
-        const currentPlayer = Number.isFinite(game.playerTurn) ? game.playerTurn : WHITE;
-        const participant = currentPlayer === WHITE ? whiteParticipant : blackParticipant;
-        if (!participant) {
-          forcedStopReason = 'missing_participant';
-          await callPostHandler(ROUTE_HANDLERS.resign, { gameId, color: currentPlayer }).catch(() => {});
-          game = await loadGameLean(gameId);
-          if (game) replay.push(toReplayFrameFromGame(game, { note: forcedStopReason }));
-          break;
-        }
-
-        if (
-          !observationState
-          || !observationState.isActive
-          || observationState.playerTurn !== currentPlayer
-        ) {
-          observationState = buildMlStateFromGame(game, observationConfig);
-        }
-        const legalActions = getLegalActions(observationState, currentPlayer);
-        if (!legalActions.length) {
-          forcedStopReason = 'no_legal_actions';
-          await callPostHandler(ROUTE_HANDLERS.resign, { gameId, color: currentPlayer }).catch(() => {});
-          game = await loadGameLean(gameId);
-          if (game) replay.push(toReplayFrameFromGame(game, { note: forcedStopReason }));
-          break;
-        }
-
-        const participantId = this.getDisplayParticipantId(participant);
-        const participantLabel = this.getDisplayParticipantLabel(participant, participantId);
-        const search = this.chooseActionForParticipant(participant, observationState, {
-          ...mctsOptions,
-          seed: seed + (observationState.ply * 104729),
-        });
-
-        const legalByKey = new Map(legalActions.map((action) => [actionKey(action), action]));
-        const requestedAction = search?.action || null;
-        const requestedKey = requestedAction ? actionKey(requestedAction) : '';
-        const primary = requestedKey && legalByKey.has(requestedKey)
-          ? legalByKey.get(requestedKey)
-          : null;
-
-        const candidates = [];
-        if (primary) candidates.push(primary);
-        legalActions.forEach((action) => {
-          if (!primary || actionKey(action) !== actionKey(primary)) {
-            candidates.push(action);
-          }
-        });
-
-        let executedAction = null;
-        let lastActionError = null;
-        for (let idx = 0; idx < candidates.length; idx += 1) {
-          const candidate = candidates[idx];
-          try {
-            await applyApiAction(candidate, currentPlayer, observationState, game);
-            executedAction = candidate;
-            break;
-          } catch (err) {
-            lastActionError = err;
-          }
-        }
-
-        if (!executedAction) {
-          forcedStopReason = lastActionError?.message || 'all_legal_actions_rejected';
-          await callPostHandler(ROUTE_HANDLERS.resign, { gameId, color: currentPlayer }).catch(() => {});
-          game = await loadGameLean(gameId);
-          if (game) {
-            replay.push(toReplayFrameFromGame(game, {
-              note: forcedStopReason,
-              decision: {
-                player: currentPlayer,
-                participantId,
-                participantLabel,
-                snapshotId: participant.snapshotId || null,
-                action: { type: 'RESIGN', player: currentPlayer },
-                move: { type: 'RESIGN', player: currentPlayer },
-                valueEstimate: 0,
-                trace: { reason: forcedStopReason },
-              },
-            }));
-          }
-          break;
-        }
-
-        const nextGame = await loadGameLean(gameId);
-        if (!nextGame) {
-          forcedStopReason = 'game_missing_after_action';
-          break;
-        }
-
-        const executedKey = actionKey(executedAction);
-        const useTrainingRecord = Boolean(requestedKey && executedKey === requestedKey);
-        const decision = {
-          ply: observationState.ply,
-          player: currentPlayer,
-          participantId,
-          participantLabel,
-          snapshotId: participant.snapshotId || null,
-          action: deepClone(executedAction),
-          move: deepClone(executedAction),
-          trace: deepClone(search?.trace || {}),
-          valueEstimate: Number.isFinite(search?.valueEstimate) ? search.valueEstimate : 0,
-          trainingRecord: useTrainingRecord && search?.trainingRecord
-            ? {
-                ...deepClone(search.trainingRecord),
-                snapshotId: participant.snapshotId || null,
-              }
-            : null,
+    for (let step = 0; step < maxDecisionSafety; step += 1) {
+      if (!game || !game.isActive) break;
+      const currentPlayer = Number.isFinite(game.playerTurn) ? game.playerTurn : WHITE;
+      const participant = currentPlayer === WHITE ? whiteParticipant : blackParticipant;
+      if (!participant) {
+        forcedStopReason = 'missing_participant';
+        game = {
+          ...game,
+          isActive: false,
+          winner: otherColor(currentPlayer),
+          winReason: 'resign',
         };
-        decisions.push(decision);
-        const predictedObservation = applyAction(observationState, executedAction);
-        const apiWinner = Number.isFinite(nextGame.winner) ? nextGame.winner : null;
-        const predictedWinner = Number.isFinite(predictedObservation?.winner)
-          ? predictedObservation.winner
-          : null;
-        const apiTurn = Number.isFinite(nextGame.playerTurn) ? nextGame.playerTurn : WHITE;
-        const predictedTurn = Number.isFinite(predictedObservation?.playerTurn)
-          ? predictedObservation.playerTurn
-          : null;
-        const shouldResyncObservation = (
-          !predictedObservation
-          || Boolean(predictedObservation.isActive) !== Boolean(nextGame.isActive)
-          || (predictedTurn !== null && predictedTurn !== apiTurn)
-          || predictedWinner !== apiWinner
-        );
-        if (shouldResyncObservation) {
-          observationState = buildMlStateFromGame(nextGame, observationConfig);
-          decision.trace = {
-            ...(decision.trace || {}),
-            observationResync: true,
-          };
-        } else {
-          observationState = predictedObservation;
-        }
-        game = nextGame;
-        replay.push(toReplayFrameFromGame(game, { decision }));
+        replay.push(toReplayFrame(game, {
+          note: forcedStopReason,
+          actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
+          moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+        }));
+        break;
+      }
 
-        if (decisions.length >= maxPlies && game.isActive) {
-          forcedStopReason = 'max_plies';
-          await forceDrawOrResign(Number.isFinite(game.playerTurn) ? game.playerTurn : currentPlayer);
-          game = await loadGameLean(gameId);
-          if (game) {
-            replay.push(toReplayFrameFromGame(game, { note: forcedStopReason }));
-          }
+      const observationState = game;
+      const legalActions = getLegalActions(observationState, currentPlayer);
+      if (!legalActions.length) {
+        forcedStopReason = 'no_legal_actions';
+        game = {
+          ...game,
+          isActive: false,
+          winner: otherColor(currentPlayer),
+          winReason: 'resign',
+        };
+        replay.push(toReplayFrame(game, {
+          note: forcedStopReason,
+          actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
+          moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+        }));
+        break;
+      }
+
+      const participantId = this.getDisplayParticipantId(participant);
+      const participantLabel = this.getDisplayParticipantLabel(participant, participantId);
+      const search = this.chooseActionForParticipant(participant, observationState, {
+        ...mctsOptions,
+        seed: seed + (observationState.ply * 104729),
+      });
+
+      const legalByKey = new Map(legalActions.map((action) => [actionKey(action), action]));
+      const requestedAction = search?.action || null;
+      const requestedKey = requestedAction ? actionKey(requestedAction) : '';
+      const primary = requestedKey && legalByKey.has(requestedKey)
+        ? legalByKey.get(requestedKey)
+        : null;
+
+      const candidates = [];
+      if (primary) candidates.push(primary);
+      legalActions.forEach((action) => {
+        if (!primary || actionKey(action) !== actionKey(primary)) {
+          candidates.push(action);
+        }
+      });
+
+      let executedAction = null;
+      for (let idx = 0; idx < candidates.length; idx += 1) {
+        const candidate = candidates[idx];
+        const nextState = applyAction(game, candidate);
+        if (nextState !== game) {
+          executedAction = candidate;
+          game = nextState;
           break;
         }
       }
 
-      if (game && game.isActive) {
-        forcedStopReason = forcedStopReason || 'safety_stop';
-        await forceDrawOrResign(Number.isFinite(game.playerTurn) ? game.playerTurn : WHITE);
-        game = await loadGameLean(gameId);
-        if (game) {
-          replay.push(toReplayFrameFromGame(game, { note: forcedStopReason }));
-        }
+      if (!executedAction) {
+        forcedStopReason = 'all_legal_actions_rejected';
+        game = {
+          ...game,
+          isActive: false,
+          winner: otherColor(currentPlayer),
+          winReason: 'resign',
+        };
+        replay.push(toReplayFrame(game, {
+          note: forcedStopReason,
+          actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
+          moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+          decision: {
+            player: currentPlayer,
+            participantId,
+            participantLabel,
+            snapshotId: participant.snapshotId || null,
+            action: { type: 'RESIGN', player: currentPlayer },
+            move: { type: 'RESIGN', player: currentPlayer },
+            valueEstimate: 0,
+            trace: { reason: forcedStopReason },
+          },
+        }));
+        break;
       }
 
-      const winner = Number.isFinite(game?.winner) ? game.winner : null;
-      const winReason = game?.winReason ?? forcedStopReason ?? null;
-      const training = this.buildTrainingSamplesFromDecisions(decisions, winner);
-      const plies = Number.isFinite(game?.actions?.length) ? game.actions.length : decisions.length;
-
-      return {
-        id: this.nextId('game'),
-        createdAt: nowIso(),
-        seed,
-        setupMode: 'random',
-        whiteParticipantId,
-        blackParticipantId,
-        whiteParticipantLabel,
-        blackParticipantLabel,
-        winner,
-        winReason,
-        plies,
-        actionHistory: Array.isArray(game?.actions) ? deepClone(game.actions) : [],
-        moveHistory: Array.isArray(game?.moves) ? deepClone(game.moves) : [],
-        replay,
-        decisions,
-        training,
-        result: {
-          whiteValue: winner === null ? 0 : (winner === WHITE ? 1 : -1),
-          blackValue: winner === null ? 0 : (winner === BLACK ? 1 : -1),
-        },
+      const executedKey = actionKey(executedAction);
+      const useTrainingRecord = Boolean(requestedKey && executedKey === requestedKey);
+      const decision = {
+        ply: observationState.ply,
+        player: currentPlayer,
+        participantId,
+        participantLabel,
+        snapshotId: participant.snapshotId || null,
+        action: deepClone(executedAction),
+        move: deepClone(executedAction),
+        trace: deepClone(search?.trace || {}),
+        valueEstimate: Number.isFinite(search?.valueEstimate) ? search.valueEstimate : 0,
+        trainingRecord: useTrainingRecord && search?.trainingRecord
+          ? {
+              ...deepClone(search.trainingRecord),
+              snapshotId: participant.snapshotId || null,
+            }
+          : null,
       };
-    } finally {
-      await cleanupApiBackedGame({ gameId, matchId });
+      decisions.push(decision);
+      replay.push(toReplayFrame(game, {
+        actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
+        moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+        decision,
+      }));
+
+      if (decisions.length >= maxPlies && game.isActive) {
+        forcedStopReason = 'max_plies';
+        game = {
+          ...game,
+          isActive: false,
+          winner: null,
+          winReason: 'draw',
+        };
+        replay.push(toReplayFrame(game, {
+          note: forcedStopReason,
+          actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
+          moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+        }));
+        break;
+      }
     }
+
+    if (game && game.isActive) {
+      forcedStopReason = forcedStopReason || 'safety_stop';
+      game = {
+        ...game,
+        isActive: false,
+        winner: null,
+        winReason: 'draw',
+      };
+      replay.push(toReplayFrame(game, {
+        note: forcedStopReason,
+        actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
+        moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+      }));
+    }
+
+    const winner = Number.isFinite(game?.winner) ? game.winner : null;
+    const winReason = game?.winReason ?? forcedStopReason ?? null;
+    const training = this.buildTrainingSamplesFromDecisions(decisions, winner);
+    const plies = Number.isFinite(game?.actions?.length) ? game.actions.length : decisions.length;
+
+    return {
+      id: this.nextId('game'),
+      createdAt: nowIso(),
+      seed,
+      setupMode: 'random',
+      whiteParticipantId,
+      blackParticipantId,
+      whiteParticipantLabel,
+      blackParticipantLabel,
+      winner,
+      winReason,
+      plies,
+      actionHistory: Array.isArray(game?.actions) ? deepClone(game.actions) : [],
+      moveHistory: Array.isArray(game?.moves) ? deepClone(game.moves) : [],
+      replay,
+      decisions,
+      training,
+      result: {
+        whiteValue: winner === null ? 0 : (winner === WHITE ? 1 : -1),
+        blackValue: winner === null ? 0 : (winner === BLACK ? 1 : -1),
+      },
+    };
   }
 
   async simulateMatches(options = {}) {

@@ -109,6 +109,18 @@ const lobbyStore = require('./state/lobby');
 const getServerConfig = require('./utils/getServerConfig');
 const { startInternalBots } = require('./services/bots/internalBots');
 const { startGuestCleanupTask } = require('./services/guestCleanup');
+const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
+
+const mlWorkflowEnabled = isMlWorkflowEnabled();
+
+function isBlockedMlRequestPath(requestPath = '') {
+  const normalized = typeof requestPath === 'string' ? requestPath.trim() : '';
+  return normalized === '/ml-admin'
+    || normalized === '/ml-admin/'
+    || normalized === '/ml-admin.html'
+    || normalized === '/ml-admin.js'
+    || normalized.startsWith('/api/v1/ml');
+}
 
 // Middleware
 app.use(cors({
@@ -120,6 +132,12 @@ app.use(compression());
 app.use(morgan(isProduction ? 'combined' : 'dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  if (mlWorkflowEnabled || !isBlockedMlRequestPath(req.path)) {
+    return next();
+  }
+  return res.status(404).json({ message: 'Not found' });
+});
 app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
 // Serve UI image assets from fallback locations if not present in public/
 app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'public', 'assets', 'images', 'UI'), staticOptions));
@@ -188,6 +206,9 @@ app.get('/admin', (req, res) => {
 
 // Serve ML admin dashboard
 app.get('/ml-admin', (req, res) => {
+  if (!mlWorkflowEnabled) {
+    return res.status(404).json({ message: 'Not found' });
+  }
   res.sendFile(path.join(__dirname, '..', 'public', 'ml-admin.html'));
 });
 

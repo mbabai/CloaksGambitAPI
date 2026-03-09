@@ -13,8 +13,10 @@ const { buildSpectateSnapshot } = require('./utils/spectatorSnapshot');
 const { buildClockPayload } = require('./utils/gameClock');
 const { appendLocalDebugLog } = require('./utils/localDebugLogger');
 const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/activeMatches');
+const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
 
 function initSocket(httpServer) {
+  const mlWorkflowEnabled = isMlWorkflowEnabled();
   const io = new Server(httpServer, {
     cors: {
       origin: true,
@@ -917,21 +919,23 @@ function initSocket(httpServer) {
   // Allow other parts of the app to request an on-demand admin metrics refresh
   eventBus.on('adminRefresh', () => emitAdminMetrics());
 
-  eventBus.on('ml:trainingProgress', (payload) => {
-    try {
-      adminNamespace.emit('ml:trainingProgress', payload || {});
-    } catch (err) {
-      console.error('Error emitting ml:trainingProgress to admin namespace:', err);
-    }
-  });
+  if (mlWorkflowEnabled) {
+    eventBus.on('ml:trainingProgress', (payload) => {
+      try {
+        adminNamespace.emit('ml:trainingProgress', payload || {});
+      } catch (err) {
+        console.error('Error emitting ml:trainingProgress to admin namespace:', err);
+      }
+    });
 
-  eventBus.on('ml:simulationProgress', (payload) => {
-    try {
-      adminNamespace.emit('ml:simulationProgress', payload || {});
-    } catch (err) {
-      console.error('Error emitting ml:simulationProgress to admin namespace:', err);
-    }
-  });
+    eventBus.on('ml:simulationProgress', (payload) => {
+      try {
+        adminNamespace.emit('ml:simulationProgress', payload || {});
+      } catch (err) {
+        console.error('Error emitting ml:simulationProgress to admin namespace:', err);
+      }
+    });
+  }
 
   io.on('connection', async (socket) => {
     const { token, userId: providedUserId } = socket.handshake.auth || {};

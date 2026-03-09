@@ -13,8 +13,11 @@ const { runHiddenInfoMcts } = require('../src/services/ml/mcts');
 const { BUILTIN_MEDIUM_ID, chooseBuiltinAction } = require('../src/services/ml/builtinBots');
 const SimulationModel = require('../src/models/Simulation');
 const SimulationGameModel = require('../src/models/SimulationGame');
+const { isMlWorkflowEnabled } = require('../src/utils/mlFeatureGate');
 
-describe('ML runtime', () => {
+const describeMlWorkflow = isMlWorkflowEnabled() ? describe : describe.skip;
+
+describeMlWorkflow('ML runtime', () => {
   let runtime;
   jest.setTimeout(60000);
 
