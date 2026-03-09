@@ -4,6 +4,7 @@ import { getIconAsset } from '/js/modules/ui/icons.js';
 
 const AUTHORIZED_EMAIL = 'marcellbabai@gmail.com';
 const GOOGLE_ICON_SRC = getIconAsset('google') || '/assets/images/google-icon.png';
+const TOKEN_STORAGE_KEY = 'cg_token';
 
 preloadAssets();
 
@@ -34,9 +35,20 @@ function showDashboard() {
 
 async function fetchSession() {
   try {
+    let authHeader = null;
+    try {
+      const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+      if (storedToken) {
+        authHeader = `Bearer ${storedToken}`;
+      }
+    } catch (_) {}
+
     const res = await fetch('/api/auth/session', {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        ...(authHeader ? { Authorization: authHeader } : {}),
+      },
       credentials: 'include'
     });
     if (!res.ok) {
@@ -58,7 +70,7 @@ async function initialize() {
     }
     upgradeButton(loginButton, { variant: 'neutral', position: 'relative' });
     loginButton.addEventListener('click', () => {
-      window.location.href = '/api/auth/google';
+      window.location.href = '/api/auth/google?returnTo=/admin';
     });
   }
 

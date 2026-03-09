@@ -52,21 +52,21 @@ router.post('/', async (req, res) => {
     );
 
     if (!updated) {
-      console.log('Game not found for ID:', gameId);
+      debugLog('Game not found for ID:', gameId);
       return res.status(404).json({ message: 'Game not found' });
     }
 
-    console.log('Game saved successfully (ready):', {
+    debugLog('Game saved successfully (ready):', {
       gameId: updated._id.toString(),
       playersReady: updated.playersReady
     });
 
-    // If both players ready, set startTime once (idempotent)
+    // If both players are ready, start the clock once.
+    // Use direct mutation+save so this works for both Mongoose docs
+    // and the in-memory active-game model (where startTime starts as null).
     if (!updated.startTime && updated.playersReady[0] && updated.playersReady[1]) {
-      await Game.updateOne(
-        { _id: updated._id, startTime: { $exists: false } },
-        { $set: { startTime: new Date() } }
-      );
+      updated.startTime = new Date();
+      await updated.save();
     }
 
     const finalGame = await Game.findById(updated._id).lean();

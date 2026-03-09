@@ -2,18 +2,8 @@ const express = require('express');
 const router = express.Router();
 const User = require('../../../models/User');
 const eventBus = require('../../../eventBus');
+const { buildAuthCookieOptions } = require('../../../utils/authCookies');
 const { createAuthToken, TOKEN_COOKIE_NAME } = require('../../../utils/authTokens');
-
-const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
-const isProduction = process.env.NODE_ENV === 'production';
-
-function buildCookieOptions() {
-  const base = {
-    maxAge: ONE_YEAR_SECONDS * 1000,
-    sameSite: 'lax',
-  };
-  return isProduction ? { ...base, secure: true } : base;
-}
 
 // PATCH /v1/users/update
 router.patch('/', async (req, res) => {
@@ -53,7 +43,7 @@ router.patch('/', async (req, res) => {
       eventBus.emit('user:updated', payload);
 
       try {
-        const cookieOptions = buildCookieOptions();
+        const cookieOptions = buildAuthCookieOptions();
         res.cookie('userId', payload.userId, cookieOptions);
         res.cookie('username', user.username, cookieOptions);
         const token = createAuthToken(user);

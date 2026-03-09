@@ -792,7 +792,8 @@ logBootConstantsOnce();
         usernameDisplay.textContent = guestName;
       }
       loginBtn.addEventListener('click', () => {
-        window.location.href = '/api/auth/google';
+        const returnTo = encodeURIComponent(`${window.location.pathname || '/'}${window.location.search || ''}`);
+        window.location.href = `/api/auth/google?returnTo=${returnTo}`;
       });
     }
   }
@@ -800,10 +801,9 @@ logBootConstantsOnce();
   async function refreshSession() {
     let sessionData = null;
     try {
-      const res = await fetch('/api/auth/session', {
+      const res = await authFetch('/api/auth/session', {
         method: 'GET',
         headers: { Accept: 'application/json' },
-        credentials: 'include'
       });
       if (!res.ok) {
         throw new Error(`Session request failed (${res.status})`);
@@ -919,11 +919,7 @@ logBootConstantsOnce();
       return cookieToken;
     }
 
-    if (stored) {
-      setStoredAuthToken(null);
-    }
-
-    return null;
+    return stored || null;
   }
 
   function authFetch(input, init = {}) {
@@ -932,7 +928,7 @@ logBootConstantsOnce();
     if (token && !headers.Authorization) {
       headers.Authorization = `Bearer ${token}`;
     }
-    return fetch(input, { ...init, headers });
+    return fetch(input, { credentials: 'include', ...init, headers });
   }
 
   if (!statsOverlayController) {
@@ -987,6 +983,7 @@ logBootConstantsOnce();
   let playerNames = ['Anonymous0', 'Anonymous1'];
   let playerElos = [null, null];
   let currentPlayerIds = [];
+  const playerProfileCache = new Map();
   const connectionStatusByPlayer = new Map();
   let customInvitePrompt = null;
   let botMatchPrompt = null;
@@ -1093,11 +1090,28 @@ logBootConstantsOnce();
   async function loadPlayerNames(ids) {
     if (!Array.isArray(ids)) return;
     currentPlayerIds = ids.slice(0, 2);
-    playerNames = currentPlayerIds.map((_, idx) => 'Anonymous' + idx);
-    playerElos = currentPlayerIds.map(() => null);
+    playerNames = currentPlayerIds.map((id, idx) => {
+      const cached = playerProfileCache.get(String(id));
+      return formatPlayerName(cached?.username, idx);
+    });
+    playerElos = currentPlayerIds.map((id) => {
+      const cached = playerProfileCache.get(String(id));
+      return Number.isFinite(cached?.elo) ? cached.elo : null;
+    });
     renderBoardAndBars();
     await Promise.all(currentPlayerIds.map(async (id, idx) => {
       try {
+        const cacheKey = String(id);
+        const cached = playerProfileCache.get(cacheKey);
+        if (cached && typeof cached.username === 'string') {
+          playerNames[idx] = formatPlayerName(cached.username, idx);
+          if (Number.isFinite(cached.elo)) {
+            playerElos[idx] = cached.elo;
+          }
+          markBotStatus(id, Boolean(cached.isBot));
+          return;
+        }
+
         const res = await authFetch('/api/v1/users/getDetails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1105,8 +1119,15 @@ logBootConstantsOnce();
         });
         if (res.ok) {
           const user = await res.json().catch(() => null);
-          playerNames[idx] = formatPlayerName(user?.username, idx);
-          playerElos[idx] = Number.isFinite(user?.elo) ? user.elo : null;
+          const normalizedUsername = formatPlayerName(user?.username, idx);
+          const normalizedElo = Number.isFinite(user?.elo) ? user.elo : null;
+          playerNames[idx] = normalizedUsername;
+          playerElos[idx] = normalizedElo;
+          playerProfileCache.set(cacheKey, {
+            username: normalizedUsername,
+            elo: normalizedElo,
+            isBot: Boolean(user?.isBot),
+          });
           if (statsOverlayController) {
             const normalized = normalizeId(id);
             if (normalized) {
@@ -1129,6 +1150,11 @@ logBootConstantsOnce();
     const activeUserId = getStoredUserId() || userId;
 
     if (targetId) {
+      const cached = playerProfileCache.get(targetId) || {};
+      playerProfileCache.set(targetId, {
+        ...cached,
+        username: normalizedName,
+      });
       const idx = currentPlayerIds.findIndex((id) => id && id.toString() === targetId);
       if (idx !== -1) {
         playerNames[idx] = formatPlayerName(normalizedName, idx);
@@ -1420,7 +1446,17 @@ logBootConstantsOnce();
       increment = incValue;
     }
 
-    if (!gameStartTime) {
+    const actionStartCandidates = Array.isArray(actionHistory)
+      ? actionHistory
+          .map((action) => Date.parse(action?.timestamp))
+          .filter((value) => Number.isFinite(value))
+      : [];
+    const inferredStartTime = actionStartCandidates.length > 0
+      ? Math.min(...actionStartCandidates)
+      : null;
+    const effectiveStartTime = Number.isFinite(gameStartTime) ? gameStartTime : inferredStartTime;
+
+    if (!effectiveStartTime) {
       whiteTimeMs = baseTime;
       blackTimeMs = baseTime;
       activeColor = null;
@@ -1433,7 +1469,7 @@ logBootConstantsOnce();
     const computed = computeGameClockState({
       baseTime,
       increment: incValue,
-      startTime: gameStartTime,
+      startTime: effectiveStartTime,
       actions: actionHistory,
       setupComplete,
       playerTurn: currentPlayerTurn,
@@ -1959,10 +1995,20 @@ logBootConstantsOnce();
     });
 
     socket.on('user:init', (payload) => {
-      ensureAuthToken();
+      const token = ensureAuthToken();
       const payloadUserId = payload?.userId ? String(payload.userId) : null;
       const payloadUsername = typeof payload?.username === 'string' ? payload.username : undefined;
       const isGuest = Boolean(payload?.guest);
+      const hasAuthenticatedSession = Boolean(sessionInfo?.authenticated && sessionInfo?.userId);
+      const shouldIgnoreGuestDowngrade = Boolean(isGuest && hasAuthenticatedSession && token);
+
+      if (shouldIgnoreGuestDowngrade) {
+        // Socket handshakes can race the auth refresh path. Keep the current
+        // authenticated identity and let /session remain source of truth.
+        refreshSession().catch(() => null);
+        updateAccountPanel();
+        return;
+      }
 
       const updates = {
         isGuest,
@@ -2116,7 +2162,7 @@ logBootConstantsOnce();
         socketAuth.userId = handshakeUserId;
         userId = handshakeUserId;
       }
-      socket = io('/', { auth: socketAuth });
+      socket = io('/', { auth: socketAuth, autoConnect: false });
       spectateController = createSpectateController({
         overlayEl: spectateOverlay,
         playAreaEl: spectatePlayArea,
@@ -2143,6 +2189,7 @@ logBootConstantsOnce();
         },
       });
       wireSocket();
+      socket.connect();
     } catch (e) {
       console.error(e);
     }
@@ -5011,8 +5058,16 @@ logBootConstantsOnce();
         currentCaptured = [[], []];
       }
       if (Array.isArray(u.daggers)) currentDaggers = u.daggers;
-      if (Array.isArray(u.setupComplete)) setupComplete = u.setupComplete;
-      if (u.playerTurn === 0 || u.playerTurn === 1) currentPlayerTurn = u.playerTurn;
+      if (Object.prototype.hasOwnProperty.call(u, 'setupComplete')) {
+        if (Array.isArray(u.setupComplete)) {
+          setupComplete = u.setupComplete;
+        } else {
+          setupComplete = [false, false];
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(u, 'playerTurn')) {
+        currentPlayerTurn = (u.playerTurn === 0 || u.playerTurn === 1) ? u.playerTurn : null;
+      }
       if (u.onDeckingPlayer !== undefined) {
         currentOnDeckingPlayer = u.onDeckingPlayer;
         if (currentOnDeckingPlayer !== null) selected = null;
@@ -5052,7 +5107,10 @@ logBootConstantsOnce();
           expectedIncrement = parsedInc;
         }
       }
-      if (u.startTime) gameStartTime = new Date(u.startTime).getTime();
+      if (Object.prototype.hasOwnProperty.call(u, 'startTime')) {
+        const parsedStart = Date.parse(u.startTime);
+        gameStartTime = Number.isFinite(parsedStart) ? parsedStart : null;
+      }
       if (Array.isArray(u.actions)) {
         actionHistory = u.actions.map((action) => {
           if (!action || typeof action !== 'object') return action;
@@ -5073,6 +5131,10 @@ logBootConstantsOnce();
         });
         lastAction = actionHistory[actionHistory.length - 1] || null;
         lastMoveAction = findLatestMoveAction(actionHistory);
+      } else if (Object.prototype.hasOwnProperty.call(u, 'actions')) {
+        actionHistory = [];
+        lastAction = null;
+        lastMoveAction = null;
       }
       if (Array.isArray(u.moves)) {
         moveHistory = u.moves.map((move) => {
@@ -5088,6 +5150,8 @@ logBootConstantsOnce();
           }
           return normalized;
         });
+      } else if (Object.prototype.hasOwnProperty.call(u, 'moves')) {
+        moveHistory = [];
       }
       if (!Array.isArray(moveHistory)) {
         moveHistory = [];

@@ -4,18 +4,14 @@ import { PIECE_IMAGES } from '/js/modules/constants.js';
 const preloadedSources = new Set();
 const retainedImages = [];
 let baseAssetsPreloaded = false;
+let deferredManifestQueued = false;
 
-const BASE_STATIC_ASSETS = [
-  '/assets/images/Background.png',
+const CRITICAL_STATIC_ASSETS = [
   '/assets/images/UI/menuButton.svg',
   '/assets/images/account.png',
-  '/assets/images/book.png',
-  '/assets/images/youtube-icon.png',
-  '/assets/images/feedback.png',
-  '/assets/images/byMarcell.webp',
-  '/assets/images/CloakHood.jpg',
+  '/assets/images/cloakHood.jpg',
   '/assets/images/google-icon.png',
-  '/assets/images/GoldThrone.svg'
+  '/assets/images/Background.png',
 ];
 
 function normalizeAssetUrl(src) {
@@ -31,11 +27,11 @@ function normalizeAssetUrl(src) {
   }
 }
 
-function queueImage(src) {
+function queueImage(src, { eager = false } = {}) {
   const normalized = normalizeAssetUrl(src);
   if (!normalized || preloadedSources.has(normalized)) return;
   const img = new Image();
-  img.loading = 'eager';
+  img.loading = eager ? 'eager' : 'lazy';
   img.decoding = 'async';
   img.src = normalized;
   retainedImages.push(img);
@@ -57,25 +53,39 @@ function extractAssetPaths(value, results) {
   }
 }
 
-function queueSources(sources) {
-  sources.forEach(src => queueImage(src));
+function queueSources(sources, options) {
+  sources.forEach((src) => queueImage(src, options));
 }
 
-function preloadBaseManifestAssets() {
+function preloadManifestAssetsDeferred() {
   const manifestSources = new Set();
   extractAssetPaths(ASSET_MANIFEST, manifestSources);
   extractAssetPaths(PIECE_IMAGES, manifestSources);
-  BASE_STATIC_ASSETS.forEach(src => manifestSources.add(src));
-  queueSources(Array.from(manifestSources));
+  queueSources(Array.from(manifestSources), { eager: false });
+}
+
+function queueDeferredManifestPreload() {
+  if (deferredManifestQueued) return;
+  deferredManifestQueued = true;
+
+  const run = () => preloadManifestAssetsDeferred();
+
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(run, { timeout: 2000 });
+    return;
+  }
+
+  setTimeout(run, 250);
 }
 
 export function preloadAssets({ additional = [] } = {}) {
   if (!baseAssetsPreloaded) {
-    preloadBaseManifestAssets();
+    queueSources(CRITICAL_STATIC_ASSETS, { eager: true });
+    queueDeferredManifestPreload();
     baseAssetsPreloaded = true;
   }
   if (Array.isArray(additional) && additional.length > 0) {
-    queueSources(additional);
+    queueSources(additional, { eager: false });
   }
 }
 

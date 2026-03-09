@@ -1,8 +1,8 @@
 const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
-const { isProduction } = require('../../config/loadEnv');
 const User = require('../../models/User');
 const ensureUser = require('../../utils/ensureUser');
+const { buildAuthCookieOptions } = require('../../utils/authCookies');
 const {
   createAuthToken,
   TOKEN_COOKIE_NAME,
@@ -20,25 +20,21 @@ const scopes = [
 ];
 
 const FALLBACK_USERNAME = 'GoogleUser';
-const ONE_YEAR_MS = 1000 * 60 * 60 * 24 * 365;
-
-function buildCookieOptions() {
-  const base = {
-    maxAge: ONE_YEAR_MS,
-    sameSite: 'lax',
-  };
-  return isProduction ? { ...base, secure: true } : base;
-}
+const DEFAULT_RETURN_TO = '/';
 
 function clearCookie(res, name, baseOptions = {}) {
-  res.cookie(name, '', { ...baseOptions, maxAge: 0 });
+  res.cookie(name, '', {
+    ...baseOptions,
+    maxAge: 0,
+    expires: new Date(0),
+  });
 }
 
-function applyAuthenticatedCookies(res, user, token) {
-  const options = buildCookieOptions();
+function applyAuthenticatedCookies(req, res, user, token) {
+  const options = buildAuthCookieOptions(req);
   const userId = user._id.toString();
   const username = user.username || FALLBACK_USERNAME;
-  const photo = user.photoUrl || 'assets/images/cloakHood.jpg';
+  const photo = user.photoUrl || '/assets/images/cloakHood.jpg';
 
   if (userId) {
     res.cookie('userId', userId, options);
@@ -50,8 +46,8 @@ function applyAuthenticatedCookies(res, user, token) {
   res.cookie(TOKEN_COOKIE_NAME, token, { ...options, httpOnly: false });
 }
 
-function applyGuestCookies(res, guestInfo) {
-  const options = buildCookieOptions();
+function applyGuestCookies(req, res, guestInfo) {
+  const options = buildAuthCookieOptions(req);
   const userId = guestInfo.userId ? String(guestInfo.userId) : '';
   const username = guestInfo.username || FALLBACK_USERNAME;
   res.cookie('userId', userId, options);
@@ -160,13 +156,58 @@ function getGoogleClientSecret() {
   return process.env.GOOGLE_CLIENT_SECRET;
 }
 
+function getRequestOrigin(req) {
+  const forwardedProtoHeader = req.headers?.['x-forwarded-proto'];
+  const forwardedHostHeader = req.headers?.['x-forwarded-host'];
+  const protoCandidate = Array.isArray(forwardedProtoHeader)
+    ? forwardedProtoHeader[0]
+    : forwardedProtoHeader;
+  const hostCandidate = Array.isArray(forwardedHostHeader)
+    ? forwardedHostHeader[0]
+    : forwardedHostHeader;
+  const protocol = String(protoCandidate || req.protocol || 'http').split(',')[0].trim();
+  const host = String(hostCandidate || req.get('host') || '').split(',')[0].trim();
+  if (!host) return null;
+  return `${protocol}://${host}`;
+}
+
 function resolveRedirectUri(req) {
   if (process.env.GOOGLE_REDIRECT_URI) {
     return process.env.GOOGLE_REDIRECT_URI;
   }
-  // Fallback for dev/local
+  const origin = getRequestOrigin(req);
+  if (origin) {
+    return `${origin}/api/auth/google/callback`;
+  }
   const port = process.env.PORT || 3000;
   return `http://localhost:${port}/api/auth/google/callback`;
+}
+
+function sanitizeReturnTo(value) {
+  if (typeof value !== 'string') return DEFAULT_RETURN_TO;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) {
+    return DEFAULT_RETURN_TO;
+  }
+  return trimmed;
+}
+
+function encodeOAuthState(payload = {}) {
+  try {
+    return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  } catch (err) {
+    return '';
+  }
+}
+
+function decodeOAuthState(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8');
+    return JSON.parse(decoded);
+  } catch (err) {
+    return null;
+  }
 }
 
 router.get('/google', (req, res) => {
@@ -176,6 +217,8 @@ router.get('/google', (req, res) => {
   if (!clientId || !clientSecret) {
     return res.status(500).json({ message: 'Google OAuth is not configured' });
   }
+  const returnTo = sanitizeReturnTo(req.query?.returnTo);
+  const state = encodeOAuthState({ returnTo });
   const redirectUri = resolveRedirectUri(req);
   const params = new URLSearchParams({
     client_id: clientId,
@@ -183,7 +226,8 @@ router.get('/google', (req, res) => {
     response_type: 'code',
     scope: scopes.join(' '),
     access_type: 'offline',
-    prompt: 'consent'
+    prompt: 'consent',
+    state,
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
 });
@@ -195,8 +239,11 @@ router.get('/google/callback', async (req, res) => {
   }
 
   try {
+    res.set('Cache-Control', 'no-store');
     const clientId = getGoogleClientId();
     const clientSecret = getGoogleClientSecret();
+    const state = decodeOAuthState(req.query?.state);
+    const returnTo = sanitizeReturnTo(state?.returnTo);
 
     if (!clientId || !clientSecret) {
       return res.status(500).json({ message: 'Google OAuth is not configured' });
@@ -244,8 +291,8 @@ router.get('/google/callback', async (req, res) => {
     }
 
     const token = createAuthToken(user);
-    applyAuthenticatedCookies(res, user, token);
-    res.redirect('/');
+    applyAuthenticatedCookies(req, res, user, token);
+    res.redirect(returnTo);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Authentication failed' });
@@ -254,10 +301,11 @@ router.get('/google/callback', async (req, res) => {
 
 router.get('/session', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store');
     const session = await resolveSessionFromRequest(req);
     if (session.type === 'authenticated' && !session.isGuest) {
       const token = createAuthToken(session.user);
-      applyAuthenticatedCookies(res, session.user, token);
+      applyAuthenticatedCookies(req, res, session.user, token);
       return res.json({
         userId: session.userId,
         username: session.username,
@@ -267,7 +315,7 @@ router.get('/session', async (req, res) => {
       });
     }
 
-    applyGuestCookies(res, session);
+    applyGuestCookies(req, res, session);
     return res.json({
       userId: session.userId,
       username: session.username,
@@ -284,7 +332,7 @@ router.get('/session', async (req, res) => {
 router.post('/logout', async (req, res) => {
   try {
     const guest = await ensureUser();
-    applyGuestCookies(res, guest);
+    applyGuestCookies(req, res, guest);
     res.json({
       userId: guest.userId,
       username: guest.username,

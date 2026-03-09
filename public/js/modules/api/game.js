@@ -20,7 +20,7 @@ function buildAuthHeaders(base = {}) {
 
 function authFetch(url, options = {}) {
   const headers = buildAuthHeaders(options.headers || {});
-  return fetch(url, { ...options, headers });
+  return fetch(url, { credentials: 'include', ...options, headers });
 }
 
 export async function apiReady(gameId, color) {

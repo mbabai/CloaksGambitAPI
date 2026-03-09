@@ -3,29 +3,59 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const {
+  resolveStartTimeMs,
+  calculateElapsedMs,
+  computeGameClockState,
+} = require('../../../utils/gameClock');
 
-function resolveStartTimeMs(game) {
-  if (!game) return null;
-
-  const candidates = [game.startTime, game.createdAt];
-
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    const ms = new Date(candidate).getTime();
-    if (Number.isFinite(ms)) {
-      return ms;
-    }
+function resolveTimeoutResult(game, { now = Date.now(), setupActionType } = {}) {
+  const baseTime = Number(game?.timeControlStart);
+  if (!Number.isFinite(baseTime) || baseTime <= 0) {
+    return { expired: false, winner: null, draw: false, clock: null };
   }
 
-  return null;
-}
+  const increment = Number(game?.increment);
+  const computed = computeGameClockState({
+    baseTime,
+    increment: Number.isFinite(increment) && increment >= 0 ? increment : 0,
+    startTime: resolveStartTimeMs(game),
+    endTime: game?.endTime,
+    actions: game?.actions,
+    setupComplete: game?.setupComplete,
+    playerTurn: game?.playerTurn,
+    isActive: Boolean(game?.isActive),
+    now,
+    setupActionType,
+  });
 
-function calculateElapsedMs(game, now = Date.now()) {
-  const startTimeMs = resolveStartTimeMs(game);
-  if (!Number.isFinite(startTimeMs)) {
-    return 0;
+  const whiteExpired = computed.whiteMs <= 0;
+  const blackExpired = computed.blackMs <= 0;
+
+  if (!whiteExpired && !blackExpired) {
+    return {
+      expired: false,
+      winner: null,
+      draw: false,
+      clock: computed,
+    };
   }
-  return Math.max(0, now - startTimeMs);
+
+  if (whiteExpired && blackExpired) {
+    return {
+      expired: true,
+      winner: null,
+      draw: true,
+      clock: computed,
+    };
+  }
+
+  return {
+    expired: true,
+    winner: whiteExpired ? 1 : 0,
+    draw: false,
+    clock: computed,
+  };
 }
 
 router.post('/', async (req, res) => {
@@ -48,52 +78,28 @@ router.post('/', async (req, res) => {
     }
 
     const config = await getServerConfig();
-    const timeControl = game.timeControlStart;
-    const increment = game.increment;
     const winReason = config.winReasons.get('TIME_CONTROL');
     const now = Date.now();
-    const elapsed = calculateElapsedMs(game, now);
+    const timeout = resolveTimeoutResult(game, {
+      now,
+      setupActionType: config.actions.get('SETUP'),
+    });
 
-    const setup0 = game.setupComplete[0];
-    const setup1 = game.setupComplete[1];
-
-    if (!setup0 || !setup1) {
-      if (elapsed > timeControl) {
-        if (!setup0 && !setup1) {
-          await game.endGame(null, winReason);
-          eventBus.emit('gameChanged', {
-            game: typeof game.toObject === 'function' ? game.toObject() : game,
-            affectedUsers: (game.players || []).map(p => p.toString()),
-          });
-          return res.json({ gameOver: true, draw: true, winReason });
-        }
-
-        const winnerColor = setup0 ? 0 : 1;
-        await game.endGame(winnerColor, winReason);
-        eventBus.emit('gameChanged', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: (game.players || []).map(p => p.toString()),
-        });
-        return res.json({ gameOver: true, winner: winnerColor, winReason });
-      }
-
+    if (!timeout.expired) {
       return res.json({ gameOver: false });
     }
 
-    // Setup complete - check current player's clock
-    const turnPlayer = game.playerTurn;
-    const actionsCount = game.actions.filter(a => a.player === turnPlayer).length;
-    if (elapsed + actionsCount * increment > timeControl) {
-      const winnerColor = turnPlayer === 0 ? 1 : 0;
-      await game.endGame(winnerColor, winReason);
-      eventBus.emit('gameChanged', {
-        game: typeof game.toObject === 'function' ? game.toObject() : game,
-        affectedUsers: (game.players || []).map(p => p.toString()),
-      });
-      return res.json({ gameOver: true, winner: winnerColor, winReason });
+    await game.endGame(timeout.winner, winReason);
+    eventBus.emit('gameChanged', {
+      game: typeof game.toObject === 'function' ? game.toObject() : game,
+      affectedUsers: (game.players || []).map((p) => p.toString()),
+    });
+
+    if (timeout.draw) {
+      return res.json({ gameOver: true, draw: true, winReason });
     }
 
-    return res.json({ gameOver: false });
+    return res.json({ gameOver: true, winner: timeout.winner, winReason });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -103,4 +109,5 @@ module.exports = router;
 module.exports._private = {
   resolveStartTimeMs,
   calculateElapsedMs,
+  resolveTimeoutResult,
 };
