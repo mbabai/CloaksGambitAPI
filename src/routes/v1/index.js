@@ -3,6 +3,7 @@ const router = express.Router();
 
 // User routes
 const userGetList = require('./users/getList');
+const userGetRankedLeaderboard = require('./users/getRankedLeaderboard');
 const userGetDetails = require('./users/getDetails');
 const userCreate = require('./users/create');
 const userUpdate = require('./users/update');
@@ -58,6 +59,7 @@ const debugLocalLog = require('./debug/localLog');
 
 // User routes
 router.use('/users/getList', userGetList);
+router.use('/users/rankedLeaderboard', userGetRankedLeaderboard);
 router.use('/users/getDetails', userGetDetails);
 router.use('/users/create', userCreate);
 router.use('/users/update', userUpdate);

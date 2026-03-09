@@ -147,6 +147,10 @@ logBootConstantsOnce();
     variant: 'neutral',
     position: 'relative'
   });
+  const rankedLeaderboardBtn = upgradeButton(document.getElementById('rankedLeaderboardBtn'), {
+    variant: 'neutral',
+    position: 'relative'
+  });
   const accountPanel = document.getElementById('menuAccountPanel');
   const usernameDisplay = document.getElementById('usernameDisplay');
   const accountPanelContent = document.getElementById('accountPanelContent');
@@ -208,6 +212,11 @@ logBootConstantsOnce();
   let queueStatusKnown = false;
 
   let statsOverlayController = null;
+  let rankedLeaderboardOverlay = null;
+  let rankedLeaderboardStatusEl = null;
+  let rankedLeaderboardListEl = null;
+  let rankedLeaderboardFindBtn = null;
+  let rankedLeaderboardEntries = [];
 
   function persistQueueMode(mode) {
     if (mode === 'quickplay' || mode === 'ranked') {
@@ -326,6 +335,170 @@ logBootConstantsOnce();
     statsOverlayController.close();
   }
 
+  function getCurrentLeaderboardUserId() {
+    return sessionInfo && sessionInfo.userId ? String(sessionInfo.userId) : null;
+  }
+
+  function updateRankedLeaderboardFindButton() {
+    if (!rankedLeaderboardFindBtn) return;
+    rankedLeaderboardFindBtn.disabled = !getCurrentLeaderboardUserId();
+  }
+
+  function renderRankedLeaderboard(entries = []) {
+    rankedLeaderboardEntries = Array.isArray(entries) ? entries : [];
+    if (!rankedLeaderboardListEl) return;
+    rankedLeaderboardListEl.innerHTML = '';
+
+    if (rankedLeaderboardEntries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'leaderboard-empty';
+      empty.textContent = 'No ranked players found yet.';
+      rankedLeaderboardListEl.appendChild(empty);
+      return;
+    }
+
+    const currentUserId = getCurrentLeaderboardUserId();
+    rankedLeaderboardEntries.forEach((entry, index) => {
+      const row = document.createElement('div');
+      row.className = 'leaderboard-row';
+      row.dataset.userId = entry.userId;
+      if (currentUserId && entry.userId === currentUserId) {
+        row.classList.add('leaderboard-row--current');
+      }
+
+      const main = document.createElement('div');
+      main.className = 'leaderboard-row__main';
+
+      const rank = document.createElement('span');
+      rank.className = 'leaderboard-row__rank';
+      rank.textContent = `${index + 1}.`;
+
+      const name = document.createElement('span');
+      name.className = 'leaderboard-row__name';
+      name.textContent = entry.username || 'Unknown';
+      name.title = entry.username || 'Unknown';
+
+      const badge = createEloBadge({
+        elo: entry.elo,
+        size: 34,
+        alt: `${entry.username || 'Player'} Elo`
+      });
+
+      main.appendChild(rank);
+      main.appendChild(name);
+      row.appendChild(main);
+      row.appendChild(badge);
+      rankedLeaderboardListEl.appendChild(row);
+    });
+  }
+
+  function ensureRankedLeaderboardOverlay() {
+    if (rankedLeaderboardOverlay) return rankedLeaderboardOverlay;
+
+    rankedLeaderboardOverlay = createOverlay({
+      baseClass: 'cg-overlay history-overlay',
+      dialogClass: 'history-modal leaderboard-modal',
+      contentClass: 'history-modal-content',
+      backdropClass: 'cg-overlay__backdrop history-overlay-backdrop',
+      closeButtonClass: 'history-close-btn',
+      closeButtonVariant: 'danger',
+      closeLabel: 'Close ranked list',
+      closeText: '×',
+      openClass: 'open cg-overlay--open',
+      bodyOpenClass: 'history-overlay-open cg-overlay-open',
+    });
+
+    const { content } = rankedLeaderboardOverlay;
+    content.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'history-overlay-header';
+
+    const heading = document.createElement('h2');
+    heading.id = 'rankedLeaderboardTitle';
+    heading.className = 'spectate-picker-title';
+    heading.textContent = 'Ranked';
+    header.appendChild(heading);
+    rankedLeaderboardOverlay.setLabelledBy(heading.id);
+
+    rankedLeaderboardStatusEl = document.createElement('div');
+    rankedLeaderboardStatusEl.className = 'leaderboard-overlay-status';
+
+    const actions = document.createElement('div');
+    actions.className = 'leaderboard-overlay-actions';
+
+    rankedLeaderboardFindBtn = createButton({
+      id: 'rankedLeaderboardFindBtn',
+      label: 'Find me',
+      variant: 'neutral',
+      position: 'relative'
+    });
+    rankedLeaderboardFindBtn.classList.add('leaderboard-find-btn');
+    rankedLeaderboardFindBtn.addEventListener('click', () => {
+      const currentUserId = getCurrentLeaderboardUserId();
+      if (!currentUserId || !rankedLeaderboardListEl) return;
+      const row = rankedLeaderboardListEl.querySelector(`[data-user-id="${currentUserId}"]`);
+      if (!row) {
+        if (rankedLeaderboardStatusEl) {
+          rankedLeaderboardStatusEl.textContent = 'Your account is not on the ranked leaderboard yet.';
+        }
+        return;
+      }
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (rankedLeaderboardStatusEl) {
+        rankedLeaderboardStatusEl.textContent = 'Scrolled to your ranking.';
+      }
+    });
+
+    actions.appendChild(rankedLeaderboardStatusEl);
+    actions.appendChild(rankedLeaderboardFindBtn);
+
+    const contentScroll = document.createElement('div');
+    contentScroll.className = 'history-overlay-content';
+
+    rankedLeaderboardListEl = document.createElement('div');
+    rankedLeaderboardListEl.className = 'leaderboard-list';
+    contentScroll.appendChild(rankedLeaderboardListEl);
+
+    content.appendChild(header);
+    content.appendChild(actions);
+    content.appendChild(contentScroll);
+
+    updateRankedLeaderboardFindButton();
+    return rankedLeaderboardOverlay;
+  }
+
+  async function openRankedLeaderboard() {
+    const overlay = ensureRankedLeaderboardOverlay();
+    updateRankedLeaderboardFindButton();
+    renderRankedLeaderboard([]);
+    if (rankedLeaderboardStatusEl) {
+      rankedLeaderboardStatusEl.textContent = 'Loading leaderboard...';
+    }
+    overlay.show({ initialFocus: rankedLeaderboardFindBtn });
+
+    try {
+      const res = await authFetch('/api/v1/users/rankedLeaderboard', {
+        method: 'GET',
+        headers: { Accept: 'application/json' }
+      });
+      if (!res.ok) {
+        throw new Error(`Leaderboard request failed (${res.status})`);
+      }
+      const data = await res.json().catch(() => []);
+      renderRankedLeaderboard(Array.isArray(data) ? data : []);
+      if (rankedLeaderboardStatusEl) {
+        rankedLeaderboardStatusEl.textContent = '';
+      }
+    } catch (err) {
+      console.error('Failed to load ranked leaderboard', err);
+      renderRankedLeaderboard([]);
+      if (rankedLeaderboardStatusEl) {
+        rankedLeaderboardStatusEl.textContent = 'Failed to load leaderboard.';
+      }
+    }
+  }
+
   function normalizeBotId(id) {
     const normalized = normalizeId(id);
     return normalized ? String(normalized) : null;
@@ -432,6 +605,13 @@ logBootConstantsOnce();
       openAccountPanel();
     }
   });
+
+  if (rankedLeaderboardBtn) {
+    rankedLeaderboardBtn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      openRankedLeaderboard();
+    });
+  }
 
   document.addEventListener('click', ev => {
     if (!menuOpen) return;
@@ -576,6 +756,7 @@ logBootConstantsOnce();
     }
 
     setUsernameDisplay();
+    updateRankedLeaderboardFindButton();
   }
 
   function setUsernameDisplay() {

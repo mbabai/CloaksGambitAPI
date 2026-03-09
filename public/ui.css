@@ -369,6 +369,98 @@ body.history-overlay-open {
   color: #f87171;
 }
 
+.leaderboard-overlay-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.leaderboard-modal {
+  width: min(1280px, calc(95vw - 48px));
+  max-width: min(1280px, calc(95vw - 48px));
+  height: 80vh;
+  max-height: 80vh;
+}
+
+.leaderboard-overlay-status {
+  font-size: 14px;
+  color: rgba(255, 215, 0, 0.78);
+  min-height: 18px;
+}
+
+.leaderboard-find-btn {
+  align-self: flex-start;
+}
+
+.leaderboard-find-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.leaderboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 3px solid var(--CG-deep-gold);
+  border-radius: 8px;
+  background: rgba(19, 7, 30, 0.9);
+  padding: 12px 14px;
+}
+
+.leaderboard-row--current {
+  background: rgba(68, 117, 71, 0.35);
+  box-shadow: 0 0 0 1px rgba(173, 255, 191, 0.28) inset;
+}
+
+.leaderboard-row__main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.leaderboard-row__rank {
+  min-width: 28px;
+  color: rgba(255, 215, 0, 0.92);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboard-row__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--CG-white);
+  font-size: 18px;
+}
+
+.leaderboard-empty {
+  padding: 18px 0;
+  color: rgba(255, 215, 0, 0.78);
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .leaderboard-modal {
+    width: 80vw;
+    max-width: 80vw;
+    height: 80vh;
+    max-height: 80vh;
+    padding: 16px;
+  }
+}
+
 .cg-overlay--banner,
 .banner-overlay {
   --cg-overlay-padding: 0;
