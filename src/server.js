@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const compression = require('compression');
 const path = require('path');
 
 const { NODE_ENV, isProduction } = require('./config/loadEnv');
@@ -11,6 +12,7 @@ const { NODE_ENV, isProduction } = require('./config/loadEnv');
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
+const JWT_SECRET = process.env.JWT_SECRET;
 const ATLAS_DB_NAME = 'cloaksgambit';
 const MONGODB_ATLAS_URI_RAW = process.env.MONGODB_ATLAS_CONNECTION_STRING;
 
@@ -62,6 +64,7 @@ console.log('Startup secrets check:', {
   GOOGLE_CLIENT_ID: !!GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET: !!GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI: !!GOOGLE_REDIRECT_URI,
+  JWT_SECRET: !!JWT_SECRET,
   MONGODB_ATLAS_CONNECTION_STRING: !!MONGODB_ATLAS_URI,
   MONGODB_ATLAS_CONNECTION_STRING_PREVIEW: atlasPreview
 });
@@ -71,6 +74,7 @@ if (isProduction) {
   if (!GOOGLE_CLIENT_ID) missing.push('GOOGLE_CLIENT_ID');
   if (!GOOGLE_CLIENT_SECRET) missing.push('GOOGLE_CLIENT_SECRET');
   if (!GOOGLE_REDIRECT_URI) missing.push('GOOGLE_REDIRECT_URI');
+  if (!JWT_SECRET) missing.push('JWT_SECRET');
   if (!MONGODB_ATLAS_URI) missing.push('MONGODB_ATLAS_CONNECTION_STRING');
   if (missing.length > 0) {
     throw new Error(`❌ Required secrets are missing in production: ${missing.join(', ')}`);
@@ -78,6 +82,22 @@ if (isProduction) {
 }
 
 const app = express();
+const staticOptions = {
+  etag: true,
+  maxAge: isProduction ? '1d' : 0,
+  setHeaders: (res, filePath) => {
+    const ext = path.extname(filePath || '').toLowerCase();
+    if (!isProduction) {
+      res.setHeader('Cache-Control', 'no-cache');
+      return;
+    }
+    if (ext === '.html') {
+      res.setHeader('Cache-Control', 'no-cache');
+      return;
+    }
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+  },
+};
 
 // Ensure Express respects proxy headers so OAuth redirect URIs keep https
 // when running behind load balancers or reverse proxies.
@@ -91,20 +111,24 @@ const { startInternalBots } = require('./services/bots/internalBots');
 const { startGuestCleanupTask } = require('./services/guestCleanup');
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: true,
+  credentials: true,
+}));
 app.use(helmet());
-app.use(morgan('dev'));
+app.use(compression());
+app.use(morgan(isProduction ? 'combined' : 'dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
 // Serve UI image assets from fallback locations if not present in public/
-app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'public', 'assets', 'images', 'UI')));
-app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'test-client', 'assets', 'images', 'UI')));
-app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'frontend', 'public', 'assets', 'images', 'UI')));
+app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'public', 'assets', 'images', 'UI'), staticOptions));
+app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'test-client', 'assets', 'images', 'UI'), staticOptions));
+app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'frontend', 'public', 'assets', 'images', 'UI'), staticOptions));
 // Serve Piece image assets from fallback locations if not present in public/
-app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'public', 'assets', 'images', 'Pieces')));
-app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'test-client', 'assets', 'images', 'Pieces')));
-app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'frontend', 'public', 'assets', 'images', 'Pieces')));
+app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'public', 'assets', 'images', 'Pieces'), staticOptions));
+app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'test-client', 'assets', 'images', 'Pieces'), staticOptions));
+app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'frontend', 'public', 'assets', 'images', 'Pieces'), staticOptions));
 
 async function connectToDatabase() {
   const defaultDevUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit';
@@ -160,6 +184,11 @@ app.get('/', (req, res) => {
 // Serve admin dashboard as a standalone endpoint
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
+});
+
+// Serve ML admin dashboard
+app.get('/ml-admin', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ml-admin.html'));
 });
 
 app.use('/api', routes);

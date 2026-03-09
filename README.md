@@ -3,6 +3,10 @@
 A REST API application built with Node.js and MongoDB. Real-time match and move
 updates are delivered through WebSocket events.
 
+The web client now includes private board annotations for live play and spectating:
+right-click a square to place a purple circle, right-drag to place a snapped arrow,
+and left-click anywhere to clear local drawings.
+
 ## Prerequisites
 
 - Node.js (v14 or higher)
@@ -15,19 +19,27 @@ updates are delivered through WebSocket events.
    ```bash
    npm install
    ```
-3. Copy `.env.example` to `.env.development` and update the values with your
+3. Copy `.env.example` to `.env` and update the values with your
    local Google OAuth credentials and MongoDB connection string. This file is
    ignored by git so each developer can manage their own secrets locally.
 
 ## Environment configuration
 
-- **Development:** Environment variables are loaded from `.env.development` via
+- **Development:** Environment variables are loaded from `.env` via
   `dotenv`. Ensure you keep this file private and never commit it to version
   control.
 - **Production:** All secrets must be provided as environment variables (for
   example via Azure App Service with Key Vault references). The application
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`,
-  and `MONGODB_ATLAS_CONNECTION_STRING` to be defined at runtime.
+  `JWT_SECRET`, and `MONGODB_ATLAS_CONNECTION_STRING` to be defined at runtime.
+  For Azure App Service, the default host for this repo is typically
+  `https://cloaksgambit.azurewebsites.net`, so the Google callback should be
+  `https://cloaksgambit.azurewebsites.net/api/auth/google/callback` unless you
+  have a custom domain.
+  If auth is served from a custom domain or embedded cross-site, set
+  `AUTH_COOKIE_SAME_SITE=none` and `AUTH_COOKIE_SECURE=true`. Set
+  `AUTH_COOKIE_DOMAIN` only when you intentionally want to share cookies across
+  subdomains.
 
 ## Running the Application
 
@@ -40,6 +52,11 @@ Production mode:
 ```bash
 npm start
 ```
+
+## ML Dashboard
+
+- ML admin UI: `http://localhost:3000/ml-admin`
+- Usage guide: [`docs/ml-admin.md`](docs/ml-admin.md)
 
 ## WebSocket Connection
 
@@ -67,17 +84,40 @@ socket.on("match:found", (match) => {
 });
 
 socket.on("game:update", (game) => {
-  // game: { matchId, gameId, board, actions }
+  // game: { matchId, gameId, board, actions, clocks, ... }
 });
 
 socket.on("game:finished", (summary) => {
-  // summary: { gameId, winner, winReason, ...full state }
+  // summary: { gameId, winner, winReason, clocks, ...full state }
 });
 ```
+
+`game:update`, `game:finished`, and `initialState.games[]` now include a `clocks`
+payload with `whiteMs`, `blackMs`, `activeColor`, `tickingWhite`, `tickingBlack`,
+and `label` so player and spectator clients can render the same server-authored
+clock baseline.
 
 Socket.IO automatically attempts to reconnect when the connection drops.
 For best results, listen for `disconnect` and `reconnect` events and refresh
 any application state after reconnecting.
+
+## Local Clock Debugging
+
+When running locally, the server can write verbose per-game clock logs to the
+operating system temp directory. By default this is enabled outside production
+and tests; set `CG_LOCAL_GAME_LOGS=false` to disable it or
+`CG_LOCAL_GAME_LOGS=true` to force-enable it.
+
+The log file path is:
+
+- Windows: `%TEMP%\cloaks-gambit-debug\clock-events.jsonl`
+
+Useful searches:
+
+```powershell
+rg -n "clock-transition|socket-payload|client-clock|timeout-check" "$env:TEMP\cloaks-gambit-debug\clock-events.jsonl"
+Get-Content "$env:TEMP\cloaks-gambit-debug\clock-events.jsonl" -Tail 80
+```
 
 ## API Endpoints
 

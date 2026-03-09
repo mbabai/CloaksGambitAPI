@@ -488,6 +488,10 @@ class MatchModel {
     const key = toIdString(doc?._id);
     if (!key) return;
 
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      return;
+    }
+
     const objectId = toObjectId(key);
     if (!objectId) {
       console.error('Failed to persist completed match - invalid ObjectId:', key);

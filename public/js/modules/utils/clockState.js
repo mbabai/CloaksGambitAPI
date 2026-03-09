@@ -184,3 +184,51 @@ export function computeGameClockState({
     tickingBlack,
   };
 }
+
+export function normalizeClockSnapshot(snapshot, {
+  receivedAt = Date.now(),
+  fallbackLabel = null,
+} = {}) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return null;
+  }
+
+  const whiteMs = Number(snapshot.whiteMs);
+  const blackMs = Number(snapshot.blackMs);
+  return {
+    whiteMs: Number.isFinite(whiteMs) ? whiteMs : 0,
+    blackMs: Number.isFinite(blackMs) ? blackMs : 0,
+    activeColor: normalizePlayer(snapshot.activeColor),
+    setupComplete: normalizeSetupFlags(snapshot.setupComplete),
+    tickingWhite: Boolean(snapshot.tickingWhite),
+    tickingBlack: Boolean(snapshot.tickingBlack),
+    label: snapshot.label || fallbackLabel || null,
+    receivedAt,
+  };
+}
+
+export function advanceClockSnapshot(base, now = Date.now()) {
+  if (!base) {
+    return {
+      whiteMs: 0,
+      blackMs: 0,
+      activeColor: null,
+      label: null,
+    };
+  }
+
+  const elapsed = Math.max(0, now - (base.receivedAt || now));
+  const whiteMs = Math.max(0, Math.round(
+    (base.whiteMs || 0) - (base.tickingWhite ? elapsed : 0)
+  ));
+  const blackMs = Math.max(0, Math.round(
+    (base.blackMs || 0) - (base.tickingBlack ? elapsed : 0)
+  ));
+
+  return {
+    whiteMs,
+    blackMs,
+    activeColor: normalizePlayer(base.activeColor),
+    label: base.label || null,
+  };
+}

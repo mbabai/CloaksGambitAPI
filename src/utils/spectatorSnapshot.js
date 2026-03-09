@@ -2,135 +2,8 @@ const maskGameForColor = require('./gameView');
 const Match = require('../models/Match');
 const Game = require('../models/Game');
 const User = require('../models/User');
+const { buildClockPayload } = require('./gameClock');
 const constants = require('../../shared/constants/game.json');
-
-const ACTIONS = constants?.actions || {};
-
-function describeTimeControl(baseMs, incMs) {
-  const parts = [];
-  if (Number.isFinite(baseMs) && baseMs > 0) {
-    const minutes = Math.floor(baseMs / 60000);
-    const seconds = Math.round((baseMs % 60000) / 1000);
-    if (minutes > 0 && seconds > 0) {
-      parts.push(`${minutes}m ${seconds}s`);
-    } else if (minutes > 0) {
-      parts.push(`${minutes}m`);
-    } else if (seconds > 0) {
-      parts.push(`${seconds}s`);
-    }
-  }
-  if (Number.isFinite(incMs) && incMs > 0) {
-    const incSeconds = incMs / 1000;
-    const formatted = Number.isInteger(incSeconds) ? String(incSeconds) : incSeconds.toFixed(1);
-    parts.push(`+ ${formatted}s`);
-  }
-  return parts.length > 0 ? parts.join(' ') : null;
-}
-
-function computeSpectatorClocks(game) {
-  const baseTime = Number(game?.timeControlStart);
-  if (!Number.isFinite(baseTime) || baseTime <= 0) {
-    return { whiteMs: 0, blackMs: 0, activeColor: null, label: describeTimeControl(null, null) };
-  }
-
-  const increment = Number(game?.increment) || 0;
-  const startTime = game?.startTime ? new Date(game.startTime).getTime() : null;
-  const label = describeTimeControl(baseTime, increment);
-  if (!startTime) {
-    return { whiteMs: baseTime, blackMs: baseTime, activeColor: null, label };
-  }
-
-  const actions = Array.isArray(game?.actions)
-    ? game.actions
-        .map((action) => ({ ...action, timestamp: new Date(action.timestamp).getTime() }))
-        .filter((action) => Number.isFinite(action.timestamp))
-        .sort((a, b) => a.timestamp - b.timestamp)
-    : [];
-
-  let white = baseTime;
-  let black = baseTime;
-  const finalSetupState = Array.isArray(game?.setupComplete)
-    ? game.setupComplete.map((value) => Boolean(value))
-    : [false, false];
-  const setupTimeline = [false, false];
-  let lastTs = startTime;
-  let derivedTurn = null;
-
-  actions.forEach((action) => {
-    const ts = action.timestamp;
-    if (!Number.isFinite(ts)) {
-      return;
-    }
-    const delta = Math.max(0, ts - lastTs);
-    if (delta > 0) {
-      if (!setupTimeline[0] || !setupTimeline[1]) {
-        if (!setupTimeline[0]) white -= delta;
-        if (!setupTimeline[1]) black -= delta;
-      } else if (derivedTurn === 0) {
-        white -= delta;
-      } else if (derivedTurn === 1) {
-        black -= delta;
-      }
-    }
-    lastTs = ts;
-
-    if (action.type === ACTIONS.SETUP) {
-      if (action.player === 0 || action.player === 1) {
-        setupTimeline[action.player] = true;
-        if (setupTimeline[0] && setupTimeline[1] && derivedTurn === null) {
-          derivedTurn = 0;
-        }
-      }
-      return;
-    }
-
-    if (derivedTurn === null) {
-      derivedTurn = 0;
-    }
-
-    if (action.player === 0) {
-      white += increment;
-      derivedTurn = 1;
-    } else if (action.player === 1) {
-      black += increment;
-      derivedTurn = 0;
-    }
-  });
-
-  const resolvedSetupFlags = [
-    finalSetupState[0] || setupTimeline[0],
-    finalSetupState[1] || setupTimeline[1],
-  ];
-
-  const activeColorFromGame = (game?.playerTurn === 0 || game?.playerTurn === 1)
-    ? game.playerTurn
-    : null;
-  const activeColor = activeColorFromGame !== null
-    ? activeColorFromGame
-    : ((resolvedSetupFlags[0] && resolvedSetupFlags[1]) ? derivedTurn : null);
-
-  const referenceTs = game?.isActive
-    ? Date.now()
-    : (game?.endTime ? new Date(game.endTime).getTime() : lastTs);
-  const tailDelta = Math.max(0, referenceTs - lastTs);
-  if (tailDelta > 0) {
-    if (!resolvedSetupFlags[0] || !resolvedSetupFlags[1]) {
-      if (!resolvedSetupFlags[0]) white -= tailDelta;
-      if (!resolvedSetupFlags[1]) black -= tailDelta;
-    } else if (activeColor === 0) {
-      white -= tailDelta;
-    } else if (activeColor === 1) {
-      black -= tailDelta;
-    }
-  }
-
-  return {
-    whiteMs: Math.max(0, Math.round(white)),
-    blackMs: Math.max(0, Math.round(black)),
-    activeColor,
-    label,
-  };
-}
 
 async function buildSpectateSnapshot(matchId) {
   if (!matchId) return null;
@@ -211,7 +84,10 @@ async function buildSpectateSnapshot(matchId) {
       setupComplete: Array.isArray(latestGame.setupComplete) ? latestGame.setupComplete : [],
     };
 
-    clocks = computeSpectatorClocks(latestGame);
+    clocks = buildClockPayload(latestGame, {
+      now: Date.now(),
+      setupActionType: constants?.actions?.SETUP,
+    });
   }
 
   const users = await User.find({ _id: { $in: Array.from(playerIds) } })

@@ -3,10 +3,11 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
 const {
   resolveStartTimeMs,
   calculateElapsedMs,
-  computeGameClockState,
+  getLiveClockStateSnapshot,
 } = require('../../../utils/gameClock');
 
 function resolveTimeoutResult(game, { now = Date.now(), setupActionType } = {}) {
@@ -15,16 +16,7 @@ function resolveTimeoutResult(game, { now = Date.now(), setupActionType } = {}) 
     return { expired: false, winner: null, draw: false, clock: null };
   }
 
-  const increment = Number(game?.increment);
-  const computed = computeGameClockState({
-    baseTime,
-    increment: Number.isFinite(increment) && increment >= 0 ? increment : 0,
-    startTime: resolveStartTimeMs(game),
-    endTime: game?.endTime,
-    actions: game?.actions,
-    setupComplete: game?.setupComplete,
-    playerTurn: game?.playerTurn,
-    isActive: Boolean(game?.isActive),
+  const computed = getLiveClockStateSnapshot(game, {
     now,
     setupActionType,
   });
@@ -83,6 +75,13 @@ router.post('/', async (req, res) => {
     const timeout = resolveTimeoutResult(game, {
       now,
       setupActionType: config.actions.get('SETUP'),
+    });
+    appendLocalDebugLog('timeout-check', {
+      gameId,
+      now,
+      playerTurn: game.playerTurn,
+      setupComplete: game.setupComplete,
+      result: timeout,
     });
 
     if (!timeout.expired) {

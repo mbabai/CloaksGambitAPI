@@ -207,4 +207,12 @@ export async function apiGetTimeSettings() {
   return res.json().catch(() => null);
 }
 
+export async function apiPostLocalDebugLog(payload = {}) {
+  return authFetch('/api/v1/debug/localLog', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 

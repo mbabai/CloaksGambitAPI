@@ -4,7 +4,11 @@ import { PIECE_IMAGES, ACTIONS, WIN_REASONS } from '../constants.js';
 import { renderBars } from '../render/bars.js';
 import { computeBoardMetrics } from '../layout.js';
 import { formatClock, describeTimeControl } from '../utils/timeControl.js';
-import { computeGameClockState } from '../utils/clockState.js';
+import {
+  computeGameClockState,
+  normalizeClockSnapshot,
+  advanceClockSnapshot,
+} from '../utils/clockState.js';
 import { getBubbleAsset } from '../ui/icons.js';
 import { setBannerState, applyBannerVariant } from '../ui/banners.js';
 import { createOverlay } from '../ui/overlays.js';
@@ -130,6 +134,7 @@ export function createSpectateController(options) {
         identityMap: PIECE_IMAGES,
         refs: spectateRefs,
         alwaysAttachGameRefs: true,
+        annotationsEnabled: true,
       })
     : null;
 
@@ -170,27 +175,7 @@ export function createSpectateController(options) {
   }
 
   function updateSpectateClockDisplay() {
-    const base = spectateState.clockBase;
-    if (!base) {
-      spectateState.clockDisplay = { whiteMs: 0, blackMs: 0, label: null };
-      updateSpectateClockElements();
-      return;
-    }
-    const now = Date.now();
-    const elapsed = Math.max(0, now - base.receivedAt);
-    let white = base.whiteMs;
-    let black = base.blackMs;
-    if (base.tickingWhite) {
-      white -= elapsed;
-    }
-    if (base.tickingBlack) {
-      black -= elapsed;
-    }
-    spectateState.clockDisplay = {
-      whiteMs: Math.max(0, Math.round(white)),
-      blackMs: Math.max(0, Math.round(black)),
-      label: base.label || null,
-    };
+    spectateState.clockDisplay = advanceClockSnapshot(spectateState.clockBase, Date.now());
     updateSpectateClockElements();
   }
 
@@ -209,13 +194,29 @@ export function createSpectateController(options) {
     }
 
     const baseTime = Number(game.timeControlStart);
+    const matchActive = snapshot?.match?.isActive !== false;
+    const now = Date.now();
+    const fallbackLabel = describeTimeControl(game.timeControlStart, game.increment) || null;
+    const serverSnapshot = normalizeClockSnapshot(snapshot?.clocks, {
+      receivedAt: now,
+      fallbackLabel,
+    });
+
+    if (serverSnapshot) {
+      spectateState.clockBase = serverSnapshot;
+      updateSpectateClockDisplay();
+      stopSpectateClockTimer();
+      if (serverSnapshot.tickingWhite || serverSnapshot.tickingBlack) {
+        spectateState.clockTimer = setInterval(updateSpectateClockDisplay, 200);
+      }
+      return;
+    }
+
     if (!Number.isFinite(baseTime) || baseTime <= 0) {
       resetSpectateClockState();
       return;
     }
 
-    const matchActive = snapshot?.match?.isActive !== false;
-    const now = Date.now();
     const computed = computeGameClockState({
       baseTime,
       increment: game.increment,
@@ -228,34 +229,16 @@ export function createSpectateController(options) {
       now,
     });
 
-    const setupFlags = Array.isArray(computed.setupComplete)
-      ? computed.setupComplete
-      : [false, false];
-    const whiteSetupComplete = setupFlags[0] ?? false;
-    const blackSetupComplete = setupFlags[1] ?? false;
-    const bothSetupComplete = whiteSetupComplete && blackSetupComplete;
-    const clocksActive = Boolean(game.isActive && matchActive);
-    const tickWhite = clocksActive && (bothSetupComplete ? computed.activeColor === 0 : !whiteSetupComplete);
-    const tickBlack = clocksActive && (bothSetupComplete ? computed.activeColor === 1 : !blackSetupComplete);
-
-    const whiteMs = Number.isFinite(computed.whiteMs) ? computed.whiteMs : 0;
-    const blackMs = Number.isFinite(computed.blackMs) ? computed.blackMs : 0;
-    const label = snapshot?.clocks?.label
-      || describeTimeControl(game.timeControlStart, game.increment)
-      || null;
-
-    spectateState.clockBase = {
-      whiteMs,
-      blackMs,
-      activeColor: computed.activeColor,
-      label,
+    spectateState.clockBase = normalizeClockSnapshot({
+      ...computed,
+      label: fallbackLabel,
+    }, {
       receivedAt: now,
-      tickingWhite: tickWhite,
-      tickingBlack: tickBlack,
-    };
+      fallbackLabel,
+    });
     updateSpectateClockDisplay();
     stopSpectateClockTimer();
-    if (tickWhite || tickBlack) {
+    if (spectateState.clockBase?.tickingWhite || spectateState.clockBase?.tickingBlack) {
       spectateState.clockTimer = setInterval(updateSpectateClockDisplay, 200);
     }
   }

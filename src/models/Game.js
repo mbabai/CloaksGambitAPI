@@ -10,6 +10,7 @@ const {
   QueryBase,
   applySelect,
 } = require('./inMemoryUtils');
+const { finalizeStoredClockState } = require('../utils/gameClock');
 
 const defaultConfig = new ServerConfig();
 
@@ -66,6 +67,51 @@ const drawOfferSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now,
+  },
+}, { _id: false });
+
+const clockStateSchema = new mongoose.Schema({
+  whiteMs: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  blackMs: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  activeColor: {
+    type: Number,
+    default: null,
+    validate: {
+      validator: function validator(value) {
+        return value === null || value === 0 || value === 1;
+      },
+      message: 'Clock activeColor must be null, 0, or 1',
+    },
+  },
+  setupComplete: {
+    type: [Boolean],
+    default: [false, false],
+    validate: {
+      validator: function validator(value) {
+        return Array.isArray(value) && value.length === 2;
+      },
+      message: 'Clock setupComplete must contain exactly two entries',
+    },
+  },
+  tickingWhite: {
+    type: Boolean,
+    default: false,
+  },
+  tickingBlack: {
+    type: Boolean,
+    default: false,
+  },
+  lastUpdatedAt: {
+    type: Date,
+    default: null,
   },
 }, { _id: false });
 
@@ -333,6 +379,10 @@ const gameSchema = new mongoose.Schema({
       message: 'Draw offer cooldowns must contain exactly two entries',
     },
   },
+  clockState: {
+    type: clockStateSchema,
+    default: null,
+  },
 });
 
 async function updateMatchAfterGame(game, createNextGame) {
@@ -421,6 +471,10 @@ gameSchema.methods.endGame = async function endGame(winner, winReason) {
   this.drawOfferCooldowns = [null, null];
   this.markModified('drawOffer');
   this.markModified('drawOfferCooldowns');
+  finalizeStoredClockState(this, {
+    now: this.endTime.getTime(),
+    reason: 'mongoose-endGame',
+  });
   await this.save();
 
   await updateMatchAfterGame(this, async () => {
@@ -589,6 +643,7 @@ class GameDocument {
     this.onDeckingPlayer = data.onDeckingPlayer ?? null;
     this.drawOffer = data.drawOffer ? cloneValue(data.drawOffer) : null;
     this.drawOfferCooldowns = ensureTwo(data.drawOfferCooldowns, [null, null]);
+    this.clockState = data.clockState ? cloneValue(data.clockState) : null;
   }
 
   markModified() {
@@ -628,6 +683,10 @@ class GameDocument {
     this.isActive = false;
     this.drawOffer = null;
     this.drawOfferCooldowns = [null, null];
+    finalizeStoredClockState(this, {
+      now: this.endTime.getTime(),
+      reason: 'memory-endGame',
+    });
 
     await this.save();
     await GameModel._persistDocument(this);
@@ -721,6 +780,10 @@ class GameModel {
   static async _persistDocument(doc) {
     const key = toIdString(doc?._id);
     if (!key) return;
+
+    if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+      return;
+    }
 
     const objectId = toObjectId(key);
     if (!objectId) {

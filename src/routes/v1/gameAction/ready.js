@@ -3,6 +3,8 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
+const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
 const { resolveUserFromRequest } = require('../../../utils/authTokens');
 const User = require('../../../models/User');
 
@@ -20,7 +22,7 @@ router.post('/', async (req, res) => {
       isBot: requesterRecord?.isBot || false,
       botDifficulty: requesterRecord?.botDifficulty || null,
     };
-    console.log('Ready endpoint called with:', {
+    debugLog('Ready endpoint called with:', {
       gameId,
       color,
       ...requesterDetails,
@@ -28,7 +30,7 @@ router.post('/', async (req, res) => {
 
     const normalizedColor = parseInt(color, 10);
     if (normalizedColor !== 0 && normalizedColor !== 1) {
-      console.log('Invalid color:', color);
+      debugLog('Invalid color:', color);
       return res.status(400).json({ message: 'Invalid color' });
     }
 
@@ -86,7 +88,7 @@ router.post('/', async (req, res) => {
     // If both players are now ready, emit explicit signal (once)
     try {
       if (finalGame.playersReady?.[0] && finalGame.playersReady?.[1]) {
-        console.log('[server] both players READY – emitting players:bothReady', {
+        debugLog('[server] both players READY – emitting players:bothReady', {
           gameId: finalGame._id.toString(),
           players: (finalGame.players || []).map(p => p.toString())
         });

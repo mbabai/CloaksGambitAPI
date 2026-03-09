@@ -3,8 +3,16 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
+const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
 const { resolveUserFromRequest } = require('../../../utils/authTokens');
 const User = require('../../../models/User');
+const {
+  ensureStoredClockState,
+  transitionStoredClockState,
+  summarizeClockState,
+} = require('../../../utils/gameClock');
+const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
 
 router.post('/', async (req, res) => {
   try {
@@ -21,7 +29,7 @@ router.post('/', async (req, res) => {
       isBot: requesterRecord?.isBot || false,
       botDifficulty: requesterRecord?.botDifficulty || null,
     };
-    console.log('[gameAction:onDeck] incoming request', {
+    debugLog('[gameAction:onDeck] incoming request', {
       gameId,
       color,
       identity: piece?.identity,
@@ -34,17 +42,31 @@ router.post('/', async (req, res) => {
     }
 
     const config = await getServerConfig();
+    const now = Date.now();
     const normalizedColor = parseInt(color, 10);
     if (normalizedColor !== 0 && normalizedColor !== 1) {
       return res.status(400).json({ message: 'Invalid color' });
     }
+
+    ensureStoredClockState(game, {
+      now,
+      setupActionType: config.actions.get('SETUP'),
+    });
+    appendLocalDebugLog('clock-route-entry', {
+      route: 'onDeck',
+      gameId,
+      color: normalizedColor,
+      playerTurn: game.playerTurn,
+      onDeckingPlayer: game.onDeckingPlayer,
+      clockState: summarizeClockState(game.clockState),
+    });
 
     if (!game.isActive) {
       return res.status(400).json({ message: 'Game is not active' });
     }
 
     // Add debugging information
-    console.log('On-deck request debug:', {
+    debugLog('On-deck request debug:', {
       requestedColor: normalizedColor,
       gamePlayerTurn: game.playerTurn,
       gameOnDeckingPlayer: game.onDeckingPlayer,
@@ -91,6 +113,13 @@ router.post('/', async (req, res) => {
       lastMove.state = config.moveStates.get('RESOLVED');
       game.playerTurn = lastMove.player === 0 ? 1 : 0;
     }
+
+    transitionStoredClockState(game, {
+      actingColor: normalizedColor,
+      now,
+      setupActionType: config.actions.get('SETUP'),
+      reason: 'onDeck',
+    });
 
     game.actions.push({
       type: config.actions.get('ON_DECK'),

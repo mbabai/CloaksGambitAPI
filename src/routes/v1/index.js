@@ -53,6 +53,8 @@ const lobbyEnterBot = require('./lobby/enterBot');
 
 // Bot routes
 const botsRegister = require('./bots/register');
+const mlRoutes = require('./ml');
+const debugLocalLog = require('./debug/localLog');
 
 // User routes
 router.use('/users/getList', userGetList);
@@ -106,5 +108,11 @@ router.use('/lobby/matchmaking', lobbyMatchmaking);
 
 // Bot routes
 router.use('/bots/register', botsRegister);
+
+// ML routes
+router.use('/ml', mlRoutes);
+
+// Debug routes
+router.use('/debug/localLog', debugLocalLog);
 
 module.exports = router;

@@ -60,6 +60,9 @@ export function renderBoard({
       // checkered pattern is oriented correctly for each player.
       const light = currentIsWhite ? ((r + c) % 2 === 1) : ((r + c) % 2 === 0);
       const cell = document.createElement('div');
+      cell.dataset.boardCell = '1';
+      cell.dataset.uiRow = String(r);
+      cell.dataset.uiCol = String(c);
       cell.style.width = squareSize + 'px';
       cell.style.height = squareSize + 'px';
       cell.style.boxSizing = 'border-box';

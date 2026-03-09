@@ -3,8 +3,16 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
+const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
 const { resolveUserFromRequest } = require('../../../utils/authTokens');
 const User = require('../../../models/User');
+const {
+  ensureStoredClockState,
+  transitionStoredClockState,
+  summarizeClockState,
+} = require('../../../utils/gameClock');
+const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
 
 router.post('/', async (req, res) => {
   try {
@@ -21,7 +29,7 @@ router.post('/', async (req, res) => {
       isBot: requesterRecord?.isBot || false,
       botDifficulty: requesterRecord?.botDifficulty || null,
     };
-    console.log('[gameAction:setup] incoming request', {
+    debugLog('[gameAction:setup] incoming request', {
       gameId,
       color,
       ...requesterDetails,
@@ -44,6 +52,19 @@ router.post('/', async (req, res) => {
     }
 
     const config = await getServerConfig();
+    const now = Date.now();
+    ensureStoredClockState(game, {
+      now,
+      setupActionType: config.actions.get('SETUP'),
+    });
+    appendLocalDebugLog('clock-route-entry', {
+      route: 'setup',
+      gameId,
+      color: normalizedColor,
+      playerTurn: game.playerTurn,
+      setupComplete: game.setupComplete,
+      clockState: summarizeClockState(game.clockState),
+    });
     const expectedRank = normalizedColor === 0 ? 0 : config.boardDimensions.RANKS - 1;
     const expectedFiles = config.boardDimensions.FILES;
 
@@ -55,7 +76,7 @@ router.post('/', async (req, res) => {
     }
 
     // Validate onDeck
-    if (!onDeck || !onDeck.identity) {
+    if (!onDeck || !onDeck.identity || onDeck.color !== normalizedColor) {
       return res.status(400).json({ message: 'Must provide a valid onDeck piece' });
     }
 
@@ -110,19 +131,19 @@ router.post('/', async (req, res) => {
     }
 
     // Validate against stash
-    console.log('Setup - Game stashes:', JSON.stringify(game.stashes));
-    console.log('Setup - Normalized color:', normalizedColor);
+    debugLog('Setup - Game stashes:', JSON.stringify(game.stashes));
+    debugLog('Setup - Normalized color:', normalizedColor);
     
     if (!game.stashes || !Array.isArray(game.stashes) || game.stashes.length !== 2) {
-      console.log('Setup - Stash validation failed: stashes not properly initialized');
+      debugLog('Setup - Stash validation failed: stashes not properly initialized');
       return res.status(500).json({ message: 'Game stash not properly initialized' });
     }
     
     const stash = game.stashes[normalizedColor];
-    console.log('Setup - Selected stash:', JSON.stringify(stash));
+    debugLog('Setup - Selected stash:', JSON.stringify(stash));
     
     if (!stash || !Array.isArray(stash)) {
-      console.log('Setup - Stash validation failed: selected stash not properly initialized');
+      debugLog('Setup - Stash validation failed: selected stash not properly initialized');
       return res.status(500).json({ message: `Stash for color ${normalizedColor} not properly initialized` });
     }
     
@@ -162,11 +183,6 @@ router.post('/', async (req, res) => {
       newStash.splice(onDeckIndex, 1);
     }
 
-    // Ensure the stash array maintains its structure
-    if (newStash.length === 0) {
-      newStash.push({ color: normalizedColor, identity: 0 }); // Add a placeholder piece to maintain array structure
-    }
-
     // Update game state
     game.stashes[normalizedColor] = newStash;
     game.setupComplete[normalizedColor] = true;
@@ -178,7 +194,7 @@ router.post('/', async (req, res) => {
     }
 
     // Add setup action
-    console.log('Setup - Adding action...');
+    debugLog('Setup - Adding action...');
     try {
       game.addAction(
         config.actions.get('SETUP'),
@@ -194,7 +210,7 @@ router.post('/', async (req, res) => {
           }
         }
       );
-      console.log('Setup - Action added successfully');
+      debugLog('Setup - Action added successfully');
     } catch (actionError) {
       console.error('Setup - Action error:', actionError);
       throw actionError;
@@ -205,17 +221,25 @@ router.post('/', async (req, res) => {
       game.playerTurn = 0;
     }
 
+    transitionStoredClockState(game, {
+      actingColor: normalizedColor,
+      now,
+      setupActionType: config.actions.get('SETUP'),
+      applyIncrement: false,
+      reason: 'setup',
+    });
+
     // Log the final game state before saving
-    console.log('Setup - Final game state before save:');
-    console.log('  - Stashes:', JSON.stringify(game.stashes));
-    console.log('  - Setup complete:', JSON.stringify(game.setupComplete));
-    console.log('  - On decks:', JSON.stringify(game.onDecks));
-    console.log('  - Board:', JSON.stringify(game.board));
-    console.log('  - Player turn:', game.playerTurn);
+    debugLog('Setup - Final game state before save:');
+    debugLog('  - Stashes:', JSON.stringify(game.stashes));
+    debugLog('  - Setup complete:', JSON.stringify(game.setupComplete));
+    debugLog('  - On decks:', JSON.stringify(game.onDecks));
+    debugLog('  - Board:', JSON.stringify(game.board));
+    debugLog('  - Player turn:', game.playerTurn);
 
     try {
       // Validate the game before saving
-      console.log('Setup - Validating game before save...');
+      debugLog('Setup - Validating game before save...');
       const validationError = game.validateSync();
       if (validationError) {
         console.error('Setup - Validation error:', validationError);
@@ -227,7 +251,7 @@ router.post('/', async (req, res) => {
       }
       
       await game.save();
-      console.log('Setup - Game saved successfully');
+      debugLog('Setup - Game saved successfully');
     } catch (saveError) {
       console.error('Setup - Save error:', saveError);
       console.error('Setup - Save error details:', saveError.errors);

@@ -8,7 +8,8 @@ import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog } from '/js/modules/api/game.js';
+import { createLocalGameLogger } from '/js/modules/debug/localGameLogger.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
 import { renderGameButton } from '/js/modules/render/gameButton.js';
@@ -30,7 +31,11 @@ import {
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
 import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
-import { computeGameClockState } from '/js/modules/utils/clockState.js';
+import {
+  computeGameClockState,
+  normalizeClockSnapshot,
+  advanceClockSnapshot,
+} from '/js/modules/utils/clockState.js';
 import { renderActiveMatchesList, createActiveMatchesStore, fetchActiveMatchesList } from '/js/modules/spectate/activeMatches.js';
 import { createSpectateController } from '/js/modules/spectate/controller.js';
 import { getLatestMoveContext } from '/js/shared/latestMoveContext.js';
@@ -87,6 +92,48 @@ logBootConstantsOnce();
 
     return false;
   })();
+
+  const logLocalGameEvent = createLocalGameLogger({
+    enabled: isLocalDevelopmentHost,
+    source: 'player-client',
+    sender: apiPostLocalDebugLog,
+  });
+
+  function summarizeClockSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      return null;
+    }
+    return {
+      whiteMs: Number.isFinite(Number(snapshot.whiteMs)) ? Number(snapshot.whiteMs) : 0,
+      blackMs: Number.isFinite(Number(snapshot.blackMs)) ? Number(snapshot.blackMs) : 0,
+      activeColor: snapshot.activeColor === 0 || snapshot.activeColor === 1
+        ? snapshot.activeColor
+        : null,
+      tickingWhite: Boolean(snapshot.tickingWhite),
+      tickingBlack: Boolean(snapshot.tickingBlack),
+      label: snapshot.label || null,
+      receivedAt: Number.isFinite(Number(snapshot.receivedAt)) ? Number(snapshot.receivedAt) : null,
+    };
+  }
+
+  function emitLocalClockDebug(event, payload = {}) {
+    try {
+      logLocalGameEvent(event, {
+        gameId: payload?.gameId || lastGameId || null,
+        userId: userId || null,
+        myColor,
+        currentIsWhite,
+        currentPlayerTurn,
+        clockBase: summarizeClockSnapshot(clockBaseSnapshot),
+        displayedClock: {
+          whiteMs: whiteTimeMs,
+          blackMs: blackTimeMs,
+          activeColor,
+        },
+        ...payload,
+      });
+    } catch (_) {}
+  }
 
   const allowGuestRankedQueue = isLocalDevelopmentHost;
   const selectWrap = document.getElementById('selectWrap');
@@ -1039,6 +1086,7 @@ logBootConstantsOnce();
   let activeColor = null; // 0 white, 1 black
   let lastClockUpdate = 0;
   let clockInterval = null;
+  let clockBaseSnapshot = null;
   let topClockEl = null;
   let bottomClockEl = null;
   let timeExpiredSent = false;
@@ -1399,8 +1447,47 @@ logBootConstantsOnce();
     }
   }
 
+  function syncClockBase(base) {
+    clockBaseSnapshot = base || null;
+    if (clockBaseSnapshot) {
+      const display = advanceClockSnapshot(clockBaseSnapshot, Date.now());
+      whiteTimeMs = display.whiteMs;
+      blackTimeMs = display.blackMs;
+      activeColor = display.activeColor;
+    }
+    updateClockDisplay();
+    emitLocalClockDebug('client-clock-base-synced', {
+      serverClock: summarizeClockSnapshot(base),
+    });
+    const expired = whiteTimeMs <= 0 || blackTimeMs <= 0;
+    if (expired && lastGameId && !timeExpiredSent) {
+      timeExpiredSent = true;
+      apiCheckTimeControl(lastGameId).catch(err => console.error('checkTimeControl failed', err));
+    } else if (!expired) {
+      timeExpiredSent = false;
+    }
+    if (gameFinished || !clockBaseSnapshot || (!clockBaseSnapshot.tickingWhite && !clockBaseSnapshot.tickingBlack)) {
+      stopClockInterval();
+      return false;
+    }
+    startClockInterval();
+    return true;
+  }
+
   function tickClock() {
     const now = Date.now();
+    if (clockBaseSnapshot) {
+      const display = advanceClockSnapshot(clockBaseSnapshot, now);
+      whiteTimeMs = display.whiteMs;
+      blackTimeMs = display.blackMs;
+      activeColor = display.activeColor;
+      updateClockDisplay();
+      if (!timeExpiredSent && (whiteTimeMs <= 0 || blackTimeMs <= 0) && lastGameId) {
+        timeExpiredSent = true;
+        apiCheckTimeControl(lastGameId).catch(err => console.error('checkTimeControl failed', err));
+      }
+      return;
+    }
     const diff = now - lastClockUpdate;
     lastClockUpdate = now;
     if (!setupComplete[0] || !setupComplete[1]) {
@@ -1430,11 +1517,22 @@ logBootConstantsOnce();
     clockInterval = null;
   }
 
-  function recomputeClocksFromServer() {
+  function recomputeClocksFromServer(serverClockSnapshot = null) {
+    const fallbackLabel = getClockLabel();
+    const normalizedServerClock = normalizeClockSnapshot(serverClockSnapshot, {
+      receivedAt: Date.now(),
+      fallbackLabel,
+    });
+    if (normalizedServerClock) {
+      syncClockBase(normalizedServerClock);
+      return;
+    }
+
     const baseTime = Number.isFinite(timeControl) && timeControl > 0
       ? timeControl
       : (Number.isFinite(expectedTimeControl) && expectedTimeControl > 0 ? expectedTimeControl : null);
     if (!baseTime) {
+      clockBaseSnapshot = null;
       updateClockDisplay();
       return;
     }
@@ -1460,6 +1558,7 @@ logBootConstantsOnce();
       whiteTimeMs = baseTime;
       blackTimeMs = baseTime;
       activeColor = null;
+      clockBaseSnapshot = null;
       stopClockInterval();
       updateClockDisplay();
       return;
@@ -1477,35 +1576,17 @@ logBootConstantsOnce();
       now,
     });
 
-    whiteTimeMs = computed.whiteMs;
-    blackTimeMs = computed.blackMs;
-    activeColor = computed.activeColor;
-    updateClockDisplay();
-    const expired = whiteTimeMs <= 0 || blackTimeMs <= 0;
-    if (expired && lastGameId && !timeExpiredSent) {
-      timeExpiredSent = true;
-      apiCheckTimeControl(lastGameId).catch(err => console.error('checkTimeControl failed', err));
-    } else if (!expired) {
-      timeExpiredSent = false;
-    }
-    startClockInterval();
+    syncClockBase(normalizeClockSnapshot({
+      ...computed,
+      label: fallbackLabel,
+    }, {
+      receivedAt: now,
+      fallbackLabel,
+    }));
   }
 
   function applyLocalMoveClock() {
-    if (activeColor === null) return;
-    const now = Date.now();
-    const diff = now - lastClockUpdate;
-    if (activeColor === 0) {
-      whiteTimeMs -= diff;
-      whiteTimeMs += increment;
-      activeColor = 1;
-    } else {
-      blackTimeMs -= diff;
-      blackTimeMs += increment;
-      activeColor = 0;
-    }
-    lastClockUpdate = now;
-    updateClockDisplay();
+    return false;
   }
 
   function updateFindButton() {
@@ -1790,6 +1871,12 @@ logBootConstantsOnce();
         console.log('[socket] game:finished', payload);
         const finishSnapshot = payload && payload.game ? payload.game : payload;
         logGameSnapshot('game:finished', finishSnapshot);
+        emitLocalClockDebug('client-game-finished-received', {
+          gameId: payload?.gameId || finishSnapshot?._id || finishSnapshot?.id || lastGameId || null,
+          incomingClock: summarizeClockSnapshot(finishSnapshot?.clocks || null),
+          winner: payload?.winner,
+          winReason: payload?.winReason,
+        });
         gameFinished = payload?.winReason !== undefined && payload?.winReason !== null;
         stopClockInterval();
         selected = null;
@@ -3805,7 +3892,8 @@ logBootConstantsOnce();
     boardView = createBoardView({
       container: boardRoot,
       identityMap: PIECE_IMAGES,
-      refs
+      refs,
+      annotationsEnabled: true,
     });
 
     topBar = document.createElement('div');
@@ -3887,6 +3975,7 @@ logBootConstantsOnce();
     pendingAction = null;
     queueStatusKnown = true;
     stopClockInterval();
+    clockBaseSnapshot = null;
     gameFinished = false;
     updateFindButton();
     currentMatch = null;
@@ -4161,6 +4250,10 @@ logBootConstantsOnce();
         visible: canBomb,
         onClick: () => {
           if (!lastGameId) return;
+          emitLocalClockDebug('client-action-submit', {
+            action: 'bomb',
+            color: myColor,
+          });
           applyLocalMoveClock();
           apiBomb(lastGameId, myColor).catch(err => console.error('Bomb failed', err));
         },
@@ -4181,6 +4274,10 @@ logBootConstantsOnce();
         visible: canPass,
         onClick: () => {
           if (!lastGameId) return;
+          emitLocalClockDebug('client-action-submit', {
+            action: 'pass',
+            color: myColor,
+          });
           applyLocalMoveClock();
           apiPass(lastGameId, myColor).catch(err => console.error('Pass failed', err));
         },
@@ -4201,6 +4298,10 @@ logBootConstantsOnce();
         visible: canChallenge,
         onClick: () => {
           if (!lastGameId) return;
+          emitLocalClockDebug('client-action-submit', {
+            action: 'challenge',
+            color: myColor,
+          });
           applyLocalMoveClock();
           apiChallenge(lastGameId, myColor).catch(err => console.error('Challenge failed', err));
         },
@@ -5046,6 +5147,14 @@ logBootConstantsOnce();
 
   function setStateFromServer(u) {
     try {
+      emitLocalClockDebug('client-game-state-received', {
+        gameId: u?.gameId || u?._id || lastGameId || null,
+        incomingClock: summarizeClockSnapshot(u?.clocks || null),
+        incomingPlayerTurn: u?.playerTurn,
+        incomingSetupComplete: Array.isArray(u?.setupComplete) ? u.setupComplete.slice(0, 2) : null,
+        actionCount: Array.isArray(u?.actions) ? u.actions.length : null,
+        moveCount: Array.isArray(u?.moves) ? u.moves.length : null,
+      });
       // Avoid overwriting optimistic in-game moves while a drag or selection is active
       if (!dragging) {
         if (Array.isArray(u.board)) currentBoard = u.board; else if (u.board === null) currentBoard = null;
@@ -5241,7 +5350,7 @@ logBootConstantsOnce();
         }
       }
     } catch (_) {}
-    recomputeClocksFromServer();
+    recomputeClocksFromServer(u?.clocks || null);
   }
 
   // ---- Setup helpers ----
@@ -5313,6 +5422,7 @@ logBootConstantsOnce();
     // Mouse: threshold promotion to drag, otherwise click-to-move
     el.addEventListener('mousedown', (e) => {
       if (gameFinished) return;
+      if (e.button !== 0) return;
       if (Date.now() < suppressMouseUntil) return; // ignore synthetic mouse after touch
       const myColorIdx = currentIsWhite ? 0 : 1;
       const isOnDeckTurn = (!isInSetup && currentOnDeckingPlayer === myColorIdx);
@@ -5419,6 +5529,7 @@ logBootConstantsOnce();
     const sourceTarget = { type: 'boardAny', uiR, uiC };
     cell.addEventListener('mousedown', (e) => {
       if (gameFinished) return;
+      if (e.button !== 0) return;
       if (Date.now() < suppressMouseUntil) return;
       if (isInSetup) return; // not in setup
       if (currentOnDeckingPlayer !== null) return; // disable board moves during on-deck phase
@@ -5574,6 +5685,13 @@ logBootConstantsOnce();
         try {
           console.log('[move] commit', { from, to, declaration: decl });
           const color = myColorIdx;
+          emitLocalClockDebug('client-action-submit', {
+            action: 'move',
+            color,
+            from,
+            to,
+            declaration: decl,
+          });
           applyLocalMoveClock();
           await apiMove({ gameId: lastGameId, color, from, to, declaration: decl });
         } catch (e) { console.error('apiMove failed', e); }
@@ -5706,6 +5824,13 @@ logBootConstantsOnce();
       showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration, { alwaysShow: true });
       try {
         console.log('[move] commit', { from, to, declaration });
+        emitLocalClockDebug('client-action-submit', {
+          action: 'move',
+          color: myColorIdx,
+          from,
+          to,
+          declaration,
+        });
         applyLocalMoveClock();
         await apiMove({ gameId: lastGameId, color: myColorIdx, from, to, declaration });
       } catch (e) { console.error('apiMove failed', e); }
@@ -5773,6 +5898,11 @@ logBootConstantsOnce();
         selected = null;
         renderBoardAndBars();
         if (lastGameId) {
+          emitLocalClockDebug('client-action-submit', {
+            action: 'onDeck',
+            color: myColorIdx,
+            identity: piece.identity,
+          });
           apiOnDeck(lastGameId, myColorIdx, { identity: piece.identity }).catch(err => console.error('onDeck failed', err));
         }
         return;
@@ -5882,6 +6012,11 @@ logBootConstantsOnce();
                 currentOnDecks = currentOnDecks.map((p, idx) => (idx === myColorIdx ? piece : p));
                 currentOnDeckingPlayer = null;
                 if (lastGameId) {
+                  emitLocalClockDebug('client-action-submit', {
+                    action: 'onDeck',
+                    color: myColorIdx,
+                    identity: piece.identity,
+                  });
                   apiOnDeck(lastGameId, myColorIdx, { identity: piece.identity }).catch(err => console.error('onDeck failed', err));
                 }
               }

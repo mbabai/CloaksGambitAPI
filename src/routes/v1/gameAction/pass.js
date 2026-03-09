@@ -3,6 +3,17 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const {
+  ensureStoredClockState,
+  transitionStoredClockState,
+  summarizeClockState,
+} = require('../../../utils/gameClock');
+const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
+const {
+  getLastAction,
+  getLastMove,
+  isPendingMove,
+} = require('../../../services/game/liveGameRules');
 
 router.post('/', async (req, res) => {
   try {
@@ -14,10 +25,22 @@ router.post('/', async (req, res) => {
     }
 
     const config = await getServerConfig();
+    const now = Date.now();
     const normalizedColor = parseInt(color, 10);
     if (normalizedColor !== 0 && normalizedColor !== 1) {
       return res.status(400).json({ message: 'Invalid color' });
     }
+    ensureStoredClockState(game, {
+      now,
+      setupActionType: config.actions.get('SETUP'),
+    });
+    appendLocalDebugLog('clock-route-entry', {
+      route: 'pass',
+      gameId,
+      color: normalizedColor,
+      playerTurn: game.playerTurn,
+      clockState: summarizeClockState(game.clockState),
+    });
 
     if (!game.isActive) {
       return res.status(400).json({ message: 'Game is not active' });
@@ -27,14 +50,17 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: "Not this player's turn" });
     }
 
-    const lastAction = game.actions[game.actions.length - 1];
+    const lastAction = getLastAction(game);
     if (!lastAction || lastAction.type !== config.actions.get('BOMB')) {
       return res.status(400).json({ message: 'Last action was not a bomb' });
     }
 
-    const lastMove = game.moves[game.moves.length - 1];
+    const lastMove = getLastMove(game);
     if (!lastMove) {
       return res.status(400).json({ message: 'No move to resolve' });
+    }
+    if (!isPendingMove(lastMove, config)) {
+      return res.status(400).json({ message: 'No pending move to resolve' });
     }
 
     const { from } = lastMove;
@@ -49,6 +75,13 @@ router.post('/', async (req, res) => {
     game.playerTurn = normalizedColor === 0 ? 1 : 0;
 
     lastMove.state = config.moveStates.get('RESOLVED');
+
+    transitionStoredClockState(game, {
+      actingColor: normalizedColor,
+      now,
+      setupActionType: config.actions.get('SETUP'),
+      reason: 'pass',
+    });
 
     await game.addAction(config.actions.get('PASS'), normalizedColor, {});
     game.movesSinceAction = 0;

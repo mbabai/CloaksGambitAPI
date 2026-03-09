@@ -1,3 +1,5 @@
+const { appendLocalDebugLog } = require('./localDebugLogger');
+
 function toTimestamp(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') {
@@ -209,6 +211,345 @@ function computeGameClockState({
   };
 }
 
+function coerceClockMs(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.round(numeric));
+}
+
+function cloneClockState(state) {
+  if (!state || typeof state !== 'object') {
+    return null;
+  }
+  return {
+    whiteMs: coerceClockMs(state.whiteMs),
+    blackMs: coerceClockMs(state.blackMs),
+    activeColor: normalizePlayer(state.activeColor),
+    setupComplete: normalizeSetupFlags(state.setupComplete),
+    tickingWhite: Boolean(state.tickingWhite),
+    tickingBlack: Boolean(state.tickingBlack),
+    lastUpdatedAt: toTimestamp(state.lastUpdatedAt),
+  };
+}
+
+function summarizeClockState(state) {
+  const cloned = cloneClockState(state);
+  if (!cloned) {
+    return null;
+  }
+  return {
+    whiteMs: cloned.whiteMs,
+    blackMs: cloned.blackMs,
+    activeColor: cloned.activeColor,
+    setupComplete: cloned.setupComplete,
+    tickingWhite: cloned.tickingWhite,
+    tickingBlack: cloned.tickingBlack,
+    lastUpdatedAt: cloned.lastUpdatedAt
+      ? new Date(cloned.lastUpdatedAt).toISOString()
+      : null,
+  };
+}
+
+function markClockStateModified(game) {
+  if (game && typeof game.markModified === 'function') {
+    game.markModified('clockState');
+  }
+}
+
+function deriveClockActivity({
+  setupComplete,
+  playerTurn,
+  isActive,
+} = {}) {
+  const normalizedSetup = normalizeSetupFlags(setupComplete);
+  if (!isActive) {
+    return {
+      setupComplete: normalizedSetup,
+      activeColor: null,
+      tickingWhite: false,
+      tickingBlack: false,
+    };
+  }
+
+  if (!normalizedSetup[0] || !normalizedSetup[1]) {
+    return {
+      setupComplete: normalizedSetup,
+      activeColor: null,
+      tickingWhite: !normalizedSetup[0],
+      tickingBlack: !normalizedSetup[1],
+    };
+  }
+
+  const activeColor = normalizePlayer(playerTurn);
+  return {
+    setupComplete: normalizedSetup,
+    activeColor,
+    tickingWhite: activeColor === 0,
+    tickingBlack: activeColor === 1,
+  };
+}
+
+function bootstrapStoredClockState(game, { now = Date.now(), setupActionType } = {}) {
+  const baseTime = Number(game?.timeControlStart);
+  const increment = Number(game?.increment);
+  const computed = computeGameClockState({
+    baseTime,
+    increment: Number.isFinite(increment) && increment >= 0 ? increment : 0,
+    startTime: resolveStartTimeMs(game),
+    endTime: game?.endTime,
+    actions: game?.actions,
+    setupComplete: game?.setupComplete,
+    playerTurn: game?.playerTurn,
+    isActive: Boolean(game?.isActive),
+    now,
+    setupActionType,
+  });
+  const activity = deriveClockActivity({
+    setupComplete: game?.setupComplete,
+    playerTurn: game?.playerTurn,
+    isActive: Boolean(game?.isActive),
+  });
+  return {
+    whiteMs: computed.whiteMs,
+    blackMs: computed.blackMs,
+    activeColor: activity.activeColor,
+    setupComplete: activity.setupComplete,
+    tickingWhite: activity.tickingWhite,
+    tickingBlack: activity.tickingBlack,
+    lastUpdatedAt: now,
+  };
+}
+
+function ensureStoredClockState(game, { now = Date.now(), setupActionType } = {}) {
+  if (!game || typeof game !== 'object') {
+    return null;
+  }
+
+  if (!game.clockState || typeof game.clockState !== 'object') {
+    game.clockState = bootstrapStoredClockState(game, { now, setupActionType });
+    markClockStateModified(game);
+    return game.clockState;
+  }
+
+  const cloned = cloneClockState(game.clockState);
+  if (!cloned) {
+    game.clockState = bootstrapStoredClockState(game, { now, setupActionType });
+    markClockStateModified(game);
+    return game.clockState;
+  }
+
+  game.clockState = {
+    whiteMs: cloned.whiteMs,
+    blackMs: cloned.blackMs,
+    activeColor: cloned.activeColor,
+    setupComplete: cloned.setupComplete,
+    tickingWhite: cloned.tickingWhite,
+    tickingBlack: cloned.tickingBlack,
+    lastUpdatedAt: cloned.lastUpdatedAt || now,
+  };
+  markClockStateModified(game);
+  return game.clockState;
+}
+
+function advanceStoredClockState(game, { now = Date.now(), setupActionType } = {}) {
+  const state = ensureStoredClockState(game, { now, setupActionType });
+  if (!state) {
+    return null;
+  }
+
+  const lastUpdatedAt = toTimestamp(state.lastUpdatedAt) || now;
+  const elapsed = Math.max(0, now - lastUpdatedAt);
+  if (elapsed > 0) {
+    if (state.tickingWhite) {
+      state.whiteMs = Math.max(0, coerceClockMs(state.whiteMs) - elapsed);
+    }
+    if (state.tickingBlack) {
+      state.blackMs = Math.max(0, coerceClockMs(state.blackMs) - elapsed);
+    }
+  }
+  state.lastUpdatedAt = now;
+  markClockStateModified(game);
+  return state;
+}
+
+function addIncrementToColor(state, increment, color) {
+  const inc = Number.isFinite(increment) && increment >= 0 ? increment : 0;
+  if (!inc || !state) return;
+  if (color === 0) {
+    state.whiteMs = coerceClockMs(state.whiteMs) + inc;
+  } else if (color === 1) {
+    state.blackMs = coerceClockMs(state.blackMs) + inc;
+  }
+}
+
+function transitionStoredClockState(
+  game,
+  {
+    actingColor = null,
+    now = Date.now(),
+    setupActionType,
+    applyIncrement = true,
+    reason = 'transition',
+  } = {},
+) {
+  const before = summarizeClockState(game?.clockState);
+  const state = advanceStoredClockState(game, { now, setupActionType });
+  if (!state) {
+    return null;
+  }
+
+  if (applyIncrement) {
+    addIncrementToColor(state, Number(game?.increment), normalizePlayer(actingColor));
+  }
+
+  const activity = deriveClockActivity({
+    setupComplete: game?.setupComplete,
+    playerTurn: game?.playerTurn,
+    isActive: Boolean(game?.isActive),
+  });
+  state.activeColor = activity.activeColor;
+  state.setupComplete = activity.setupComplete;
+  state.tickingWhite = activity.tickingWhite;
+  state.tickingBlack = activity.tickingBlack;
+  state.lastUpdatedAt = now;
+  markClockStateModified(game);
+
+  appendLocalDebugLog('clock-transition', {
+    gameId: game?._id?.toString?.() || game?._id || null,
+    reason,
+    actingColor: normalizePlayer(actingColor),
+    incrementMs: Number(game?.increment) || 0,
+    before,
+    after: summarizeClockState(state),
+    playerTurn: game?.playerTurn,
+    setupComplete: normalizeSetupFlags(game?.setupComplete),
+    onDeckingPlayer: game?.onDeckingPlayer ?? null,
+    isActive: Boolean(game?.isActive),
+  });
+
+  return state;
+}
+
+function finalizeStoredClockState(game, { now = Date.now(), setupActionType, reason = 'finalize' } = {}) {
+  const before = summarizeClockState(game?.clockState);
+  const state = advanceStoredClockState(game, { now, setupActionType });
+  if (!state) {
+    return null;
+  }
+  state.activeColor = null;
+  state.setupComplete = normalizeSetupFlags(game?.setupComplete);
+  state.tickingWhite = false;
+  state.tickingBlack = false;
+  state.lastUpdatedAt = now;
+  markClockStateModified(game);
+
+  appendLocalDebugLog('clock-finalize', {
+    gameId: game?._id?.toString?.() || game?._id || null,
+    reason,
+    before,
+    after: summarizeClockState(state),
+    winner: game?.winner ?? null,
+    winReason: game?.winReason ?? null,
+  });
+
+  return state;
+}
+
+function getLiveClockStateSnapshot(game, { now = Date.now(), setupActionType } = {}) {
+  if (game?.clockState && typeof game.clockState === 'object') {
+    const base = cloneClockState(game.clockState);
+    if (base) {
+      const lastUpdatedAt = base.lastUpdatedAt || now;
+      const elapsed = Math.max(0, now - lastUpdatedAt);
+      if (elapsed > 0) {
+        if (base.tickingWhite) {
+          base.whiteMs = Math.max(0, base.whiteMs - elapsed);
+        }
+        if (base.tickingBlack) {
+          base.blackMs = Math.max(0, base.blackMs - elapsed);
+        }
+      }
+      return {
+        whiteMs: base.whiteMs,
+        blackMs: base.blackMs,
+        activeColor: base.activeColor,
+        setupComplete: base.setupComplete,
+        tickingWhite: base.tickingWhite,
+        tickingBlack: base.tickingBlack,
+        lastTimestamp: lastUpdatedAt,
+        referenceTimestamp: now,
+      };
+    }
+  }
+
+  const baseTime = Number(game?.timeControlStart);
+  const increment = Number(game?.increment);
+  return computeGameClockState({
+    baseTime,
+    increment: Number.isFinite(increment) && increment >= 0 ? increment : 0,
+    startTime: resolveStartTimeMs(game),
+    endTime: game?.endTime,
+    actions: game?.actions,
+    setupComplete: game?.setupComplete,
+    playerTurn: game?.playerTurn,
+    isActive: Boolean(game?.isActive),
+    now,
+    setupActionType,
+  });
+}
+
+function describeTimeControl(baseMs, incMs) {
+  const parts = [];
+  if (Number.isFinite(baseMs) && baseMs > 0) {
+    const minutes = Math.floor(baseMs / 60000);
+    const seconds = Math.round((baseMs % 60000) / 1000);
+    if (minutes > 0 && seconds > 0) {
+      parts.push(`${minutes}m ${seconds}s`);
+    } else if (minutes > 0) {
+      parts.push(`${minutes}m`);
+    } else if (seconds > 0) {
+      parts.push(`${seconds}s`);
+    }
+  }
+  if (Number.isFinite(incMs) && incMs > 0) {
+    const incSeconds = incMs / 1000;
+    const formatted = Number.isInteger(incSeconds) ? String(incSeconds) : incSeconds.toFixed(1);
+    parts.push(`+ ${formatted}s`);
+  }
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+function buildClockPayload(game, { now = Date.now(), setupActionType } = {}) {
+  const baseTime = Number(game?.timeControlStart);
+  const increment = Number(game?.increment);
+  const label = describeTimeControl(
+    Number.isFinite(baseTime) ? baseTime : null,
+    Number.isFinite(increment) ? increment : null,
+  );
+
+  if (!Number.isFinite(baseTime) || baseTime <= 0) {
+    return {
+      whiteMs: 0,
+      blackMs: 0,
+      activeColor: null,
+      setupComplete: [false, false],
+      tickingWhite: false,
+      tickingBlack: false,
+      label,
+    };
+  }
+
+  const computed = getLiveClockStateSnapshot(game, {
+    now,
+    setupActionType,
+  });
+
+  return {
+    ...computed,
+    label,
+  };
+}
+
 module.exports = {
   toTimestamp,
   normalizePlayer,
@@ -216,4 +557,15 @@ module.exports = {
   resolveStartTimeMs,
   calculateElapsedMs,
   computeGameClockState,
+  cloneClockState,
+  summarizeClockState,
+  deriveClockActivity,
+  bootstrapStoredClockState,
+  ensureStoredClockState,
+  advanceStoredClockState,
+  transitionStoredClockState,
+  finalizeStoredClockState,
+  getLiveClockStateSnapshot,
+  describeTimeControl,
+  buildClockPayload,
 };

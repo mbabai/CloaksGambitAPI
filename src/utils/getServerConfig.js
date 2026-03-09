@@ -34,6 +34,7 @@ function toNumber(value) {
 
 let cachedConfig = null;
 let configPromise = null;
+let didLogInitFailure = false;
 
 const cloneDeep = (value) => JSON.parse(JSON.stringify(value));
 
@@ -101,6 +102,10 @@ function createConfigSnapshot(configLike = DEFAULT_CONFIG) {
   return snapshot;
 }
 
+if (!cachedConfig) {
+  cachedConfig = createConfigSnapshot(DEFAULT_CONFIG);
+}
+
 async function loadServerConfigFromDatabase() {
   try {
     let config = await ServerConfig.findOne();
@@ -164,14 +169,12 @@ async function loadServerConfigFromDatabase() {
 
     return config;
   } catch (err) {
-    console.error('Error loading server config from database:', err);
     throw err;
   }
 }
 
 async function initServerConfig(forceReload = false) {
   if (forceReload) {
-    cachedConfig = null;
     configPromise = null;
   }
 
@@ -179,12 +182,19 @@ async function initServerConfig(forceReload = false) {
     configPromise = loadServerConfigFromDatabase()
       .then((config) => {
         cachedConfig = config;
+        didLogInitFailure = false;
         return cachedConfig;
       })
       .catch((err) => {
-        cachedConfig = null;
+        if (!didLogInitFailure) {
+          console.error('Error loading server config from database, using defaults:', err);
+          didLogInitFailure = true;
+        }
+        if (!cachedConfig) {
+          cachedConfig = createConfigSnapshot(DEFAULT_CONFIG);
+        }
         configPromise = null;
-        throw err;
+        return cachedConfig;
       });
   }
 
@@ -200,11 +210,7 @@ async function getServerConfig() {
 }
 
 function getServerConfigSync() {
-  if (!cachedConfig) {
-    throw new Error('Server config has not been initialized');
-  }
-
-  return cachedConfig;
+  return cachedConfig || createConfigSnapshot(DEFAULT_CONFIG);
 }
 
 async function refreshServerConfig() {

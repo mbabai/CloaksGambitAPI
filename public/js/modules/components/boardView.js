@@ -1,4 +1,5 @@
 import { renderBoard } from '../render/board.js';
+import { createBoardAnnotations } from './boardAnnotations.js';
 
 /**
  * Factory that wraps the low-level board renderer with a simple stateful API so
@@ -13,6 +14,7 @@ export function createBoardView({
   defaultLabelFont = 12,
   defaultShowDeploymentLines = true,
   alwaysAttachGameRefs = false,
+  annotationsEnabled = false,
 } = {}) {
   if (!container) {
     throw new Error('createBoardView requires a container element');
@@ -26,15 +28,24 @@ export function createBoardView({
   let disableInteractions = false;
   let attachHandlers = null;
   let attachGameHandlers = null;
+  const annotationController = createBoardAnnotations({
+    container,
+    enabled: annotationsEnabled,
+  });
 
   function updateInteractivity() {
-    if (disableInteractions) {
+    if (disableInteractions && !annotationsEnabled) {
       container.style.pointerEvents = 'none';
       container.setAttribute('aria-disabled', 'true');
     } else {
       container.style.pointerEvents = 'auto';
-      container.removeAttribute('aria-disabled');
+      if (disableInteractions) {
+        container.setAttribute('aria-disabled', 'true');
+      } else {
+        container.removeAttribute('aria-disabled');
+      }
     }
+    annotationController.setEnabled(annotationsEnabled);
   }
 
   updateInteractivity();
@@ -79,6 +90,11 @@ export function createBoardView({
         showDeploymentLines,
       },
     });
+    annotationController.sync({
+      rows: lastSizes.rows,
+      cols: lastSizes.cols,
+      squareSize: lastSizes.squareSize,
+    });
   }
 
   function setReadOnly(value = true) {
@@ -95,6 +111,7 @@ export function createBoardView({
   }
 
   function destroy() {
+    annotationController.destroy();
     while (container.firstChild) {
       container.removeChild(container.firstChild);
     }

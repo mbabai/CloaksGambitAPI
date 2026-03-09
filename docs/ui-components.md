@@ -85,6 +85,18 @@ Supporting primitives expose additional hooks:
 - `.cg-spectate-score` prints the match tally. Player labels read `--cg-spectate-score-player-*`, the numeric value uses `--cg-spectate-score-value-*`, and draw summaries pull from the `--cg-spectate-score-draw-*` namespace.
 - `.cg-spectate-result-card` powers the post-game overlay. Palette and spacing tokens live under `--cg-spectate-result-*`, while the modifier `.cg-spectate-result-card--draw` swaps in a neutral background.
 
+## Board Interaction Layer
+
+Both the live player board and the spectate board now attach a shared board-level annotation controller through [`public/js/modules/components/boardView.js`](../public/js/modules/components/boardView.js). The controller renders an SVG overlay above the board squares, keeps its own per-client annotation state, and survives ordinary board rerenders by reattaching after each `renderBoard()` call.
+
+The shared module lives in [`public/js/modules/components/boardAnnotations.js`](../public/js/modules/components/boardAnnotations.js). It handles:
+
+- Right-click circles on a single square.
+- Right-drag arrows that snap to rook-line, bishop-line, or knight destinations.
+- Document-level left-click clearing so all local annotations disappear before the next ordinary interaction.
+
+The board view's `readOnly` mode no longer disables pointer events when annotations are enabled, which is what allows spectator mode to support the same right-click drawing behavior without reintroducing move handlers.
+
 To simplify banner management, the module now exports:
 
 - `createBanner({ text, variant, icon })` – returns a detached `.cg-banner` element with optional variant modifiers (accepting a string or array).

@@ -10,12 +10,15 @@ const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
 const lobbyStore = require('./state/lobby');
 const { buildSpectateSnapshot } = require('./utils/spectatorSnapshot');
+const { buildClockPayload } = require('./utils/gameClock');
+const { appendLocalDebugLog } = require('./utils/localDebugLogger');
 const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/activeMatches');
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: '*',
+      origin: true,
+      credentials: true,
     },
   });
   const clients = new Map();
@@ -742,6 +745,20 @@ function initSocket(httpServer) {
     const matchId = game.match?.toString();
     const gameIdStr = game._id.toString();
     const players = (payload.affectedUsers || game.players || []).map(id => id.toString());
+    const clockPayload = buildClockPayload(game, {
+      now: Date.now(),
+      setupActionType: GAME_CONSTANTS.actions.SETUP,
+    });
+    appendLocalDebugLog('socket-payload', {
+      gameId: gameIdStr,
+      matchId,
+      playerTurn: game.playerTurn,
+      setupComplete: game.setupComplete,
+      onDeckingPlayer: game.onDeckingPlayer,
+      clocks: clockPayload,
+      actionCount: Array.isArray(game.actions) ? game.actions.length : 0,
+      moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+    });
 
     const initiator = payload?.initiator || {};
     const botTargets = Array.isArray(payload?.botPlayers)
@@ -790,6 +807,7 @@ function initSocket(httpServer) {
         startTime: game.startTime,
         timeControlStart: game.timeControlStart,
         increment: game.increment,
+        clocks: clockPayload,
       });
     });
 
@@ -819,6 +837,7 @@ function initSocket(httpServer) {
           startTime: game.startTime,
           timeControlStart: game.timeControlStart,
           increment: game.increment,
+          clocks: clockPayload,
         });
       });
 
@@ -897,6 +916,22 @@ function initSocket(httpServer) {
 
   // Allow other parts of the app to request an on-demand admin metrics refresh
   eventBus.on('adminRefresh', () => emitAdminMetrics());
+
+  eventBus.on('ml:trainingProgress', (payload) => {
+    try {
+      adminNamespace.emit('ml:trainingProgress', payload || {});
+    } catch (err) {
+      console.error('Error emitting ml:trainingProgress to admin namespace:', err);
+    }
+  });
+
+  eventBus.on('ml:simulationProgress', (payload) => {
+    try {
+      adminNamespace.emit('ml:simulationProgress', payload || {});
+    } catch (err) {
+      console.error('Error emitting ml:simulationProgress to admin namespace:', err);
+    }
+  });
 
   io.on('connection', async (socket) => {
     const { token, userId: providedUserId } = socket.handshake.auth || {};
@@ -1024,6 +1059,10 @@ function initSocket(httpServer) {
           startTime: game.startTime,
           timeControlStart: game.timeControlStart,
           increment: game.increment,
+          clocks: buildClockPayload(game, {
+            now: Date.now(),
+            setupActionType: GAME_CONSTANTS.actions.SETUP,
+          }),
         };
       });
 

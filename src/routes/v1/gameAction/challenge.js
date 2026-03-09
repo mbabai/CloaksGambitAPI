@@ -3,12 +3,20 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
+const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
+const {
+  ensureStoredClockState,
+  transitionStoredClockState,
+  summarizeClockState,
+} = require('../../../utils/gameClock');
+const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
 
 router.post('/', async (req, res) => {
   try {
     const { gameId, color } = req.body;
     
-    console.log('Challenge request:', { gameId, color });
+    debugLog('Challenge request:', { gameId, color });
 
     const game = await Game.findById(gameId);
     if (!game) {
@@ -21,6 +29,19 @@ router.post('/', async (req, res) => {
     }
 
     const config = await getServerConfig();
+    const now = Date.now();
+    ensureStoredClockState(game, {
+      now,
+      setupActionType: config.actions.get('SETUP'),
+    });
+    appendLocalDebugLog('clock-route-entry', {
+      route: 'challenge',
+      gameId,
+      color: normalizedColor,
+      playerTurn: game.playerTurn,
+      onDeckingPlayer: game.onDeckingPlayer,
+      clockState: summarizeClockState(game.clockState),
+    });
 
     if (!game.isActive) {
       return res.status(400).json({ message: 'Game is already ended' });
@@ -35,14 +56,14 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'No previous action to challenge' });
     }
     
-    console.log('Last action:', lastAction);
-    console.log('Game moves:', game.moves);
-    console.log('Game actions:', game.actions);
-    console.log('Game board:', game.board);
-    console.log('Game stashes:', game.stashes);
-    console.log('Game onDecks:', game.onDecks);
-    console.log('Game captured:', game.captured);
-    console.log('Game daggers:', game.daggers);
+    debugLog('Last action:', lastAction);
+    debugLog('Game moves:', game.moves);
+    debugLog('Game actions:', game.actions);
+    debugLog('Game board:', game.board);
+    debugLog('Game stashes:', game.stashes);
+    debugLog('Game onDecks:', game.onDecks);
+    debugLog('Game captured:', game.captured);
+    debugLog('Game daggers:', game.daggers);
 
     const moveType = config.actions.get('MOVE');
     const bombType = config.actions.get('BOMB');
@@ -99,7 +120,7 @@ router.post('/', async (req, res) => {
     let wasSuccessful = false; // Whether the challenger succeeded
 
     if (lastAction.type === moveType) {
-      console.log('Processing move challenge, lastMove:', lastMove);
+      debugLog('Processing move challenge, lastMove:', lastMove);
       
       // Ensure lastMove has a player property
       if (typeof lastMove.player !== 'number' || (lastMove.player !== 0 && lastMove.player !== 1)) {
@@ -109,7 +130,7 @@ router.post('/', async (req, res) => {
       const from = lastMove.from;
       const to = lastMove.to;
       
-      console.log('Move coordinates:', { from, to });
+      debugLog('Move coordinates:', { from, to });
       
       // Validate board coordinates
       if (!from || !to || 
@@ -119,14 +140,14 @@ router.post('/', async (req, res) => {
           from.col < 0 || from.col >= game.board[0].length ||
           to.row < 0 || to.row >= game.board.length ||
           to.col < 0 || to.col >= game.board[0].length) {
-        console.log('Invalid coordinates:', { from, to, boardLength: game.board.length, boardWidth: game.board[0]?.length });
+        debugLog('Invalid coordinates:', { from, to, boardLength: game.board.length, boardWidth: game.board[0]?.length });
         return res.status(400).json({ message: 'Invalid move coordinates' });
       }
       
       const pieceFrom = game.board[from.row][from.col];
       const pieceTo = game.board[to.row][to.col];
       
-      console.log('Board pieces:', { pieceFrom, pieceTo });
+      debugLog('Board pieces:', { pieceFrom, pieceTo });
 
       if (!pieceFrom) {
         return res.status(400).json({ message: 'Invalid move state' });
@@ -160,7 +181,7 @@ router.post('/', async (req, res) => {
           captureBy = lastMove.player; // The original mover captures the challenging piece
           game.captured[lastMove.player].push(pieceTo); // Store in original mover's array
           
-          console.log('Move challenge failed - capturing challenging piece:', {
+          debugLog('Move challenge failed - capturing challenging piece:', {
             pieceTo: pieceTo,
             captureBy: captureBy,
             storedInArray: lastMove.player,
@@ -179,7 +200,7 @@ router.post('/', async (req, res) => {
         game.onDeckingPlayer = 1 - normalizedColor; // Opposite of challenger (1 - challenger)
         game.playerTurn = 1 - normalizedColor;      // It's the opposite player's turn to go on-deck
 
-        console.log('Move challenge failed - setting on-deck state:', {
+        debugLog('Move challenge failed - setting on-deck state:', {
           challengerColor: normalizedColor,
           oppositeColor: 1 - normalizedColor,
           onDeckingPlayer: game.onDeckingPlayer,
@@ -247,7 +268,7 @@ router.post('/', async (req, res) => {
         game.onDeckingPlayer = 1 - normalizedColor; // Opposite of challenger (1 - challenger)
         game.playerTurn = 1 - normalizedColor;      // It's the opposite player's turn to go on-deck
 
-        console.log('Bomb challenge failed - setting on-deck state:', {
+        debugLog('Bomb challenge failed - setting on-deck state:', {
           challengerColor: normalizedColor,
           oppositeColor: 1 - normalizedColor,
           onDeckingPlayer: game.onDeckingPlayer,
@@ -260,7 +281,7 @@ router.post('/', async (req, res) => {
           game.captured[1 - normalizedColor].push(pieceFrom); // Store in opposite of challenger's array
           game.board[from.row][from.col] = null;
           
-          console.log('Bomb challenge failed - capturing original piece:', {
+          debugLog('Bomb challenge failed - capturing original piece:', {
             pieceFrom: pieceFrom,
             captureBy: captureBy,
             storedInArray: 1 - normalizedColor,
@@ -287,12 +308,19 @@ router.post('/', async (req, res) => {
     }
 
     // Add debugging for turn logic
-    console.log('Challenge turn logic debug:', {
+    debugLog('Challenge turn logic debug:', {
       wasSuccessful,
       onDeckingPlayer: game.onDeckingPlayer,
       playerTurn: game.playerTurn,
       lastMovePlayer: lastMove ? lastMove.player : null,
       challengeColor: normalizedColor
+    });
+
+    transitionStoredClockState(game, {
+      actingColor: normalizedColor,
+      now,
+      setupActionType: config.actions.get('SETUP'),
+      reason: 'challenge',
     });
 
     await game.addAction(
