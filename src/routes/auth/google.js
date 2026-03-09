@@ -333,7 +333,7 @@ router.post('/logout', async (req, res) => {
   try {
     const guest = await ensureUser();
     applyGuestCookies(req, res, guest);
-    res.json({
+    return res.json({
       userId: guest.userId,
       username: guest.username,
       isGuest: true,
@@ -346,3 +346,4 @@ router.post('/logout', async (req, res) => {
 });
 
 module.exports = router;
+
