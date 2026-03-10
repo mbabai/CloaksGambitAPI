@@ -24,7 +24,7 @@ function evaluate(functionName, args) {
   `;
   const output = execFileSync(
     process.execPath,
-    ['--experimental-vm-modules', '--experimental-default-type=module', '--input-type=module', '-e', script],
+    ['--input-type=module', '-e', script],
     { encoding: 'utf8' }
   );
   return JSON.parse(output);
