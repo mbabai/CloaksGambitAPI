@@ -76,6 +76,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   if (!statsOverlayController) {
     statsOverlayController = createPlayerStatsOverlay({
       authFetch,
+      getViewerUserId: () => adminUserId,
       getPreferredWidth: () => {
         const maxWidth = Math.min(window.innerWidth - 48, 960);
         return Number.isFinite(maxWidth) ? Math.max(320, Math.round(maxWidth)) : null;

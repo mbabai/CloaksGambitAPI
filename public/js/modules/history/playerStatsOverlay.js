@@ -57,7 +57,8 @@ function formatMatchDateLabel(match) {
 
 export function createPlayerStatsOverlay({
   authFetch,
-  getPreferredWidth
+  getPreferredWidth,
+  getViewerUserId
 } = {}) {
   if (typeof authFetch !== 'function') {
     throw new TypeError('createPlayerStatsOverlay requires an authFetch function');
@@ -108,6 +109,17 @@ export function createPlayerStatsOverlay({
 
   function getCurrentUserId() {
     return currentUser?.id || null;
+  }
+
+  function getViewerId() {
+    if (typeof getViewerUserId === 'function') {
+      try {
+        return normalizeId(getViewerUserId());
+      } catch (err) {
+        console.warn('Failed to resolve history overlay viewer id', err);
+      }
+    }
+    return normalizeId(defaultUser?.id);
   }
 
   function getDisplayNameForId(id) {
@@ -605,7 +617,8 @@ export function createPlayerStatsOverlay({
       return;
     }
 
-    const normalizedUserId = normalizeId(currentUser?.id);
+    const normalizedCurrentUserId = normalizeId(currentUser?.id);
+    const normalizedViewerId = getViewerId();
     const matchEntries = filtered.map((match) => {
       const descriptor = describeMatch(match, {
         usernameLookup: (id) => getDisplayNameForId(id),
@@ -638,9 +651,9 @@ export function createPlayerStatsOverlay({
       if (matchForGrid?.type && String(matchForGrid.type).toUpperCase() === 'AI') {
         const p1Id = normalizeId(matchForGrid.player1);
         const p2Id = normalizeId(matchForGrid.player2);
-        if (normalizedUserId && p1Id && p1Id === normalizedUserId && p2Id) {
+        if (normalizedCurrentUserId && p1Id && p1Id === normalizedCurrentUserId && p2Id) {
           markBotUser(p2Id, true);
-        } else if (normalizedUserId && p2Id && p2Id === normalizedUserId && p1Id) {
+        } else if (normalizedCurrentUserId && p2Id && p2Id === normalizedCurrentUserId && p1Id) {
           markBotUser(p1Id, true);
         }
       }
@@ -648,7 +661,7 @@ export function createPlayerStatsOverlay({
         usernameLookup: (id) => {
           const normalized = normalizeId(id);
           const base = getDisplayNameForId(id) || getDisplayNameForId(normalized) || normalized || 'Unknown';
-          if (normalizedUserId && normalized && normalized === normalizedUserId) {
+          if (normalizedViewerId && normalized && normalized === normalizedViewerId) {
             return `${base} (You)`;
           }
           return base;
@@ -657,13 +670,13 @@ export function createPlayerStatsOverlay({
         onPlayerClick: (info) => {
           if (!info || !info.id) return;
           const normalized = normalizeId(info.id);
-          if (normalizedUserId && normalized && normalized === normalizedUserId) return;
+          if (normalizedViewerId && normalized && normalized === normalizedViewerId) return;
           if (isBotUser(normalized)) return;
           const name = info.name || getDisplayNameForId(normalized);
           const elo = isFiniteNumber(info.elo) ? info.elo : null;
           openForUser({ userId: normalized, username: name, elo });
         },
-        currentUserId: currentUser?.id || null,
+        currentUserId: normalizedViewerId,
         shouldAllowPlayerClick: (id) => !isBotUser(id),
       });
       row.appendChild(table);

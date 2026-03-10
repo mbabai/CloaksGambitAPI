@@ -1384,7 +1384,8 @@ logBootConstantsOnce();
   if (!statsOverlayController) {
     statsOverlayController = createPlayerStatsOverlay({
       authFetch,
-      getPreferredWidth: getDesiredHistoryOverlayWidth
+      getPreferredWidth: getDesiredHistoryOverlayWidth,
+      getViewerUserId: () => sessionInfo?.userId || null
     });
   }
 
