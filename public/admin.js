@@ -16,11 +16,13 @@ const loginButton = document.getElementById('adminGoogleLoginBtn');
 let dashboardLoaded = false;
 
 function getAssetVersionSuffix() {
-  if (typeof window === 'undefined') return '';
-  const version = typeof window.__CG_ASSET_VERSION__ === 'string'
-    ? window.__CG_ASSET_VERSION__.trim()
-    : '';
-  return version ? `?v=${encodeURIComponent(version)}` : '';
+  try {
+    const url = new URL(import.meta.url);
+    const version = url.searchParams.get('v');
+    return version ? `?v=${encodeURIComponent(version.trim())}` : '';
+  } catch (_) {
+    return '';
+  }
 }
 
 function showLogin() {
