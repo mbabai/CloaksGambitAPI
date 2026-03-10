@@ -6,6 +6,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const compression = require('compression');
 const path = require('path');
+const fs = require('fs');
 
 const { NODE_ENV, isProduction } = require('./config/loadEnv');
 
@@ -134,6 +135,20 @@ function resolveFaviconPathForHost(hostHeader) {
   return PROD_FAVICON_PATH;
 }
 
+function resolveExistingFaviconPath(hostHeader) {
+  const preferredPath = resolveFaviconPathForHost(hostHeader);
+  if (fs.existsSync(preferredPath)) {
+    return preferredPath;
+  }
+  if (preferredPath !== DEV_FAVICON_PATH && fs.existsSync(DEV_FAVICON_PATH)) {
+    return DEV_FAVICON_PATH;
+  }
+  if (preferredPath !== PROD_FAVICON_PATH && fs.existsSync(PROD_FAVICON_PATH)) {
+    return PROD_FAVICON_PATH;
+  }
+  return null;
+}
+
 // Ensure Express respects proxy headers so OAuth redirect URIs keep https
 // when running behind load balancers or reverse proxies.
 app.set('trust proxy', true);
@@ -174,9 +189,18 @@ app.use((req, res, next) => {
   return res.status(404).json({ message: 'Not found' });
 });
 app.get('/favicon.ico', (req, res) => {
-  res.type('image/jpeg');
   const hostHeader = req.get('x-forwarded-host') || req.get('host');
-  res.sendFile(resolveFaviconPathForHost(hostHeader));
+  const faviconPath = resolveExistingFaviconPath(hostHeader);
+  if (!faviconPath) {
+    return res.status(204).end();
+  }
+  return res.sendFile(faviconPath, (err) => {
+    if (!err || res.headersSent) {
+      return;
+    }
+    console.error('Failed to serve favicon:', err);
+    res.status(err.statusCode || 500).end();
+  });
 });
 app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
 // Serve UI image assets from fallback locations if not present in public/
