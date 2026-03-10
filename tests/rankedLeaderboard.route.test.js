@@ -1,12 +1,8 @@
-jest.mock('../src/models/Match', () => ({
-  find: jest.fn(),
-}));
-
 jest.mock('../src/models/User', () => ({
+  countDocuments: jest.fn(),
   find: jest.fn(),
 }));
 
-const Match = require('../src/models/Match');
 const User = require('../src/models/User');
 const rankedLeaderboardRouter = require('../src/routes/v1/users/getRankedLeaderboard');
 
@@ -26,17 +22,18 @@ function extractGetHandler(router, routePath) {
   return layer.route.stack[0].handle;
 }
 
-function createLeanChain(value) {
+function createUserQueryChain(value) {
   return {
-    select: jest.fn().mockReturnValue({
-      lean: jest.fn().mockResolvedValue(value),
-    }),
+    sort: jest.fn().mockReturnThis(),
+    skip: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
+    lean: jest.fn().mockResolvedValue(value),
   };
 }
 
-function callGet(handler) {
+function callGet(handler, req = {}) {
   return new Promise((resolve) => {
-    const req = {};
     const res = {
       statusCode: 200,
       status(code) {
@@ -59,36 +56,83 @@ describe('ranked leaderboard route', () => {
     jest.clearAllMocks();
   });
 
-  test('returns non-bot, non-guest ranked players sorted by elo descending', async () => {
-    Match.find
-      .mockReturnValueOnce(createLeanChain([
-        { player1: 'u1', player2: 'u2' },
-        { player1: 'u3', player2: 'u1' },
-      ]))
-      .mockReturnValueOnce(createLeanChain([
-        { player1: 'u4', player2: 'u2' },
-      ]));
+  test('returns non-bot, non-guest users with elo in leaderboard order', async () => {
+    const pageQuery = createUserQueryChain([
+      { _id: 'u2', username: 'Alpha', elo: 1250 },
+      { _id: 'u1', username: 'Bravo', elo: 1100 },
+      { _id: 'u5', username: 'Fallback', elo: 'not-a-number' },
+    ]);
 
-    User.find.mockReturnValue({
-      select: jest.fn().mockReturnValue({
-        lean: jest.fn().mockResolvedValue([
-          { _id: 'u1', username: 'Bravo', elo: 1100, isBot: false, isGuest: false },
-          { _id: 'u2', username: 'Alpha', elo: 1250, isBot: false, isGuest: false },
-          { _id: 'u3', username: 'Botty', elo: 1400, isBot: true, isGuest: false },
-          { _id: 'u4', username: 'Guesty', elo: 1300, isBot: false, isGuest: true },
-        ]),
-      }),
-    });
+    User.countDocuments.mockResolvedValue(3);
+    User.find.mockReturnValueOnce(pageQuery);
 
-    const response = await callGet(handler);
+    const response = await callGet(handler, { query: {} });
 
     expect(response.statusCode).toBe(200);
-    expect(response.payload).toEqual([
-      { userId: 'u2', username: 'Alpha', elo: 1250 },
-      { userId: 'u1', username: 'Bravo', elo: 1100 },
+    expect(response.payload).toEqual({
+      items: [
+        { userId: 'u2', username: 'Alpha', elo: 1250 },
+        { userId: 'u1', username: 'Bravo', elo: 1100 },
+        { userId: 'u5', username: 'Fallback', elo: 800 },
+      ],
+      pagination: {
+        page: 1,
+        perPage: 100,
+        totalItems: 3,
+        totalPages: 1,
+      },
+      currentUser: null,
+    });
+    expect(User.countDocuments).toHaveBeenCalledWith({
+      isBot: { $ne: true },
+      isGuest: { $ne: true },
+      elo: { $exists: true, $ne: null },
+    });
+    expect(User.find).toHaveBeenCalledWith({
+      isBot: { $ne: true },
+      isGuest: { $ne: true },
+      elo: { $exists: true, $ne: null },
+    });
+    expect(pageQuery.skip).toHaveBeenCalledWith(0);
+    expect(pageQuery.limit).toHaveBeenCalledWith(100);
+    expect(pageQuery.select).toHaveBeenCalledWith('_id username elo');
+  });
+
+  test('returns requested page and current user placement metadata', async () => {
+    const pageTwoQuery = createUserQueryChain([
+      { _id: 'u101', username: 'Player 101', elo: 900 },
+      { _id: 'u155', username: 'Player 155', elo: 845 },
     ]);
-    expect(Match.find).toHaveBeenNthCalledWith(1, { type: 'RANKED' });
-    expect(Match.find).toHaveBeenNthCalledWith(2, { type: 'RANKED', isActive: false });
-    expect(User.find).toHaveBeenCalledWith({ _id: { $in: ['u1', 'u2', 'u3', 'u4'] } });
+    const placementQuery = createUserQueryChain(
+      Array.from({ length: 205 }, (_, index) => ({ _id: `u${index + 1}` }))
+    );
+
+    User.countDocuments.mockResolvedValue(205);
+    User.find
+      .mockReturnValueOnce(pageTwoQuery)
+      .mockReturnValueOnce(placementQuery);
+
+    const response = await callGet(handler, {
+      query: {
+        page: '2',
+        userId: 'u155',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.pagination).toEqual({
+      page: 2,
+      perPage: 100,
+      totalItems: 205,
+      totalPages: 3,
+    });
+    expect(response.payload.currentUser).toEqual({
+      userId: 'u155',
+      rank: 155,
+      page: 2,
+    });
+    expect(pageTwoQuery.skip).toHaveBeenCalledWith(100);
+    expect(pageTwoQuery.limit).toHaveBeenCalledWith(100);
+    expect(placementQuery.select).toHaveBeenCalledWith('_id');
   });
 });

@@ -94,6 +94,8 @@ if (isProduction) {
 }
 
 const app = express();
+const PROD_FAVICON_PATH = path.join(__dirname, '..', 'public', 'assets', 'images', 'cloakHood.jpg');
+const DEV_FAVICON_PATH = path.join(__dirname, '..', 'public', 'assets', 'images', 'cloakHoodInverted.jpg');
 const staticOptions = {
   etag: true,
   maxAge: isProduction ? '1d' : 0,
@@ -110,6 +112,27 @@ const staticOptions = {
     res.setHeader('Cache-Control', 'public, max-age=86400');
   },
 };
+
+function parseHostname(hostHeader) {
+  const raw = typeof hostHeader === 'string' ? hostHeader.trim().toLowerCase() : '';
+  const first = raw.split(',')[0] ? raw.split(',')[0].trim() : '';
+  if (!first) return '';
+  if (first.startsWith('[')) {
+    const closing = first.indexOf(']');
+    if (closing > 1) return first.slice(1, closing);
+    return first;
+  }
+  const colonIndex = first.indexOf(':');
+  return colonIndex >= 0 ? first.slice(0, colonIndex) : first;
+}
+
+function resolveFaviconPathForHost(hostHeader) {
+  const hostname = parseHostname(hostHeader);
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return DEV_FAVICON_PATH;
+  }
+  return PROD_FAVICON_PATH;
+}
 
 // Ensure Express respects proxy headers so OAuth redirect URIs keep https
 // when running behind load balancers or reverse proxies.
@@ -149,6 +172,11 @@ app.use((req, res, next) => {
     return next();
   }
   return res.status(404).json({ message: 'Not found' });
+});
+app.get('/favicon.ico', (req, res) => {
+  res.type('image/jpeg');
+  const hostHeader = req.get('x-forwarded-host') || req.get('host');
+  res.sendFile(resolveFaviconPathForHost(hostHeader));
 });
 app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
 // Serve UI image assets from fallback locations if not present in public/
