@@ -4,8 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cloaks Gambit – Queue</title>
-    <link id="app-favicon" rel="icon" type="image/jpeg" href="/assets/images/cloakHoodInverted.jpg?v=dev" />
-    <link id="app-shortcut-icon" rel="shortcut icon" type="image/jpeg" href="/assets/images/cloakHoodInverted.jpg?v=dev" />
     <script>
       (function setEnvironmentFavicon() {
         const host = (window.location.hostname || '').toLowerCase();
@@ -13,14 +11,9 @@
         const faviconHref = isProductionHost
           ? '/assets/images/cloakHood.jpg?v=prod'
           : '/assets/images/cloakHoodInverted.jpg?v=dev';
-        const icon = document.getElementById('app-favicon');
-        const shortcut = document.getElementById('app-shortcut-icon');
-        if (icon) {
-          icon.href = faviconHref;
-        }
-        if (shortcut) {
-          shortcut.href = faviconHref;
-        }
+        document.write(`<link rel="icon" type="image/jpeg" href="${faviconHref}">`);
+        document.write(`<link rel="shortcut icon" type="image/jpeg" href="${faviconHref}">`);
+        document.write(`<link rel="apple-touch-icon" href="${faviconHref}">`);
       }());
     </script>
     <link rel="stylesheet" href="colors.css" />
