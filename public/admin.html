@@ -4,7 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Admin Dashboard</title>
-    <link rel="icon" type="image/jpeg" href="assets/images/cloakHood.jpg" />
+    <script>
+      (function setEnvironmentFavicon() {
+        const host = (window.location.hostname || '').toLowerCase();
+        const isLocalhost = host === 'localhost' || host === '127.0.0.1';
+        const faviconHref = isLocalhost
+          ? 'assets/images/cloakHoodInverted.jpg'
+          : 'assets/images/cloakHood.jpg';
+        const existing = document.querySelector('link[rel="icon"]');
+        if (existing) {
+          existing.href = faviconHref;
+          return;
+        }
+        const link = document.createElement('link');
+        link.rel = 'icon';
+        link.type = 'image/jpeg';
+        link.href = faviconHref;
+        document.head.appendChild(link);
+      }());
+    </script>
     <link rel="stylesheet" href="colors.css" />
     <link rel="stylesheet" href="ui.css" />
     <style>
