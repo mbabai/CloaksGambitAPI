@@ -4,23 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Admin Dashboard</title>
-    <link id="app-favicon" rel="icon" type="image/jpeg" href="/assets/images/cloakHood.jpg" />
-    <link id="app-shortcut-icon" rel="shortcut icon" type="image/jpeg" href="/assets/images/cloakHood.jpg" />
+    <link id="app-favicon" rel="icon" type="image/jpeg" href="/assets/images/cloakHoodInverted.jpg?v=dev" />
+    <link id="app-shortcut-icon" rel="shortcut icon" type="image/jpeg" href="/assets/images/cloakHoodInverted.jpg?v=dev" />
     <script>
       (function setEnvironmentFavicon() {
         const host = (window.location.hostname || '').toLowerCase();
-        const isLocalhost = host === 'localhost' || host === '127.0.0.1';
-        const faviconHref = isLocalhost
-          ? '/assets/images/cloakHoodInverted.jpg'
-          : '/assets/images/cloakHood.jpg';
-        const cacheBustedHref = `${faviconHref}?v=${isLocalhost ? 'dev' : 'prod'}`;
+        const isProductionHost = host === 'cloaksgambit.bymarcell.com';
+        const faviconHref = isProductionHost
+          ? '/assets/images/cloakHood.jpg?v=prod'
+          : '/assets/images/cloakHoodInverted.jpg?v=dev';
         const icon = document.getElementById('app-favicon');
         const shortcut = document.getElementById('app-shortcut-icon');
         if (icon) {
-          icon.href = cacheBustedHref;
+          icon.href = faviconHref;
         }
         if (shortcut) {
-          shortcut.href = cacheBustedHref;
+          shortcut.href = faviconHref;
         }
       }());
     </script>

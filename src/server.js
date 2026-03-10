@@ -32,6 +32,45 @@ function getDatabaseNameFromUri(uri) {
   return name || null;
 }
 
+function hasMongoQueryParam(uri, key) {
+  if (!uri || !key) return false;
+  const queryIndex = uri.indexOf('?');
+  if (queryIndex === -1) return false;
+  const params = new URLSearchParams(uri.slice(queryIndex + 1));
+  return params.has(key);
+}
+
+function setMongoQueryParam(uri, key, value) {
+  if (!uri || !key) return uri;
+  const [prefix, query = ''] = uri.split('?');
+  const params = new URLSearchParams(query);
+  params.set(key, value);
+  const nextQuery = params.toString();
+  return nextQuery ? `${prefix}?${nextQuery}` : prefix;
+}
+
+function buildProductionConnectionAttempts(uri) {
+  const baseOptions = {
+    dbName: ATLAS_DB_NAME,
+    serverSelectionTimeoutMS: 10000
+  };
+  const attempts = [{
+    uri,
+    options: { ...baseOptions },
+    description: 'raw Atlas URI with explicit dbName'
+  }];
+
+  if (!hasMongoQueryParam(uri, 'authSource')) {
+    attempts.push({
+      uri: setMongoQueryParam(uri, 'authSource', 'admin'),
+      options: { ...baseOptions },
+      description: 'raw Atlas URI with explicit dbName and authSource=admin'
+    });
+  }
+
+  return attempts;
+}
+
 
 
 console.log('Startup secrets check:', {
@@ -126,16 +165,33 @@ async function connectToDatabase() {
   const uri = isProduction ? MONGODB_ATLAS_URI : defaultDevUri;
   const databaseName = isProduction ? ATLAS_DB_NAME : getDatabaseNameFromUri(uri) || 'unknown';
 
-  const connectionOptions = isProduction
-    ? {
-        dbName: ATLAS_DB_NAME,
-        serverSelectionTimeoutMS: 10000
-      }
-    : {};
-
   try {
     console.log(`Connecting to MongoDB database "${databaseName}" (${isProduction ? 'Atlas' : 'local instance'})`);
-    await mongoose.connect(uri, connectionOptions);
+    if (isProduction) {
+      const attempts = buildProductionConnectionAttempts(uri);
+      let lastError = null;
+
+      for (let i = 0; i < attempts.length; i += 1) {
+        const attempt = attempts[i];
+        try {
+          if (i > 0) {
+            console.warn(`Retrying MongoDB Atlas connection using ${attempt.description}`);
+          }
+          await mongoose.connect(attempt.uri, attempt.options);
+          lastError = null;
+          break;
+        } catch (err) {
+          lastError = err;
+          await mongoose.disconnect().catch(() => {});
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+    } else {
+      await mongoose.connect(uri, {});
+    }
 
     if (isProduction) {
       console.log(`✅ Connected to MongoDB Atlas (${databaseName})`);
