@@ -54,6 +54,7 @@
 - Run full suite with `npm test`; run a focused file with `npm test -- tests/sharedGameConstants.test.js`.
 - Do not use port `3000` for test runs or local verification started by the agent; treat `3000` as reserved for the user's active app session and use another port such as `3100`.
 - On Windows in the Codex desktop terminal, do not invoke `nvm` for version switching because it can trigger GUI popups instead of returning terminal output. For cross-version validation, prefer running the target runtime directly, for example `npx -p node@24 node ...`.
+- When giving Azure CLI commands for Cloud Shell or portal terminals, prefer single-line commands without shell continuations because pasted multiline commands may fail depending on the shell surface.
 - There is no enforced coverage gate; aim for meaningful assertions on changed paths.
 
 ## Commit & Pull Request Guidelines

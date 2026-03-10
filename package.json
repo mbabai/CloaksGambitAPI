@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "REST API application with Node.js and MongoDB",
   "main": "src/server.js",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "clean:temp": "node scripts/cleanup-temp-artifacts.js",
     "build:shared": "node scripts/build-shared-constants.js",
