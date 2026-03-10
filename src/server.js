@@ -14,29 +14,7 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
 const ATLAS_DB_NAME = 'cloaksgambit';
-const MONGODB_ATLAS_URI_RAW = process.env.MONGODB_ATLAS_CONNECTION_STRING;
-
-function ensureDatabaseInUri(uri, dbName) {
-  if (!uri) return uri;
-
-  const [prefix, params] = uri.split('?');
-  const match = prefix.match(/^(mongodb(?:\+srv)?:\/\/[^/]+)(?:\/(.*))?$/i);
-
-  let base = prefix;
-
-  if (match) {
-    base = match[1];
-  } else if (prefix.endsWith('/')) {
-    base = prefix.replace(/\/+$/, '');
-  } else {
-    const lastSlashIndex = prefix.lastIndexOf('/');
-    base = lastSlashIndex === -1 ? prefix : prefix.slice(0, lastSlashIndex);
-  }
-
-  const finalPrefix = `${base}/${dbName}`;
-
-  return params ? `${finalPrefix}?${params}` : finalPrefix;
-}
+const MONGODB_ATLAS_URI = process.env.MONGODB_ATLAS_CONNECTION_STRING;
 
 function getDatabaseNameFromUri(uri) {
   if (!uri) return null;
@@ -54,11 +32,7 @@ function getDatabaseNameFromUri(uri) {
   return name || null;
 }
 
-const MONGODB_ATLAS_URI = ensureDatabaseInUri(MONGODB_ATLAS_URI_RAW, ATLAS_DB_NAME);
 
-const atlasPreview = MONGODB_ATLAS_URI
-  ? `${MONGODB_ATLAS_URI.slice(0, 60)}${MONGODB_ATLAS_URI.length > 60 ? '…' : ''}`
-  : null;
 
 console.log('Startup secrets check:', {
   GOOGLE_CLIENT_ID: !!GOOGLE_CLIENT_ID,
@@ -154,9 +128,8 @@ async function connectToDatabase() {
 
   const connectionOptions = isProduction
     ? {
-        serverSelectionTimeoutMS: 10000,
-        useNewUrlParser: true,
-        useUnifiedTopology: true
+        dbName: ATLAS_DB_NAME,
+        serverSelectionTimeoutMS: 10000
       }
     : {};
 

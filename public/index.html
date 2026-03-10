@@ -4,23 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cloaks Gambit – Queue</title>
+    <link id="app-favicon" rel="icon" type="image/jpeg" href="/assets/images/cloakHood.jpg" />
+    <link id="app-shortcut-icon" rel="shortcut icon" type="image/jpeg" href="/assets/images/cloakHood.jpg" />
     <script>
       (function setEnvironmentFavicon() {
         const host = (window.location.hostname || '').toLowerCase();
         const isLocalhost = host === 'localhost' || host === '127.0.0.1';
         const faviconHref = isLocalhost
-          ? 'assets/images/cloakHoodInverted.jpg'
-          : 'assets/images/cloakHood.jpg';
-        const existing = document.querySelector('link[rel="icon"]');
-        if (existing) {
-          existing.href = faviconHref;
-          return;
+          ? '/assets/images/cloakHoodInverted.jpg'
+          : '/assets/images/cloakHood.jpg';
+        const cacheBustedHref = `${faviconHref}?v=${isLocalhost ? 'dev' : 'prod'}`;
+        const icon = document.getElementById('app-favicon');
+        const shortcut = document.getElementById('app-shortcut-icon');
+        if (icon) {
+          icon.href = cacheBustedHref;
         }
-        const link = document.createElement('link');
-        link.rel = 'icon';
-        link.type = 'image/jpeg';
-        link.href = faviconHref;
-        document.head.appendChild(link);
+        if (shortcut) {
+          shortcut.href = cacheBustedHref;
+        }
       }());
     </script>
     <link rel="stylesheet" href="colors.css" />
