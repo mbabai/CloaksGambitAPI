@@ -218,6 +218,74 @@ body.history-overlay-open {
   color: rgba(255, 215, 0, 0.85);
 }
 
+.history-overlay-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-overlay-search-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-overlay-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 2px solid rgba(245, 230, 167, 0.5);
+  border-radius: 8px;
+  background: rgba(19, 7, 30, 0.92);
+  color: var(--CG-white);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.history-overlay-search-input::placeholder {
+  color: rgba(245, 230, 167, 0.55);
+}
+
+.history-overlay-search-input:focus-visible {
+  outline: 2px solid var(--CG-light-gold);
+  outline-offset: 2px;
+}
+
+.history-overlay-search-submit {
+  border: 2px solid var(--CG-deep-gold);
+  border-radius: 8px;
+  background: rgba(78, 47, 112, 0.95);
+  color: var(--CG-white);
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.history-overlay-search-submit:hover:not(:disabled) {
+  background: rgba(105, 64, 145, 0.98);
+}
+
+.history-overlay-search-submit:focus-visible {
+  outline: 2px solid var(--CG-light-gold);
+  outline-offset: 2px;
+}
+
+.history-overlay-search-input:disabled,
+.history-overlay-search-submit:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.history-overlay-search-status {
+  min-height: 18px;
+  font-size: 14px;
+  color: rgba(255, 215, 0, 0.78);
+}
+
+.history-overlay-search-status[data-state="error"] {
+  color: #fca5a5;
+}
+
 .history-overlay-content {
   flex: 1;
   min-height: 0;
@@ -445,6 +513,25 @@ body.history-overlay-open {
   font-size: 18px;
 }
 
+.leaderboard-row__name--interactive {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.leaderboard-row__name--interactive:hover {
+  color: rgba(255, 215, 0, 0.96);
+}
+
+.leaderboard-row__name--interactive:focus-visible {
+  outline: 2px solid var(--CG-light-gold);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 .leaderboard-empty {
   padding: 18px 0;
   color: rgba(255, 215, 0, 0.78);
@@ -452,6 +539,15 @@ body.history-overlay-open {
 }
 
 @media (max-width: 720px) {
+  .history-overlay-search-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .history-overlay-search-submit {
+    width: 100%;
+  }
+
   .leaderboard-modal {
     width: 80vw;
     max-width: 80vw;

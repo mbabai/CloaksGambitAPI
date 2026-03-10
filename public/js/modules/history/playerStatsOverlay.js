@@ -100,6 +100,11 @@ export function createPlayerStatsOverlay({
   let overlaySummaryEls = null;
   let overlayHeadingEl = null;
   let overlayNameEl = null;
+  let overlaySearchInputEl = null;
+  let overlaySearchSubmitBtn = null;
+  let overlaySearchStatusEl = null;
+  let historyRequestToken = 0;
+  let searchRequestToken = 0;
 
   function getCurrentUserId() {
     return currentUser?.id || null;
@@ -135,11 +140,43 @@ export function createPlayerStatsOverlay({
     historyGames = [];
     historyMaxGameCount = 1;
     historyLoaded = false;
+    historyFetching = false;
     historyGamesByMatch.clear();
     historySummaryData = null;
     historyPagination = { page: 0, totalPages: 0, perPage: 50, totalItems: 0 };
     historyHasMore = false;
     disconnectHistoryObserver();
+  }
+
+  function isHistoryRequestCurrent(requestToken, userId = null) {
+    if (requestToken !== undefined && requestToken !== null && requestToken !== historyRequestToken) {
+      return false;
+    }
+    const normalizedUserId = normalizeId(userId);
+    if (normalizedUserId && normalizedUserId !== getCurrentUserId()) {
+      return false;
+    }
+    return true;
+  }
+
+  function setSearchStatus(message = '', tone = 'neutral') {
+    if (!overlaySearchStatusEl) return;
+    overlaySearchStatusEl.textContent = message || '';
+    overlaySearchStatusEl.dataset.state = tone || 'neutral';
+  }
+
+  function updateSearchPending(isPending) {
+    if (overlaySearchInputEl) {
+      overlaySearchInputEl.disabled = Boolean(isPending);
+    }
+    if (overlaySearchSubmitBtn) {
+      overlaySearchSubmitBtn.disabled = Boolean(isPending);
+    }
+  }
+
+  function syncSearchInput({ preserveQuery = false } = {}) {
+    if (!overlaySearchInputEl || preserveQuery) return;
+    overlaySearchInputEl.value = currentUser?.username || '';
   }
 
   function disconnectHistoryObserver() {
@@ -163,7 +200,12 @@ export function createPlayerStatsOverlay({
         if (!entry.isIntersecting) return;
         if (!historyHasMore || historyFetching) return;
         const nextPage = (historyPagination.page || 0) + 1;
-        fetchHistoryPage({ userId: getCurrentUserId(), page: nextPage, append: true });
+        fetchHistoryPage({
+          userId: getCurrentUserId(),
+          page: nextPage,
+          append: true,
+          requestToken: historyRequestToken
+        });
       });
     }, { root: overlayMatchesEl, rootMargin: '200px 0px' });
     historyObserver.observe(historyScrollSentinel);
@@ -239,6 +281,44 @@ export function createPlayerStatsOverlay({
     header.appendChild(nameLine);
 
     content.appendChild(header);
+
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'history-overlay-search';
+
+    const searchForm = document.createElement('form');
+    searchForm.className = 'history-overlay-search-form';
+
+    const searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.className = 'history-overlay-search-input';
+    searchInput.placeholder = 'Search username';
+    searchInput.autocomplete = 'off';
+    searchInput.spellcheck = false;
+    searchInput.setAttribute('aria-label', 'Search username');
+    overlaySearchInputEl = searchInput;
+
+    const searchSubmit = document.createElement('button');
+    searchSubmit.type = 'submit';
+    searchSubmit.className = 'history-overlay-search-submit';
+    searchSubmit.textContent = 'Go';
+    overlaySearchSubmitBtn = searchSubmit;
+
+    searchForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      searchForUsername(searchInput.value);
+    });
+
+    searchForm.appendChild(searchInput);
+    searchForm.appendChild(searchSubmit);
+    searchWrap.appendChild(searchForm);
+
+    const searchStatus = document.createElement('div');
+    searchStatus.className = 'history-overlay-search-status';
+    searchStatus.setAttribute('aria-live', 'polite');
+    overlaySearchStatusEl = searchStatus;
+    searchWrap.appendChild(searchStatus);
+
+    content.appendChild(searchWrap);
 
     const eloRow = document.createElement('div');
     eloRow.className = 'history-current-elo';
@@ -371,6 +451,8 @@ export function createPlayerStatsOverlay({
     updateFilterButtons();
     updateHeading();
     updateEloDisplay();
+    syncSearchInput();
+    setSearchStatus();
 
     return overlay;
   }
@@ -391,6 +473,65 @@ export function createPlayerStatsOverlay({
     if (!overlayEloValueEl) return;
     const elo = currentUser?.elo;
     overlayEloValueEl.textContent = isFiniteNumber(elo) ? String(Math.round(elo)) : '—';
+  }
+
+  async function searchForUsername(value) {
+    ensureOverlay();
+    const username = typeof value === 'string' ? value.trim() : '';
+    if (!username) {
+      setSearchStatus('Enter a username.', 'error');
+      if (overlaySearchInputEl) {
+        overlaySearchInputEl.focus();
+        overlaySearchInputEl.select();
+      }
+      return false;
+    }
+
+    const requestToken = ++searchRequestToken;
+    updateSearchPending(true);
+    setSearchStatus('Searching...', 'neutral');
+
+    try {
+      const res = await authFetch('/api/v1/users/findByUsername', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username })
+      });
+
+      if (requestToken !== searchRequestToken) {
+        return false;
+      }
+
+      if (!res || res.status === 404) {
+        setSearchStatus('Username not found', 'error');
+        return false;
+      }
+
+      if (!res.ok) {
+        throw new Error(`Username lookup failed (${res.status})`);
+      }
+
+      const user = await res.json().catch(() => null);
+      const normalizedId = normalizeId(user?.userId ?? user?.id);
+      if (!normalizedId || user?.isBot) {
+        setSearchStatus('Username not found', 'error');
+        return false;
+      }
+
+      openForUser(user);
+      setSearchStatus();
+      return true;
+    } catch (err) {
+      console.error('Failed to search for player username', err);
+      if (requestToken === searchRequestToken) {
+        setSearchStatus('Unable to find that username right now.', 'error');
+      }
+      return false;
+    } finally {
+      if (requestToken === searchRequestToken) {
+        updateSearchPending(false);
+      }
+    }
   }
 
   function showMessage(message) {
@@ -555,7 +696,7 @@ export function createPlayerStatsOverlay({
     }));
   }
 
-  async function fetchHistorySummaryForUser(userId) {
+  async function fetchHistorySummaryForUser(userId, { requestToken } = {}) {
     const normalizedUserId = normalizeId(userId);
     if (!normalizedUserId) {
       historySummaryData = null;
@@ -569,21 +710,28 @@ export function createPlayerStatsOverlay({
       });
 
       if (!res || !res.ok) {
-        historySummaryData = null;
+        if (isHistoryRequestCurrent(requestToken, normalizedUserId)) {
+          historySummaryData = null;
+        }
         return;
       }
 
       const data = await res.json().catch(() => null);
+      if (!isHistoryRequestCurrent(requestToken, normalizedUserId)) {
+        return;
+      }
       historySummaryData = data && typeof data === 'object' ? data.summary || null : null;
     } catch (err) {
       console.error('Failed to fetch player history summary', err);
-      historySummaryData = null;
+      if (isHistoryRequestCurrent(requestToken, normalizedUserId)) {
+        historySummaryData = null;
+      }
     }
   }
 
-  async function fetchHistoryPage({ userId, page = 1, append = false, forceReset = false } = {}) {
+  async function fetchHistoryPage({ userId, page = 1, append = false, forceReset = false, requestToken } = {}) {
     const normalizedUserId = normalizeId(userId);
-    if (!normalizedUserId || historyFetching) return;
+    if (!normalizedUserId || historyFetching || !isHistoryRequestCurrent(requestToken, normalizedUserId)) return;
     ensureOverlay();
     if (!overlayMatchesEl) return;
 
@@ -601,7 +749,7 @@ export function createPlayerStatsOverlay({
       historyPagination = { page: 0, totalPages: 0, perPage: 50, totalItems: 0 };
       historyHasMore = false;
       disconnectHistoryObserver();
-      showMessage('Loading match history…');
+      showMessage('Loading match history...');
     }
 
     try {
@@ -625,6 +773,9 @@ export function createPlayerStatsOverlay({
       let matchesPayload = null;
       if (matchesRes && matchesRes.ok) {
         matchesPayload = await matchesRes.json().catch(() => null);
+      }
+      if (!isHistoryRequestCurrent(requestToken, normalizedUserId)) {
+        return;
       }
 
       const matchItems = Array.isArray(matchesPayload)
@@ -682,6 +833,9 @@ export function createPlayerStatsOverlay({
         } catch (err) {
           console.error('Failed to fetch games for player history', err);
         }
+      }
+      if (!isHistoryRequestCurrent(requestToken, normalizedUserId)) {
+        return;
       }
 
       if (!shouldAppend) {
@@ -753,6 +907,9 @@ export function createPlayerStatsOverlay({
         }
       });
       await fetchUsernames(idsToFetch);
+      if (!isHistoryRequestCurrent(requestToken, normalizedUserId)) {
+        return;
+      }
 
       historyLoaded = true;
       updateSummary();
@@ -760,7 +917,7 @@ export function createPlayerStatsOverlay({
       ensureHistoryObserver();
     } catch (err) {
       console.error('Failed to load player history', err);
-      if (shouldReset) {
+      if (shouldReset && isHistoryRequestCurrent(requestToken, normalizedUserId)) {
         historyMatches = [];
         historyGames = [];
         historyMaxGameCount = 1;
@@ -768,16 +925,19 @@ export function createPlayerStatsOverlay({
         showMessage('Unable to load history right now. Please try again later.');
       }
     } finally {
-      historyFetching = false;
+      if (isHistoryRequestCurrent(requestToken, normalizedUserId)) {
+        historyFetching = false;
+      }
     }
   }
 
-  async function fetchHistory() {
-    const userId = getCurrentUserId();
-    if (!userId) return;
-    await fetchHistorySummaryForUser(userId);
+  async function fetchHistory({ userId = getCurrentUserId(), requestToken = historyRequestToken } = {}) {
+    const normalizedUserId = normalizeId(userId);
+    if (!normalizedUserId || !isHistoryRequestCurrent(requestToken, normalizedUserId)) return;
+    await fetchHistorySummaryForUser(normalizedUserId, { requestToken });
+    if (!isHistoryRequestCurrent(requestToken, normalizedUserId)) return;
     updateSummary();
-    await fetchHistoryPage({ userId, page: 1, forceReset: true });
+    await fetchHistoryPage({ userId: normalizedUserId, page: 1, forceReset: true, requestToken });
   }
 
   async function setFilter(filter) {
@@ -787,30 +947,38 @@ export function createPlayerStatsOverlay({
     updateFilterButtons();
     if (historyLoaded) {
       const userId = getCurrentUserId();
+      const requestToken = historyRequestToken;
       if (userId) {
-        await fetchHistorySummaryForUser(userId);
+        await fetchHistorySummaryForUser(userId, { requestToken });
+        if (!isHistoryRequestCurrent(requestToken, userId)) return;
         updateSummary();
       }
-      await fetchHistoryPage({ userId, page: 1, forceReset: true });
+      await fetchHistoryPage({ userId, page: 1, forceReset: true, requestToken });
     } else {
       renderMatches();
     }
   }
 
-  function setCurrentUser(user, { source = 'external', preserveFilter = false } = {}) {
+  function setCurrentUser(user, { source = 'external', preserveFilter = false, preserveSearchQuery = false } = {}) {
     const normalizedId = normalizeId(user?.userId ?? user?.id);
     const username = typeof user?.username === 'string' ? user.username.trim() : '';
     const elo = isFiniteNumber(user?.elo) ? Math.round(user.elo) : null;
     const previousId = currentUser?.id || null;
     const nextId = normalizedId || null;
+    const userChanged = previousId !== nextId;
 
     if (!nextId) {
+      historyRequestToken += 1;
       currentUser = null;
       usernameMap = {};
       resetHistoryState();
       updateFilterButtons();
       updateHeading();
       updateEloDisplay();
+      syncSearchInput({ preserveQuery: preserveSearchQuery });
+      if (!preserveSearchQuery) {
+        setSearchStatus();
+      }
       return;
     }
 
@@ -819,7 +987,8 @@ export function createPlayerStatsOverlay({
       updateFilterButtons();
     }
 
-    if (previousId !== nextId) {
+    if (userChanged) {
+      historyRequestToken += 1;
       resetHistoryState();
     }
 
@@ -840,17 +1009,23 @@ export function createPlayerStatsOverlay({
 
     updateHeading();
     updateEloDisplay();
+    syncSearchInput({ preserveQuery: preserveSearchQuery });
+    if (!preserveSearchQuery) {
+      setSearchStatus();
+    }
   }
 
   function openCurrentUser() {
     if (!currentUser?.id) return;
     const instance = ensureOverlay();
+    const requestToken = historyRequestToken;
     applyOverlayWidth();
     updateFilterButtons();
     updateHeading();
     updateEloDisplay();
-    instance.show({ initialFocus: instance.closeButton });
-    fetchHistory();
+    syncSearchInput();
+    instance.show({ initialFocus: overlaySearchInputEl || instance.closeButton });
+    fetchHistory({ userId: currentUser.id, requestToken });
   }
 
   function openDefaultUser() {
@@ -872,7 +1047,10 @@ export function createPlayerStatsOverlay({
     if (isBotUser(normalizedId)) {
       return;
     }
-    setCurrentUser({ id: normalizedId, username, elo, isBot: user.isBot }, { source: 'external', preserveFilter: false });
+    setCurrentUser(
+      { id: normalizedId, username, elo, isBot: user.isBot },
+      { source: 'external', preserveFilter: false }
+    );
     openCurrentUser();
   }
 
@@ -930,6 +1108,7 @@ export function createPlayerStatsOverlay({
     if (currentUser && currentUser.id === normalizedId) {
       currentUser = { ...currentUser, username: trimmed };
       updateHeading();
+      syncSearchInput();
       if (historyLoaded) {
         renderMatches();
       }
@@ -947,6 +1126,7 @@ export function createPlayerStatsOverlay({
     if (currentUser && currentUser.id === normalizedId) {
       currentUser = { ...currentUser, username: trimmed };
       updateHeading();
+      syncSearchInput();
     }
     if (defaultUser && defaultUser.id === normalizedId) {
       defaultUser = { ...defaultUser, username: trimmed };

@@ -373,10 +373,22 @@ logBootConstantsOnce();
       rank.className = 'leaderboard-row__rank';
       rank.textContent = `${index + 1}.`;
 
-      const name = document.createElement('span');
-      name.className = 'leaderboard-row__name';
+      const name = document.createElement('button');
+      name.type = 'button';
+      name.className = 'leaderboard-row__name leaderboard-row__name--interactive';
       name.textContent = entry.username || 'Unknown';
       name.title = entry.username || 'Unknown';
+      name.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (rankedLeaderboardOverlay) {
+          rankedLeaderboardOverlay.hide({ restoreFocus: false });
+        }
+        viewPlayerStats({
+          userId: entry.userId,
+          username: entry.username,
+          elo: entry.elo
+        });
+      });
 
       const badge = createEloBadge({
         elo: entry.elo,
