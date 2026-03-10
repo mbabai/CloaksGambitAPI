@@ -29,6 +29,22 @@ function buildLeaderboardQuery() {
   };
 }
 
+function mapLeaderboardItems(users = []) {
+  return (users || []).map((user) => ({
+    userId: toIdString(user._id),
+    username: user.username || 'Unknown',
+    elo: Number.isFinite(Number(user.elo)) ? Math.round(Number(user.elo)) : 800,
+  }));
+}
+
+function isLegacyLeaderboardRequest(query) {
+  if (!query || typeof query !== 'object') {
+    return true;
+  }
+  return !Object.prototype.hasOwnProperty.call(query, 'page')
+    && !Object.prototype.hasOwnProperty.call(query, 'userId');
+}
+
 async function getCurrentUserLeaderboardPlacement(query, userId) {
   const normalizedUserId = toIdString(userId);
   if (!normalizedUserId) {
@@ -58,9 +74,20 @@ async function getCurrentUserLeaderboardPlacement(query, userId) {
 
 router.get('/', async (req, res) => {
   try {
+    const query = buildLeaderboardQuery();
+
+    // Keep pre-pagination clients working while cached frontend bundles age out.
+    if (isLegacyLeaderboardRequest(req.query)) {
+      const users = await User.find(query)
+        .sort(LEADERBOARD_SORT)
+        .select('_id username elo')
+        .lean();
+
+      return res.json(mapLeaderboardItems(users));
+    }
+
     const page = normalizePage(req.query?.page);
     const skip = (page - 1) * PAGE_SIZE;
-    const query = buildLeaderboardQuery();
 
     const [totalItems, users, currentUser] = await Promise.all([
       User.countDocuments(query),
@@ -73,11 +100,7 @@ router.get('/', async (req, res) => {
       getCurrentUserLeaderboardPlacement(query, req.query?.userId),
     ]);
 
-    const items = (users || []).map((user) => ({
-      userId: toIdString(user._id),
-      username: user.username || 'Unknown',
-      elo: Number.isFinite(Number(user.elo)) ? Math.round(Number(user.elo)) : 800,
-    }));
+    const items = mapLeaderboardItems(users);
 
     const totalPages = totalItems > 0 ? Math.ceil(totalItems / PAGE_SIZE) : 0;
 

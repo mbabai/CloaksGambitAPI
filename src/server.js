@@ -16,6 +16,13 @@ const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
 const ATLAS_DB_NAME = 'cloaksgambit';
 const MONGODB_ATLAS_URI = process.env.MONGODB_ATLAS_CONNECTION_STRING;
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const ASSET_VERSION_TOKEN = '__ASSET_VERSION__';
+const APP_ASSET_VERSION = String(
+  process.env.ASSET_VERSION
+    || process.env.GITHUB_SHA
+    || Date.now()
+);
 
 function getDatabaseNameFromUri(uri) {
   if (!uri) return null;
@@ -95,10 +102,15 @@ if (isProduction) {
 }
 
 const app = express();
-const PROD_FAVICON_PATH = path.join(__dirname, '..', 'public', 'assets', 'images', 'cloakHood.jpg');
-const DEV_FAVICON_PATH = path.join(__dirname, '..', 'public', 'assets', 'images', 'cloakHoodInverted.jpg');
+const PROD_FAVICON_PATH = path.join(PUBLIC_DIR, 'assets', 'images', 'cloakHood.jpg');
+const DEV_FAVICON_PATH = path.join(PUBLIC_DIR, 'assets', 'images', 'cloakHoodInverted.jpg');
+const INDEX_HTML_PATH = path.join(PUBLIC_DIR, 'index.html');
+const ADMIN_HTML_PATH = path.join(PUBLIC_DIR, 'admin.html');
+const ML_ADMIN_HTML_PATH = path.join(PUBLIC_DIR, 'ml-admin.html');
+const htmlTemplateCache = new Map();
 const staticOptions = {
   etag: true,
+  index: false,
   maxAge: isProduction ? '1d' : 0,
   setHeaders: (res, filePath) => {
     const ext = path.extname(filePath || '').toLowerCase();
@@ -106,7 +118,7 @@ const staticOptions = {
       res.setHeader('Cache-Control', 'no-cache');
       return;
     }
-    if (ext === '.html') {
+    if (ext === '.html' || ext === '.js' || ext === '.css') {
       res.setHeader('Cache-Control', 'no-cache');
       return;
     }
@@ -147,6 +159,25 @@ function resolveExistingFaviconPath(hostHeader) {
     return PROD_FAVICON_PATH;
   }
   return null;
+}
+
+function getHtmlTemplate(filePath) {
+  if (!htmlTemplateCache.has(filePath)) {
+    htmlTemplateCache.set(filePath, fs.readFileSync(filePath, 'utf8'));
+  }
+  return htmlTemplateCache.get(filePath);
+}
+
+function sendVersionedHtml(res, filePath) {
+  try {
+    const template = getHtmlTemplate(filePath);
+    const html = template.replaceAll(ASSET_VERSION_TOKEN, APP_ASSET_VERSION);
+    res.setHeader('Cache-Control', 'no-cache');
+    return res.type('html').send(html);
+  } catch (err) {
+    console.error(`Failed to render HTML template "${filePath}":`, err);
+    return res.status(500).json({ message: 'Failed to render page.' });
+  }
 }
 
 // Ensure Express respects proxy headers so OAuth redirect URIs keep https
@@ -202,13 +233,25 @@ app.get('/favicon.ico', (req, res) => {
     res.status(err.statusCode || 500).end();
   });
 });
-app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
+app.get(['/', '/index.html'], (req, res) => {
+  sendVersionedHtml(res, INDEX_HTML_PATH);
+});
+app.get(['/admin', '/admin.html'], (req, res) => {
+  sendVersionedHtml(res, ADMIN_HTML_PATH);
+});
+app.get(['/ml-admin', '/ml-admin.html'], (req, res) => {
+  if (!mlWorkflowEnabled) {
+    return res.status(404).json({ message: 'Not found' });
+  }
+  return sendVersionedHtml(res, ML_ADMIN_HTML_PATH);
+});
+app.use(express.static(PUBLIC_DIR, staticOptions));
 // Serve UI image assets from fallback locations if not present in public/
-app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'public', 'assets', 'images', 'UI'), staticOptions));
+app.use('/assets/images/UI', express.static(path.join(PUBLIC_DIR, 'assets', 'images', 'UI'), staticOptions));
 app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'test-client', 'assets', 'images', 'UI'), staticOptions));
 app.use('/assets/images/UI', express.static(path.join(__dirname, '..', 'frontend', 'public', 'assets', 'images', 'UI'), staticOptions));
 // Serve Piece image assets from fallback locations if not present in public/
-app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'public', 'assets', 'images', 'Pieces'), staticOptions));
+app.use('/assets/images/Pieces', express.static(path.join(PUBLIC_DIR, 'assets', 'images', 'Pieces'), staticOptions));
 app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'test-client', 'assets', 'images', 'Pieces'), staticOptions));
 app.use('/assets/images/Pieces', express.static(path.join(__dirname, '..', 'frontend', 'public', 'assets', 'images', 'Pieces'), staticOptions));
 
@@ -272,25 +315,6 @@ async function resetLobbyQueues() {
     console.error('Error clearing in-memory lobby state:', err);
   }
 }
-
-// Routes
-// Serve the PlayArea page at root
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
-});
-
-// Serve admin dashboard as a standalone endpoint
-app.get('/admin', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
-});
-
-// Serve ML admin dashboard
-app.get('/ml-admin', (req, res) => {
-  if (!mlWorkflowEnabled) {
-    return res.status(404).json({ message: 'Not found' });
-  }
-  res.sendFile(path.join(__dirname, '..', 'public', 'ml-admin.html'));
-});
 
 app.use('/api', routes);
 

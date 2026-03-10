@@ -15,6 +15,14 @@ const loginButton = document.getElementById('adminGoogleLoginBtn');
 
 let dashboardLoaded = false;
 
+function getAssetVersionSuffix() {
+  if (typeof window === 'undefined') return '';
+  const version = typeof window.__CG_ASSET_VERSION__ === 'string'
+    ? window.__CG_ASSET_VERSION__.trim()
+    : '';
+  return version ? `?v=${encodeURIComponent(version)}` : '';
+}
+
 function showLogin() {
   if (loginContainer) loginContainer.hidden = false;
   if (unauthorizedContainer) unauthorizedContainer.hidden = true;
@@ -93,7 +101,7 @@ async function initialize() {
   if (!dashboardLoaded) {
     dashboardLoaded = true;
     try {
-      await import('./admin-dashboard.js');
+      await import(`./admin-dashboard.js${getAssetVersionSuffix()}`);
     } catch (err) {
       console.error('Failed to load admin dashboard module', err);
     }

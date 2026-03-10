@@ -56,6 +56,32 @@ describe('ranked leaderboard route', () => {
     jest.clearAllMocks();
   });
 
+  test('returns legacy array payload when pagination params are absent', async () => {
+    const legacyQuery = createUserQueryChain([
+      { _id: 'u2', username: 'Alpha', elo: 1250 },
+      { _id: 'u1', username: 'Bravo', elo: 1100 },
+      { _id: 'u5', username: 'Fallback', elo: 'not-a-number' },
+    ]);
+
+    User.find.mockReturnValueOnce(legacyQuery);
+
+    const response = await callGet(handler, { query: {} });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toEqual([
+      { userId: 'u2', username: 'Alpha', elo: 1250 },
+      { userId: 'u1', username: 'Bravo', elo: 1100 },
+      { userId: 'u5', username: 'Fallback', elo: 800 },
+    ]);
+    expect(User.countDocuments).not.toHaveBeenCalled();
+    expect(User.find).toHaveBeenCalledWith({
+      isBot: { $ne: true },
+      isGuest: { $ne: true },
+      elo: { $exists: true, $ne: null },
+    });
+    expect(legacyQuery.select).toHaveBeenCalledWith('_id username elo');
+  });
+
   test('returns non-bot, non-guest users with elo in leaderboard order', async () => {
     const pageQuery = createUserQueryChain([
       { _id: 'u2', username: 'Alpha', elo: 1250 },
@@ -66,7 +92,7 @@ describe('ranked leaderboard route', () => {
     User.countDocuments.mockResolvedValue(3);
     User.find.mockReturnValueOnce(pageQuery);
 
-    const response = await callGet(handler, { query: {} });
+    const response = await callGet(handler, { query: { page: '1' } });
 
     expect(response.statusCode).toBe(200);
     expect(response.payload).toEqual({

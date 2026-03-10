@@ -7,8 +7,8 @@
     <link rel="icon" type="image/jpeg" href="/favicon.ico?v=20260310h" />
     <link rel="shortcut icon" type="image/jpeg" href="/favicon.ico?v=20260310h" />
     <link rel="apple-touch-icon" href="/favicon.ico?v=20260310h" />
-    <link rel="stylesheet" href="colors.css" />
-    <link rel="stylesheet" href="ui.css" />
+    <link rel="stylesheet" href="colors.css?v=__ASSET_VERSION__" />
+    <link rel="stylesheet" href="ui.css?v=__ASSET_VERSION__" />
     <style>
       :root { --forest: var(--CG-forest); --purple: var(--CG-purple); --purple-pressed: var(--CG-purple-pressed); }
       html, body { height: 100%; }
@@ -509,8 +509,11 @@
       </div>
     </div>
 
+    <script>
+      window.__CG_ASSET_VERSION__ = '__ASSET_VERSION__';
+    </script>
     <script src="/socket.io/socket.io.js"></script>
-    <script type="module" src="/js/main.js" defer></script>
+    <script type="module" src="/js/main.js?v=__ASSET_VERSION__" defer></script>
   </body>
   </html>
 
