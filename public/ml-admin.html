@@ -791,6 +791,30 @@
         table-layout: fixed;
       }
 
+      .simulation-runs-table col.col-name {
+        width: 22%;
+      }
+
+      .simulation-runs-table col.col-player {
+        width: 8%;
+      }
+
+      .simulation-runs-table col.col-games {
+        width: 28%;
+      }
+
+      .simulation-runs-table col.col-avg {
+        width: 5%;
+      }
+
+      .simulation-runs-table col.col-timestamp {
+        width: 18%;
+      }
+
+      .simulation-runs-table col.col-actions {
+        width: 11%;
+      }
+
       .game-table thead th {
         position: sticky;
         top: 0;
@@ -847,6 +871,41 @@
 
       .inline-actions button {
         padding: 6px 10px;
+      }
+
+      .simulation-games-cell {
+        min-width: 240px;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+      }
+
+      .simulation-games-stack {
+        display: grid;
+        gap: 8px;
+      }
+
+      .simulation-games-label {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .simulation-games-label.active {
+        color: var(--teal);
+      }
+
+      .simulation-games-label.warn {
+        color: var(--accent-strong);
+      }
+
+      .simulation-games-label.error {
+        color: var(--danger);
+      }
+
+      .simulation-games-meta {
+        font-size: 12px;
+        color: var(--muted);
       }
 
       .hidden-controls {
@@ -1004,20 +1063,6 @@
                   </div>
                 </div>
                 <button id="runSimulationBtn" type="button">Run Simulation Batch</button>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <h2 class="panel-title">Simulation Stream</h2>
-                <span id="simulationStreamBadge" class="badge">Idle</span>
-              </div>
-              <div class="panel-body stream-card">
-                <div class="progress"><span id="simulationProgressBar"></span></div>
-                <div id="simulationProgressMeta" class="subtle">No simulation running.</div>
-                <div class="actions">
-                  <button id="stopSimulationBtn" class="danger" type="button" disabled>Stop Current Run</button>
-                </div>
               </div>
             </section>
 

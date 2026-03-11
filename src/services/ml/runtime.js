@@ -2630,9 +2630,6 @@ class MlRuntime {
       stats: deepClone(simulation.stats || {}),
     };
 
-    this.state.activeJobs.simulation = deepClone(job);
-    this.upsertSimulationRecord(simulation);
-
     const mongoPersistence = await this.persistSimulationToMongo(simulation, {
       gameIds: options.gameIds || null,
       pruneMissingGames: options.pruneMissingGames === true,
@@ -2641,6 +2638,10 @@ class MlRuntime {
     if (mongoPersistence?.saved) {
       simulation.gamesStoredExternally = true;
     }
+    this.state.activeJobs.simulation = deepClone(job);
+    this.upsertSimulationRecord(simulation.gamesStoredExternally
+      ? compactSimulationForState(simulation)
+      : simulation);
     await this.save();
   }
 
@@ -2900,7 +2901,9 @@ class MlRuntime {
           stats: deepClone(stats),
         };
         this.state.activeJobs.simulation = deepClone(job);
-        this.upsertSimulationRecord(simulation);
+        this.upsertSimulationRecord(simulation.gamesStoredExternally
+          ? compactSimulationForState(simulation)
+          : simulation);
 
         this.emitSimulationJobProgress(job, 'game', {
           completedGames: stats.games,
@@ -2980,7 +2983,9 @@ class MlRuntime {
         ...(simulation.persistence || {}),
         error: err?.message || 'Simulation failed',
       };
-      this.upsertSimulationRecord(simulation);
+      this.upsertSimulationRecord(simulation.gamesStoredExternally
+        ? compactSimulationForState(simulation)
+        : simulation);
       await this.checkpointSimulationJob(job, simulation, {
         status: 'error',
         jobStatus: 'error',

@@ -32,11 +32,6 @@ const els = {
   latestSimulationSummary: document.getElementById('latestSimulationSummary'),
   latestTrainingSummary: document.getElementById('latestTrainingSummary'),
 
-  simulationStreamBadge: document.getElementById('simulationStreamBadge'),
-  simulationProgressBar: document.getElementById('simulationProgressBar'),
-  simulationProgressMeta: document.getElementById('simulationProgressMeta'),
-  stopSimulationBtn: document.getElementById('stopSimulationBtn'),
-
   trainingStreamBadge: document.getElementById('trainingStreamBadge'),
   trainingProgressBar: document.getElementById('trainingProgressBar'),
   trainingProgressMeta: document.getElementById('trainingProgressMeta'),
@@ -222,6 +217,86 @@ function isTrainingActive() {
 function isSimulationActive() {
   const phase = String(state.liveSimulation?.phase || '').toLowerCase();
   return phase === 'start' || phase === 'game';
+}
+
+function getLiveSimulationForRun(simulation) {
+  if (!simulation?.id || !state.liveSimulation?.simulationId) return null;
+  return state.liveSimulation.simulationId === simulation.id ? state.liveSimulation : null;
+}
+
+function getSimulationTaskId(simulation, livePayload = null) {
+  return livePayload?.taskId
+    || simulation?.persistence?.taskId
+    || (state.liveSimulation?.simulationId === simulation?.id ? state.activeSimulationTaskId : '')
+    || '';
+}
+
+function isSimulationInFlight(simulation, livePayload = null) {
+  const status = String(livePayload?.status || simulation?.status || '').toLowerCase();
+  const phase = String(livePayload?.phase || '').toLowerCase();
+  if (livePayload && phase) return phase === 'start' || phase === 'game';
+  return status === 'running' || status === 'stopping';
+}
+
+function getSimulationResultSummary(stats = {}) {
+  return `${Number(stats.whiteWins || 0)}W ${Number(stats.blackWins || 0)}B ${Number(stats.draws || 0)}D`;
+}
+
+function buildSimulationGamesView(simulation, livePayload = null) {
+  const status = String(livePayload?.status || simulation?.status || '').toLowerCase();
+  const phase = String(livePayload?.phase || '').toLowerCase();
+  const errorMessage = livePayload?.message || simulation?.errorMessage || '';
+  const stats = livePayload?.stats || simulation?.stats || {};
+  const completedGames = Number(
+    livePayload?.completedGames
+    ?? simulation?.config?.completedGameCount
+    ?? simulation?.gameCount
+    ?? simulation?.stats?.games
+    ?? 0
+  );
+  const totalGames = Number(
+    livePayload?.gameCount
+    || simulation?.config?.requestedGameCount
+    || completedGames
+    || 0
+  );
+  const resultSummary = getSimulationResultSummary(stats);
+  const title = errorMessage || formatWinReasonSummary(simulation?.stats?.winReasons) || describeStorage(simulation);
+
+  if (livePayload && (phase === 'start' || phase === 'game')) {
+    const progress = Number.isFinite(Number(livePayload.progress))
+      ? Math.max(0, Math.min(1, Number(livePayload.progress)))
+      : 0;
+    const isStopping = status === 'stopping';
+    return {
+      label: `${completedGames}/${totalGames || completedGames} games`,
+      labelClass: isStopping ? 'warn' : 'active',
+      meta: `${resultSummary}${isStopping ? ' | stopping' : ''}`,
+      progress,
+      progressTone: isStopping ? 'default' : 'active',
+      title,
+    };
+  }
+
+  if (errorMessage) {
+    return {
+      label: `${completedGames}${totalGames > completedGames ? `/${totalGames}` : ''} games`,
+      labelClass: 'error',
+      meta: errorMessage,
+      progress: null,
+      progressTone: 'default',
+      title,
+    };
+  }
+
+  return {
+    label: `${completedGames} games`,
+    labelClass: '',
+    meta: `${resultSummary}${status === 'stopped' || phase === 'cancelled' ? ' | stopped' : ''}`,
+    progress: null,
+    progressTone: 'default',
+    title,
+  };
 }
 
 function isTrainingRunSelectable(trainingRun) {
@@ -749,7 +824,16 @@ function renderSimulationList() {
   }
   els.simulationRunsMeta.textContent = `${simulations.length} run(s) recorded. Use Select to inspect games.`;
   els.simulationList.innerHTML = `
-    <table class="game-table">
+    <table class="game-table simulation-runs-table">
+      <colgroup>
+        <col class="col-name" />
+        <col class="col-player" />
+        <col class="col-player" />
+        <col class="col-games" />
+        <col class="col-avg" />
+        <col class="col-timestamp" />
+        <col class="col-actions" />
+      </colgroup>
       <thead>
         <tr>
           <th>Name</th>
@@ -758,7 +842,6 @@ function renderSimulationList() {
           <th>Games</th>
           <th>Avg Plies</th>
           <th>Timestamp</th>
-          <th>Status</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -770,23 +853,32 @@ function renderSimulationList() {
     const row = document.createElement('tr');
     row.className = simulation.id === state.selectedSimulationId ? 'active' : '';
     row.dataset.simulationId = simulation.id;
+    const livePayload = getLiveSimulationForRun(simulation);
     const whitePlayer = simulation.participantALabel || simulation.participantAId || 'Player 1';
     const blackPlayer = simulation.participantBLabel || simulation.participantBId || 'Player 2';
-    const statusLabel = simulation.errorMessage
-      ? `Error: ${simulation.errorMessage}`
-      : String(simulation.status || 'completed');
+    const gamesView = buildSimulationGamesView(simulation, livePayload);
+    const inFlight = isSimulationInFlight(simulation, livePayload);
+    const isStopping = String(livePayload?.status || simulation?.status || '').toLowerCase() === 'stopping';
+    const taskId = getSimulationTaskId(simulation, livePayload);
     row.innerHTML = `
       <td>${escapeHtml(simulation.label || simulation.id)}</td>
       <td>${escapeHtml(whitePlayer)}</td>
       <td>${escapeHtml(blackPlayer)}</td>
-      <td class="subtle">${escapeHtml(String(simulation.gameCount || 0))}</td>
+      <td class="simulation-games-cell" title="${escapeHtml(gamesView.title)}">
+        <div class="simulation-games-stack">
+          <div class="simulation-games-label ${escapeHtml(gamesView.labelClass)}">${escapeHtml(gamesView.label)}</div>
+          ${gamesView.progress !== null ? `<div class="progress"><span class="${escapeHtml(gamesView.progressTone)}" style="width:${Math.max(0, Math.min(100, gamesView.progress * 100)).toFixed(1)}%"></span></div>` : ''}
+          ${gamesView.meta ? `<div class="simulation-games-meta">${escapeHtml(gamesView.meta)}</div>` : ''}
+        </div>
+      </td>
       <td class="subtle">${escapeHtml(Number(simulation?.stats?.averagePlies || 0).toFixed(1))}</td>
       <td class="subtle">${escapeHtml(formatDate(simulation.createdAt))}</td>
-      <td class="subtle" title="${escapeHtml(formatWinReasonSummary(simulation?.stats?.winReasons) || describeStorage(simulation))}">${escapeHtml(statusLabel)}</td>
       <td class="actions-cell">
         <div class="inline-actions">
           <button type="button" class="secondary" data-action="select-run" data-simulation-id="${escapeHtml(simulation.id)}">Select</button>
-          <button type="button" class="danger" data-action="delete" data-simulation-id="${escapeHtml(simulation.id)}">Delete</button>
+          ${inFlight
+            ? `<button type="button" class="danger" data-action="stop-run" data-simulation-id="${escapeHtml(simulation.id)}" data-task-id="${escapeHtml(taskId)}" ${isStopping || !taskId ? 'disabled' : ''}>${isStopping ? 'Stopping...' : 'Stop run'}</button>`
+            : `<button type="button" class="danger" data-action="delete" data-simulation-id="${escapeHtml(simulation.id)}">Delete</button>`}
         </div>
       </td>
     `;
@@ -1256,7 +1348,6 @@ function applyLiveStatusPayload(live = null) {
   } else if (hadSimulation) {
     state.liveSimulation = null;
     state.activeSimulationTaskId = '';
-    els.stopSimulationBtn.disabled = true;
     refreshWorkbench({ workflowTab: 'simulations', silent: true }).catch(() => {});
   }
 
@@ -1324,9 +1415,6 @@ async function runSimulation() {
 
   els.runSimulationBtn.disabled = true;
   setActiveWorkflowTab('simulations');
-  updateProgressBar(els.simulationProgressBar, 0, 'active');
-  els.simulationStreamBadge.textContent = 'Submitting';
-  els.simulationProgressMeta.textContent = 'Submitting simulation batch...';
   setStatus('Starting simulation batch...');
   try {
     const result = await apiFetch('/api/v1/ml/simulations/start', {
@@ -1397,17 +1485,36 @@ async function runTraining() {
   }
 }
 
-async function stopSimulationRun() {
-  const taskId = state.activeSimulationTaskId || '';
-  if (!taskId) {
+async function stopSimulationRun(taskId = '', simulationId = '') {
+  const resolvedTaskId = taskId || state.activeSimulationTaskId || '';
+  const resolvedSimulationId = simulationId || state.liveSimulation?.simulationId || '';
+  const simulation = resolvedSimulationId ? getSimulationById(resolvedSimulationId) : null;
+  const label = simulation?.label || resolvedSimulationId || 'the active simulation run';
+  if (!resolvedTaskId) {
     setStatus('No active simulation task to stop.', 'warn');
     return;
   }
   await apiFetch('/api/v1/ml/simulations/stop', {
     method: 'POST',
-    body: JSON.stringify({ taskId }),
+    body: JSON.stringify({ taskId: resolvedTaskId }),
   });
-  setStatus('Stop requested for the active simulation run.', 'ok');
+  if (resolvedSimulationId) {
+    const simulationIndex = state.simulations.findIndex((entry) => entry.id === resolvedSimulationId);
+    if (simulationIndex >= 0) {
+      state.simulations.splice(simulationIndex, 1, {
+        ...state.simulations[simulationIndex],
+        status: 'stopping',
+      });
+    }
+    if (state.liveSimulation?.simulationId === resolvedSimulationId) {
+      state.liveSimulation = {
+        ...state.liveSimulation,
+        status: 'stopping',
+      };
+    }
+    renderSimulationList();
+  }
+  setStatus(`Stop requested for ${label}.`, 'ok');
 }
 
 function handleTrainingProgress(payload = {}) {
@@ -1483,45 +1590,23 @@ function handleSimulationProgress(payload = {}) {
   state.liveSimulation = payload;
   if (payload.taskId) state.activeSimulationTaskId = payload.taskId;
   const phase = String(payload.phase || '').toLowerCase();
-  const progress = Number.isFinite(Number(payload.progress))
-    ? Math.max(0, Math.min(1, Number(payload.progress)))
-    : 0;
   upsertLiveSimulationSummary(payload);
   renderSimulationList();
-  if (phase === 'start') {
-    els.stopSimulationBtn.disabled = false;
-    els.simulationStreamBadge.textContent = payload.label || payload.simulationId || 'Running';
-    els.simulationProgressMeta.textContent = `${payload.completedGames || 0}/${payload.gameCount || 0} games complete`;
-    updateProgressBar(els.simulationProgressBar, progress, 'active');
-    return;
-  }
-  if (phase === 'game') {
-    const stats = payload.stats || {};
-    els.stopSimulationBtn.disabled = false;
-    els.simulationStreamBadge.textContent = `${payload.label || payload.simulationId || 'Simulation'} ${(progress * 100).toFixed(1)}%`;
-    els.simulationProgressMeta.textContent = `${payload.completedGames || 0}/${payload.gameCount || 0} games | ${stats.whiteWins || 0}W ${stats.blackWins || 0}B ${stats.draws || 0}D`;
-    updateProgressBar(els.simulationProgressBar, progress, 'active');
+  if (phase === 'start' || phase === 'game') {
     return;
   }
   if (phase === 'complete' || phase === 'cancelled') {
-    els.stopSimulationBtn.disabled = true;
     state.activeSimulationTaskId = '';
-    els.simulationStreamBadge.textContent = phase === 'complete'
-      ? `Complete ${payload.simulationId || ''}`
-      : `Stopped ${payload.simulationId || ''}`;
-    els.simulationProgressMeta.textContent = phase === 'complete'
-      ? `${payload.completedGames || payload.gameCount || 0}/${payload.gameCount || payload.completedGames || 0} games complete`
-      : `${payload.completedGames || 0}/${payload.gameCount || payload.completedGames || 0} games complete (stopped)`;
-    updateProgressBar(els.simulationProgressBar, phase === 'complete' ? 1 : progress, 'default');
     refreshWorkbench({ workflowTab: 'simulations', preferSimulationId: payload.simulationId || state.selectedSimulationId }).catch(() => {});
     return;
   }
   if (phase === 'error') {
-    els.stopSimulationBtn.disabled = true;
     state.activeSimulationTaskId = '';
-    els.simulationStreamBadge.textContent = 'Simulation Error';
-    els.simulationProgressMeta.textContent = payload.message || 'Simulation failed.';
-    updateProgressBar(els.simulationProgressBar, 1, 'error');
+    refreshWorkbench({
+      workflowTab: 'simulations',
+      preferSimulationId: payload.simulationId || state.selectedSimulationId,
+      silent: true,
+    }).catch(() => {});
   }
 }
 
@@ -1534,14 +1619,9 @@ function connectAdminSocket() {
       els.trainingProgressMeta.textContent = 'No training running.';
       if (!state.liveTrainingHistory.length) setTrainingLossDisplay(null);
     }
-    if (!isSimulationActive()) {
-      els.simulationStreamBadge.textContent = 'Connected';
-      els.simulationProgressMeta.textContent = 'No simulation running.';
-    }
   });
   socket.on('disconnect', () => {
     els.trainingStreamBadge.textContent = 'Disconnected';
-    els.simulationStreamBadge.textContent = 'Disconnected';
   });
   socket.on('ml:trainingProgress', handleTrainingProgress);
   socket.on('ml:simulationProgress', handleSimulationProgress);
@@ -1591,11 +1671,18 @@ function bindEvents() {
   els.clearTrainingSourcesBtn?.addEventListener('click', clearTrainingSources);
   els.runTrainingBtn?.addEventListener('click', () => runTraining().catch((err) => setStatus(err.message, 'error')));
   els.runSimulationBtn?.addEventListener('click', () => runSimulation().catch((err) => setStatus(err.message, 'error')));
-  els.stopSimulationBtn?.addEventListener('click', () => stopSimulationRun().catch((err) => setStatus(err.message, 'error')));
   els.simulationList?.addEventListener('click', (event) => {
     const selectButton = event.target.closest('button[data-action="select-run"]');
     if (selectButton) {
       selectSimulation(selectButton.dataset.simulationId || '').catch((err) => setStatus(err.message, 'error'));
+      return;
+    }
+    const stopButton = event.target.closest('button[data-action="stop-run"]');
+    if (stopButton) {
+      stopSimulationRun(
+        stopButton.dataset.taskId || '',
+        stopButton.dataset.simulationId || '',
+      ).catch((err) => setStatus(err.message, 'error'));
       return;
     }
     const button = event.target.closest('button[data-action="delete"]');
@@ -1659,7 +1746,6 @@ async function boot() {
   connectAdminSocket();
   bindEvents();
   setActiveWorkflowTab(state.activeWorkflowTab);
-  updateProgressBar(els.simulationProgressBar, 0, 'default');
   updateProgressBar(els.trainingProgressBar, 0, 'default');
   setTrainingLossDisplay(null);
   updateReplayControlsState();
