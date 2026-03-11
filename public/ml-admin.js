@@ -93,7 +93,6 @@ const els = {
 
   replaySimulationSelect: document.getElementById('replaySimulationSelect'),
   replayGameSelect: document.getElementById('replayGameSelect'),
-  loadReplayBtn: document.getElementById('loadReplayBtn'),
   replayPlayPauseBtn: document.getElementById('replayPlayPauseBtn'),
   replayPrevBtn: document.getElementById('replayPrevBtn'),
   replayNextBtn: document.getElementById('replayNextBtn'),
@@ -277,9 +276,6 @@ function setTrainingLossDisplay(loss = null) {
 }
 
 function updateReplayControlsState() {
-  if (els.loadReplayBtn) {
-    els.loadReplayBtn.disabled = !(state.selectedSimulationId && state.selectedGameId);
-  }
 }
 
 function getHeaders(extra = {}) {
@@ -751,35 +747,50 @@ function renderSimulationList() {
     els.simulationList.innerHTML = '<div class="subtle">Run a simulation batch to populate this list.</div>';
     return;
   }
-  els.simulationRunsMeta.textContent = `${simulations.length} run(s) recorded. Click one to inspect its games.`;
+  els.simulationRunsMeta.textContent = `${simulations.length} run(s) recorded. Use Select to inspect games.`;
+  els.simulationList.innerHTML = `
+    <table class="game-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>White Player</th>
+          <th>Black Player</th>
+          <th>Games</th>
+          <th>Avg Plies</th>
+          <th>Timestamp</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  `;
+  const tableBody = els.simulationList.querySelector('.game-table tbody');
   simulations.forEach((simulation) => {
-    const participantResults = Array.isArray(simulation?.stats?.participantResults)
-      ? simulation.stats.participantResults
-      : [];
-    const resultSummary = participantResults
-      .map((entry) => `${entry.label}: ${Number(entry.winPct || 0).toFixed(1)}%`)
-      .join(' | ');
-    const row = document.createElement('article');
-    row.className = `detail-row ${simulation.id === state.selectedSimulationId ? 'active' : ''}`;
+    const row = document.createElement('tr');
+    row.className = simulation.id === state.selectedSimulationId ? 'active' : '';
     row.dataset.simulationId = simulation.id;
+    const whitePlayer = simulation.participantALabel || simulation.participantAId || 'Player 1';
+    const blackPlayer = simulation.participantBLabel || simulation.participantBId || 'Player 2';
+    const statusLabel = simulation.errorMessage
+      ? `Error: ${simulation.errorMessage}`
+      : String(simulation.status || 'completed');
     row.innerHTML = `
-      <div class="detail-row-head">
-        <div>
-          <strong>${escapeHtml(simulation.label || simulation.id)}</strong>
-          <div class="card-meta">${escapeHtml(simulation.participantALabel || simulation.participantAId || 'Player 1')} vs ${escapeHtml(simulation.participantBLabel || simulation.participantBId || 'Player 2')}</div>
+      <td>${escapeHtml(simulation.label || simulation.id)}</td>
+      <td>${escapeHtml(whitePlayer)}</td>
+      <td>${escapeHtml(blackPlayer)}</td>
+      <td class="subtle">${escapeHtml(String(simulation.gameCount || 0))}</td>
+      <td class="subtle">${escapeHtml(Number(simulation?.stats?.averagePlies || 0).toFixed(1))}</td>
+      <td class="subtle">${escapeHtml(formatDate(simulation.createdAt))}</td>
+      <td class="subtle" title="${escapeHtml(formatWinReasonSummary(simulation?.stats?.winReasons) || describeStorage(simulation))}">${escapeHtml(statusLabel)}</td>
+      <td class="actions-cell">
+        <div class="inline-actions">
+          <button type="button" class="secondary" data-action="select-run" data-simulation-id="${escapeHtml(simulation.id)}">Select</button>
+          <button type="button" class="danger" data-action="delete" data-simulation-id="${escapeHtml(simulation.id)}">Delete</button>
         </div>
-        <span class="pill">${escapeHtml(String(simulation.status || 'completed'))}</span>
-      </div>
-      <div class="detail-row-meta">
-        <div class="subtle">${simulation.gameCount} games | ${Number(simulation?.stats?.averagePlies || 0).toFixed(1)} avg plies</div>
-        <div class="subtle">${escapeHtml(formatWinReasonSummary(simulation?.stats?.winReasons))}</div>
-        <div class="subtle">${escapeHtml(resultSummary || describeStorage(simulation))}</div>
-      </div>
-      <div class="detail-actions">
-        <button type="button" class="danger" data-action="delete" data-simulation-id="${escapeHtml(simulation.id)}">Delete Run</button>
-      </div>
+      </td>
     `;
-    els.simulationList.appendChild(row);
+    tableBody.appendChild(row);
   });
 }
 
@@ -835,7 +846,9 @@ function renderSelectedSimulation() {
     .map((entry) => `${entry.label}: ${Number(entry.winPct || 0).toFixed(1)}%`)
     .join(' | ');
   els.selectedSimulationLabel.textContent = simulation.label || simulation.id;
-  els.selectedSimulationMeta.textContent = `${simulation.id} | ${simulation.gameCount} games | ${formatDate(simulation.createdAt)} | ${resultSummary || describeStorage(simulation)}`;
+  els.selectedSimulationMeta.textContent = simulation.errorMessage
+    ? `${simulation.id} | ${simulation.gameCount} games | ${formatDate(simulation.createdAt)} | ${resultSummary || describeStorage(simulation)} | Error: ${simulation.errorMessage}`
+    : `${simulation.id} | ${simulation.gameCount} games | ${formatDate(simulation.createdAt)} | ${resultSummary || describeStorage(simulation)}`;
   if (state.loadingSimulationId === simulation.id && !detail) {
     els.simulationGameList.innerHTML = '<div class="subtle">Loading games for this run...</div>';
     updateReplayControlsState();
@@ -847,26 +860,50 @@ function renderSelectedSimulation() {
     updateReplayControlsState();
     return;
   }
-  els.simulationGameList.innerHTML = '';
+  const previousScrollTop = els.simulationGameList.scrollTop || 0;
+  els.simulationGameList.innerHTML = `
+    <table class="game-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>White Player</th>
+          <th>Black Player</th>
+          <th>Plies</th>
+          <th>Decisions</th>
+          <th>Timestamp</th>
+          <th>Win Reason</th>
+          <th>Win Color</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  `;
+  const tableBody = els.simulationGameList.querySelector('.game-table tbody');
   games.forEach((game) => {
-    const row = document.createElement('article');
-    row.className = `detail-row ${game.id === state.selectedGameId ? 'active' : ''}`;
+    const row = document.createElement('tr');
+    row.className = game.id === state.selectedGameId ? 'active' : '';
     row.dataset.gameId = game.id;
+    const whitePlayer = game.whiteParticipantLabel || simulation.participantALabel || 'White';
+    const blackPlayer = game.blackParticipantLabel || simulation.participantBLabel || 'Black';
     row.innerHTML = `
-      <div class="detail-row-head">
-        <div>
-          <strong>${escapeHtml(game.id)}</strong>
-          <div class="card-meta">${escapeHtml(game.whiteParticipantLabel || simulation.participantALabel || 'White')} vs ${escapeHtml(game.blackParticipantLabel || simulation.participantBLabel || 'Black')}</div>
+      <td>${escapeHtml(game.id)}</td>
+      <td>${escapeHtml(whitePlayer)}</td>
+      <td>${escapeHtml(blackPlayer)}</td>
+      <td class="subtle">${escapeHtml(String(game.plies ?? 0))}</td>
+      <td class="subtle">${escapeHtml(String(game.decisionCount || 0))}</td>
+      <td class="subtle">${escapeHtml(formatDate(game.createdAt))}</td>
+      <td class="subtle">${escapeHtml(winReasonToText(game.winReason))}</td>
+      <td>${escapeHtml(formatGameWinner(game))}</td>
+      <td class="actions-cell">
+        <div class="inline-actions">
+          <button type="button" class="secondary" data-action="load-game" data-game-id="${escapeHtml(game.id)}">Load Game</button>
         </div>
-        <span class="pill">${escapeHtml(formatGameWinner(game))}</span>
-      </div>
-      <div class="detail-row-meta">
-        <div class="subtle">${game.plies} plies | ${game.decisionCount || 0} decisions | ${escapeHtml(formatDate(game.createdAt))}</div>
-        <div class="subtle">Reason: ${escapeHtml(winReasonToText(game.winReason))}</div>
-      </div>
+      </td>
     `;
-    els.simulationGameList.appendChild(row);
+    tableBody.appendChild(row);
   });
+  els.simulationGameList.scrollTop = previousScrollTop;
   updateReplayControlsState();
 }
 
@@ -1016,13 +1053,14 @@ async function refreshWorkbench(options = {}) {
   state.isRefreshingWorkbench = true;
   try {
     const live = await loadWorkbench();
-    state.simulationDetailsById = new Map();
     state.loadingSimulationId = '';
     syncSelections(options);
-    if (state.selectedSimulationId) state.loadingSimulationId = state.selectedSimulationId;
+    if (state.selectedSimulationId && !state.simulationDetailsById.has(state.selectedSimulationId)) {
+      state.loadingSimulationId = state.selectedSimulationId;
+    }
     renderWorkbench();
     const followUps = [];
-    if (state.selectedSimulationId) {
+    if (state.selectedSimulationId && !state.simulationDetailsById.has(state.selectedSimulationId)) {
       followUps.push(loadSelectedSimulationDetail({
         autoSelectFirstGame: Boolean(options.autoSelectFirstGame),
         autoLoadReplay: Boolean(options.autoLoadReplay),
@@ -1555,6 +1593,11 @@ function bindEvents() {
   els.runSimulationBtn?.addEventListener('click', () => runSimulation().catch((err) => setStatus(err.message, 'error')));
   els.stopSimulationBtn?.addEventListener('click', () => stopSimulationRun().catch((err) => setStatus(err.message, 'error')));
   els.simulationList?.addEventListener('click', (event) => {
+    const selectButton = event.target.closest('button[data-action="select-run"]');
+    if (selectButton) {
+      selectSimulation(selectButton.dataset.simulationId || '').catch((err) => setStatus(err.message, 'error'));
+      return;
+    }
     const button = event.target.closest('button[data-action="delete"]');
     if (button) {
       deleteSimulation(button.dataset.simulationId || '').catch((err) => setStatus(err.message, 'error'));
@@ -1564,15 +1607,22 @@ function bindEvents() {
     if (row) selectSimulation(row.dataset.simulationId || '').catch((err) => setStatus(err.message, 'error'));
   });
   els.simulationGameList?.addEventListener('click', (event) => {
+    const loadButton = event.target.closest('button[data-action="load-game"]');
+    if (loadButton) {
+      selectReplayGame(loadButton.dataset.gameId || '', { autoLoadReplay: true }).catch((err) => setStatus(err.message, 'error'));
+      return;
+    }
     const row = event.target.closest('[data-game-id]');
-    if (row) selectReplayGame(row.dataset.gameId || '', { autoLoadReplay: true }).catch((err) => setStatus(err.message, 'error'));
+    if (row) {
+      state.selectedGameId = row.dataset.gameId || '';
+      renderSelectedSimulation();
+    }
   });
   els.replaySimulationSelect?.addEventListener('change', () => selectSimulation(els.replaySimulationSelect.value || '').catch((err) => setStatus(err.message, 'error')));
   els.replayGameSelect?.addEventListener('change', () => {
     state.selectedGameId = els.replayGameSelect.value || '';
     renderSelectedSimulation();
   });
-  els.loadReplayBtn?.addEventListener('click', () => loadReplay().catch((err) => setStatus(err.message, 'error')));
   els.replayPlayPauseBtn?.addEventListener('click', () => replayWorkbench.togglePlayback());
   els.replayPrevBtn?.addEventListener('click', () => { replayWorkbench.stopPlayback(); replayWorkbench.step(-1); });
   els.replayNextBtn?.addEventListener('click', () => { replayWorkbench.stopPlayback(); replayWorkbench.step(1); });

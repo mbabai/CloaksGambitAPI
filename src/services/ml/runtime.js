@@ -49,9 +49,14 @@ const { runInSimulationRequestContext } = require('../../utils/simulationRequest
 const SIMULATION_CHECKPOINT_GAME_INTERVAL = 2;
 const SIMULATION_CHECKPOINT_MS = 5000;
 const LIVE_STATUS_RETENTION_MS = 30000;
+const SAVE_RENAME_RETRY_DELAYS_MS = [25, 75, 150];
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function deepClone(value) {
@@ -61,6 +66,41 @@ function deepClone(value) {
 function ensureDirSync(targetDir) {
   if (!fs.existsSync(targetDir)) {
     fs.mkdirSync(targetDir, { recursive: true });
+  }
+}
+
+function isRetriableRenameError(err) {
+  const code = String(err?.code || '').toUpperCase();
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+}
+
+async function persistJsonWithFallback(targetPath, payload) {
+  const tmpPath = `${targetPath}.tmp`;
+  await fs.promises.writeFile(tmpPath, payload, 'utf8');
+  let lastRenameError = null;
+  for (const delayMs of [0, ...SAVE_RENAME_RETRY_DELAYS_MS]) {
+    if (delayMs) await sleep(delayMs);
+    try {
+      await fs.promises.rename(tmpPath, targetPath);
+      return;
+    } catch (err) {
+      lastRenameError = err;
+      if (!isRetriableRenameError(err)) {
+        throw err;
+      }
+    }
+  }
+  try {
+    await fs.promises.writeFile(targetPath, payload, 'utf8');
+  } finally {
+    await fs.promises.unlink(tmpPath).catch(() => {});
+  }
+  if (lastRenameError) {
+    console.warn('[ml-runtime] rename fallback used while persisting state', {
+      code: lastRenameError.code,
+      path: tmpPath,
+      dest: targetPath,
+    });
   }
 }
 
@@ -1065,11 +1105,9 @@ class MlRuntime {
     if (!this.persist) return;
     ensureDirSync(path.dirname(this.dataFilePath));
     const payload = JSON.stringify(this.state, null, 2);
-    const tmpPath = `${this.dataFilePath}.tmp`;
     this.savePromise = this.savePromise
       .then(async () => {
-        await fs.promises.writeFile(tmpPath, payload, 'utf8');
-        await fs.promises.rename(tmpPath, this.dataFilePath);
+        await persistJsonWithFallback(this.dataFilePath, payload);
       })
       .catch((err) => {
         console.error('[ml-runtime] failed to persist state', err);
@@ -1705,6 +1743,10 @@ class MlRuntime {
         stats.winReasons = derived;
       }
     }
+    const errorMessage = simulation?.persistence?.error
+      || simulation?.persistence?.message
+      || simulation?.persistence?.mongo?.message
+      || null;
     return {
       id: simulation.id,
       createdAt: simulation.createdAt,
@@ -1725,6 +1767,7 @@ class MlRuntime {
           : (Array.isArray(simulation.games) ? simulation.games.length : 0),
       gamesStoredExternally: Boolean(simulation.gamesStoredExternally),
       persistence: simulation.persistence || null,
+      errorMessage,
       stats,
     };
   }

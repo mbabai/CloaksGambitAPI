@@ -672,6 +672,19 @@
         grid-template-columns: 420px minmax(0, 1fr);
       }
 
+      .simulations-layout {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 420px minmax(0, 1fr);
+        align-items: start;
+      }
+
+      .simulations-main {
+        display: grid;
+        gap: 16px;
+        min-width: 0;
+      }
+
       .section-grid {
         display: grid;
         gap: 12px;
@@ -689,6 +702,12 @@
         gap: 10px;
         max-height: 420px;
         overflow: auto;
+      }
+
+      #simulationGameList {
+        max-height: 560px;
+        overflow: auto;
+        padding-right: 6px;
       }
 
       .detail-row {
@@ -732,6 +751,104 @@
         box-shadow: inset 0 0 0 1px rgba(240, 182, 88, 0.16);
       }
 
+      .compact-game-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 14px;
+      }
+
+      .compact-game-main {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+
+      .compact-game-id {
+        flex: 0 0 auto;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .compact-game-meta {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .game-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        table-layout: fixed;
+      }
+
+      .game-table thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        padding: 9px 10px;
+        background: rgba(7, 22, 28, 0.98);
+        border-bottom: 1px solid rgba(133, 184, 175, 0.18);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        text-align: left;
+      }
+
+      .game-table tbody tr {
+        cursor: pointer;
+      }
+
+      .game-table tbody tr:hover td {
+        background: rgba(9, 24, 30, 0.88);
+      }
+
+      .game-table tbody tr.active td {
+        background: rgba(29, 24, 11, 0.68);
+        box-shadow: inset 0 1px 0 rgba(240, 182, 88, 0.2), inset 0 -1px 0 rgba(240, 182, 88, 0.2);
+      }
+
+      .game-table td {
+        padding: 10px;
+        border-bottom: 1px solid rgba(133, 184, 175, 0.12);
+        font-size: 12px;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        background: rgba(6, 18, 23, 0.76);
+      }
+
+      .game-table td.subtle {
+        color: var(--muted);
+      }
+
+      .game-table td.actions-cell {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+      }
+
+      .inline-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .inline-actions button {
+        padding: 6px 10px;
+      }
+
       .hidden-controls {
         display: none;
       }
@@ -744,7 +861,8 @@
       @media (max-width: 1280px) {
         .banner,
         .main,
-        .replay-shell {
+        .replay-shell,
+        .simulations-layout {
           grid-template-columns: minmax(0, 1fr);
         }
       }
@@ -801,7 +919,7 @@
       </div>
 
       <section class="workflow-panel active" data-workflow-panel="simulations">
-        <div class="workflow-grid">
+        <div class="simulations-layout">
           <div class="stack">
             <section class="panel">
               <div class="panel-head">
@@ -903,6 +1021,9 @@
               </div>
             </section>
 
+          </div>
+
+          <div class="simulations-main">
             <section class="panel">
               <div class="panel-head">
                 <h2 class="panel-title">Simulation Runs</h2>
@@ -912,12 +1033,10 @@
                 <div id="simulationList" class="detail-list"></div>
               </div>
             </section>
-          </div>
 
-          <div class="stack">
             <section class="panel">
               <div class="panel-head">
-                <h2 class="panel-title">Selected Run Games</h2>
+                <h2 class="panel-title">Run Games</h2>
               </div>
               <div class="panel-body stack">
                 <div class="section-grid">
@@ -938,7 +1057,6 @@
                   <select id="replayGameSelect"></select>
                 </div>
                 <div class="control-row">
-                  <button id="loadReplayBtn" class="secondary" type="button">Reload Selected Game</button>
                   <button id="replayPlayPauseBtn" class="secondary" type="button">Play</button>
                   <button id="replayPrevBtn" class="secondary" type="button">Prev</button>
                   <button id="replayNextBtn" class="secondary" type="button">Next</button>
