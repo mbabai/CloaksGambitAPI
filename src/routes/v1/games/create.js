@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
 const Match = require('../../../models/Match');
-const eventBus = require('../../../eventBus');
+const { emitGameChanged } = require('../../../utils/gameRouteEvents');
 
 router.post('/', async (req, res) => {
   try {
@@ -22,10 +22,7 @@ router.post('/', async (req, res) => {
     match.games.push(game._id);
     await match.save();
 
-    eventBus.emit('gameChanged', {
-      game: typeof game.toObject === 'function' ? game.toObject() : game,
-      affectedUsers: (game.players || []).map(p => p.toString()),
-    });
+    emitGameChanged(game);
 
     res.status(201).json(game);
   } catch (err) {

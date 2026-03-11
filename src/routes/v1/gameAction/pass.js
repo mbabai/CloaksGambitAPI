@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const getServerConfig = require('../../../utils/getServerConfig');
-const eventBus = require('../../../eventBus');
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const {
   ensureStoredClockState,
@@ -14,6 +13,7 @@ const {
   getLastMove,
   isPendingMove,
 } = require('../../../services/game/liveGameRules');
+const { emitGameChanged } = require('../../../utils/gameRouteEvents');
 
 router.post('/', async (req, res) => {
   try {
@@ -84,20 +84,14 @@ router.post('/', async (req, res) => {
       await game.endGame(normalizedColor === 0 ? 1 : 0, config.winReasons.get('CAPTURED_KING'));
       // Check if game ended and return early
       if (!game.isActive) {
-        eventBus.emit('gameChanged', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: (game.players || []).map(p => p.toString()),
-        });
+        emitGameChanged(game);
         return res.json({ message: 'Game ended: King captured' });
       }
     }
 
     await game.save();
 
-    eventBus.emit('gameChanged', {
-      game: typeof game.toObject === 'function' ? game.toObject() : game,
-      affectedUsers: (game.players || []).map(p => p.toString()),
-    });
+    emitGameChanged(game);
 
     res.json({ message: 'Pass recorded' });
   } catch (err) {

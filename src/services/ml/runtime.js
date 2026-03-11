@@ -5,17 +5,15 @@ const mongoose = require('mongoose');
 const {
   WHITE,
   BLACK,
-  otherColor,
   createRng,
-  createInitialState,
   getLegalActions,
   applyAction,
   actionKey,
-  toReplayFrame,
 } = require('./engine');
 const {
   createDefaultModelBundle,
   cloneModelBundle,
+  createOptimizerState,
   trainPolicyModel,
   trainValueModel,
   trainIdentityModel,
@@ -31,6 +29,7 @@ const {
 const eventBus = require('../../eventBus');
 const SimulationModel = require('../../models/Simulation');
 const SimulationGameModel = require('../../models/SimulationGame');
+const TrainingRunModel = require('../../models/TrainingRun');
 const Match = require('../../models/Match');
 const Game = require('../../models/Game');
 const getServerConfig = require('../../utils/getServerConfig');
@@ -45,6 +44,11 @@ const passRoute = require('../../routes/v1/gameAction/pass');
 const onDeckRoute = require('../../routes/v1/gameAction/onDeck');
 const resignRoute = require('../../routes/v1/gameAction/resign');
 const drawRoute = require('../../routes/v1/gameAction/draw');
+const { runInSimulationRequestContext } = require('../../utils/simulationRequestContext');
+
+const SIMULATION_CHECKPOINT_GAME_INTERVAL = 2;
+const SIMULATION_CHECKPOINT_MS = 5000;
+const LIVE_STATUS_RETENTION_MS = 30000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -233,7 +237,7 @@ function compactSimulationForState(simulation) {
 
 function createEmptyState() {
   return {
-    version: 1,
+    version: 2,
     counters: {
       snapshot: 1,
       simulation: 1,
@@ -243,6 +247,10 @@ function createEmptyState() {
     snapshots: [],
     simulations: [],
     trainingRuns: [],
+    activeJobs: {
+      simulation: null,
+      training: null,
+    },
   };
 }
 
@@ -265,7 +273,25 @@ function extractPostHandler(router) {
   return layer.route.stack[0].handle;
 }
 
-async function callPostHandler(handler, body = {}) {
+function createInternalRequestSession(userId, username = 'SimulationUser') {
+  if (!userId) return null;
+  return {
+    userId: String(userId),
+    username,
+    authenticated: false,
+    isGuest: true,
+    email: '',
+    user: {
+      _id: String(userId),
+      username,
+      isGuest: true,
+      isBot: true,
+      botDifficulty: 'medium',
+    },
+  };
+}
+
+async function callPostHandler(handler, body = {}, options = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (fn, value) => {
@@ -277,15 +303,19 @@ async function callPostHandler(handler, body = {}) {
     const req = {
       method: 'POST',
       url: '/',
-      headers: {},
+      headers: { ...(options.headers || {}) },
       body: deepClone(body),
-      query: {},
-      params: {},
+      query: { ...(options.query || {}) },
+      params: { ...(options.params || {}) },
+      __resolvedSession: options.session || null,
     };
 
     const res = {
       statusCode: 200,
       headersSent: false,
+      cookie() {
+        return this;
+      },
       status(code) {
         this.statusCode = code;
         return this;
@@ -312,7 +342,11 @@ async function callPostHandler(handler, body = {}) {
       }
     };
 
-    Promise.resolve(handler(req, res, next))
+    runInSimulationRequestContext(() => Promise.resolve(handler(req, res, next)), {
+      route: options.routeName || 'internal',
+      gameId: body?.gameId || null,
+      matchId: body?.matchId || null,
+    })
       .then(() => {
         if (!res.headersSent) {
           finish(resolve, {});
@@ -419,6 +453,13 @@ async function loadGameLean(gameId) {
   const doc = await query;
   if (!doc) return null;
   return typeof doc.toObject === 'function' ? doc.toObject() : deepClone(doc);
+}
+
+async function loadGameDocument(gameId) {
+  const query = Game.findById(gameId);
+  if (!query) return null;
+  const doc = await query;
+  return doc || null;
 }
 
 function toReplayPiece(piece, zone, row = -1, col = -1, id = '') {
@@ -609,6 +650,26 @@ function buildMlStateFromGame(game, options = {}) {
   };
 }
 
+function createShadowStateFromLiveGame(game, options = {}) {
+  const state = buildMlStateFromGame(game, options);
+  if (options.resetActionHistory) {
+    state.actions = [];
+    state.moves = [];
+    state.movesSinceAction = Number.isFinite(game?.movesSinceAction) ? game.movesSinceAction : 0;
+  }
+  if (Number.isFinite(options.playablePly)) {
+    state.ply = options.playablePly;
+  }
+  if (Number.isFinite(game?.playerTurn)) {
+    state.playerTurn = game.playerTurn;
+    state.toMove = game.playerTurn;
+  }
+  if (Number.isFinite(options.maxPlies)) {
+    state.maxPlies = options.maxPlies;
+  }
+  return state;
+}
+
 async function createApiBackedGame(seed) {
   const config = typeof getServerConfig.getServerConfigSnapshotSync === 'function'
     ? getServerConfig.getServerConfigSnapshotSync()
@@ -629,6 +690,10 @@ async function createApiBackedGame(seed) {
 
   const player1 = new mongoose.Types.ObjectId().toString();
   const player2 = new mongoose.Types.ObjectId().toString();
+  const sessionsByColor = {
+    [WHITE]: createInternalRequestSession(player1, 'SimulationWhite'),
+    [BLACK]: createInternalRequestSession(player2, 'SimulationBlack'),
+  };
   const match = await callPostHandler(ROUTE_HANDLERS.matchCreate, {
     type,
     player1,
@@ -667,7 +732,7 @@ async function createApiBackedGame(seed) {
     color: WHITE,
     pieces: whiteSetup.pieces,
     onDeck: whiteSetup.onDeck,
-  });
+  }, { session: sessionsByColor[WHITE] });
   liveGame = await loadGameLean(gameId);
   const blackSetup = buildRandomSetupFromGame(liveGame, BLACK, rng, config);
   await callPostHandler(ROUTE_HANDLERS.setup, {
@@ -675,10 +740,10 @@ async function createApiBackedGame(seed) {
     color: BLACK,
     pieces: blackSetup.pieces,
     onDeck: blackSetup.onDeck,
-  });
+  }, { session: sessionsByColor[BLACK] });
 
-  await callPostHandler(ROUTE_HANDLERS.ready, { gameId, color: WHITE });
-  await callPostHandler(ROUTE_HANDLERS.ready, { gameId, color: BLACK });
+  await callPostHandler(ROUTE_HANDLERS.ready, { gameId, color: WHITE }, { session: sessionsByColor[WHITE] });
+  await callPostHandler(ROUTE_HANDLERS.ready, { gameId, color: BLACK }, { session: sessionsByColor[BLACK] });
 
   const readyGame = await loadGameLean(gameId);
   if (!readyGame) {
@@ -689,16 +754,23 @@ async function createApiBackedGame(seed) {
     gameId,
     matchId,
     game: readyGame,
+    players: [player1, player2],
+    sessionsByColor,
   };
 }
 
 async function cleanupApiBackedGame({ gameId, matchId }) {
+  const canTouchMongoHistory = Boolean(mongoose.connection && mongoose.connection.readyState === 1);
   if (gameId) {
     try {
       await Game.deleteMany({ _id: gameId });
     } catch (_) {}
     try {
-      if (Game.historyModel && typeof Game.historyModel.deleteOne === 'function') {
+      if (
+        canTouchMongoHistory
+        && Game.historyModel
+        && typeof Game.historyModel.deleteOne === 'function'
+      ) {
         await Game.historyModel.deleteOne({ _id: gameId });
       }
     } catch (_) {}
@@ -708,11 +780,165 @@ async function cleanupApiBackedGame({ gameId, matchId }) {
       await Match.deleteMany({ _id: matchId });
     } catch (_) {}
     try {
-      if (Match.historyModel && typeof Match.historyModel.deleteOne === 'function') {
+      if (
+        canTouchMongoHistory
+        && Match.historyModel
+        && typeof Match.historyModel.deleteOne === 'function'
+      ) {
         await Match.historyModel.deleteOne({ _id: matchId });
       }
     } catch (_) {}
   }
+}
+
+function summarizeLiveBoard(game) {
+  return Array.isArray(game?.board)
+    ? game.board.map((row) => (
+      Array.isArray(row)
+        ? row.map((piece) => (piece ? `${piece.color}:${piece.identity}` : '.')).join('|')
+        : ''
+    ))
+    : [];
+}
+
+function summarizeShadowBoard(state) {
+  return Array.isArray(state?.board)
+    ? state.board.map((row) => (
+      Array.isArray(row)
+        ? row.map((pieceId) => {
+          if (!pieceId) return '.';
+          const piece = state.pieces?.[pieceId];
+          return piece ? `${piece.color}:${piece.identity}` : '.';
+        }).join('|')
+        : ''
+    ))
+    : [];
+}
+
+function summarizeLiveZone(zone = []) {
+  return (Array.isArray(zone) ? zone : [])
+    .map((piece) => (piece ? `${piece.color}:${piece.identity}` : '.'))
+    .sort();
+}
+
+function summarizeShadowZone(state, pieceIds = []) {
+  return (Array.isArray(pieceIds) ? pieceIds : [])
+    .map((pieceId) => {
+      const piece = state?.pieces?.[pieceId];
+      return piece ? `${piece.color}:${piece.identity}` : '.';
+    })
+    .sort();
+}
+
+function compareLiveGameToShadowState(liveGame, shadowState) {
+  const mismatches = [];
+  if (!liveGame || !shadowState) {
+    return {
+      ok: false,
+      mismatches: ['missing_state'],
+    };
+  }
+  if ((liveGame.playerTurn ?? null) !== (shadowState.playerTurn ?? null)) {
+    mismatches.push('playerTurn');
+  }
+  if ((liveGame.onDeckingPlayer ?? null) !== (shadowState.onDeckingPlayer ?? null)) {
+    mismatches.push('onDeckingPlayer');
+  }
+  if (Boolean(liveGame.isActive) !== Boolean(shadowState.isActive)) {
+    mismatches.push('isActive');
+  }
+  if (summarizeLiveBoard(liveGame).join('/') !== summarizeShadowBoard(shadowState).join('/')) {
+    mismatches.push('board');
+  }
+  [WHITE, BLACK].forEach((color) => {
+    if (summarizeLiveZone(liveGame?.stashes?.[color]).join(',') !== summarizeShadowZone(shadowState, shadowState?.stashes?.[color]).join(',')) {
+      mismatches.push(`stash:${color}`);
+    }
+    if (summarizeLiveZone(liveGame?.captured?.[color]).join(',') !== summarizeShadowZone(shadowState, shadowState?.captured?.[color]).join(',')) {
+      mismatches.push(`captured:${color}`);
+    }
+    const liveOnDeck = liveGame?.onDecks?.[color] ? `${liveGame.onDecks[color].color}:${liveGame.onDecks[color].identity}` : '.';
+    const shadowOnDeckId = shadowState?.onDecks?.[color];
+    const shadowOnDeckPiece = shadowOnDeckId ? shadowState?.pieces?.[shadowOnDeckId] : null;
+    const shadowOnDeck = shadowOnDeckPiece ? `${shadowOnDeckPiece.color}:${shadowOnDeckPiece.identity}` : '.';
+    if (liveOnDeck !== shadowOnDeck) {
+      mismatches.push(`onDeck:${color}`);
+    }
+  });
+  return {
+    ok: mismatches.length === 0,
+    mismatches,
+  };
+}
+
+async function applyLiveActionToGame(context, action, shadowState) {
+  const type = normalizeActionType(action?.type);
+  const color = Number.isFinite(action?.player) ? action.player : shadowState?.playerTurn;
+  const session = context?.sessionsByColor?.[color] || null;
+  if (!context?.gameId || !session) {
+    throw new Error('Simulation live game context is incomplete');
+  }
+
+  if (type === 'MOVE') {
+    await callPostHandler(ROUTE_HANDLERS.move, {
+      gameId: context.gameId,
+      color,
+      from: action.from,
+      to: action.to,
+      declaration: action.declaration,
+    }, { session });
+  } else if (type === 'CHALLENGE') {
+    await callPostHandler(ROUTE_HANDLERS.challenge, {
+      gameId: context.gameId,
+      color,
+    }, { session });
+  } else if (type === 'BOMB') {
+    await callPostHandler(ROUTE_HANDLERS.bomb, {
+      gameId: context.gameId,
+      color,
+    }, { session });
+  } else if (type === 'PASS') {
+    await callPostHandler(ROUTE_HANDLERS.pass, {
+      gameId: context.gameId,
+      color,
+    }, { session });
+  } else if (type === 'ON_DECK') {
+    const onDeckPiece = action.pieceId ? shadowState?.pieces?.[action.pieceId] : null;
+    await callPostHandler(ROUTE_HANDLERS.onDeck, {
+      gameId: context.gameId,
+      color,
+      piece: {
+        identity: Number.isFinite(action.identity)
+          ? action.identity
+          : onDeckPiece?.identity,
+      },
+    }, { session });
+  } else if (type === 'RESIGN') {
+    await callPostHandler(ROUTE_HANDLERS.resign, {
+      gameId: context.gameId,
+      color,
+    }, { session });
+  } else {
+    throw new Error(`Unsupported live action type: ${type || 'unknown'}`);
+  }
+
+  const liveGame = await loadGameLean(context.gameId);
+  if (!liveGame) {
+    throw new Error('Live simulation game disappeared after action');
+  }
+  return liveGame;
+}
+
+async function forceLiveGameDraw(context) {
+  const game = await loadGameDocument(context?.gameId);
+  if (!game || !game.isActive) {
+    return loadGameLean(context?.gameId);
+  }
+  const config = typeof getServerConfig.getServerConfigSnapshotSync === 'function'
+    ? getServerConfig.getServerConfigSnapshotSync()
+    : await getServerConfig();
+  await game.endGame(null, config.winReasons.get('DRAW'));
+  return loadGameLean(context.gameId);
 }
 
 class MlRuntime {
@@ -728,6 +954,12 @@ class MlRuntime {
     this.savePromise = Promise.resolve();
     this.didAttemptMongoSimulationMigration = false;
     this.simulationTasks = new Map();
+    this.trainingTasks = new Map();
+    this.resumePromise = null;
+    this.lastLiveStatus = {
+      simulation: null,
+      training: null,
+    };
   }
 
   async ensureLoaded() {
@@ -744,18 +976,26 @@ class MlRuntime {
         const raw = await fs.promises.readFile(this.dataFilePath, 'utf8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
+          const emptyState = createEmptyState();
           this.state = {
-            ...createEmptyState(),
+            ...emptyState,
             ...parsed,
             counters: {
-              ...createEmptyState().counters,
+              ...emptyState.counters,
               ...(parsed.counters || {}),
+            },
+            activeJobs: {
+              ...emptyState.activeJobs,
+              ...(parsed.activeJobs || {}),
             },
           };
           if (Array.isArray(this.state.simulations)) {
             this.state.simulations = this.state.simulations
               .map((simulation) => compactSimulationForState(simulation))
               .slice(0, this.maxSimulationHistory);
+          }
+          if (!Array.isArray(this.state.trainingRuns)) {
+            this.state.trainingRuns = [];
           }
         }
       } else {
@@ -769,6 +1009,7 @@ class MlRuntime {
     this.ensureBootstrapSnapshot();
     this.loaded = true;
     await this.save();
+    await this.ensureResumedJobs();
   }
 
   ensureBootstrapSnapshot() {
@@ -834,6 +1075,181 @@ class MlRuntime {
         console.error('[ml-runtime] failed to persist state', err);
       });
     await this.savePromise;
+  }
+
+  async ensureResumedJobs() {
+    if (!this.persist) return;
+    if (this.resumePromise) {
+      await this.resumePromise;
+      return;
+    }
+    this.resumePromise = Promise.resolve()
+      .then(async () => {
+        await this.hydrateActiveJobsFromMongo();
+        await this.resumePersistedJobs();
+      })
+      .catch((err) => {
+        console.error('[ml-runtime] failed to resume persisted jobs', err);
+      });
+    await this.resumePromise;
+  }
+
+  async hydrateActiveJobsFromMongo() {
+    if (!this.isMongoSimulationPersistenceAvailable()) return;
+    let stateChanged = false;
+
+    if (!this.state.activeJobs?.simulation) {
+      const doc = await SimulationModel.findOne(
+        { status: { $in: ['running', 'stopping'] } },
+        { _id: 0, __v: 0 },
+      )
+        .sort({ createdAt: -1 })
+        .lean()
+        .catch(() => null);
+      const simulation = doc ? this.normalizeStoredSimulationRecord(doc) : null;
+      if (simulation?.id) {
+        const config = simulation.config || {};
+        this.state.activeJobs.simulation = {
+          type: 'simulation',
+          taskId: simulation?.persistence?.taskId || `simulation:${simulation.id}`,
+          simulationId: simulation.id,
+          status: simulation.status === 'stopping' ? 'stopping' : 'running',
+          createdAt: simulation.createdAt || nowIso(),
+          updatedAt: simulation.updatedAt || simulation.createdAt || nowIso(),
+          label: simulation.label || simulation.id,
+          participantAId: simulation.participantAId || null,
+          participantBId: simulation.participantBId || null,
+          participantALabel: simulation.participantALabel || null,
+          participantBLabel: simulation.participantBLabel || null,
+          whiteSnapshotId: simulation.whiteSnapshotId || null,
+          blackSnapshotId: simulation.blackSnapshotId || null,
+          options: {
+            whiteParticipantId: simulation.participantAId || null,
+            blackParticipantId: simulation.participantBId || null,
+            whiteSnapshotId: simulation.whiteSnapshotId || null,
+            blackSnapshotId: simulation.blackSnapshotId || null,
+            gameCount: config.requestedGameCount || config.gameCount || simulation.gameCount || 0,
+            maxPlies: config.maxPlies,
+            iterations: config.iterations,
+            maxDepth: config.maxDepth,
+            hypothesisCount: config.hypothesisCount,
+            riskBias: config.riskBias,
+            exploration: config.exploration,
+            alternateColors: Boolean(config.alternateColors),
+            seed: config.seed,
+            label: simulation.label || null,
+          },
+          checkpoint: {
+            requestedGameCount: config.requestedGameCount || config.gameCount || simulation.gameCount || 0,
+            completedGames: Number(config.completedGameCount || simulation?.stats?.games || simulation.gameCount || 0),
+            stats: deepClone(simulation.stats || {}),
+            lastCheckpointAt: simulation?.persistence?.checkpointedAt || simulation.updatedAt || simulation.createdAt || nowIso(),
+          },
+        };
+        if (!this.getInMemorySimulation(simulation.id)) {
+          this.state.simulations.unshift(simulation);
+          this.state.simulations = this.state.simulations.slice(0, this.maxSimulationHistory);
+        }
+        stateChanged = true;
+      }
+    }
+
+    if (!this.state.activeJobs?.training) {
+      const doc = await TrainingRunModel.findOne(
+        { status: 'running' },
+        { _id: 0, __v: 0 },
+      )
+        .sort({ createdAt: -1 })
+        .lean()
+        .catch(() => null);
+      const run = doc ? this.normalizeStoredTrainingRunRecord(doc) : null;
+      if (run?.id) {
+        this.state.activeJobs.training = {
+          type: 'training',
+          taskId: run?.checkpoint?.taskId || `training:${run.id}`,
+          trainingRunId: run.id,
+          status: 'running',
+          createdAt: run.createdAt || nowIso(),
+          updatedAt: run.updatedAt || run.createdAt || nowIso(),
+          baseSnapshotId: run.baseSnapshotId || null,
+          epochs: Number(run.epochs || 0),
+          learningRate: Number(run.learningRate || 0),
+          sourceSimulationIds: Array.isArray(run.sourceSimulationIds) ? run.sourceSimulationIds.slice() : [],
+          sourceGames: Number(run.sourceGames || 0),
+          sourceSimulations: Number(run.sourceSimulations || 0),
+          sampleCounts: deepClone(run.sampleCounts || {}),
+          label: run.label || '',
+          notes: run.notes || '',
+          checkpoint: deepClone(run.checkpoint || {}),
+        };
+        if (!this.getInMemoryTrainingRun(run.id)) {
+          this.state.trainingRuns.unshift({
+            ...run,
+            checkpoint: {
+              ...deepClone(run.checkpoint || {}),
+              modelBundle: undefined,
+              optimizerState: undefined,
+            },
+          });
+          this.state.trainingRuns = this.state.trainingRuns.slice(0, 500);
+        }
+        stateChanged = true;
+      }
+    }
+
+    if (stateChanged) {
+      await this.save();
+    }
+  }
+
+  async resumePersistedJobs() {
+    const simulationJob = this.state.activeJobs?.simulation || null;
+    if (simulationJob && String(simulationJob.status || '').toLowerCase() === 'running') {
+      this.resumeSimulationJob(simulationJob);
+    }
+
+    const trainingJob = this.state.activeJobs?.training || null;
+    if (trainingJob && String(trainingJob.status || '').toLowerCase() === 'running') {
+      this.resumeTrainingJob(trainingJob);
+    }
+  }
+
+  rememberLiveStatus(type, payload = null) {
+    if (!type) return;
+    if (!payload) {
+      this.lastLiveStatus[type] = null;
+      return;
+    }
+    this.lastLiveStatus[type] = {
+      observedAt: nowIso(),
+      payload: deepClone(payload),
+    };
+  }
+
+  getRecentRememberedLiveStatus(type) {
+    const entry = this.lastLiveStatus?.[type] || null;
+    if (!entry?.observedAt || !entry?.payload) return null;
+    const age = Date.now() - parseTimeValue(entry.observedAt);
+    if (!Number.isFinite(age) || age < 0 || age > LIVE_STATUS_RETENTION_MS) {
+      return null;
+    }
+    return deepClone(entry.payload);
+  }
+
+  getInMemoryTrainingRun(trainingRunId) {
+    return (this.state.trainingRuns || []).find((item) => item.id === trainingRunId) || null;
+  }
+
+  normalizeStoredTrainingRunRecord(trainingRun) {
+    if (!trainingRun || typeof trainingRun !== 'object') return null;
+    const normalized = deepClone(trainingRun);
+    if (Object.prototype.hasOwnProperty.call(normalized, '_id')) {
+      delete normalized._id;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, '__v')) {
+      delete normalized.__v;
+    }
+    return normalized;
   }
 
   isMongoSimulationPersistenceAvailable() {
@@ -1029,6 +1445,9 @@ class MlRuntime {
       }
 
       const gamePayloads = Array.isArray(payload.games) ? payload.games : [];
+      const checkpointGameIds = Array.isArray(options.gameIds)
+        ? new Set(options.gameIds.filter(Boolean))
+        : null;
       const hasDetailedGamePayloads = simulationHasDetailedGames(payload);
       const gameSummaries = gamePayloads
         .map((game) => summarizeGameForStorage(game))
@@ -1061,7 +1480,10 @@ class MlRuntime {
 
       const shouldSyncDetailedGames = hasDetailedGamePayloads || !payload.gamesStoredExternally;
       if (shouldSyncDetailedGames) {
-        const gameOperations = gamePayloads
+        const checkpointGames = checkpointGameIds
+          ? gamePayloads.filter((game) => checkpointGameIds.has(game?.id))
+          : gamePayloads;
+        const gameOperations = checkpointGames
           .filter((game) => game && game.id)
           .map((game) => {
             const summary = summarizeGameForStorage(game) || {};
@@ -1081,21 +1503,25 @@ class MlRuntime {
             };
           });
 
-        const chunks = chunkArray(gameOperations, 10);
-        for (let idx = 0; idx < chunks.length; idx += 1) {
-          await SimulationGameModel.bulkWrite(chunks[idx], { ordered: false });
+        if (gameOperations.length) {
+          const chunks = chunkArray(gameOperations, 10);
+          for (let idx = 0; idx < chunks.length; idx += 1) {
+            await SimulationGameModel.bulkWrite(chunks[idx], { ordered: false });
+          }
         }
 
-        const gameIds = gamePayloads
-          .map((game) => game?.id)
-          .filter(Boolean);
-        if (gameIds.length) {
-          await SimulationGameModel.deleteMany({
-            simulationId: simulationDoc.id,
-            id: { $nin: gameIds },
-          });
-        } else {
-          await SimulationGameModel.deleteMany({ simulationId: simulationDoc.id });
+        if (options.pruneMissingGames === true) {
+          const gameIds = gamePayloads
+            .map((game) => game?.id)
+            .filter(Boolean);
+          if (gameIds.length) {
+            await SimulationGameModel.deleteMany({
+              simulationId: simulationDoc.id,
+              id: { $nin: gameIds },
+            });
+          } else {
+            await SimulationGameModel.deleteMany({ simulationId: simulationDoc.id });
+          }
         }
       }
 
@@ -1109,6 +1535,109 @@ class MlRuntime {
       console.error('[ml-runtime] failed to persist simulation to MongoDB', err);
       return status;
     }
+  }
+
+  isMongoTrainingPersistenceAvailable() {
+    return this.isMongoSimulationPersistenceAvailable();
+  }
+
+  async persistTrainingRunToMongo(trainingRun, options = {}) {
+    if (!trainingRun || !this.isMongoTrainingPersistenceAvailable()) {
+      return {
+        saved: false,
+        reason: 'mongo_unavailable',
+      };
+    }
+
+    try {
+      const payload = this.normalizeStoredTrainingRunRecord(trainingRun);
+      if (!payload?.id) {
+        return {
+          saved: false,
+          reason: 'invalid_payload',
+        };
+      }
+
+      const checkpoint = deepClone(payload.checkpoint || {});
+      if (options.includeCheckpointArtifacts !== true) {
+        delete checkpoint.modelBundle;
+        delete checkpoint.optimizerState;
+      }
+
+      await TrainingRunModel.updateOne(
+        { id: payload.id },
+        {
+          $set: {
+            ...payload,
+            checkpoint,
+            updatedAt: payload.updatedAt || nowIso(),
+          },
+        },
+        { upsert: true, setDefaultsOnInsert: true },
+      );
+
+      return {
+        saved: true,
+        mode: options.includeCheckpointArtifacts === true ? 'checkpoint' : 'summary',
+      };
+    } catch (err) {
+      const status = {
+        saved: false,
+        reason: 'mongo_write_failed',
+        message: err?.message || 'MongoDB write failed',
+      };
+      console.error('[ml-runtime] failed to persist training run to MongoDB', err);
+      return status;
+    }
+  }
+
+  async listStoredTrainingRuns(options = {}) {
+    const limit = clampPositiveInt(options.limit, 20, 1, 500);
+    if (this.isMongoTrainingPersistenceAvailable()) {
+      const docs = await TrainingRunModel.find(
+        {},
+        {
+          _id: 0,
+          __v: 0,
+          'checkpoint.modelBundle': 0,
+          'checkpoint.optimizerState': 0,
+        },
+      )
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
+      const mongoRecords = (Array.isArray(docs) ? docs : [])
+        .map((doc) => this.normalizeStoredTrainingRunRecord(doc))
+        .filter(Boolean);
+      const memoryRecords = (this.state.trainingRuns || [])
+        .map((run) => this.normalizeStoredTrainingRunRecord(run))
+        .filter(Boolean);
+      const mergedById = new Map();
+      [...mongoRecords, ...memoryRecords].forEach((run) => {
+        if (!run?.id) return;
+        const existing = mergedById.get(run.id);
+        if (!existing) {
+          mergedById.set(run.id, run);
+          return;
+        }
+        const existingTime = Math.max(parseTimeValue(existing.updatedAt), parseTimeValue(existing.createdAt));
+        const candidateTime = Math.max(parseTimeValue(run.updatedAt), parseTimeValue(run.createdAt));
+        if (candidateTime >= existingTime) {
+          mergedById.set(run.id, run);
+        }
+      });
+      return Array.from(mergedById.values())
+        .sort((a, b) => (
+          Math.max(parseTimeValue(b?.updatedAt), parseTimeValue(b?.createdAt))
+          - Math.max(parseTimeValue(a?.updatedAt), parseTimeValue(a?.createdAt))
+        ))
+        .slice(0, limit);
+    }
+
+    return (this.state.trainingRuns || [])
+      .slice(0, limit)
+      .map((run) => this.normalizeStoredTrainingRunRecord(run))
+      .filter(Boolean);
   }
 
   async trimMongoSimulationHistory() {
@@ -1200,16 +1729,48 @@ class MlRuntime {
     };
   }
 
+  summarizeTrainingRun(trainingRun) {
+    if (!trainingRun) return null;
+    const history = Array.isArray(trainingRun.history) ? trainingRun.history : [];
+    const latestLoss = trainingRun.finalLoss || (history.length ? history[history.length - 1] : null);
+    return {
+      id: trainingRun.id,
+      createdAt: trainingRun.createdAt,
+      updatedAt: trainingRun.updatedAt || trainingRun.createdAt,
+      status: trainingRun.status || 'completed',
+      label: trainingRun.label || '',
+      notes: trainingRun.notes || '',
+      baseSnapshotId: trainingRun.baseSnapshotId || null,
+      newSnapshotId: trainingRun.newSnapshotId || null,
+      epochs: Number(trainingRun.epochs || 0),
+      learningRate: Number(trainingRun.learningRate || 0),
+      sourceSimulationIds: Array.isArray(trainingRun.sourceSimulationIds)
+        ? trainingRun.sourceSimulationIds.slice()
+        : [],
+      sourceGames: Number(trainingRun.sourceGames || 0),
+      sourceSimulations: Number(trainingRun.sourceSimulations || 0),
+      sampleCounts: deepClone(trainingRun.sampleCounts || {}),
+      history: deepClone(history),
+      finalLoss: latestLoss ? deepClone(latestLoss) : null,
+      checkpoint: {
+        completedEpochs: Number(trainingRun?.checkpoint?.completedEpochs || history.length || 0),
+        totalEpochs: Number(trainingRun?.checkpoint?.totalEpochs || trainingRun.epochs || 0),
+        checkpointedAt: trainingRun?.checkpoint?.checkpointedAt || null,
+      },
+    };
+  }
+
   async getSummary() {
     await this.ensureLoaded();
     const snapshots = (this.state.snapshots || []).map((snapshot) => this.summarizeSnapshot(snapshot));
     const simulations = await this.listStoredSimulations({ limit: this.maxSimulationHistory });
+    const trainingRuns = await this.listStoredTrainingRuns({ limit: 1 });
     const totalGames = simulations.reduce((acc, simulation) => (
       acc + ((simulation.stats && simulation.stats.games) || 0)
     ), 0);
-    const totalTrainingRuns = (this.state.trainingRuns || []).length;
+    const totalTrainingRuns = (await this.listStoredTrainingRuns({ limit: 500 })).length;
     const latestSimulation = simulations.length ? this.summarizeSimulation(simulations[0]) : null;
-    const latestTraining = this.state.trainingRuns.length ? this.state.trainingRuns[0] : null;
+    const latestTraining = trainingRuns.length ? this.summarizeTrainingRun(trainingRuns[0]) : null;
 
     return {
       snapshots,
@@ -1524,6 +2085,9 @@ class MlRuntime {
             player: record.player,
             pieceId: sample.pieceId,
             trueIdentity: sample.trueIdentity,
+            pieceFeatures: Array.isArray(sample.pieceFeatures)
+              ? sample.pieceFeatures.slice()
+              : null,
             featureByIdentity: deepClone(sample.featureByIdentity),
             probabilities: deepClone(sample.probabilities),
           });
@@ -1532,6 +2096,40 @@ class MlRuntime {
     });
 
     return { policySamples, valueSamples, identitySamples };
+  }
+
+  getSimulationIndex(simulationId) {
+    return (this.state.simulations || []).findIndex((simulation) => simulation.id === simulationId);
+  }
+
+  upsertSimulationRecord(simulation) {
+    if (!simulation?.id) return null;
+    const index = this.getSimulationIndex(simulation.id);
+    if (index >= 0) {
+      this.state.simulations.splice(index, 1);
+    }
+    this.state.simulations.unshift(simulation);
+    if (this.state.simulations.length > this.maxSimulationHistory) {
+      this.state.simulations.length = this.maxSimulationHistory;
+    }
+    return simulation;
+  }
+
+  getTrainingRunIndex(trainingRunId) {
+    return (this.state.trainingRuns || []).findIndex((trainingRun) => trainingRun.id === trainingRunId);
+  }
+
+  upsertTrainingRunRecord(trainingRun) {
+    if (!trainingRun?.id) return null;
+    const index = this.getTrainingRunIndex(trainingRun.id);
+    if (index >= 0) {
+      this.state.trainingRuns.splice(index, 1);
+    }
+    this.state.trainingRuns.unshift(trainingRun);
+    if (this.state.trainingRuns.length > 500) {
+      this.state.trainingRuns.length = 500;
+    }
+    return trainingRun;
   }
 
   async runSingleGame(options = {}) {
@@ -1552,200 +2150,811 @@ class MlRuntime {
     };
     const maxDecisionSafety = Math.max(maxPlies * 6, maxPlies + 24);
 
-    let game = null;
     const replay = [];
     const decisions = [];
     let forcedStopReason = null;
+    const liveContext = await createApiBackedGame(seed);
+    let liveGame = liveContext.game;
+    let shadowState = createShadowStateFromLiveGame(liveGame, {
+      maxPlies,
+      seed,
+      playablePly: 0,
+      resetActionHistory: true,
+    });
 
-    game = createInitialState({ seed, maxPlies });
-    replay.push(toReplayFrame(game, {
+    replay.push(toReplayFrameFromGame(liveGame, {
       note: 'start',
-      actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
-      moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
+      actionCount: Array.isArray(liveGame.actions) ? liveGame.actions.length : 0,
+      moveCount: Array.isArray(liveGame.moves) ? liveGame.moves.length : 0,
     }));
 
-    for (let step = 0; step < maxDecisionSafety; step += 1) {
-      if (!game || !game.isActive) break;
-      const currentPlayer = Number.isFinite(game.playerTurn) ? game.playerTurn : WHITE;
-      const participant = currentPlayer === WHITE ? whiteParticipant : blackParticipant;
-      if (!participant) {
-        forcedStopReason = 'missing_participant';
-        game = {
-          ...game,
-          isActive: false,
-          winner: otherColor(currentPlayer),
-          winReason: 'resign',
-        };
-        replay.push(toReplayFrame(game, {
-          note: forcedStopReason,
-          actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
-          moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
-        }));
-        break;
-      }
+    try {
+      for (let step = 0; step < maxDecisionSafety; step += 1) {
+        if (!liveGame || !liveGame.isActive || !shadowState || !shadowState.isActive) break;
+        const currentPlayer = Number.isFinite(shadowState.playerTurn) ? shadowState.playerTurn : WHITE;
+        const participant = currentPlayer === WHITE ? whiteParticipant : blackParticipant;
+        const participantId = this.getDisplayParticipantId(participant);
+        const participantLabel = this.getDisplayParticipantLabel(participant, participantId);
 
-      const observationState = game;
-      const legalActions = getLegalActions(observationState, currentPlayer);
-      if (!legalActions.length) {
-        forcedStopReason = 'no_legal_actions';
-        game = {
-          ...game,
-          isActive: false,
-          winner: otherColor(currentPlayer),
-          winReason: 'resign',
-        };
-        replay.push(toReplayFrame(game, {
-          note: forcedStopReason,
-          actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
-          moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
-        }));
-        break;
-      }
-
-      const participantId = this.getDisplayParticipantId(participant);
-      const participantLabel = this.getDisplayParticipantLabel(participant, participantId);
-      const search = this.chooseActionForParticipant(participant, observationState, {
-        ...mctsOptions,
-        seed: seed + (observationState.ply * 104729),
-      });
-
-      const legalByKey = new Map(legalActions.map((action) => [actionKey(action), action]));
-      const requestedAction = search?.action || null;
-      const requestedKey = requestedAction ? actionKey(requestedAction) : '';
-      const primary = requestedKey && legalByKey.has(requestedKey)
-        ? legalByKey.get(requestedKey)
-        : null;
-
-      const candidates = [];
-      if (primary) candidates.push(primary);
-      legalActions.forEach((action) => {
-        if (!primary || actionKey(action) !== actionKey(primary)) {
-          candidates.push(action);
+        if (!participant) {
+          forcedStopReason = 'missing_participant';
+          liveGame = await applyLiveActionToGame(liveContext, {
+            type: 'RESIGN',
+            player: currentPlayer,
+          }, shadowState);
+          replay.push(toReplayFrameFromGame(liveGame, {
+            note: forcedStopReason,
+            actionCount: Array.isArray(liveGame.actions) ? liveGame.actions.length : 0,
+            moveCount: Array.isArray(liveGame.moves) ? liveGame.moves.length : 0,
+          }));
+          break;
         }
-      });
 
-      let executedAction = null;
-      for (let idx = 0; idx < candidates.length; idx += 1) {
-        const candidate = candidates[idx];
-        const nextState = applyAction(game, candidate);
-        if (nextState !== game) {
+        const observationState = shadowState;
+        const legalActions = getLegalActions(observationState, currentPlayer);
+        if (!legalActions.length) {
+          forcedStopReason = 'no_legal_actions';
+          liveGame = await applyLiveActionToGame(liveContext, {
+            type: 'RESIGN',
+            player: currentPlayer,
+          }, shadowState);
+          replay.push(toReplayFrameFromGame(liveGame, {
+            note: forcedStopReason,
+            actionCount: Array.isArray(liveGame.actions) ? liveGame.actions.length : 0,
+            moveCount: Array.isArray(liveGame.moves) ? liveGame.moves.length : 0,
+          }));
+          break;
+        }
+
+        const search = this.chooseActionForParticipant(participant, observationState, {
+          ...mctsOptions,
+          seed: seed + (decisions.length * 104729),
+        });
+
+        const legalByKey = new Map(legalActions.map((action) => [actionKey(action), action]));
+        const requestedAction = search?.action || null;
+        const requestedKey = requestedAction ? actionKey(requestedAction) : '';
+        const primary = requestedKey && legalByKey.has(requestedKey)
+          ? legalByKey.get(requestedKey)
+          : null;
+
+        const candidates = [];
+        if (primary) candidates.push(primary);
+        legalActions.forEach((action) => {
+          if (!primary || actionKey(action) !== actionKey(primary)) {
+            candidates.push(action);
+          }
+        });
+
+        let executedAction = null;
+        let nextLiveGame = liveGame;
+        let nextShadowState = shadowState;
+        const liveRejectedCandidates = [];
+
+        for (let idx = 0; idx < candidates.length; idx += 1) {
+          const candidate = candidates[idx];
+          try {
+            nextLiveGame = await applyLiveActionToGame(liveContext, candidate, shadowState);
+          } catch (err) {
+            liveRejectedCandidates.push({
+              actionKey: actionKey(candidate),
+              message: err.message || 'Action rejected',
+            });
+            continue;
+          }
+
+          const shadowCandidate = applyAction(shadowState, candidate);
           executedAction = candidate;
-          game = nextState;
+          nextShadowState = shadowCandidate === shadowState
+            ? createShadowStateFromLiveGame(nextLiveGame, {
+              maxPlies,
+              seed,
+              playablePly: decisions.length + 1,
+            })
+            : shadowCandidate;
+          break;
+        }
+
+        if (!executedAction) {
+          forcedStopReason = 'all_legal_actions_rejected';
+          liveGame = await applyLiveActionToGame(liveContext, {
+            type: 'RESIGN',
+            player: currentPlayer,
+          }, shadowState);
+          replay.push(toReplayFrameFromGame(liveGame, {
+            note: forcedStopReason,
+            actionCount: Array.isArray(liveGame.actions) ? liveGame.actions.length : 0,
+            moveCount: Array.isArray(liveGame.moves) ? liveGame.moves.length : 0,
+            decision: {
+              player: currentPlayer,
+              participantId,
+              participantLabel,
+              snapshotId: participant.snapshotId || null,
+              action: { type: 'RESIGN', player: currentPlayer },
+              move: { type: 'RESIGN', player: currentPlayer },
+              valueEstimate: 0,
+              trace: {
+                reason: forcedStopReason,
+                liveRejectedCandidates,
+              },
+            },
+          }));
+          break;
+        }
+
+        const parity = compareLiveGameToShadowState(nextLiveGame, nextShadowState);
+        if (!parity.ok) {
+          nextShadowState = createShadowStateFromLiveGame(nextLiveGame, {
+            maxPlies,
+            seed,
+            playablePly: decisions.length + 1,
+          });
+        }
+
+        const executedKey = actionKey(executedAction);
+        const useTrainingRecord = Boolean(requestedKey && executedKey === requestedKey);
+        const decisionTrace = {
+          ...deepClone(search?.trace || {}),
+          liveRoute: {
+            fallbackUsed: Boolean(requestedKey && executedKey && requestedKey !== executedKey),
+            rejectedCandidates: liveRejectedCandidates,
+            parityMismatches: parity.ok ? [] : parity.mismatches,
+          },
+        };
+        const decision = {
+          ply: decisions.length,
+          player: currentPlayer,
+          participantId,
+          participantLabel,
+          snapshotId: participant.snapshotId || null,
+          action: deepClone(executedAction),
+          move: deepClone(executedAction),
+          trace: decisionTrace,
+          valueEstimate: Number.isFinite(search?.valueEstimate) ? search.valueEstimate : 0,
+          trainingRecord: useTrainingRecord && search?.trainingRecord
+            ? {
+              ...deepClone(search.trainingRecord),
+              snapshotId: participant.snapshotId || null,
+            }
+            : null,
+        };
+        decisions.push(decision);
+        liveGame = nextLiveGame;
+        shadowState = nextShadowState;
+        replay.push(toReplayFrameFromGame(liveGame, {
+          actionCount: Array.isArray(liveGame.actions) ? liveGame.actions.length : 0,
+          moveCount: Array.isArray(liveGame.moves) ? liveGame.moves.length : 0,
+          decision,
+        }));
+
+        if (decisions.length >= maxPlies && liveGame.isActive) {
+          forcedStopReason = 'max_plies';
+          liveGame = await forceLiveGameDraw(liveContext);
+          shadowState = createShadowStateFromLiveGame(liveGame, {
+            maxPlies,
+            seed,
+            playablePly: decisions.length,
+          });
+          replay.push(toReplayFrameFromGame(liveGame, {
+            note: forcedStopReason,
+            actionCount: Array.isArray(liveGame.actions) ? liveGame.actions.length : 0,
+            moveCount: Array.isArray(liveGame.moves) ? liveGame.moves.length : 0,
+          }));
           break;
         }
       }
 
-      if (!executedAction) {
-        forcedStopReason = 'all_legal_actions_rejected';
-        game = {
-          ...game,
-          isActive: false,
-          winner: otherColor(currentPlayer),
-          winReason: 'resign',
-        };
-        replay.push(toReplayFrame(game, {
+      if (liveGame && liveGame.isActive) {
+        forcedStopReason = forcedStopReason || 'safety_stop';
+        liveGame = await forceLiveGameDraw(liveContext);
+        shadowState = createShadowStateFromLiveGame(liveGame, {
+          maxPlies,
+          seed,
+          playablePly: decisions.length,
+        });
+        replay.push(toReplayFrameFromGame(liveGame, {
           note: forcedStopReason,
-          actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
-          moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
-          decision: {
-            player: currentPlayer,
-            participantId,
-            participantLabel,
-            snapshotId: participant.snapshotId || null,
-            action: { type: 'RESIGN', player: currentPlayer },
-            move: { type: 'RESIGN', player: currentPlayer },
-            valueEstimate: 0,
-            trace: { reason: forcedStopReason },
-          },
+          actionCount: Array.isArray(liveGame.actions) ? liveGame.actions.length : 0,
+          moveCount: Array.isArray(liveGame.moves) ? liveGame.moves.length : 0,
         }));
-        break;
       }
 
-      const executedKey = actionKey(executedAction);
-      const useTrainingRecord = Boolean(requestedKey && executedKey === requestedKey);
-      const decision = {
-        ply: observationState.ply,
-        player: currentPlayer,
-        participantId,
-        participantLabel,
-        snapshotId: participant.snapshotId || null,
-        action: deepClone(executedAction),
-        move: deepClone(executedAction),
-        trace: deepClone(search?.trace || {}),
-        valueEstimate: Number.isFinite(search?.valueEstimate) ? search.valueEstimate : 0,
-        trainingRecord: useTrainingRecord && search?.trainingRecord
-          ? {
-              ...deepClone(search.trainingRecord),
-              snapshotId: participant.snapshotId || null,
-            }
-          : null,
+      const winner = Number.isFinite(liveGame?.winner) ? liveGame.winner : null;
+      const winReason = liveGame?.winReason ?? forcedStopReason ?? null;
+      const training = this.buildTrainingSamplesFromDecisions(decisions, winner);
+      const plies = decisions.length;
+
+      return {
+        id: this.nextId('game'),
+        createdAt: nowIso(),
+        seed,
+        setupMode: 'live-route',
+        whiteParticipantId,
+        blackParticipantId,
+        whiteParticipantLabel,
+        blackParticipantLabel,
+        winner,
+        winReason,
+        plies,
+        actionHistory: Array.isArray(liveGame?.actions) ? deepClone(liveGame.actions) : [],
+        moveHistory: Array.isArray(liveGame?.moves) ? deepClone(liveGame.moves) : [],
+        replay,
+        decisions,
+        training,
+        result: {
+          whiteValue: winner === null ? 0 : (winner === WHITE ? 1 : -1),
+          blackValue: winner === null ? 0 : (winner === BLACK ? 1 : -1),
+        },
       };
-      decisions.push(decision);
-      replay.push(toReplayFrame(game, {
-        actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
-        moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
-        decision,
-      }));
-
-      if (decisions.length >= maxPlies && game.isActive) {
-        forcedStopReason = 'max_plies';
-        game = {
-          ...game,
-          isActive: false,
-          winner: null,
-          winReason: 'draw',
-        };
-        replay.push(toReplayFrame(game, {
-          note: forcedStopReason,
-          actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
-          moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
-        }));
-        break;
-      }
+    } finally {
+      await cleanupApiBackedGame(liveContext);
     }
+  }
 
-    if (game && game.isActive) {
-      forcedStopReason = forcedStopReason || 'safety_stop';
-      game = {
-        ...game,
-        isActive: false,
-        winner: null,
-        winReason: 'draw',
+  createSimulationAccumulator(participantA, participantB) {
+    const participantResultById = {};
+    [participantA, participantB].forEach((participant) => {
+      const id = this.getDisplayParticipantId(participant);
+      participantResultById[id] = {
+        participantId: id,
+        participantType: participant?.type || 'snapshot',
+        snapshotId: participant?.snapshotId || null,
+        label: this.getDisplayParticipantLabel(participant, id),
+        games: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        asWhite: 0,
+        asBlack: 0,
+        whiteWins: 0,
+        blackWins: 0,
       };
-      replay.push(toReplayFrame(game, {
-        note: forcedStopReason,
-        actionCount: Array.isArray(game.actions) ? game.actions.length : game.ply,
-        moveCount: Array.isArray(game.moves) ? game.moves.length : 0,
-      }));
-    }
-
-    const winner = Number.isFinite(game?.winner) ? game.winner : null;
-    const winReason = game?.winReason ?? forcedStopReason ?? null;
-    const training = this.buildTrainingSamplesFromDecisions(decisions, winner);
-    const plies = Number.isFinite(game?.actions?.length) ? game.actions.length : decisions.length;
+    });
 
     return {
-      id: this.nextId('game'),
+      stats: {
+        games: 0,
+        whiteWins: 0,
+        blackWins: 0,
+        draws: 0,
+        averagePlies: 0,
+        winReasons: {},
+        participantResults: [],
+      },
+      participantResultById,
+    };
+  }
+
+  applyGameToSimulationAccumulator(stats, participantResultById, game, whiteParticipant, blackParticipant) {
+    if (!stats || !game) return;
+    const previousGames = Number(stats.games || 0);
+    const nextGames = previousGames + 1;
+    stats.games = nextGames;
+    stats.averagePlies = (
+      ((Number(stats.averagePlies || 0) * previousGames) + Number(game.plies || 0))
+      / nextGames
+    );
+    if (game.winner === WHITE) stats.whiteWins += 1;
+    else if (game.winner === BLACK) stats.blackWins += 1;
+    else stats.draws += 1;
+    const reasonKey = String(game.winReason ?? 'unknown');
+    stats.winReasons[reasonKey] = (stats.winReasons[reasonKey] || 0) + 1;
+
+    const whiteId = game.whiteParticipantId || this.getDisplayParticipantId(whiteParticipant);
+    const blackId = game.blackParticipantId || this.getDisplayParticipantId(blackParticipant);
+    const whiteStats = participantResultById[whiteId];
+    const blackStats = participantResultById[blackId];
+    if (whiteStats) {
+      whiteStats.games += 1;
+      whiteStats.asWhite += 1;
+    }
+    if (blackStats) {
+      blackStats.games += 1;
+      blackStats.asBlack += 1;
+    }
+    if (game.winner === WHITE) {
+      if (whiteStats) {
+        whiteStats.wins += 1;
+        whiteStats.whiteWins += 1;
+      }
+      if (blackStats) blackStats.losses += 1;
+    } else if (game.winner === BLACK) {
+      if (blackStats) {
+        blackStats.wins += 1;
+        blackStats.blackWins += 1;
+      }
+      if (whiteStats) whiteStats.losses += 1;
+    } else {
+      if (whiteStats) whiteStats.draws += 1;
+      if (blackStats) blackStats.draws += 1;
+    }
+  }
+
+  finalizeSimulationAccumulator(stats, participantResultById) {
+    const normalizedStats = {
+      ...(stats || {}),
+      games: Number(stats?.games || 0),
+      whiteWins: Number(stats?.whiteWins || 0),
+      blackWins: Number(stats?.blackWins || 0),
+      draws: Number(stats?.draws || 0),
+      averagePlies: Number(stats?.averagePlies || 0),
+      winReasons: deepClone(stats?.winReasons || {}),
+    };
+    normalizedStats.participantResults = Object.values(participantResultById || {}).map((entry) => (
+      normalizeParticipantStatsEntry(entry, entry.games)
+    ));
+    return normalizedStats;
+  }
+
+  rebuildSimulationAccumulator(games, participantA, participantB) {
+    const { stats, participantResultById } = this.createSimulationAccumulator(participantA, participantB);
+    (Array.isArray(games) ? games : []).forEach((game) => {
+      const whiteParticipant = game?.whiteParticipantId === this.getDisplayParticipantId(participantB)
+        ? participantB
+        : participantA;
+      const blackParticipant = game?.blackParticipantId === this.getDisplayParticipantId(participantA)
+        ? participantA
+        : participantB;
+      this.applyGameToSimulationAccumulator(stats, participantResultById, game, whiteParticipant, blackParticipant);
+    });
+    return {
+      stats: this.finalizeSimulationAccumulator(stats, participantResultById),
+      participantResultById,
+    };
+  }
+
+  shouldCheckpointProgress(completedUnits, lastCheckpointAt, options = {}) {
+    if (options.force === true) return true;
+    const count = Number(completedUnits || 0);
+    if (count <= 0) return false;
+    if ((count % SIMULATION_CHECKPOINT_GAME_INTERVAL) === 0) return true;
+    const elapsed = Date.now() - (Number(lastCheckpointAt || 0) || 0);
+    return Number.isFinite(elapsed) && elapsed >= SIMULATION_CHECKPOINT_MS;
+  }
+
+  buildSimulationJobPayload(job, phase = null, overrides = {}) {
+    const simulation = job?.simulationId ? this.getInMemorySimulation(job.simulationId) : null;
+    const config = simulation?.config || job?.options || {};
+    const requestedGameCount = Number(
+      job?.checkpoint?.requestedGameCount
+      || config.requestedGameCount
+      || config.gameCount
+      || simulation?.gameCount
+      || 0
+    );
+    const completedGames = Number(
+      overrides.completedGames
+      ?? job?.checkpoint?.completedGames
+      ?? simulation?.stats?.games
+      ?? 0
+    );
+    const progress = requestedGameCount > 0 ? (completedGames / requestedGameCount) : 0;
+    const inferredPhase = phase || (completedGames > 0 ? 'game' : 'start');
+    return {
+      phase: inferredPhase,
+      taskId: job?.taskId || '',
+      simulationId: job?.simulationId || simulation?.id || '',
+      timestamp: nowIso(),
+      label: simulation?.label || job?.label || job?.simulationId || '',
+      gameCount: requestedGameCount,
+      participantAId: simulation?.participantAId || job?.participantAId || null,
+      participantBId: simulation?.participantBId || job?.participantBId || null,
+      participantALabel: simulation?.participantALabel || job?.participantALabel || null,
+      participantBLabel: simulation?.participantBLabel || job?.participantBLabel || null,
+      alternateColors: Boolean(config.alternateColors),
+      completedGames,
+      progress: Math.max(0, Math.min(1, progress)),
+      latestGameId: overrides.latestGameId || job?.checkpoint?.latestGameId || null,
+      status: simulation?.status || job?.status || 'running',
+      stats: deepClone(simulation?.stats || job?.checkpoint?.stats || {}),
+      ...overrides,
+    };
+  }
+
+  emitSimulationJobProgress(job, phase, overrides = {}) {
+    const payload = this.buildSimulationJobPayload(job, phase, overrides);
+    this.rememberLiveStatus('simulation', payload);
+    eventBus.emit('ml:simulationProgress', payload);
+    return payload;
+  }
+
+  async checkpointSimulationJob(job, simulation, options = {}) {
+    if (!job || !simulation) return;
+    const checkpointedAt = nowIso();
+    simulation.updatedAt = checkpointedAt;
+    simulation.status = options.status || simulation.status || 'running';
+    simulation.config = {
+      ...(simulation.config || {}),
+      requestedGameCount: Number(job?.checkpoint?.requestedGameCount || simulation?.config?.requestedGameCount || 0),
+      completedGameCount: Number(simulation?.stats?.games || simulation?.gameCount || 0),
+    };
+    simulation.gameCount = Number(simulation?.stats?.games || simulation?.gameCount || 0);
+    simulation.persistence = {
+      ...(simulation.persistence || {}),
+      taskId: job.taskId,
+      checkpointedAt,
+    };
+
+    job.updatedAt = checkpointedAt;
+    job.status = simulation.status === 'stopping' ? 'stopping' : (options.jobStatus || 'running');
+    job.checkpoint = {
+      ...(job.checkpoint || {}),
+      requestedGameCount: Number(job?.checkpoint?.requestedGameCount || simulation?.config?.requestedGameCount || 0),
+      completedGames: Number(simulation?.stats?.games || simulation?.gameCount || 0),
+      latestGameId: options.latestGameId || job?.checkpoint?.latestGameId || null,
+      lastCheckpointAt: checkpointedAt,
+      checkpointedAt,
+      stats: deepClone(simulation.stats || {}),
+    };
+
+    this.state.activeJobs.simulation = deepClone(job);
+    this.upsertSimulationRecord(simulation);
+
+    const mongoPersistence = await this.persistSimulationToMongo(simulation, {
+      gameIds: options.gameIds || null,
+      pruneMissingGames: options.pruneMissingGames === true,
+    });
+    simulation.persistence.mongo = mongoPersistence;
+    if (mongoPersistence?.saved) {
+      simulation.gamesStoredExternally = true;
+    }
+    await this.save();
+  }
+
+  resumeSimulationJob(jobRecord) {
+    const job = jobRecord || this.state.activeJobs?.simulation;
+    if (!job?.taskId || !job?.simulationId) return;
+    if (this.simulationTasks.has(job.taskId)) return;
+    const taskState = {
+      id: job.taskId,
+      status: 'running',
+      cancelRequested: String(job.status || '').toLowerCase() === 'stopping',
+    };
+    this.simulationTasks.set(job.taskId, taskState);
+    this.runSimulationJob(taskState).catch((err) => {
+      console.error('[ml-runtime] simulation background job failed', err);
+    });
+  }
+
+  async startSimulationJob(options = {}) {
+    await this.ensureLoaded();
+    const activeJob = this.state.activeJobs?.simulation || null;
+    if (activeJob && String(activeJob.status || '').toLowerCase() === 'running') {
+      const err = new Error('A simulation batch is already running');
+      err.statusCode = 409;
+      err.code = 'SIMULATION_ALREADY_RUNNING';
+      throw err;
+    }
+
+    const participantA = this.resolveParticipant(
+      options.whiteParticipantId || options.whiteSnapshotId,
+      options.whiteSnapshotId || null,
+    );
+    const participantB = this.resolveParticipant(
+      options.blackParticipantId || options.blackSnapshotId,
+      options.blackSnapshotId || null,
+    );
+    if (!participantA || !participantB) {
+      const err = new Error('Choose two valid controllers before starting a simulation batch');
+      err.statusCode = 400;
+      err.code = 'INVALID_SIMULATION_PARTICIPANTS';
+      throw err;
+    }
+
+    const gameCount = clampPositiveInt(options.gameCount, 4, 1, 100000);
+    const baseSeed = Number.isFinite(options.seed) ? Math.floor(options.seed) : Date.now();
+    const participantAId = this.getDisplayParticipantId(participantA);
+    const participantBId = this.getDisplayParticipantId(participantB);
+    const participantALabel = this.getDisplayParticipantLabel(participantA, participantAId);
+    const participantBLabel = this.getDisplayParticipantLabel(participantB, participantBId);
+    const customLabel = typeof options.label === 'string' ? options.label.trim() : '';
+    const labelBase = customLabel || `${participantALabel} vs ${participantBLabel}`;
+    const label = await this.buildUniqueSimulationLabel(labelBase, {
+      forceOrdinal: !customLabel,
+    });
+    const simulationId = this.nextId('simulation');
+    const taskId = `simulation:${simulationId}`;
+    const {
+      stats,
+      participantResultById,
+    } = this.createSimulationAccumulator(participantA, participantB);
+    const normalizedStats = this.finalizeSimulationAccumulator(stats, participantResultById);
+    const simulation = {
+      id: simulationId,
       createdAt: nowIso(),
-      seed,
-      setupMode: 'random',
-      whiteParticipantId,
-      blackParticipantId,
-      whiteParticipantLabel,
-      blackParticipantLabel,
-      winner,
-      winReason,
-      plies,
-      actionHistory: Array.isArray(game?.actions) ? deepClone(game.actions) : [],
-      moveHistory: Array.isArray(game?.moves) ? deepClone(game.moves) : [],
-      replay,
-      decisions,
-      training,
-      result: {
-        whiteValue: winner === null ? 0 : (winner === WHITE ? 1 : -1),
-        blackValue: winner === null ? 0 : (winner === BLACK ? 1 : -1),
+      updatedAt: nowIso(),
+      label,
+      participantAId,
+      participantBId,
+      participantALabel,
+      participantBLabel,
+      whiteSnapshotId: participantA.snapshotId || null,
+      blackSnapshotId: participantB.snapshotId || null,
+      config: {
+        gameCount,
+        requestedGameCount: gameCount,
+        completedGameCount: 0,
+        maxPlies: clampPositiveInt(options.maxPlies, 120, 40, 300),
+        iterations: clampPositiveInt(options.iterations, 90, 10, 800),
+        maxDepth: clampPositiveInt(options.maxDepth, 16, 4, 80),
+        hypothesisCount: clampPositiveInt(options.hypothesisCount, 8, 1, 24),
+        riskBias: normalizeFloat(options.riskBias, 0.75, 0, 3),
+        exploration: normalizeFloat(options.exploration, 1.25, 0, 5),
+        alternateColors: Boolean(options.alternateColors),
+        setupMode: 'random',
+        seed: baseSeed,
+      },
+      stats: normalizedStats,
+      games: [],
+      gameCount: 0,
+      gamesStoredExternally: false,
+      status: 'running',
+      persistence: {
+        taskId,
       },
     };
+    const job = {
+      type: 'simulation',
+      taskId,
+      simulationId,
+      status: 'running',
+      createdAt: simulation.createdAt,
+      updatedAt: simulation.updatedAt,
+      label,
+      participantAId,
+      participantBId,
+      participantALabel,
+      participantBLabel,
+      whiteSnapshotId: participantA.snapshotId || null,
+      blackSnapshotId: participantB.snapshotId || null,
+      options: {
+        whiteParticipantId: participantAId,
+        blackParticipantId: participantBId,
+        whiteSnapshotId: participantA.snapshotId || null,
+        blackSnapshotId: participantB.snapshotId || null,
+        gameCount,
+        maxPlies: simulation.config.maxPlies,
+        iterations: simulation.config.iterations,
+        maxDepth: simulation.config.maxDepth,
+        hypothesisCount: simulation.config.hypothesisCount,
+        riskBias: simulation.config.riskBias,
+        exploration: simulation.config.exploration,
+        alternateColors: simulation.config.alternateColors,
+        seed: baseSeed,
+        label,
+      },
+      checkpoint: {
+        requestedGameCount: gameCount,
+        completedGames: 0,
+        latestGameId: null,
+        lastCheckpointAt: simulation.updatedAt,
+        checkpointedAt: simulation.updatedAt,
+        stats: deepClone(normalizedStats),
+      },
+    };
+
+    this.state.activeJobs.simulation = deepClone(job);
+    this.upsertSimulationRecord(simulation);
+    const mongoPersistence = await this.persistSimulationToMongo(simulation, { pruneMissingGames: true });
+    simulation.persistence.mongo = mongoPersistence;
+    if (mongoPersistence?.saved) {
+      simulation.gamesStoredExternally = true;
+      this.upsertSimulationRecord(simulation);
+    }
+    await this.save();
+    this.emitSimulationJobProgress(job, 'start', {
+      completedGames: 0,
+      progress: 0,
+      stats: deepClone(normalizedStats),
+    });
+    this.resumeSimulationJob(job);
+    return {
+      taskId,
+      simulation: this.summarizeSimulation(simulation),
+      live: this.buildSimulationJobPayload(job, 'start'),
+    };
+  }
+
+  async runSimulationJob(taskState) {
+    const job = this.state.activeJobs?.simulation || null;
+    if (!job || job.taskId !== taskState?.id) {
+      this.simulationTasks.delete(taskState?.id);
+      return;
+    }
+
+    let simulation = this.getInMemorySimulation(job.simulationId);
+    if (!simulation) {
+      simulation = await this.getStoredSimulationById(job.simulationId);
+      if (!simulation) {
+        throw new Error(`Simulation ${job.simulationId} not found for resume`);
+      }
+      this.upsertSimulationRecord(simulation);
+    }
+
+    const participantA = this.resolveParticipant(
+      job?.options?.whiteParticipantId || simulation.participantAId,
+      job?.options?.whiteSnapshotId || simulation.whiteSnapshotId,
+    );
+    const participantB = this.resolveParticipant(
+      job?.options?.blackParticipantId || simulation.participantBId,
+      job?.options?.blackSnapshotId || simulation.blackSnapshotId,
+    );
+    if (!participantA || !participantB) {
+      throw new Error('Could not resolve simulation participants while resuming the batch');
+    }
+
+    const requestedGameCount = clampPositiveInt(
+      job?.checkpoint?.requestedGameCount || simulation?.config?.requestedGameCount || simulation?.config?.gameCount,
+      1,
+      1,
+      100000,
+    );
+    const baseSeed = Number.isFinite(simulation?.config?.seed)
+      ? Math.floor(simulation.config.seed)
+      : Date.now();
+    const alternateColors = Boolean(simulation?.config?.alternateColors);
+    const games = Array.isArray(simulation.games) ? simulation.games : [];
+    const rebuilt = this.rebuildSimulationAccumulator(games, participantA, participantB);
+    let stats = rebuilt.stats;
+    const participantResultById = rebuilt.participantResultById;
+    simulation.stats = deepClone(stats);
+    simulation.gameCount = stats.games;
+    simulation.config = {
+      ...(simulation.config || {}),
+      requestedGameCount,
+      completedGameCount: stats.games,
+    };
+    this.upsertSimulationRecord(simulation);
+
+    this.emitSimulationJobProgress(job, stats.games > 0 ? 'game' : 'start', {
+      completedGames: stats.games,
+      progress: requestedGameCount > 0 ? (stats.games / requestedGameCount) : 0,
+      stats: deepClone(stats),
+    });
+
+    let cancelled = false;
+    let lastCheckpointAt = parseTimeValue(job?.checkpoint?.lastCheckpointAt) || Date.now();
+
+    try {
+      for (let gameIndex = stats.games; gameIndex < requestedGameCount; gameIndex += 1) {
+        const latestJob = this.state.activeJobs?.simulation || null;
+        if (!latestJob || latestJob.taskId !== job.taskId) break;
+        if (taskState.cancelRequested || String(latestJob.status || '').toLowerCase() === 'stopping') {
+          cancelled = true;
+          break;
+        }
+
+        const shouldSwap = alternateColors && (gameIndex % 2 === 1);
+        const whiteParticipant = shouldSwap ? participantB : participantA;
+        const blackParticipant = shouldSwap ? participantA : participantB;
+        const game = await this.runSingleGame({
+          whiteParticipant,
+          blackParticipant,
+          seed: baseSeed + (gameIndex * 7919),
+          maxPlies: simulation.config.maxPlies,
+          iterations: simulation.config.iterations,
+          maxDepth: simulation.config.maxDepth,
+          hypothesisCount: simulation.config.hypothesisCount,
+          riskBias: simulation.config.riskBias,
+          exploration: simulation.config.exploration,
+        });
+
+        games.push(game);
+        this.applyGameToSimulationAccumulator(stats, participantResultById, game, whiteParticipant, blackParticipant);
+        stats = this.finalizeSimulationAccumulator(stats, participantResultById);
+        simulation.games = games;
+        simulation.stats = deepClone(stats);
+        simulation.gameCount = stats.games;
+        simulation.status = 'running';
+        simulation.updatedAt = nowIso();
+        simulation.config.completedGameCount = stats.games;
+        job.updatedAt = simulation.updatedAt;
+        job.checkpoint = {
+          ...(job.checkpoint || {}),
+          requestedGameCount,
+          completedGames: stats.games,
+          latestGameId: game.id,
+          stats: deepClone(stats),
+        };
+        this.state.activeJobs.simulation = deepClone(job);
+        this.upsertSimulationRecord(simulation);
+
+        this.emitSimulationJobProgress(job, 'game', {
+          completedGames: stats.games,
+          progress: requestedGameCount > 0 ? (stats.games / requestedGameCount) : 0,
+          latestGameId: game.id,
+          winner: game.winner,
+          winReason: game.winReason,
+          stats: deepClone(stats),
+        });
+
+        if (this.shouldCheckpointProgress(stats.games, lastCheckpointAt, {
+          force: stats.games >= requestedGameCount,
+        })) {
+          await this.checkpointSimulationJob(job, simulation, {
+            gameIds: [game.id],
+            latestGameId: game.id,
+          });
+          lastCheckpointAt = Date.now();
+        }
+
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      simulation.status = cancelled ? 'stopped' : 'completed';
+      simulation.updatedAt = nowIso();
+      simulation.config.completedGameCount = stats.games;
+      simulation.gameCount = stats.games;
+      simulation.stats = deepClone(this.finalizeSimulationAccumulator(stats, participantResultById));
+      if (!simulation.persistence?.snapshotStatsApplied) {
+        if (participantA.type === 'snapshot' && participantA.snapshot) {
+          this.recordSimulationOnSnapshot(participantA.snapshot, simulation.stats, WHITE);
+        }
+        if (participantB.type === 'snapshot' && participantB.snapshot) {
+          this.recordSimulationOnSnapshot(participantB.snapshot, simulation.stats, BLACK);
+        }
+        simulation.persistence = {
+          ...(simulation.persistence || {}),
+          snapshotStatsApplied: true,
+        };
+      }
+      await this.checkpointSimulationJob(job, simulation, {
+        status: cancelled ? 'stopped' : 'completed',
+        jobStatus: cancelled ? 'stopping' : 'completed',
+        latestGameId: job?.checkpoint?.latestGameId || null,
+        pruneMissingGames: true,
+      });
+      if (simulation.gamesStoredExternally) {
+        this.upsertSimulationRecord(compactSimulationForState(simulation));
+      } else {
+        this.upsertSimulationRecord(simulation);
+      }
+      this.state.activeJobs.simulation = null;
+      await this.save();
+      if (simulation.gamesStoredExternally) {
+        await this.trimMongoSimulationHistory();
+      }
+
+      const phase = cancelled ? 'cancelled' : 'complete';
+      this.emitSimulationJobProgress({
+        ...job,
+        status: simulation.status,
+        checkpoint: {
+          ...(job.checkpoint || {}),
+          completedGames: simulation.stats.games,
+          stats: deepClone(simulation.stats),
+        },
+      }, phase, {
+        completedGames: simulation.stats.games,
+        progress: requestedGameCount > 0 ? (simulation.stats.games / requestedGameCount) : 0,
+        stats: deepClone(simulation.stats),
+        status: simulation.status,
+      });
+    } catch (err) {
+      simulation.status = 'error';
+      simulation.updatedAt = nowIso();
+      simulation.persistence = {
+        ...(simulation.persistence || {}),
+        error: err?.message || 'Simulation failed',
+      };
+      this.upsertSimulationRecord(simulation);
+      await this.checkpointSimulationJob(job, simulation, {
+        status: 'error',
+        jobStatus: 'error',
+        pruneMissingGames: false,
+      }).catch(() => {});
+      this.state.activeJobs.simulation = null;
+      await this.save().catch(() => {});
+      this.emitSimulationJobProgress(job, 'error', {
+        completedGames: simulation?.stats?.games || 0,
+        progress: requestedGameCount > 0 ? ((simulation?.stats?.games || 0) / requestedGameCount) : 0,
+        stats: deepClone(simulation?.stats || {}),
+        message: err.message || 'Simulation failed',
+      });
+      throw err;
+    } finally {
+      this.simulationTasks.delete(taskState?.id);
+    }
   }
 
   async simulateMatches(options = {}) {
@@ -2130,12 +3339,41 @@ class MlRuntime {
     if (!id) {
       return { stopped: false, reason: 'missing_task_id' };
     }
-    const task = this.simulationTasks.get(id);
-    if (!task || task.status !== 'running') {
-      return { stopped: false, reason: 'not_running', taskId: id };
+    const activeJob = this.state.activeJobs?.simulation || null;
+    if (!activeJob || activeJob.taskId !== id) {
+      const legacyTask = this.simulationTasks.get(id);
+      if (!legacyTask || legacyTask.status !== 'running') {
+        return { stopped: false, reason: 'not_running', taskId: id };
+      }
+      legacyTask.cancelRequested = true;
+      legacyTask.cancelRequestedAt = nowIso();
+      return { stopped: true, taskId: id };
     }
-    task.cancelRequested = true;
-    task.cancelRequestedAt = nowIso();
+    const task = this.simulationTasks.get(id);
+    if (task) {
+      task.cancelRequested = true;
+      task.cancelRequestedAt = nowIso();
+    }
+    activeJob.status = 'stopping';
+    activeJob.updatedAt = nowIso();
+    this.state.activeJobs.simulation = deepClone(activeJob);
+    const simulation = this.getInMemorySimulation(activeJob.simulationId);
+    if (simulation) {
+      simulation.status = 'stopping';
+      simulation.updatedAt = activeJob.updatedAt;
+      simulation.persistence = {
+        ...(simulation.persistence || {}),
+        stopRequestedAt: activeJob.updatedAt,
+      };
+      this.upsertSimulationRecord(simulation);
+      await this.checkpointSimulationJob(activeJob, simulation, {
+        status: 'stopping',
+        jobStatus: 'stopping',
+        pruneMissingGames: false,
+      }).catch(() => {});
+    } else {
+      await this.save();
+    }
     return { stopped: true, taskId: id };
   }
 
@@ -2277,6 +3515,415 @@ class MlRuntime {
     };
   }
 
+  buildTrainingJobPayload(job, phase = null, overrides = {}) {
+    const trainingRun = job?.trainingRunId ? this.getInMemoryTrainingRun(job.trainingRunId) : null;
+    const history = Array.isArray(overrides.history)
+      ? overrides.history
+      : (Array.isArray(trainingRun?.history) ? trainingRun.history : []);
+    const completedEpochs = Number(
+      overrides.epoch
+      ?? overrides.completedEpochs
+      ?? job?.checkpoint?.completedEpochs
+      ?? history.length
+      ?? 0
+    );
+    const totalEpochs = Number(job?.epochs || trainingRun?.epochs || 0);
+    const inferredPhase = phase || (completedEpochs > 0 ? 'epoch' : 'start');
+    const latestLoss = overrides.loss
+      || trainingRun?.finalLoss
+      || (history.length ? history[history.length - 1] : null)
+      || null;
+    return {
+      phase: inferredPhase,
+      taskId: job?.taskId || '',
+      trainingRunId: job?.trainingRunId || trainingRun?.id || '',
+      timestamp: nowIso(),
+      baseSnapshotId: job?.baseSnapshotId || trainingRun?.baseSnapshotId || null,
+      newSnapshotId: trainingRun?.newSnapshotId || null,
+      epochs: totalEpochs,
+      totalEpochs,
+      epoch: completedEpochs,
+      learningRate: Number(job?.learningRate || trainingRun?.learningRate || 0),
+      sourceSimulationIds: Array.isArray(job?.sourceSimulationIds)
+        ? job.sourceSimulationIds.slice()
+        : (Array.isArray(trainingRun?.sourceSimulationIds) ? trainingRun.sourceSimulationIds.slice() : []),
+      sourceGames: Number(job?.sourceGames || trainingRun?.sourceGames || 0),
+      sourceSimulations: Number(job?.sourceSimulations || trainingRun?.sourceSimulations || 0),
+      sampleCounts: deepClone(job?.sampleCounts || trainingRun?.sampleCounts || {}),
+      loss: latestLoss ? deepClone(latestLoss) : null,
+      history: deepClone(history),
+      status: trainingRun?.status || job?.status || 'running',
+      ...overrides,
+    };
+  }
+
+  emitTrainingJobProgress(job, phase, overrides = {}) {
+    const payload = this.buildTrainingJobPayload(job, phase, overrides);
+    this.rememberLiveStatus('training', payload);
+    eventBus.emit('ml:trainingProgress', payload);
+    return payload;
+  }
+
+  async checkpointTrainingJob(job, trainingRun, options = {}) {
+    if (!job || !trainingRun) return;
+    const checkpointedAt = nowIso();
+    trainingRun.updatedAt = checkpointedAt;
+    trainingRun.status = options.status || trainingRun.status || 'running';
+    trainingRun.finalLoss = trainingRun.finalLoss || (
+      Array.isArray(trainingRun.history) && trainingRun.history.length
+        ? trainingRun.history[trainingRun.history.length - 1]
+        : null
+    );
+    trainingRun.checkpoint = {
+      taskId: job.taskId,
+      completedEpochs: Number(job?.checkpoint?.completedEpochs || trainingRun.history?.length || 0),
+      totalEpochs: Number(job?.epochs || trainingRun.epochs || 0),
+      checkpointedAt,
+    };
+
+    job.updatedAt = checkpointedAt;
+    job.status = options.jobStatus || trainingRun.status || 'running';
+    job.checkpoint = {
+      ...(job.checkpoint || {}),
+      completedEpochs: Number(job?.checkpoint?.completedEpochs || trainingRun.history?.length || 0),
+      totalEpochs: Number(job?.epochs || trainingRun.epochs || 0),
+      checkpointedAt,
+      lastLoss: trainingRun.finalLoss ? deepClone(trainingRun.finalLoss) : null,
+    };
+
+    this.state.activeJobs.training = deepClone(job);
+    this.upsertTrainingRunRecord(trainingRun);
+
+    const mongoPersistence = await this.persistTrainingRunToMongo({
+      ...trainingRun,
+      checkpoint: {
+        ...deepClone(trainingRun.checkpoint || {}),
+        modelBundle: deepClone(job?.checkpoint?.modelBundle || null),
+        optimizerState: deepClone(job?.checkpoint?.optimizerState || null),
+      },
+    }, {
+      includeCheckpointArtifacts: options.includeCheckpointArtifacts === true,
+    });
+    trainingRun.persistence = {
+      ...(trainingRun.persistence || {}),
+      mongo: mongoPersistence,
+    };
+    await this.save();
+  }
+
+  resumeTrainingJob(jobRecord) {
+    const job = jobRecord || this.state.activeJobs?.training;
+    if (!job?.taskId || !job?.trainingRunId) return;
+    if (this.trainingTasks.has(job.taskId)) return;
+    const taskState = {
+      id: job.taskId,
+      status: 'running',
+    };
+    this.trainingTasks.set(job.taskId, taskState);
+    this.runTrainingJob(taskState).catch((err) => {
+      console.error('[ml-runtime] training background job failed', err);
+    });
+  }
+
+  async startTrainingJob(options = {}) {
+    await this.ensureLoaded();
+    const activeJob = this.state.activeJobs?.training || null;
+    if (activeJob && String(activeJob.status || '').toLowerCase() === 'running') {
+      const err = new Error('A training run is already active');
+      err.statusCode = 409;
+      err.code = 'TRAINING_ALREADY_RUNNING';
+      throw err;
+    }
+
+    const baseSnapshot = this.resolveSnapshot(options.snapshotId);
+    if (!baseSnapshot) {
+      const err = new Error('Snapshot not found for training');
+      err.code = 'SNAPSHOT_NOT_FOUND';
+      err.statusCode = 404;
+      throw err;
+    }
+    const epochs = clampPositiveInt(options.epochs, 2, 1, 50);
+    const learningRate = normalizeFloat(options.learningRate, 0.01, 0.0001, 0.5);
+    const simulationIds = Array.isArray(options.simulationIds)
+      ? options.simulationIds.filter(Boolean)
+      : null;
+    const samples = await this.collectTrainingSamples(baseSnapshot.id, simulationIds);
+    if (!samples.policySamples.length && !samples.valueSamples.length && !samples.identitySamples.length) {
+      const err = new Error(
+        'No training samples found for the selected snapshot/simulations. '
+        + 'Select runs where that snapshot actually played (not builtin-vs-builtin only).',
+      );
+      err.code = 'NO_TRAINING_SAMPLES';
+      err.statusCode = 400;
+      err.details = {
+        snapshotId: baseSnapshot.id,
+        simulationIds: simulationIds || [],
+        sourceSimulations: samples.sourceSimulations,
+        sourceGames: samples.sourceGames,
+      };
+      throw err;
+    }
+
+    const sampleCounts = {
+      policy: samples.policySamples.length,
+      value: samples.valueSamples.length,
+      identity: samples.identitySamples.length,
+    };
+    const trainingRunId = this.nextId('training');
+    const taskId = `training:${trainingRunId}`;
+    const checkpointBundle = cloneModelBundle(baseSnapshot.modelBundle);
+    const checkpointOptimizer = createOptimizerState(checkpointBundle);
+    const createdAt = nowIso();
+    const trainingRun = {
+      id: trainingRunId,
+      createdAt,
+      updatedAt: createdAt,
+      status: 'running',
+      label: options.label || '',
+      notes: options.notes || '',
+      baseSnapshotId: baseSnapshot.id,
+      newSnapshotId: null,
+      epochs,
+      learningRate,
+      sourceSimulationIds: simulationIds || [],
+      sourceGames: samples.sourceGames,
+      sourceSimulations: samples.sourceSimulations,
+      sampleCounts,
+      history: [],
+      finalLoss: null,
+      checkpoint: {
+        taskId,
+        completedEpochs: 0,
+        totalEpochs: epochs,
+        checkpointedAt: createdAt,
+      },
+    };
+    const job = {
+      type: 'training',
+      taskId,
+      trainingRunId,
+      status: 'running',
+      createdAt,
+      updatedAt: createdAt,
+      baseSnapshotId: baseSnapshot.id,
+      epochs,
+      learningRate,
+      sourceSimulationIds: simulationIds || [],
+      sourceGames: samples.sourceGames,
+      sourceSimulations: samples.sourceSimulations,
+      sampleCounts,
+      label: trainingRun.label,
+      notes: trainingRun.notes,
+      checkpoint: {
+        completedEpochs: 0,
+        totalEpochs: epochs,
+        checkpointedAt: createdAt,
+        modelBundle: checkpointBundle,
+        optimizerState: checkpointOptimizer,
+      },
+    };
+
+    this.state.activeJobs.training = deepClone(job);
+    this.upsertTrainingRunRecord(trainingRun);
+    await this.persistTrainingRunToMongo({
+      ...trainingRun,
+      checkpoint: {
+        ...deepClone(trainingRun.checkpoint || {}),
+        modelBundle: checkpointBundle,
+        optimizerState: checkpointOptimizer,
+      },
+    }, {
+      includeCheckpointArtifacts: true,
+    });
+    await this.save();
+    this.emitTrainingJobProgress(job, 'start', {
+      sourceGames: samples.sourceGames,
+      sourceSimulations: samples.sourceSimulations,
+      history: [],
+    });
+    this.resumeTrainingJob(job);
+    return {
+      taskId,
+      trainingRun: this.summarizeTrainingRun(trainingRun),
+      live: this.buildTrainingJobPayload(job, 'start'),
+    };
+  }
+
+  async runTrainingJob(taskState) {
+    const job = this.state.activeJobs?.training || null;
+    if (!job || job.taskId !== taskState?.id) {
+      this.trainingTasks.delete(taskState?.id);
+      return;
+    }
+
+    const trainingRun = this.getInMemoryTrainingRun(job.trainingRunId);
+    if (!trainingRun) {
+      throw new Error(`Training run ${job.trainingRunId} not found for resume`);
+    }
+
+    const baseSnapshot = this.getSnapshotById(job.baseSnapshotId);
+    if (!baseSnapshot) {
+      throw new Error(`Base snapshot ${job.baseSnapshotId} is missing`);
+    }
+
+    const samples = await this.collectTrainingSamples(baseSnapshot.id, job.sourceSimulationIds || null);
+    if (!samples.policySamples.length && !samples.valueSamples.length && !samples.identitySamples.length) {
+      throw new Error('Training samples disappeared before the run could resume');
+    }
+
+    let trainedBundle = job?.checkpoint?.modelBundle
+      ? cloneModelBundle(job.checkpoint.modelBundle)
+      : cloneModelBundle(baseSnapshot.modelBundle);
+    let optimizerState = job?.checkpoint?.optimizerState
+      ? deepClone(job.checkpoint.optimizerState)
+      : createOptimizerState(trainedBundle);
+    let completedEpochs = Number(job?.checkpoint?.completedEpochs || trainingRun.history.length || 0);
+
+    this.emitTrainingJobProgress(job, completedEpochs > 0 ? 'epoch' : 'start', {
+      epoch: completedEpochs,
+      totalEpochs: job.epochs,
+      history: deepClone(trainingRun.history || []),
+      loss: trainingRun.finalLoss || null,
+    });
+
+    try {
+      for (let epoch = completedEpochs; epoch < job.epochs; epoch += 1) {
+        const policy = trainPolicyModel(trainedBundle, samples.policySamples, {
+          learningRate: job.learningRate,
+          optimizerState: optimizerState.policy,
+        });
+        const value = trainValueModel(trainedBundle, samples.valueSamples, {
+          learningRate: job.learningRate,
+          optimizerState: optimizerState.value,
+        });
+        const identity = trainIdentityModel(trainedBundle, samples.identitySamples, {
+          learningRate: job.learningRate,
+          optimizerState: optimizerState.identity,
+        });
+        optimizerState = {
+          policy: policy.optimizerState || optimizerState.policy,
+          value: value.optimizerState || optimizerState.value,
+          identity: identity.optimizerState || optimizerState.identity,
+        };
+
+        const epochLoss = {
+          epoch: epoch + 1,
+          policyLoss: policy.loss,
+          valueLoss: value.loss,
+          identityLoss: identity.loss,
+          identityAccuracy: identity.accuracy,
+          policySamples: policy.samples,
+          valueSamples: value.samples,
+          identitySamples: identity.samples,
+        };
+        trainingRun.history.push(epochLoss);
+        trainingRun.finalLoss = epochLoss;
+        trainingRun.updatedAt = nowIso();
+        trainingRun.status = 'running';
+        completedEpochs = epoch + 1;
+        job.updatedAt = trainingRun.updatedAt;
+        job.checkpoint = {
+          ...(job.checkpoint || {}),
+          completedEpochs,
+          totalEpochs: job.epochs,
+          checkpointedAt: trainingRun.updatedAt,
+          modelBundle: cloneModelBundle(trainedBundle),
+          optimizerState: deepClone(optimizerState),
+        };
+
+        await this.checkpointTrainingJob(job, trainingRun, {
+          includeCheckpointArtifacts: true,
+        });
+        this.emitTrainingJobProgress(job, 'epoch', {
+          epoch: completedEpochs,
+          totalEpochs: job.epochs,
+          history: deepClone(trainingRun.history),
+          loss: epochLoss,
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      const latestLoss = trainingRun.finalLoss || (trainingRun.history.length
+        ? trainingRun.history[trainingRun.history.length - 1]
+        : null);
+      const lossRecord = {
+        timestamp: nowIso(),
+        learningRate: job.learningRate,
+        epochs: job.epochs,
+        sourceSimulations: trainingRun.sourceSimulations,
+        sourceGames: trainingRun.sourceGames,
+        history: trainingRun.history.map((entry) => ({ ...entry })),
+        ...(latestLoss || {}),
+      };
+
+      const newSnapshot = this.createSnapshotRecord({
+        label: trainingRun.label || `${baseSnapshot.label} -> trained`,
+        generation: (baseSnapshot.generation || 0) + 1,
+        parentSnapshotId: baseSnapshot.id,
+        modelBundle: trainedBundle,
+        notes: trainingRun.notes || `Trained from ${trainingRun.sourceGames} game(s)`,
+        stats: {
+          ...baseSnapshot.stats,
+          trainingRuns: (baseSnapshot.stats?.trainingRuns || 0) + 1,
+        },
+        losses: [
+          ...(baseSnapshot.losses || []),
+          lossRecord,
+        ],
+      });
+      this.state.snapshots.unshift(newSnapshot);
+      baseSnapshot.stats = baseSnapshot.stats || {};
+      baseSnapshot.stats.trainingRuns = (baseSnapshot.stats.trainingRuns || 0) + 1;
+      baseSnapshot.updatedAt = nowIso();
+
+      trainingRun.newSnapshotId = newSnapshot.id;
+      trainingRun.status = 'completed';
+      trainingRun.updatedAt = nowIso();
+      trainingRun.finalLoss = latestLoss;
+      trainingRun.checkpoint = {
+        taskId: job.taskId,
+        completedEpochs: completedEpochs,
+        totalEpochs: job.epochs,
+        checkpointedAt: trainingRun.updatedAt,
+      };
+      this.upsertTrainingRunRecord(trainingRun);
+      await this.persistTrainingRunToMongo(trainingRun, {
+        includeCheckpointArtifacts: false,
+      });
+      this.state.activeJobs.training = null;
+      await this.save();
+
+      this.emitTrainingJobProgress(job, 'complete', {
+        epoch: completedEpochs,
+        totalEpochs: job.epochs,
+        trainingRunId: trainingRun.id,
+        newSnapshotId: newSnapshot.id,
+        history: deepClone(trainingRun.history),
+        loss: latestLoss,
+      });
+    } catch (err) {
+      trainingRun.status = 'error';
+      trainingRun.updatedAt = nowIso();
+      await this.checkpointTrainingJob(job, trainingRun, {
+        includeCheckpointArtifacts: true,
+        status: 'error',
+        jobStatus: 'error',
+      }).catch(() => {});
+      this.state.activeJobs.training = null;
+      await this.save().catch(() => {});
+      this.emitTrainingJobProgress(job, 'error', {
+        epoch: completedEpochs,
+        totalEpochs: job.epochs,
+        history: deepClone(trainingRun.history || []),
+        loss: trainingRun.finalLoss || null,
+        message: err.message || 'Training failed',
+      });
+      throw err;
+    } finally {
+      this.trainingTasks.delete(taskState?.id);
+    }
+  }
+
   async trainSnapshot(options = {}) {
     await this.ensureLoaded();
     const baseSnapshot = this.resolveSnapshot(options.snapshotId);
@@ -2335,12 +3982,25 @@ class MlRuntime {
 
     try {
       const trainedBundle = cloneModelBundle(baseSnapshot.modelBundle);
+      const optimizerState = createOptimizerState(trainedBundle);
       const lossEntries = [];
 
       for (let epoch = 0; epoch < epochs; epoch += 1) {
-        const policy = trainPolicyModel(trainedBundle, samples.policySamples, learningRate);
-        const value = trainValueModel(trainedBundle, samples.valueSamples, learningRate);
-        const identity = trainIdentityModel(trainedBundle, samples.identitySamples, learningRate);
+        const policy = trainPolicyModel(trainedBundle, samples.policySamples, {
+          learningRate,
+          optimizerState: optimizerState.policy,
+        });
+        const value = trainValueModel(trainedBundle, samples.valueSamples, {
+          learningRate,
+          optimizerState: optimizerState.value,
+        });
+        const identity = trainIdentityModel(trainedBundle, samples.identitySamples, {
+          learningRate,
+          optimizerState: optimizerState.identity,
+        });
+        optimizerState.policy = policy.optimizerState || optimizerState.policy;
+        optimizerState.value = value.optimizerState || optimizerState.value;
+        optimizerState.identity = identity.optimizerState || optimizerState.identity;
         const epochLoss = {
           epoch: epoch + 1,
           policyLoss: policy.loss,
@@ -2360,6 +4020,15 @@ class MlRuntime {
       }
 
       const latestLoss = lossEntries[lossEntries.length - 1];
+      const lossRecord = {
+        timestamp: nowIso(),
+        learningRate,
+        epochs,
+        sourceSimulations: samples.sourceSimulations,
+        sourceGames: samples.sourceGames,
+        history: lossEntries.map((entry) => ({ ...entry })),
+        ...latestLoss,
+      };
       const newSnapshot = this.createSnapshotRecord({
         label: options.label || `${baseSnapshot.label} -> trained`,
         generation: (baseSnapshot.generation || 0) + 1,
@@ -2372,14 +4041,7 @@ class MlRuntime {
         },
         losses: [
           ...(baseSnapshot.losses || []),
-          {
-            timestamp: nowIso(),
-            ...latestLoss,
-            learningRate,
-            epochs,
-            sourceSimulations: samples.sourceSimulations,
-            sourceGames: samples.sourceGames,
-          },
+          lossRecord,
         ],
       });
 
@@ -2394,6 +4056,8 @@ class MlRuntime {
         sourceSimulationIds: simulationIds || [],
         sourceGames: samples.sourceGames,
         sourceSimulations: samples.sourceSimulations,
+        sampleCounts,
+        history: lossEntries.map((entry) => ({ ...entry })),
         finalLoss: latestLoss,
       };
       this.state.trainingRuns.unshift(trainingRun);
@@ -2444,10 +4108,27 @@ class MlRuntime {
     })));
   }
 
+  async getLiveStatus() {
+    await this.ensureLoaded();
+    const simulationJob = this.state.activeJobs?.simulation || null;
+    const trainingJob = this.state.activeJobs?.training || null;
+    const simulation = simulationJob
+      ? this.buildSimulationJobPayload(simulationJob)
+      : this.getRecentRememberedLiveStatus('simulation');
+    const training = trainingJob
+      ? this.buildTrainingJobPayload(trainingJob)
+      : this.getRecentRememberedLiveStatus('training');
+    return {
+      serverTime: nowIso(),
+      simulation,
+      training,
+    };
+  }
+
   async listTrainingRuns(options = {}) {
     await this.ensureLoaded();
-    const limit = clampPositiveInt(options.limit, 20, 1, 500);
-    return deepClone((this.state.trainingRuns || []).slice(0, limit));
+    const runs = await this.listStoredTrainingRuns({ limit: options.limit });
+    return runs.map((run) => this.summarizeTrainingRun(run));
   }
 }
 
@@ -2456,6 +4137,9 @@ let defaultRuntime = null;
 function getMlRuntime() {
   if (!defaultRuntime) {
     defaultRuntime = new MlRuntime();
+    defaultRuntime.ensureLoaded().catch((err) => {
+      console.error('[ml-runtime] failed to initialize default runtime', err);
+    });
   }
   return defaultRuntime;
 }

@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const getServerConfig = require('../../../utils/getServerConfig');
-const eventBus = require('../../../eventBus');
 const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
 const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
+const { emitGameChanged } = require('../../../utils/gameRouteEvents');
 const {
   ensureStoredClockState,
   transitionStoredClockState,
@@ -111,10 +111,7 @@ router.post('/', async (req, res) => {
 
     await game.save();
 
-    eventBus.emit('gameChanged', {
-      game: typeof game.toObject === 'function' ? game.toObject() : game,
-      affectedUsers: (game.players || []).map(p => p.toString()),
-    });
+    emitGameChanged(game);
 
     res.json({ message: 'Piece placed on deck' });
   } catch (err) {

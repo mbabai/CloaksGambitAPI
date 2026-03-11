@@ -80,6 +80,19 @@ function normalizeResolvedUser(resolved) {
   };
 }
 
+function normalizeInjectedSession(session) {
+  if (!session?.userId) return null;
+  return {
+    type: session.isGuest ? 'guest' : 'authenticated',
+    authenticated: Boolean(session.authenticated && !session.isGuest),
+    userId: String(session.userId),
+    username: session.username || FALLBACK_USERNAME,
+    email: session.email || '',
+    isGuest: Boolean(session.isGuest),
+    user: session.user || null,
+  };
+}
+
 async function resolveGuestFromCookieUser(cookieUserId) {
   if (!cookieUserId) return null;
 
@@ -114,6 +127,10 @@ async function resolveGuestFromCookieUser(cookieUserId) {
 
 async function resolveSessionFromRequest(req, options = {}) {
   const { createGuest = false } = options;
+  const injected = normalizeInjectedSession(req?.__resolvedSession);
+  if (injected) {
+    return injected;
+  }
   const token = extractTokenFromRequest(req);
 
   if (token) {

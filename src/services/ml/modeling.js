@@ -3,6 +3,7 @@ const {
   IDENTITIES,
   IDENTITY_COUNTS,
   PIECE_VALUES,
+  MOVE_STATES,
   RANKS,
   FILES,
   WHITE,
@@ -16,6 +17,20 @@ const {
   findKing,
   distanceToThrone,
 } = require('./engine');
+const {
+  addL2Penalty,
+  applyAdamUpdate,
+  backpropagateInto,
+  clipGradientBundle,
+  cloneNetwork,
+  createAdamState,
+  createGradientBundle,
+  createMlp,
+  forwardNetwork,
+  prepareInputVector,
+  scaleGradientBundle,
+  zeroGradientBundle,
+} = require('./network');
 
 const POLICY_FEATURES = Object.freeze([
   'bias',
@@ -45,6 +60,13 @@ const POLICY_FEATURES = Object.freeze([
   'kingThroneDelta',
   'materialDiff',
   'mobilityDiff',
+  'responsePhase',
+  'challengeWindow',
+  'bombWindow',
+  'ownDaggers',
+  'oppDaggers',
+  'stashDiff',
+  'onDeckAdvantage',
 ]);
 
 const VALUE_FEATURES = Object.freeze([
@@ -59,13 +81,23 @@ const VALUE_FEATURES = Object.freeze([
   'ownKingAlive',
   'oppKingAlive',
   'kingPressure',
+  'daggerDiff',
+  'stashDiff',
+  'onDeckAdvantage',
+  'movesSinceAction',
+  'responsePressure',
 ]);
 
 const IDENTITY_FEATURES = Object.freeze([
   'bias',
-  'compatibility',
   'historyDepth',
   'captureSeen',
+  'compatKing',
+  'compatRook',
+  'compatBishop',
+  'compatKnight',
+  'truthfulSignals',
+  'failedSignals',
 ]);
 
 const INFERRED_IDENTITIES = Object.freeze([
@@ -75,71 +107,24 @@ const INFERRED_IDENTITIES = Object.freeze([
   IDENTITIES.KNIGHT,
 ]);
 
-const DEFAULT_POLICY_WEIGHTS = Object.freeze([
-  0.0,
-  0.12,
-  0.08,
-  0.08,
-  0.05,
-  0.06,
-  1.1,
-  5.0,
-  0.42,
-  0.18,
-  0.12,
-  -0.15,
-  0.06,
-  0.07,
-  0.09,
-  0.25,
-  0.14,
-  0.13,
-  0.14,
-  0.1,
-  0.02,
-  0.04,
-  0.04,
-  0.04,
-  1.9,
-  0.28,
-  0.26,
-]);
+const POLICY_HIDDEN_SIZES = Object.freeze([24]);
+const VALUE_HIDDEN_SIZES = Object.freeze([16]);
+const IDENTITY_HIDDEN_SIZES = Object.freeze([12]);
 
-const DEFAULT_VALUE_WEIGHTS = Object.freeze([
-  0.0,
-  1.25,
-  0.55,
-  -0.75,
-  0.75,
-  0.2,
-  0.45,
-  0.08,
-  1.7,
-  -1.7,
-  0.4,
-]);
-
-function clampWeight(value) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(-12, Math.min(12, value));
-}
-
-function dot(weights, features) {
-  let total = 0;
-  const length = Math.min(weights.length, features.length);
-  for (let i = 0; i < length; i += 1) {
-    total += (weights[i] || 0) * (features[i] || 0);
-  }
-  return total;
-}
+const DEFAULT_TRAINING_OPTIONS = Object.freeze({
+  batchSize: 24,
+  learningRate: 0.0025,
+  weightDecay: 0.0001,
+  gradientClipNorm: 5,
+});
 
 function softmax(scores, temperature = 1) {
   const values = Array.isArray(scores) ? scores : [];
   if (!values.length) return [];
   const safeTemp = Number.isFinite(temperature) && temperature > 0 ? temperature : 1;
-  const adjusted = values.map((score) => (score || 0) / safeTemp);
-  const max = adjusted.reduce((best, value) => (value > best ? value : best), Number.NEGATIVE_INFINITY);
-  const exps = adjusted.map((value) => Math.exp(value - max));
+  const scaled = values.map((score) => (score || 0) / safeTemp);
+  const max = scaled.reduce((best, value) => (value > best ? value : best), Number.NEGATIVE_INFINITY);
+  const exps = scaled.map((value) => Math.exp(value - max));
   const sum = exps.reduce((acc, value) => acc + value, 0);
   if (sum <= 0) {
     const uniform = 1 / values.length;
@@ -153,71 +138,207 @@ function tanh(value) {
   return Math.tanh(clamped);
 }
 
-function cloneWeights(weights) {
-  return Array.isArray(weights) ? weights.slice() : [];
+function shuffleInPlace(values, rng) {
+  const source = Array.isArray(values) ? values.slice() : [];
+  const random = typeof rng === 'function' ? rng : createRng(Date.now());
+  for (let idx = source.length - 1; idx > 0; idx -= 1) {
+    const swapIndex = Math.floor(random() * (idx + 1));
+    [source[idx], source[swapIndex]] = [source[swapIndex], source[idx]];
+  }
+  return source;
 }
 
-function cloneIdentityWeights(weightsByIdentity = {}) {
-  const next = {};
-  INFERRED_IDENTITIES.forEach((identity) => {
-    next[identity] = cloneWeights(weightsByIdentity[identity]);
+function normalizeTrainingOptions(optionsOrLearningRate, overrides = {}) {
+  const fromNumber = Number.isFinite(optionsOrLearningRate)
+    ? { learningRate: optionsOrLearningRate }
+    : (optionsOrLearningRate || {});
+  return {
+    ...DEFAULT_TRAINING_OPTIONS,
+    ...fromNumber,
+    ...overrides,
+    batchSize: Math.max(1, Math.floor(fromNumber.batchSize || overrides.batchSize || DEFAULT_TRAINING_OPTIONS.batchSize)),
+    learningRate: Math.max(1e-5, Number(fromNumber.learningRate || overrides.learningRate || DEFAULT_TRAINING_OPTIONS.learningRate)),
+    weightDecay: Math.max(0, Number(fromNumber.weightDecay || overrides.weightDecay || DEFAULT_TRAINING_OPTIONS.weightDecay)),
+    gradientClipNorm: Math.max(0, Number(
+      fromNumber.gradientClipNorm
+      || overrides.gradientClipNorm
+      || DEFAULT_TRAINING_OPTIONS.gradientClipNorm
+    )),
+  };
+}
+
+function createPolicyNetwork(seed = Date.now()) {
+  return createMlp({
+    inputSize: POLICY_FEATURES.length,
+    hiddenSizes: POLICY_HIDDEN_SIZES,
+    outputSize: 1,
+    seed,
   });
-  return next;
 }
 
-function createIdentityWeightTemplate(seed = Date.now()) {
-  const rng = createRng(seed);
-  const total = INFERRED_IDENTITIES.reduce((acc, identity) => acc + (IDENTITY_COUNTS[identity] || 0), 0);
-  const byIdentity = {};
-  INFERRED_IDENTITIES.forEach((identity) => {
-    const prior = Math.log(((IDENTITY_COUNTS[identity] || 1) / total) || 0.25);
-    byIdentity[identity] = [
-      prior + ((rng() - 0.5) * 0.06),
-      1.3 + ((rng() - 0.5) * 0.1),
-      0.25 + ((rng() - 0.5) * 0.05),
-      0.2 + ((rng() - 0.5) * 0.05),
-    ].map(clampWeight);
+function createValueNetwork(seed = Date.now()) {
+  return createMlp({
+    inputSize: VALUE_FEATURES.length,
+    hiddenSizes: VALUE_HIDDEN_SIZES,
+    outputSize: 1,
+    seed,
   });
-  return byIdentity;
 }
 
-function addNoise(weights, rng, scale = 0.05) {
-  return weights.map((value) => clampWeight(value + ((rng() - 0.5) * scale)));
+function createIdentityNetwork(seed = Date.now()) {
+  return createMlp({
+    inputSize: IDENTITY_FEATURES.length,
+    hiddenSizes: IDENTITY_HIDDEN_SIZES,
+    outputSize: INFERRED_IDENTITIES.length,
+    seed,
+  });
+}
+
+function cloneLegacyWeights(weights, size) {
+  return prepareInputVector(Array.isArray(weights) ? weights : [], size);
+}
+
+function convertLegacyPolicyNetwork(weights) {
+  const network = createMlp({
+    inputSize: POLICY_FEATURES.length,
+    hiddenSizes: [],
+    outputSize: 1,
+    seed: 1,
+  });
+  network.layers[0].weights[0] = cloneLegacyWeights(weights, POLICY_FEATURES.length);
+  network.layers[0].biases[0] = 0;
+  return network;
+}
+
+function convertLegacyValueNetwork(weights) {
+  const network = createMlp({
+    inputSize: VALUE_FEATURES.length,
+    hiddenSizes: [],
+    outputSize: 1,
+    seed: 2,
+  });
+  network.layers[0].weights[0] = cloneLegacyWeights(weights, VALUE_FEATURES.length);
+  network.layers[0].biases[0] = 0;
+  return network;
+}
+
+function legacyIdentityWeightsToRow(weights, identity) {
+  const source = Array.isArray(weights) ? weights : [];
+  const row = Array.from({ length: IDENTITY_FEATURES.length }, () => 0);
+  row[0] = Number(source[0] || 0);
+  row[1] = Number(source[2] || 0);
+  row[2] = Number(source[3] || 0);
+  row[7] = Number(source[2] || 0) * 0.2;
+  row[8] = Number(source[3] || 0) * 0.1;
+  if (identity === IDENTITIES.KING) row[3] = Number(source[1] || 0);
+  if (identity === IDENTITIES.ROOK) row[4] = Number(source[1] || 0);
+  if (identity === IDENTITIES.BISHOP) row[5] = Number(source[1] || 0);
+  if (identity === IDENTITIES.KNIGHT) row[6] = Number(source[1] || 0);
+  return row;
+}
+
+function convertLegacyIdentityNetwork(weightsByIdentity = {}) {
+  const network = createMlp({
+    inputSize: IDENTITY_FEATURES.length,
+    hiddenSizes: [],
+    outputSize: INFERRED_IDENTITIES.length,
+    seed: 3,
+  });
+  INFERRED_IDENTITIES.forEach((identity, idx) => {
+    network.layers[0].weights[idx] = legacyIdentityWeightsToRow(weightsByIdentity[identity], identity);
+    network.layers[0].biases[idx] = 0;
+  });
+  return network;
+}
+
+function ensurePolicyModel(model = {}) {
+  if (model.network && Array.isArray(model.network.layers) && model.network.layers.length) {
+    return model;
+  }
+  model.version = 2;
+  model.temperature = Number.isFinite(model.temperature) ? model.temperature : 1.1;
+  model.network = Array.isArray(model.weights)
+    ? convertLegacyPolicyNetwork(model.weights)
+    : createPolicyNetwork(Date.now());
+  delete model.weights;
+  return model;
+}
+
+function ensureValueModel(model = {}) {
+  if (model.network && Array.isArray(model.network.layers) && model.network.layers.length) {
+    return model;
+  }
+  model.version = 2;
+  model.network = Array.isArray(model.weights)
+    ? convertLegacyValueNetwork(model.weights)
+    : createValueNetwork(Date.now());
+  delete model.weights;
+  return model;
+}
+
+function ensureIdentityModel(model = {}) {
+  if (model.network && Array.isArray(model.network.layers) && model.network.layers.length) {
+    return model;
+  }
+  model.version = 2;
+  model.temperature = Number.isFinite(model.temperature) ? model.temperature : 1;
+  model.beamWidth = Number.isFinite(model.beamWidth) ? model.beamWidth : 24;
+  model.network = model.weightsByIdentity
+    ? convertLegacyIdentityNetwork(model.weightsByIdentity)
+    : createIdentityNetwork(Date.now());
+  delete model.weightsByIdentity;
+  return model;
+}
+
+function normalizeModelBundle(modelBundle) {
+  const source = modelBundle || {};
+  source.version = 2;
+  source.policy = ensurePolicyModel(source.policy || {});
+  source.value = ensureValueModel(source.value || {});
+  source.identity = ensureIdentityModel(source.identity || {});
+  return source;
 }
 
 function createDefaultModelBundle(options = {}) {
   const seed = Number.isFinite(options.seed) ? options.seed : Date.now();
-  const rng = createRng(seed);
-  return {
+  return normalizeModelBundle({
+    version: 2,
     policy: {
-      weights: addNoise(DEFAULT_POLICY_WEIGHTS, rng, 0.05),
-      temperature: 1.1,
+      version: 2,
+      temperature: 1,
+      network: createPolicyNetwork(seed + 11),
     },
     value: {
-      weights: addNoise(DEFAULT_VALUE_WEIGHTS, rng, 0.04),
+      version: 2,
+      network: createValueNetwork(seed + 29),
     },
     identity: {
-      weightsByIdentity: createIdentityWeightTemplate(seed + 11),
+      version: 2,
       temperature: 1,
       beamWidth: 24,
+      network: createIdentityNetwork(seed + 47),
     },
-  };
+  });
 }
 
 function cloneModelBundle(modelBundle) {
-  const source = modelBundle || createDefaultModelBundle();
+  const normalized = normalizeModelBundle(modelBundle || createDefaultModelBundle());
   return {
+    version: 2,
     policy: {
-      ...source.policy,
-      weights: cloneWeights(source.policy?.weights),
+      version: 2,
+      temperature: normalized.policy.temperature,
+      network: cloneNetwork(normalized.policy.network),
     },
     value: {
-      ...source.value,
-      weights: cloneWeights(source.value?.weights),
+      version: 2,
+      network: cloneNetwork(normalized.value.network),
     },
     identity: {
-      ...source.identity,
-      weightsByIdentity: cloneIdentityWeights(source.identity?.weightsByIdentity),
+      version: 2,
+      temperature: normalized.identity.temperature,
+      beamWidth: normalized.identity.beamWidth,
+      network: cloneNetwork(normalized.identity.network),
     },
   };
 }
@@ -243,25 +364,47 @@ function countAlivePieces(state, color) {
   return count;
 }
 
+function countStashPieces(state, color) {
+  return Array.isArray(state?.stashes?.[color]) ? state.stashes[color].length : 0;
+}
+
+function getResponsePhaseInfo(state) {
+  const lastAction = Array.isArray(state?.actions) && state.actions.length
+    ? state.actions[state.actions.length - 1]
+    : null;
+  const lastMove = Array.isArray(state?.moves) && state.moves.length
+    ? state.moves[state.moves.length - 1]
+    : null;
+  const lastType = String(lastAction?.type || '').toUpperCase();
+  const movePending = Boolean(lastMove && lastMove.state === MOVE_STATES.PENDING);
+  const responsePhase = Boolean(
+    (lastType === ACTIONS.MOVE || lastType === 'MOVE') && movePending,
+  );
+  const bombPhase = lastType === ACTIONS.BOMB || lastType === 'BOMB';
+  return {
+    responsePhase: responsePhase || bombPhase ? 1 : 0,
+    challengeWindow: responsePhase || bombPhase ? 1 : 0,
+    bombWindow: responsePhase ? 1 : 0,
+  };
+}
+
 function extractStateFeatures(state, perspective, guessedIdentities = null) {
   const opponent = perspective === WHITE ? BLACK : WHITE;
-  // Mobility should be measured for both players regardless of whose turn it is.
   const ownMoves = countMoveOptionsForColor(state, perspective);
   const oppMoves = countMoveOptionsForColor(state, opponent);
-
   const material = summarizeMaterial(state, perspective, guessedIdentities);
   const ownKing = findKing(state, perspective);
   const oppKing = findKing(state, opponent);
-  const ownAlive = ownKing ? 1 : 0;
-  const oppAlive = oppKing ? 1 : 0;
-
   const ownPieces = countAlivePieces(state, perspective);
   const oppPieces = countAlivePieces(state, opponent);
   const maxPlies = Number.isFinite(state.maxPlies) && state.maxPlies > 0 ? state.maxPlies : 120;
-
   const ownKingDistance = ownKing ? distanceToThrone(ownKing) / (RANKS - 1) : 1.5;
   const oppKingDistance = oppKing ? distanceToThrone(oppKing) / (RANKS - 1) : 1.5;
-
+  const daggerDiff = ((state?.daggers?.[perspective] || 0) - (state?.daggers?.[opponent] || 0)) / 3;
+  const stashDiff = (countStashPieces(state, perspective) - countStashPieces(state, opponent)) / 4;
+  const onDeckAdvantage = ((state?.onDecks?.[perspective] ? 1 : 0) - (state?.onDecks?.[opponent] ? 1 : 0));
+  const movesSinceAction = Math.min(1, (Number(state.movesSinceAction || 0) || 0) / 20);
+  const responseInfo = getResponsePhaseInfo(state);
   const materialDiff = (material.own - material.enemy) / 20;
   const mobilityDiff = (ownMoves - oppMoves) / 20;
   const pieceCountDiff = (ownPieces - oppPieces) / 5;
@@ -277,9 +420,14 @@ function extractStateFeatures(state, perspective, guessedIdentities = null) {
     state.toMove === perspective ? 1 : -1,
     pieceCountDiff,
     plyProgress,
-    ownAlive,
-    oppAlive,
+    ownKing ? 1 : 0,
+    oppKing ? 1 : 0,
     kingPressure,
+    daggerDiff,
+    stashDiff,
+    onDeckAdvantage,
+    movesSinceAction,
+    responseInfo.responsePhase,
   ];
 }
 
@@ -305,6 +453,10 @@ function extractActionFeatures(state, perspective, action, guessedIdentities = n
   const isBomb = type === ACTIONS.BOMB || type === 'BOMB';
   const isPass = type === ACTIONS.PASS || type === 'PASS';
   const isOnDeck = type === ACTIONS.ON_DECK || type === 'ON_DECK';
+  const responseInfo = getResponsePhaseInfo(state);
+  const features = Array.isArray(stateFeatures)
+    ? stateFeatures
+    : extractStateFeatures(state, perspective, guessedIdentities);
 
   let capture = 0;
   let captureKing = 0;
@@ -334,31 +486,26 @@ function extractActionFeatures(state, perspective, action, guessedIdentities = n
       const dr = action.to.row - action.from.row;
       const dc = action.to.col - action.from.col;
       distance = Math.sqrt((dr * dr) + (dc * dc)) / 5;
-      const forwardRaw = perspective === WHITE ? dr : -dr;
-      forward = forwardRaw / (RANKS - 1);
+      forward = (perspective === WHITE ? dr : -dr) / (RANKS - 1);
       const centerRow = (RANKS - 1) / 2;
       const centerCol = (FILES - 1) / 2;
       const centerDistance = Math.abs(action.to.row - centerRow) + Math.abs(action.to.col - centerCol);
       targetCenter = 1 - (centerDistance / (RANKS + FILES));
       capture = action.capturePieceId ? 1 : 0;
       if (!capture) {
-        const target = state.board?.[action.to.row]?.[action.to.col];
-        capture = target ? 1 : 0;
+        capture = state.board?.[action.to.row]?.[action.to.col] ? 1 : 0;
       }
       const targetIdentity = getTargetIdentityEstimate(state, perspective, action, guessedIdentities);
       captureKing = (capture && targetIdentity === IDENTITIES.KING) ? 1 : 0;
-
       moverKing = piece.identity === IDENTITIES.KING ? 1 : 0;
       moverRook = piece.identity === IDENTITIES.ROOK ? 1 : 0;
       moverBishop = piece.identity === IDENTITIES.BISHOP ? 1 : 0;
       moverKnight = piece.identity === IDENTITIES.KNIGHT ? 1 : 0;
-
       const declaration = Number.isFinite(action.declaration) ? action.declaration : IDENTITIES.UNKNOWN;
       declaredKing = declaration === IDENTITIES.KING ? 1 : 0;
       declaredRook = declaration === IDENTITIES.ROOK ? 1 : 0;
       declaredBishop = declaration === IDENTITIES.BISHOP ? 1 : 0;
       declaredKnight = declaration === IDENTITIES.KNIGHT ? 1 : 0;
-
       const distBefore = piece.identity === IDENTITIES.KING
         ? (piece.color === WHITE ? (RANKS - 1 - action.from.row) : action.from.row)
         : 0;
@@ -380,12 +527,6 @@ function extractActionFeatures(state, perspective, action, guessedIdentities = n
     onDeckRook = identity === IDENTITIES.ROOK ? 1 : 0;
     onDeckKnight = identity === IDENTITIES.KNIGHT ? 1 : 0;
   }
-
-  const features = Array.isArray(stateFeatures)
-    ? stateFeatures
-    : extractStateFeatures(state, perspective, guessedIdentities);
-  const materialDiff = features[1] || 0;
-  const mobilityDiff = features[2] || 0;
 
   return [
     1,
@@ -413,12 +554,21 @@ function extractActionFeatures(state, perspective, action, guessedIdentities = n
     onDeckRook,
     onDeckKnight,
     kingThroneDelta,
-    materialDiff,
-    mobilityDiff,
+    features[1] || 0,
+    features[2] || 0,
+    responseInfo.responsePhase,
+    responseInfo.challengeWindow,
+    responseInfo.bombWindow,
+    (state?.daggers?.[perspective] || 0) / 3,
+    (state?.daggers?.[perspective === WHITE ? BLACK : WHITE] || 0) / 3,
+    features[12] || 0,
+    features[13] || 0,
   ];
 }
 
 function predictPolicy(modelBundle, state, perspective, actions = null, guessedIdentities = null) {
+  const normalizedBundle = normalizeModelBundle(modelBundle);
+  const model = normalizedBundle.policy;
   const legalActions = Array.isArray(actions) ? actions : getLegalActions(state, perspective);
   if (!legalActions.length) {
     return {
@@ -431,13 +581,13 @@ function predictPolicy(modelBundle, state, perspective, actions = null, guessedI
   }
 
   const stateFeatures = extractStateFeatures(state, perspective, guessedIdentities);
-  const weights = modelBundle?.policy?.weights || [];
   const featureMatrix = legalActions.map((action) => (
     extractActionFeatures(state, perspective, action, guessedIdentities, stateFeatures)
   ));
-  const scores = featureMatrix.map((vector) => dot(weights, vector));
-  const temperature = modelBundle?.policy?.temperature || 1;
-  const probabilities = softmax(scores, temperature);
+  const scores = featureMatrix.map((vector) => (
+    forwardNetwork(model.network, vector)[0] || 0
+  ));
+  const probabilities = softmax(scores, model.temperature || 1);
 
   return {
     actions: legalActions,
@@ -449,9 +599,9 @@ function predictPolicy(modelBundle, state, perspective, actions = null, guessedI
 }
 
 function predictValue(modelBundle, state, perspective, guessedIdentities = null) {
+  const normalizedBundle = normalizeModelBundle(modelBundle);
   const features = extractStateFeatures(state, perspective, guessedIdentities);
-  const weights = modelBundle?.value?.weights || [];
-  const raw = dot(weights, features);
+  const raw = forwardNetwork(normalizedBundle.value.network, features)[0] || 0;
   return {
     value: tanh(raw),
     raw,
@@ -489,28 +639,74 @@ function buildIdentityFeaturesForPiece(state, pieceId) {
   const entries = state.moveHistoryByPiece?.[pieceId] || [];
   const captureSeen = entries.some((entry) => entry && entry.capture) ? 1 : 0;
   const historyDepth = Math.min(1, entries.length / 6);
-  const byIdentity = {};
-  INFERRED_IDENTITIES.forEach((identity) => {
-    byIdentity[identity] = [
+  const truthfulSignals = Math.min(1, entries.filter((entry) => entry?.truthfulChallenge === true).length / 3);
+  const failedSignals = Math.min(1, entries.filter((entry) => (
+    entry
+    && Number.isFinite(entry.revealedIdentity)
+    && entry.declaration !== entry.revealedIdentity
+  )).length / 3);
+  const compatKing = moveCompatibilityScore(entries, IDENTITIES.KING);
+  const compatRook = moveCompatibilityScore(entries, IDENTITIES.ROOK);
+  const compatBishop = moveCompatibilityScore(entries, IDENTITIES.BISHOP);
+  const compatKnight = moveCompatibilityScore(entries, IDENTITIES.KNIGHT);
+
+  return {
+    pieceFeatures: [
       1,
-      moveCompatibilityScore(entries, identity),
       historyDepth,
       captureSeen,
-    ];
-  });
-  return byIdentity;
+      compatKing,
+      compatRook,
+      compatBishop,
+      compatKnight,
+      truthfulSignals,
+      failedSignals,
+    ],
+    featureByIdentity: {
+      [IDENTITIES.KING]: [1, compatKing, historyDepth, captureSeen],
+      [IDENTITIES.ROOK]: [1, compatRook, historyDepth, captureSeen],
+      [IDENTITIES.BISHOP]: [1, compatBishop, historyDepth, captureSeen],
+      [IDENTITIES.KNIGHT]: [1, compatKnight, historyDepth, captureSeen],
+    },
+  };
 }
 
-function predictIdentityForPiece(modelBundle, featureByIdentity) {
-  const weightsByIdentity = modelBundle?.identity?.weightsByIdentity || {};
-  const logits = {};
-  INFERRED_IDENTITIES.forEach((identity) => {
-    const features = featureByIdentity[identity] || IDENTITY_FEATURES.map(() => 0);
-    const weights = weightsByIdentity[identity] || IDENTITY_FEATURES.map(() => 0);
-    logits[identity] = dot(weights, features);
-  });
-  const scores = INFERRED_IDENTITIES.map((identity) => logits[identity]);
-  const probabilities = softmax(scores, modelBundle?.identity?.temperature || 1);
+function legacyFeaturePacketToPieceFeatures(featureByIdentity = {}) {
+  const compatKing = Number(featureByIdentity?.[IDENTITIES.KING]?.[1] || 0);
+  const compatRook = Number(featureByIdentity?.[IDENTITIES.ROOK]?.[1] || 0);
+  const compatBishop = Number(featureByIdentity?.[IDENTITIES.BISHOP]?.[1] || 0);
+  const compatKnight = Number(featureByIdentity?.[IDENTITIES.KNIGHT]?.[1] || 0);
+  const historyDepth = Number(
+    featureByIdentity?.[IDENTITIES.KING]?.[2]
+      || featureByIdentity?.[IDENTITIES.ROOK]?.[2]
+      || 0,
+  );
+  const captureSeen = Number(
+    featureByIdentity?.[IDENTITIES.KING]?.[3]
+      || featureByIdentity?.[IDENTITIES.ROOK]?.[3]
+      || 0,
+  );
+  return [
+    1,
+    historyDepth,
+    captureSeen,
+    compatKing,
+    compatRook,
+    compatBishop,
+    compatKnight,
+    0,
+    0,
+  ];
+}
+
+function predictIdentityForPiece(modelBundle, featurePacket) {
+  const normalizedBundle = normalizeModelBundle(modelBundle);
+  const model = normalizedBundle.identity;
+  const pieceFeatures = Array.isArray(featurePacket?.pieceFeatures)
+    ? featurePacket.pieceFeatures
+    : legacyFeaturePacketToPieceFeatures(featurePacket?.featureByIdentity || featurePacket);
+  const logits = forwardNetwork(model.network, pieceFeatures);
+  const probabilities = softmax(logits, model.temperature || 1);
   const map = {};
   probabilities.forEach((value, idx) => {
     map[INFERRED_IDENTITIES[idx]] = value;
@@ -561,23 +757,20 @@ function buildIdentityHypotheses(modelBundle, perPieceProbabilities, options = {
   pieceIds.sort((a, b) => entropyByPiece[a] - entropyByPiece[b]);
 
   let beam = [{ assignment: {}, logProb: 0 }];
-
   pieceIds.forEach((pieceId) => {
     const probs = perPieceProbabilities[pieceId] || {};
     const candidates = [];
     beam.forEach((entry) => {
       INFERRED_IDENTITIES.forEach((identity) => {
-        const p = probs[identity] || 0;
-        if (p <= 0) return;
+        const probability = probs[identity] || 0;
+        if (probability <= 0) return;
         const assignment = { ...entry.assignment, [pieceId]: identity };
-        const penalty = getAssignmentPenalty(assignment);
         candidates.push({
           assignment,
-          logProb: entry.logProb + Math.log(p) - penalty,
+          logProb: entry.logProb + Math.log(probability) - getAssignmentPenalty(assignment),
         });
       });
     });
-
     if (!candidates.length) {
       beam = beam.map((entry) => ({
         assignment: { ...entry.assignment, [pieceId]: IDENTITIES.ROOK },
@@ -585,7 +778,6 @@ function buildIdentityHypotheses(modelBundle, perPieceProbabilities, options = {
       }));
       return;
     }
-
     candidates.sort((a, b) => b.logProb - a.logProb);
     beam = candidates.slice(0, beamWidth);
   });
@@ -593,23 +785,23 @@ function buildIdentityHypotheses(modelBundle, perPieceProbabilities, options = {
   const maxLog = beam.reduce((best, entry) => (entry.logProb > best ? entry.logProb : best), Number.NEGATIVE_INFINITY);
   const exps = beam.map((entry) => Math.exp(entry.logProb - maxLog));
   const sum = exps.reduce((acc, value) => acc + value, 0);
-
   const normalized = beam.map((entry, idx) => ({
     assignment: entry.assignment,
     probability: sum > 0 ? exps[idx] / sum : (1 / beam.length),
   }));
   normalized.sort((a, b) => b.probability - a.probability);
-
   return normalized.slice(0, hypothesisCount);
 }
 
 function inferIdentityHypotheses(modelBundle, state, perspective, options = {}) {
-  const hiddenPieceIds = getHiddenPieceIds(state, perspective);
+  const revealed = state?.revealedIdentities || {};
+  const hiddenPieceIds = getHiddenPieceIds(state, perspective).filter((pieceId) => !Number.isFinite(revealed[pieceId]));
   if (!hiddenPieceIds.length) {
     return {
       hiddenPieceIds: [],
       perPieceProbabilities: {},
       pieceFeatureByIdentity: {},
+      pieceFeatureVectors: {},
       hypotheses: [{ assignment: {}, probability: 1 }],
       samples: [],
     };
@@ -617,12 +809,14 @@ function inferIdentityHypotheses(modelBundle, state, perspective, options = {}) 
 
   const perPieceProbabilities = {};
   const pieceFeatureByIdentity = {};
+  const pieceFeatureVectors = {};
   const samples = [];
 
   hiddenPieceIds.forEach((pieceId) => {
-    const featureByIdentity = buildIdentityFeaturesForPiece(state, pieceId);
-    pieceFeatureByIdentity[pieceId] = featureByIdentity;
-    const probabilities = predictIdentityForPiece(modelBundle, featureByIdentity);
+    const featurePacket = buildIdentityFeaturesForPiece(state, pieceId);
+    pieceFeatureByIdentity[pieceId] = featurePacket.featureByIdentity;
+    pieceFeatureVectors[pieceId] = featurePacket.pieceFeatures;
+    const probabilities = predictIdentityForPiece(modelBundle, featurePacket);
     perPieceProbabilities[pieceId] = probabilities;
 
     const piece = state.pieces[pieceId];
@@ -630,22 +824,19 @@ function inferIdentityHypotheses(modelBundle, state, perspective, options = {}) 
       samples.push({
         pieceId,
         trueIdentity: piece.identity,
-        featureByIdentity,
+        pieceFeatures: featurePacket.pieceFeatures.slice(),
+        featureByIdentity: featurePacket.featureByIdentity,
         probabilities,
       });
     }
-  });
-
-  const hypotheses = buildIdentityHypotheses(modelBundle, perPieceProbabilities, {
-    count: options.count,
-    beamWidth: options.beamWidth,
   });
 
   return {
     hiddenPieceIds,
     perPieceProbabilities,
     pieceFeatureByIdentity,
-    hypotheses,
+    pieceFeatureVectors,
+    hypotheses: buildIdentityHypotheses(modelBundle, perPieceProbabilities, options),
     samples,
   };
 }
@@ -668,155 +859,210 @@ function applyRiskBiasToHypotheses(hypotheses, values, riskBias = 0.65) {
   const totalWeight = weighted.reduce((acc, item) => acc + item.weight, 0);
   if (totalWeight <= 0) {
     const uniform = 1 / weighted.length;
-    const value = weighted.reduce((acc, item) => acc + (item.value * uniform), 0);
     return {
-      value,
+      value: weighted.reduce((acc, item) => acc + (item.value * uniform), 0),
       weights: weighted.map(() => uniform),
     };
   }
   const weights = weighted.map((item) => item.weight / totalWeight);
-  const value = weighted.reduce((acc, item, idx) => acc + (item.value * weights[idx]), 0);
-  return { value, weights };
+  return {
+    value: weighted.reduce((acc, item, idx) => acc + (item.value * weights[idx]), 0),
+    weights,
+  };
 }
 
-function trainPolicyModel(modelBundle, policySamples, learningRate = 0.01) {
+function createOptimizerState(modelBundle) {
+  const normalizedBundle = normalizeModelBundle(modelBundle);
+  return {
+    policy: createAdamState(normalizedBundle.policy.network),
+    value: createAdamState(normalizedBundle.value.network),
+    identity: createAdamState(normalizedBundle.identity.network),
+  };
+}
+
+function trainPolicyModel(modelBundle, policySamples, optionsOrLearningRate = 0.01) {
   const samples = Array.isArray(policySamples) ? policySamples : [];
   if (!samples.length) {
-    return { samples: 0, loss: 0 };
+    return { samples: 0, loss: 0, optimizerState: null };
   }
-  const lr = Number.isFinite(learningRate) && learningRate > 0 ? learningRate : 0.01;
-  const weights = modelBundle.policy.weights;
+
+  const normalizedBundle = normalizeModelBundle(modelBundle);
+  const model = normalizedBundle.policy;
+  const options = normalizeTrainingOptions(optionsOrLearningRate, {
+    learningRate: Number.isFinite(optionsOrLearningRate) ? optionsOrLearningRate : undefined,
+    batchSize: 16,
+  });
+  const optimizerState = options.optimizerState || createAdamState(model.network);
+  const shuffled = shuffleInPlace(samples, createRng(Date.now() + samples.length));
   let totalLoss = 0;
   let processed = 0;
 
-  samples.forEach((sample) => {
-    const features = sample?.features || [];
-    const target = sample?.target || [];
-    if (!features.length || features.length !== target.length) return;
-    processed += 1;
-    const logits = features.map((vector) => dot(weights, vector));
-    const pred = softmax(logits, modelBundle.policy.temperature || 1);
-    let sampleLoss = 0;
-    for (let m = 0; m < pred.length; m += 1) {
-      const t = target[m] || 0;
-      if (t > 0) {
-        sampleLoss += -t * Math.log(Math.max(pred[m], 1e-9));
-      }
-    }
-    totalLoss += sampleLoss;
+  for (let start = 0; start < shuffled.length; start += options.batchSize) {
+    const batch = shuffled.slice(start, start + options.batchSize);
+    const gradients = zeroGradientBundle(createGradientBundle(model.network));
+    let batchLoss = 0;
+    let batchCount = 0;
 
-    const gradient = Array.from({ length: weights.length }, () => 0);
-    const actionScale = 1 / Math.max(1, pred.length);
-    for (let m = 0; m < pred.length; m += 1) {
-      const delta = (pred[m] || 0) - (target[m] || 0);
-      const vector = features[m];
-      for (let i = 0; i < gradient.length; i += 1) {
-        gradient[i] += delta * (vector[i] || 0) * actionScale;
-      }
-    }
-    for (let i = 0; i < weights.length; i += 1) {
-      weights[i] = clampWeight(weights[i] - (lr * gradient[i]));
-    }
-  });
+    batch.forEach((sample) => {
+      const features = Array.isArray(sample?.features) ? sample.features : [];
+      const target = Array.isArray(sample?.target) ? normalizeTargetProbabilities(sample.target) : [];
+      if (!features.length || features.length !== target.length) return;
 
-  if (!processed) {
-    return { samples: 0, loss: 0 };
+      const caches = [];
+      const logits = features.map((vector) => {
+        const forward = forwardNetwork(model.network, vector, { keepCache: true });
+        caches.push(forward.cache);
+        return forward.output[0] || 0;
+      });
+      const probs = softmax(logits, model.temperature || 1);
+      let sampleLoss = 0;
+      for (let idx = 0; idx < probs.length; idx += 1) {
+        const truth = target[idx] || 0;
+        if (truth > 0) {
+          sampleLoss += -truth * Math.log(Math.max(probs[idx], 1e-9));
+        }
+      }
+      batchLoss += sampleLoss;
+      batchCount += 1;
+
+      for (let idx = 0; idx < probs.length; idx += 1) {
+        const delta = (probs[idx] || 0) - (target[idx] || 0);
+        backpropagateInto(model.network, caches[idx], [delta], gradients);
+      }
+    });
+
+    if (!batchCount) continue;
+    addL2Penalty(gradients, model.network, options.weightDecay);
+    scaleGradientBundle(gradients, 1 / batchCount);
+    clipGradientBundle(gradients, options.gradientClipNorm);
+    applyAdamUpdate(model.network, gradients, optimizerState, options);
+
+    totalLoss += batchLoss;
+    processed += batchCount;
   }
+
   return {
     samples: processed,
-    loss: totalLoss / processed,
+    loss: processed > 0 ? totalLoss / processed : 0,
+    optimizerState,
   };
 }
 
-function trainValueModel(modelBundle, valueSamples, learningRate = 0.01) {
+function trainValueModel(modelBundle, valueSamples, optionsOrLearningRate = 0.01) {
   const samples = Array.isArray(valueSamples) ? valueSamples : [];
   if (!samples.length) {
-    return { samples: 0, loss: 0 };
+    return { samples: 0, loss: 0, optimizerState: null };
   }
-  const lr = Number.isFinite(learningRate) && learningRate > 0 ? learningRate : 0.01;
-  const weights = modelBundle.value.weights;
-  let totalLoss = 0;
 
-  samples.forEach((sample) => {
-    const features = sample?.features || [];
-    const target = Number.isFinite(sample?.target) ? sample.target : 0;
-    if (!features.length) return;
-
-    const raw = dot(weights, features);
-    const pred = tanh(raw);
-    const error = pred - target;
-    totalLoss += error * error;
-    const derivative = 1 - (pred * pred);
-    const scalar = 2 * error * derivative;
-
-    for (let i = 0; i < weights.length; i += 1) {
-      weights[i] = clampWeight(weights[i] - (lr * scalar * (features[i] || 0)));
-    }
+  const normalizedBundle = normalizeModelBundle(modelBundle);
+  const model = normalizedBundle.value;
+  const options = normalizeTrainingOptions(optionsOrLearningRate, {
+    learningRate: Number.isFinite(optionsOrLearningRate) ? optionsOrLearningRate : undefined,
   });
+  const optimizerState = options.optimizerState || createAdamState(model.network);
+  const shuffled = shuffleInPlace(samples, createRng(Date.now() + (samples.length * 3)));
+  let totalLoss = 0;
+  let processed = 0;
+
+  for (let start = 0; start < shuffled.length; start += options.batchSize) {
+    const batch = shuffled.slice(start, start + options.batchSize);
+    const gradients = zeroGradientBundle(createGradientBundle(model.network));
+    let batchLoss = 0;
+    let batchCount = 0;
+
+    batch.forEach((sample) => {
+      const features = Array.isArray(sample?.features) ? sample.features : [];
+      const target = Number.isFinite(sample?.target) ? sample.target : 0;
+      if (!features.length) return;
+      const forward = forwardNetwork(model.network, features, { keepCache: true });
+      const raw = forward.output[0] || 0;
+      const pred = tanh(raw);
+      const error = pred - target;
+      batchLoss += error * error;
+      batchCount += 1;
+      const delta = 2 * error * (1 - (pred * pred));
+      backpropagateInto(model.network, forward.cache, [delta], gradients);
+    });
+
+    if (!batchCount) continue;
+    addL2Penalty(gradients, model.network, options.weightDecay);
+    scaleGradientBundle(gradients, 1 / batchCount);
+    clipGradientBundle(gradients, options.gradientClipNorm);
+    applyAdamUpdate(model.network, gradients, optimizerState, options);
+
+    totalLoss += batchLoss;
+    processed += batchCount;
+  }
 
   return {
-    samples: samples.length,
-    loss: totalLoss / samples.length,
+    samples: processed,
+    loss: processed > 0 ? totalLoss / processed : 0,
+    optimizerState,
   };
 }
 
-function trainIdentityModel(modelBundle, identitySamples, learningRate = 0.01) {
+function trainIdentityModel(modelBundle, identitySamples, optionsOrLearningRate = 0.01) {
   const samples = Array.isArray(identitySamples) ? identitySamples : [];
   if (!samples.length) {
-    return { samples: 0, loss: 0, accuracy: 0 };
+    return { samples: 0, loss: 0, accuracy: 0, optimizerState: null };
   }
-  const lr = Number.isFinite(learningRate) && learningRate > 0 ? learningRate : 0.01;
-  const weightsByIdentity = modelBundle.identity.weightsByIdentity;
+
+  const normalizedBundle = normalizeModelBundle(modelBundle);
+  const model = normalizedBundle.identity;
+  const options = normalizeTrainingOptions(optionsOrLearningRate, {
+    learningRate: Number.isFinite(optionsOrLearningRate) ? optionsOrLearningRate : undefined,
+  });
+  const optimizerState = options.optimizerState || createAdamState(model.network);
+  const shuffled = shuffleInPlace(samples, createRng(Date.now() + (samples.length * 5)));
   let totalLoss = 0;
+  let processed = 0;
   let correct = 0;
 
-  let processed = 0;
+  for (let start = 0; start < shuffled.length; start += options.batchSize) {
+    const batch = shuffled.slice(start, start + options.batchSize);
+    const gradients = zeroGradientBundle(createGradientBundle(model.network));
+    let batchLoss = 0;
+    let batchCount = 0;
 
-  samples.forEach((sample) => {
-    const truth = sample?.trueIdentity;
-    if (!INFERRED_IDENTITIES.includes(truth)) return;
-    processed += 1;
-    const featureByIdentity = sample?.featureByIdentity || {};
-    const logits = {};
-    INFERRED_IDENTITIES.forEach((identity) => {
-      logits[identity] = dot(
-        weightsByIdentity[identity] || IDENTITY_FEATURES.map(() => 0),
-        featureByIdentity[identity] || IDENTITY_FEATURES.map(() => 0),
-      );
-    });
-    const probs = softmax(INFERRED_IDENTITIES.map((identity) => logits[identity]), modelBundle.identity.temperature || 1);
-    let predictedIdentity = INFERRED_IDENTITIES[0];
-    let bestProb = -1;
-    INFERRED_IDENTITIES.forEach((identity, idx) => {
-      if (probs[idx] > bestProb) {
-        bestProb = probs[idx];
-        predictedIdentity = identity;
+    batch.forEach((sample) => {
+      const truth = sample?.trueIdentity;
+      const truthIndex = INFERRED_IDENTITIES.indexOf(truth);
+      if (truthIndex < 0) return;
+
+      const pieceFeatures = Array.isArray(sample?.pieceFeatures)
+        ? sample.pieceFeatures
+        : legacyFeaturePacketToPieceFeatures(sample?.featureByIdentity || {});
+      const forward = forwardNetwork(model.network, pieceFeatures, { keepCache: true });
+      const logits = Array.isArray(forward.output) ? forward.output : [];
+      const probs = softmax(logits, model.temperature || 1);
+      const predictedIndex = probs.reduce((bestIdx, value, idx, arr) => (
+        value > arr[bestIdx] ? idx : bestIdx
+      ), 0);
+      if (predictedIndex === truthIndex) {
+        correct += 1;
       }
-    });
-    if (predictedIdentity === truth) {
-      correct += 1;
-    }
 
-    const truthIndex = INFERRED_IDENTITIES.indexOf(truth);
-    const truthProb = Math.max(1e-9, probs[truthIndex] || 0);
-    totalLoss += -Math.log(truthProb);
-
-    INFERRED_IDENTITIES.forEach((identity, idx) => {
-      const target = identity === truth ? 1 : 0;
-      const delta = (probs[idx] || 0) - target;
-      const features = featureByIdentity[identity] || IDENTITY_FEATURES.map(() => 0);
-      const weights = weightsByIdentity[identity] || IDENTITY_FEATURES.map(() => 0);
-      for (let i = 0; i < weights.length; i += 1) {
-        weights[i] = clampWeight(weights[i] - (lr * delta * (features[i] || 0)));
-      }
-      weightsByIdentity[identity] = weights;
+      batchLoss += -Math.log(Math.max(probs[truthIndex] || 0, 1e-9));
+      batchCount += 1;
+      const gradient = probs.map((value, idx) => value - (idx === truthIndex ? 1 : 0));
+      backpropagateInto(model.network, forward.cache, gradient, gradients);
     });
-  });
+
+    if (!batchCount) continue;
+    addL2Penalty(gradients, model.network, options.weightDecay);
+    scaleGradientBundle(gradients, 1 / batchCount);
+    clipGradientBundle(gradients, options.gradientClipNorm);
+    applyAdamUpdate(model.network, gradients, optimizerState, options);
+
+    totalLoss += batchLoss;
+    processed += batchCount;
+  }
 
   return {
     samples: processed,
     loss: processed > 0 ? totalLoss / processed : 0,
     accuracy: processed > 0 ? (correct / processed) : 0,
+    optimizerState,
   };
 }
 
@@ -841,17 +1087,19 @@ module.exports = {
   VALUE_FEATURES,
   IDENTITY_FEATURES,
   INFERRED_IDENTITIES,
-  createDefaultModelBundle,
+  applyRiskBiasToHypotheses,
   cloneModelBundle,
-  extractStateFeatures,
+  createDefaultModelBundle,
+  createOptimizerState,
   extractActionFeatures,
   extractMoveFeatures: extractActionFeatures,
+  extractStateFeatures,
+  inferIdentityHypotheses,
+  normalizeModelBundle,
+  normalizeTargetProbabilities,
   predictPolicy,
   predictValue,
-  inferIdentityHypotheses,
-  applyRiskBiasToHypotheses,
+  trainIdentityModel,
   trainPolicyModel,
   trainValueModel,
-  trainIdentityModel,
-  normalizeTargetProbabilities,
 };

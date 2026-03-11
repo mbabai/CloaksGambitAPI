@@ -2,10 +2,10 @@ const express = require('express');
 const router = express.Router();
 const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
-const eventBus = require('../../../eventBus');
 const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
 const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
+const { emitGameChanged, emitPlayersBothReady } = require('../../../utils/gameRouteEvents');
 
 router.post('/', async (req, res) => {
   try {
@@ -58,9 +58,7 @@ router.post('/', async (req, res) => {
 
     const finalGame = await Game.findById(updated._id).lean();
 
-    eventBus.emit('gameChanged', {
-      game: finalGame,
-      affectedUsers: (finalGame.players || []).map(p => p.toString()),
+    emitGameChanged(finalGame, {
       initiator: {
         action: 'ready',
         userId: requesterDetails.userId,
@@ -77,10 +75,10 @@ router.post('/', async (req, res) => {
           gameId: finalGame._id.toString(),
           players: (finalGame.players || []).map(p => p.toString())
         });
-        eventBus.emit('players:bothReady', {
-          gameId: finalGame._id.toString(),
-          affectedUsers: (finalGame.players || []).map(p => p.toString()),
-        });
+        emitPlayersBothReady(
+          finalGame._id.toString(),
+          (finalGame.players || []).map((player) => player.toString()),
+        );
       }
     } catch (emitErr) {
       console.error('Error emitting players:bothReady:', emitErr);

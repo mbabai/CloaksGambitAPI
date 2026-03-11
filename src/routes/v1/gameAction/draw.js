@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const getServerConfig = require('../../../utils/getServerConfig');
-const eventBus = require('../../../eventBus');
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
+const { emitGameChanged } = require('../../../utils/gameRouteEvents');
 
 const DRAW_COOLDOWN_MS = 10000;
 
@@ -55,10 +55,7 @@ router.post('/', async (req, res) => {
       game.markModified('drawOffer');
       await game.save();
 
-      eventBus.emit('gameChanged', {
-        game,
-        affectedUsers
-      });
+      emitGameChanged(game, { affectedUsers });
 
       return res.json({ message: 'Draw offer sent' });
     }
@@ -75,10 +72,7 @@ router.post('/', async (req, res) => {
 
       const updatedGame = await game.endGame(null, config.winReasons.get('DRAW'));
 
-      eventBus.emit('gameChanged', {
-        game: typeof updatedGame.toObject === 'function' ? updatedGame.toObject() : updatedGame,
-        affectedUsers
-      });
+      emitGameChanged(updatedGame, { affectedUsers });
 
       return res.json({ message: 'Draw accepted' });
     }
@@ -95,10 +89,7 @@ router.post('/', async (req, res) => {
     game.markModified('drawOfferCooldowns');
     await game.save();
 
-    eventBus.emit('gameChanged', {
-      game,
-      affectedUsers
-    });
+    emitGameChanged(game, { affectedUsers });
 
     return res.json({ message: 'Draw offer declined' });
   } catch (err) {

@@ -21,6 +21,16 @@ describeMlWorkflow('ML runtime', () => {
   let runtime;
   jest.setTimeout(60000);
 
+  async function waitFor(condition, timeoutMs = 10000) {
+    const started = Date.now();
+    while (!condition()) {
+      if ((Date.now() - started) > timeoutMs) {
+        throw new Error('Timed out waiting for condition');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   beforeEach(() => {
     runtime = new MlRuntime({ persist: false });
   });
@@ -94,6 +104,73 @@ describeMlWorkflow('ML runtime', () => {
     const lossHistory = await runtime.getLossHistory({ snapshotId: training.snapshot.id });
     expect(Array.isArray(lossHistory)).toBe(true);
     expect(lossHistory.length).toBeGreaterThan(0);
+  });
+
+  test('background simulation jobs complete and expose live status', async () => {
+    const snapshots = await runtime.listSnapshots();
+    const baseSnapshotId = snapshots[0].id;
+
+    const started = await runtime.startSimulationJob({
+      whiteSnapshotId: baseSnapshotId,
+      blackSnapshotId: baseSnapshotId,
+      gameCount: 1,
+      iterations: 12,
+      maxDepth: 8,
+      hypothesisCount: 4,
+      maxPlies: 60,
+      seed: 5252,
+      label: 'background-sim-test',
+    });
+
+    expect(started.simulation).toBeTruthy();
+    expect(started.taskId).toBeTruthy();
+
+    const live = await runtime.getLiveStatus();
+    expect(live.simulation).toBeTruthy();
+    expect(live.simulation.simulationId).toBe(started.simulation.id);
+
+    await waitFor(() => !runtime.state.activeJobs.simulation, 30000);
+    const completed = await runtime.getSimulation(started.simulation.id);
+    expect(completed).toBeTruthy();
+    expect(completed.status).toBe('completed');
+    expect(completed.gameCount).toBe(1);
+  });
+
+  test('background training jobs complete and create a new snapshot', async () => {
+    const snapshots = await runtime.listSnapshots();
+    const baseSnapshotId = snapshots[0].id;
+
+    const simulation = await runtime.simulateMatches({
+      whiteSnapshotId: baseSnapshotId,
+      blackSnapshotId: baseSnapshotId,
+      gameCount: 1,
+      iterations: 12,
+      maxDepth: 8,
+      hypothesisCount: 4,
+      maxPlies: 60,
+      seed: 5253,
+    });
+
+    const started = await runtime.startTrainingJob({
+      snapshotId: baseSnapshotId,
+      simulationIds: [simulation.simulation.id],
+      epochs: 1,
+      learningRate: 0.01,
+      label: 'background-training-test',
+    });
+
+    expect(started.trainingRun).toBeTruthy();
+    expect(started.taskId).toBeTruthy();
+
+    const live = await runtime.getLiveStatus();
+    expect(live.training).toBeTruthy();
+    expect(live.training.trainingRunId).toBe(started.trainingRun.id);
+
+    await waitFor(() => !runtime.state.activeJobs.training, 30000);
+    const run = runtime.getInMemoryTrainingRun(started.trainingRun.id);
+    expect(run).toBeTruthy();
+    expect(run.status).toBe('completed');
+    expect(run.newSnapshotId).toBeTruthy();
   });
 
   test('training returns a client error when no matching samples exist', async () => {

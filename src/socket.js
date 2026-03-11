@@ -14,6 +14,7 @@ const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/act
 const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
 const { ensureAdminSocketHandshake } = require('./utils/adminAccess');
 const { resolveSessionFromSocketHandshake } = require('./utils/requestSession');
+const { getMlRuntime } = require('./services/ml/runtime');
 
 function initSocket(httpServer) {
   const mlWorkflowEnabled = isMlWorkflowEnabled();
@@ -1304,6 +1305,21 @@ function initSocket(httpServer) {
 
     socket.data = socket.data || {};
     socket.data.spectating = new Set();
+
+    if (mlWorkflowEnabled) {
+      getMlRuntime().getLiveStatus()
+        .then((live) => {
+          if (live?.simulation) {
+            socket.emit('ml:simulationProgress', live.simulation);
+          }
+          if (live?.training) {
+            socket.emit('ml:trainingProgress', live.training);
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to emit initial ML live status to admin socket:', err);
+        });
+    }
 
     socket.on('spectate:join', (payload = {}) => {
       joinSpectateRoom(socket, payload);

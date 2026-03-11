@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const getServerConfig = require('../../../utils/getServerConfig');
-const eventBus = require('../../../eventBus');
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
 const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
+const { emitGameChanged } = require('../../../utils/gameRouteEvents');
 const {
   ensureStoredClockState,
   transitionStoredClockState,
@@ -331,10 +331,7 @@ router.post('/', async (req, res) => {
       await game.endGame(lastMove.player, config.winReasons.get('TRUE_KING'));
       // Check if game ended and return early
       if (!game.isActive) {
-        eventBus.emit('gameChanged', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: (game.players || []).map(p => p.toString()),
-        });
+        emitGameChanged(game);
         return res.json({
           success: wasSuccessful,
           message: 'Game ended: True king victory',
@@ -353,10 +350,7 @@ router.post('/', async (req, res) => {
       await game.endGame(captureBy, config.winReasons.get('CAPTURED_KING'));
       // Check if game ended and return early
       if (!game.isActive) {
-        eventBus.emit('gameChanged', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: (game.players || []).map(p => p.toString()),
-        });
+        emitGameChanged(game);
         return res.json({
           success: wasSuccessful,
           message: 'Game ended: King captured',
@@ -374,10 +368,7 @@ router.post('/', async (req, res) => {
       await game.endGame(winner, config.winReasons.get('DAGGERS'));
       // Check if game ended and return early
       if (!game.isActive) {
-        eventBus.emit('gameChanged', {
-          game: typeof game.toObject === 'function' ? game.toObject() : game,
-          affectedUsers: (game.players || []).map(p => p.toString()),
-        });
+        emitGameChanged(game);
         return res.json({
           success: wasSuccessful,
           message: 'Game ended: dagger penalty',
@@ -388,10 +379,7 @@ router.post('/', async (req, res) => {
       }
     }
 
-    eventBus.emit('gameChanged', {
-      game: typeof game.toObject === 'function' ? game.toObject() : game,
-      affectedUsers: (game.players || []).map(p => p.toString()),
-    });
+    emitGameChanged(game);
 
     res.json({ 
       success: wasSuccessful, 

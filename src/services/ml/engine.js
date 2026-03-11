@@ -797,7 +797,9 @@ function applyChallengeAction(state, action) {
       lastMove.state = MOVE_STATES.RESOLVED;
       updateMoveHistoryEntry(state, lastMove.pieceId, {
         resolvedState: MOVE_STATES.RESOLVED,
+        revealedIdentity: pieceFrom.identity,
       });
+      state.revealedIdentities[pieceFrom.id] = pieceFrom.identity;
       wasSuccessful = true;
       state.onDeckingPlayer = null;
     } else {
@@ -805,6 +807,7 @@ function applyChallengeAction(state, action) {
       updateMoveHistoryEntry(state, lastMove.pieceId, {
         resolvedState: MOVE_STATES.COMPLETED,
         truthfulChallenge: true,
+        revealedIdentity: pieceFrom.identity,
       });
       state.daggers[challenger] += 1;
       state.revealedIdentities[pieceFrom.id] = pieceFrom.identity;

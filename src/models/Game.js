@@ -11,6 +11,7 @@ const {
   applySelect,
 } = require('./inMemoryUtils');
 const { finalizeStoredClockState } = require('../utils/gameClock');
+const { isInternalSimulationActive } = require('../utils/simulationRequestContext');
 
 const defaultConfig = new ServerConfig();
 
@@ -689,6 +690,9 @@ class GameDocument {
     });
 
     await this.save();
+    if (isInternalSimulationActive()) {
+      return this;
+    }
     await GameModel._persistDocument(this);
     await updateMatchAfterGame(this, async () => GameModel.create({
       players: [this.players[1], this.players[0]],
@@ -780,6 +784,9 @@ class GameModel {
   static async _persistDocument(doc) {
     const key = toIdString(doc?._id);
     if (!key) return;
+    if (isInternalSimulationActive()) {
+      return;
+    }
 
     if (!mongoose.connection || mongoose.connection.readyState !== 1) {
       return;
