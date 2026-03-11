@@ -7,6 +7,7 @@ import {
 } from './dashboard.js';
 
 const DEFAULT_FILTER = 'all';
+const MOBILE_HISTORY_BREAKPOINT_PX = 720;
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -104,6 +105,13 @@ export function createPlayerStatsOverlay({
   let overlaySearchInputEl = null;
   let overlaySearchSubmitBtn = null;
   let overlaySearchStatusEl = null;
+  let overlayMatchesPaneEl = null;
+  let overlayMatchesScrollRootEl = null;
+  let historyObserverRoot = null;
+  let mobileSectionTrackEl = null;
+  let mobileSectionButtons = [];
+  let mobileSectionPanels = [];
+  let activeMobileSectionIndex = 0;
   let historyRequestToken = 0;
   let searchRequestToken = 0;
 
@@ -191,22 +199,123 @@ export function createPlayerStatsOverlay({
     overlaySearchInputEl.value = currentUser?.username || '';
   }
 
+  function isMobileHistoryViewport() {
+    return Boolean(
+      typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia(`(max-width: ${MOBILE_HISTORY_BREAKPOINT_PX}px)`).matches
+    );
+  }
+
+  function updateMobileSectionTabs() {
+    if (!Array.isArray(mobileSectionButtons) || mobileSectionButtons.length === 0) return;
+    mobileSectionButtons.forEach((button, index) => {
+      const isActive = index === activeMobileSectionIndex;
+      button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      button.tabIndex = isActive ? 0 : -1;
+      button.classList.toggle('player-history-mobile-tab--active', isActive);
+    });
+    if (!Array.isArray(mobileSectionPanels) || mobileSectionPanels.length === 0) return;
+    mobileSectionPanels.forEach((panel, index) => {
+      if (!panel) return;
+      const isActive = index === activeMobileSectionIndex;
+      panel.classList.toggle('player-history-section--active', isActive);
+      panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+    });
+  }
+
+  function scrollMobileSection(index, { behavior = 'smooth', force = false } = {}) {
+    if (!mobileSectionTrackEl) return;
+    const maxIndex = Math.max(0, mobileSectionButtons.length - 1);
+    const safeIndex = Math.max(0, Math.min(maxIndex, Number.isFinite(index) ? Math.round(index) : 0));
+    activeMobileSectionIndex = safeIndex;
+    if (isMobileHistoryViewport()) {
+      mobileSectionTrackEl.dataset.activeSectionIndex = String(safeIndex);
+    } else {
+      delete mobileSectionTrackEl.dataset.activeSectionIndex;
+    }
+    updateMobileSectionTabs();
+    if (!isMobileHistoryViewport()) {
+      return;
+    }
+    const activePanel = mobileSectionPanels[safeIndex];
+    if (activePanel && typeof activePanel.scrollTo === 'function') {
+      activePanel.scrollTo({ top: 0, behavior: force ? 'auto' : behavior });
+    }
+  }
+
+  function handleMobileSectionTabKeyDown(event) {
+    const currentIndex = mobileSectionButtons.indexOf(event.currentTarget);
+    if (currentIndex === -1) return;
+
+    let nextIndex = null;
+    if (event.key === 'ArrowRight') {
+      nextIndex = Math.min(mobileSectionButtons.length - 1, currentIndex + 1);
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = Math.max(0, currentIndex - 1);
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = mobileSectionButtons.length - 1;
+    }
+
+    if (nextIndex === null) return;
+    event.preventDefault();
+    scrollMobileSection(nextIndex, { behavior: 'smooth', force: true });
+    mobileSectionButtons[nextIndex]?.focus();
+  }
+
+  function getHistoryObserverRoot() {
+    if (isMobileHistoryViewport()) {
+      return overlayMatchesPaneEl || overlayMatchesScrollRootEl || overlayMatchesEl;
+    }
+    return overlayMatchesScrollRootEl || overlayMatchesEl;
+  }
+
+  function syncMobileHistoryLayout({ reset = false } = {}) {
+    if (!mobileSectionTrackEl) return;
+
+    const apply = () => {
+      if (!isMobileHistoryViewport()) {
+        activeMobileSectionIndex = 0;
+        delete mobileSectionTrackEl.dataset.activeSectionIndex;
+        updateMobileSectionTabs();
+        ensureHistoryObserver();
+        return;
+      }
+
+      scrollMobileSection(reset ? 0 : activeMobileSectionIndex, { behavior: 'auto', force: true });
+      ensureHistoryObserver();
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(apply);
+    } else {
+      apply();
+    }
+  }
+
   function disconnectHistoryObserver() {
     if (historyObserver) {
       historyObserver.disconnect();
       historyObserver = null;
     }
+    historyObserverRoot = null;
   }
 
   function ensureHistoryObserver() {
     if (!overlayMatchesEl) return;
+    const nextRoot = getHistoryObserverRoot();
+    if (!nextRoot) return;
     if (!historyScrollSentinel.isConnected) {
       historyScrollSentinel.style.display = historyHasMore ? 'block' : 'none';
       overlayMatchesEl.appendChild(historyScrollSentinel);
     } else {
       historyScrollSentinel.style.display = historyHasMore ? 'block' : 'none';
     }
-    if (historyObserver) return;
+    if (historyObserver && historyObserverRoot === nextRoot) return;
+    disconnectHistoryObserver();
+    historyObserverRoot = nextRoot;
     historyObserver = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         if (!entry.isIntersecting) return;
@@ -219,7 +328,7 @@ export function createPlayerStatsOverlay({
           requestToken: historyRequestToken
         });
       });
-    }, { root: overlayMatchesEl, rootMargin: '200px 0px' });
+    }, { root: nextRoot, rootMargin: '200px 0px' });
     historyObserver.observe(historyScrollSentinel);
   }
 
@@ -246,6 +355,7 @@ export function createPlayerStatsOverlay({
 
   function handleOverlayResize() {
     applyOverlayWidth();
+    syncMobileHistoryLayout();
   }
 
   function ensureOverlay() {
@@ -271,6 +381,8 @@ export function createPlayerStatsOverlay({
     });
 
     const { content, closeButton } = overlay;
+    overlay.dialog.classList.add('player-history-modal');
+    content.classList.add('player-history-modal-content');
     if (closeButton) {
       closeButton.setAttribute('aria-label', 'Close history');
     }
@@ -332,11 +444,62 @@ export function createPlayerStatsOverlay({
 
     content.appendChild(searchWrap);
 
+    const mobileTabs = document.createElement('div');
+    mobileTabs.className = 'player-history-mobile-tabs';
+    mobileTabs.setAttribute('role', 'tablist');
+    mobileTabs.setAttribute('aria-label', 'History sections');
+
+    const sectionViewport = document.createElement('div');
+    sectionViewport.className = 'player-history-sections';
+
+    const sectionTrack = document.createElement('div');
+    sectionTrack.className = 'player-history-sections__track';
+    mobileSectionTrackEl = sectionTrack;
+    sectionViewport.appendChild(sectionTrack);
+
+    const summaryPane = document.createElement('section');
+    summaryPane.className = 'player-history-section player-history-section--summary';
+    summaryPane.id = 'playerHistorySummaryPanel';
+    summaryPane.setAttribute('role', 'tabpanel');
+    summaryPane.setAttribute('aria-labelledby', 'playerHistorySummaryTab');
+
+    const matchesPane = document.createElement('section');
+    matchesPane.className = 'player-history-section player-history-section--matches';
+    matchesPane.id = 'playerHistoryMatchesPanel';
+    matchesPane.setAttribute('role', 'tabpanel');
+    matchesPane.setAttribute('aria-labelledby', 'playerHistoryMatchesTab');
+    overlayMatchesPaneEl = matchesPane;
+    mobileSectionPanels = [summaryPane, matchesPane];
+
+    [
+      { id: 'playerHistorySummaryTab', label: 'Summary', panelId: 'playerHistorySummaryPanel' },
+      { id: 'playerHistoryMatchesTab', label: 'Matches', panelId: 'playerHistoryMatchesPanel' },
+    ].forEach((section, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.id = section.id;
+      button.className = 'player-history-mobile-tab';
+      button.textContent = section.label;
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-controls', section.panelId);
+      button.addEventListener('click', () => {
+        scrollMobileSection(index, { behavior: 'smooth', force: true });
+      });
+      button.addEventListener('keydown', handleMobileSectionTabKeyDown);
+      mobileTabs.appendChild(button);
+      mobileSectionButtons.push(button);
+    });
+
+    sectionTrack.appendChild(summaryPane);
+    sectionTrack.appendChild(matchesPane);
+    content.appendChild(mobileTabs);
+    content.appendChild(sectionViewport);
+
     const eloRow = document.createElement('div');
     eloRow.className = 'history-current-elo';
     eloRow.innerHTML = 'Current ELO: <span id="historyCurrentEloValue">—</span>';
     overlayEloValueEl = eloRow.querySelector('#historyCurrentEloValue');
-    content.appendChild(eloRow);
+    summaryPane.appendChild(eloRow);
 
     const summary = document.createElement('div');
     summary.className = 'history-summary';
@@ -433,7 +596,7 @@ export function createPlayerStatsOverlay({
       customDraws: summary.querySelector('#playerHistoryCustomDraws'),
       customLosses: summary.querySelector('#playerHistoryCustomLosses')
     };
-    content.appendChild(summary);
+    summaryPane.appendChild(summary);
 
     const filters = document.createElement('div');
     filters.className = 'history-filters';
@@ -450,16 +613,18 @@ export function createPlayerStatsOverlay({
         setFilter(target);
       });
     });
-    content.appendChild(filters);
+    matchesPane.appendChild(filters);
 
     const contentScroll = document.createElement('div');
     contentScroll.className = 'history-overlay-content';
+    overlayMatchesScrollRootEl = contentScroll;
     overlayMatchesEl = document.createElement('div');
     overlayMatchesEl.className = 'history-matches';
     overlayMatchesEl.setAttribute('aria-live', 'polite');
     contentScroll.appendChild(overlayMatchesEl);
-    content.appendChild(contentScroll);
+    matchesPane.appendChild(contentScroll);
 
+    updateMobileSectionTabs();
     updateFilterButtons();
     updateHeading();
     updateEloDisplay();
@@ -1038,6 +1203,7 @@ export function createPlayerStatsOverlay({
     updateEloDisplay();
     syncSearchInput();
     instance.show({ initialFocus: overlaySearchInputEl || instance.closeButton });
+    syncMobileHistoryLayout({ reset: true });
     fetchHistory({ userId: currentUser.id, requestToken });
   }
 

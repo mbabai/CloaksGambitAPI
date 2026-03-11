@@ -51,7 +51,6 @@ async function startInternalBots({ port } = {}) {
   const serverUrl = resolveServerUrl(port);
   const difficulties = parseDifficulties();
   const secret = process.env.BOT_SERVICE_SECRET || '';
-  const heartbeatInterval = Number(process.env.BOT_STATUS_INTERVAL ?? '10000');
   console.log('[bot-runtime] starting internal bot clients', { serverUrl, difficulties });
   startPromise = Promise.all(
     difficulties.map(async (difficulty) => {
@@ -60,7 +59,6 @@ async function startInternalBots({ port } = {}) {
           serverUrl,
           difficulty,
           secret,
-          heartbeatInterval,
         });
         activeClients.set(difficulty, client);
         return client;

@@ -4,7 +4,7 @@ const Match = require('../../../models/Match');
 const Game = require('../../../models/Game');
 const User = require('../../../models/User');
 const eventBus = require('../../../eventBus');
-const ensureAdminSecret = require('../../../utils/adminSecret');
+const { ensureAdminRequest } = require('../../../utils/adminAccess');
 const toObjectId = require('../../../utils/toObjectId');
 
 function computeEloAdjustment(startElo, endElo) {
@@ -18,7 +18,8 @@ function computeEloAdjustment(startElo, endElo) {
 
 router.post('/', async (req, res) => {
   try {
-    if (!ensureAdminSecret(req, res)) return;
+    const adminSession = await ensureAdminRequest(req, res);
+    if (!adminSession) return;
 
     const matchId = req.body?.matchId;
     if (!matchId) {

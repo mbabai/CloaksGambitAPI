@@ -29,12 +29,14 @@
 
 ## Auth and Identity
 - HTTP auth routes live in `src/routes/auth/google.js`.
-- Socket auth accepts a JWT token first and falls back to `ensureUser()` guest creation when no real session is available.
-- The browser depends on a readable `cgToken` cookie plus `localStorage['cg_token']`. Any move toward httpOnly-only tokens would require a coordinated browser and socket handshake redesign.
+- `src/utils/requestSession.js` is now the shared identity resolver for HTTP routes and Socket.IO handshakes.
+- Guest creation is server-owned. The browser should establish a session through `/api/auth/session`, then reuse the resulting cookies; sockets no longer accept a raw fallback `userId`.
+- Admin access is server-enforced through the authenticated Google account email `marcellbabai@gmail.com`, including `/admin`, `/ml-admin`, admin APIs, and the `/admin` Socket.IO namespace.
 
 ## Recent Refactors Worth Knowing
 - Clock authority now lives on `game.clockState`, not only on action replay. Read `src/utils/gameClock.js` and `docs/clock-authority-debug-execplan.md` before changing live clock behavior.
 - The auth/session path now repairs real-user cookies in development and keeps `ensureUser()` from turning real accounts back into guests.
+- The browser no longer mirrors JWT auth into `localStorage` for fetch or socket auth. Requests and sockets now rely on server-owned cookies, while harmless UX state such as queue timers can still live in local storage.
 - Startup Mongo behavior changed in March 2026 to stop mutating Atlas URIs and instead retry with explicit `dbName` plus optional `authSource=admin`.
 
 ## Editing Guidance

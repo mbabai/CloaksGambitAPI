@@ -1,25 +1,5 @@
-const TOKEN_STORAGE_KEY = 'cg_token';
-
-function getStoredAuthToken() {
-  try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY);
-  } catch (err) {
-    console.warn('Unable to access localStorage for auth token', err);
-    return null;
-  }
-}
-
-function buildAuthHeaders(base = {}) {
-  const headers = { ...base };
-  const token = getStoredAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  return headers;
-}
-
 function authFetch(url, options = {}) {
-  const headers = buildAuthHeaders(options.headers || {});
+  const headers = { ...(options.headers || {}) };
   return fetch(url, { credentials: 'include', ...options, headers });
 }
 
@@ -82,12 +62,6 @@ function persistIdentity({ userId, username }) {
 
 async function sendQueueRequest(path, payload = {}) {
   const body = { ...payload };
-  if (!body.userId) {
-    const stored = getStoredUserId();
-    if (stored) {
-      body.userId = stored;
-    }
-  }
 
   const res = await authFetch(path, {
     method: 'POST',

@@ -191,6 +191,7 @@ const getServerConfig = require('./utils/getServerConfig');
 const { startInternalBots } = require('./services/bots/internalBots');
 const { startGuestCleanupTask } = require('./services/guestCleanup');
 const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
+const { ensureAdminRequest } = require('./utils/adminAccess');
 
 const mlWorkflowEnabled = isMlWorkflowEnabled();
 
@@ -236,12 +237,20 @@ app.get('/favicon.ico', (req, res) => {
 app.get(['/', '/index.html'], (req, res) => {
   sendVersionedHtml(res, INDEX_HTML_PATH);
 });
-app.get(['/admin', '/admin.html'], (req, res) => {
+app.get(['/admin', '/admin.html'], async (req, res) => {
+  const adminSession = await ensureAdminRequest(req, res);
+  if (!adminSession) {
+    return;
+  }
   sendVersionedHtml(res, ADMIN_HTML_PATH);
 });
-app.get(['/ml-admin', '/ml-admin.html'], (req, res) => {
+app.get(['/ml-admin', '/ml-admin.html'], async (req, res) => {
   if (!mlWorkflowEnabled) {
     return res.status(404).json({ message: 'Not found' });
+  }
+  const adminSession = await ensureAdminRequest(req, res);
+  if (!adminSession) {
+    return;
   }
   return sendVersionedHtml(res, ML_ADMIN_HTML_PATH);
 });

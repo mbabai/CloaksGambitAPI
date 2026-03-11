@@ -61,13 +61,14 @@ npm start
 ## WebSocket Connection
 
 Real-time updates are delivered over a Socket.IO connection. Clients should
-connect with their user ID to receive personalized events:
+establish a normal browser session first, then connect with cookies enabled so
+the server can resolve the player or guest identity from the session:
 
 ```javascript
 import { io } from "socket.io-client";
 
 const socket = io("http://localhost:3000", {
-  auth: { userId: "<USER_ID>" }
+  withCredentials: true
 });
 
 socket.on("initialState", ({ queued, games }) => {
@@ -100,6 +101,9 @@ clock baseline.
 Socket.IO automatically attempts to reconnect when the connection drops.
 For best results, listen for `disconnect` and `reconnect` events and refresh
 any application state after reconnecting.
+
+The browser client should not mirror the auth JWT into `localStorage`. Fetches
+and sockets are expected to rely on the server-owned session cookies.
 
 ## Local Clock Debugging
 

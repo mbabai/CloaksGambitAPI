@@ -2,11 +2,12 @@ const express = require('express');
 const router = express.Router();
 const User = require('../../../models/User');
 const eventBus = require('../../../eventBus');
-const ensureAdminSecret = require('../../../utils/adminSecret');
+const { ensureAdminRequest } = require('../../../utils/adminAccess');
 
 router.post('/', async (req, res) => {
   try {
-    if (!ensureAdminSecret(req, res)) return;
+    const adminSession = await ensureAdminRequest(req, res);
+    if (!adminSession) return;
 
     const result = await User.deleteMany({});
 

@@ -1,12 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
 const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
-const { resolveUserFromRequest } = require('../../../utils/authTokens');
-const User = require('../../../models/User');
+const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const {
   ensureStoredClockState,
   transitionStoredClockState,
@@ -17,34 +15,14 @@ const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
 router.post('/', async (req, res) => {
   try {
     const { gameId, color, pieces, onDeck } = req.body;
-
-    const requester = await resolveUserFromRequest(req).catch(() => null);
-    let requesterRecord = null;
-    if (requester?.userId) {
-      requesterRecord = await User.findById(requester.userId).lean().catch(() => null);
-    }
-    const requesterDetails = {
-      userId: requester?.userId || null,
-      username: requester?.username || requesterRecord?.username || null,
-      isBot: requesterRecord?.isBot || false,
-      botDifficulty: requesterRecord?.botDifficulty || null,
-    };
+    const context = await requireGamePlayerContext(req, res, { gameId, color });
+    if (!context) return;
+    const { game, color: normalizedColor, requesterDetails } = context;
     debugLog('[gameAction:setup] incoming request', {
       gameId,
-      color,
+      color: normalizedColor,
       ...requesterDetails,
     });
-
-    const game = await Game.findById(gameId);
-    if (!game) {
-      return res.status(404).json({ message: 'Game not found' });
-    }
-
-    // Validate color
-    const normalizedColor = parseInt(color, 10);
-    if (normalizedColor !== 0 && normalizedColor !== 1) {
-      return res.status(400).json({ message: 'Invalid color' });
-    }
 
     // Check if setup is already complete for this color
     if (game.setupComplete[normalizedColor]) {
@@ -272,7 +250,8 @@ router.post('/', async (req, res) => {
 
     res.json({ message: 'Setup completed successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
+    res.status(statusCode).json({ message: err.message });
   }
 });
 

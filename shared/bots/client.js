@@ -98,14 +98,11 @@ async function registerBot(serverUrl, difficulty, secret) {
   return res.json();
 }
 
-async function startBotClient({ serverUrl, difficulty = 'easy', secret = '', heartbeatInterval = 10000 } = {}) {
+async function startBotClient({ serverUrl, difficulty = 'easy', secret = '' } = {}) {
   const registration = await registerBot(serverUrl, difficulty, secret);
   console.log('[bot] registered as', registration.username);
   const client = new BotClient(serverUrl, registration.token, registration.userId, difficulty);
   client.start();
-  if (heartbeatInterval > 0) {
-    setInterval(() => console.log('[bot] heartbeat', new Date().toISOString()), heartbeatInterval);
-  }
   return client;
 }
 

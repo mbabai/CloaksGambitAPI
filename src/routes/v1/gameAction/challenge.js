@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
 const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
 const {
@@ -15,18 +15,11 @@ const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
 router.post('/', async (req, res) => {
   try {
     const { gameId, color } = req.body;
+    const context = await requireGamePlayerContext(req, res, { gameId, color });
+    if (!context) return;
+    const { game, color: normalizedColor } = context;
     
-    debugLog('Challenge request:', { gameId, color });
-
-    const game = await Game.findById(gameId);
-    if (!game) {
-      return res.status(404).json({ message: 'Game not found' });
-    }
-
-    const normalizedColor = parseInt(color, 10);
-    if (normalizedColor !== 0 && normalizedColor !== 1) {
-      return res.status(400).json({ message: 'Invalid color' });
-    }
+    debugLog('Challenge request:', { gameId, color: normalizedColor });
 
     const config = await getServerConfig();
     const now = Date.now();

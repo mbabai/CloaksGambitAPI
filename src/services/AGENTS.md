@@ -24,6 +24,7 @@
 
 ## Guest Cleanup
 - `guestCleanup.js` deletes guest users whose `lastDisconnectedAt` is older than 24 hours.
+- The cleanup now skips any guest record still referenced by a live or historical `Game`/`Match`, so active boards and history views keep stable player identities.
 - Startup begins the cleanup loop only after the database connection succeeds.
 
 ## Change Discipline

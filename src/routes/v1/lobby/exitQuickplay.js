@@ -1,21 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const eventBus = require('../../../eventBus');
-const ensureUser = require('../../../utils/ensureUser');
-const { resolveUserFromRequest } = require('../../../utils/authTokens');
+const { resolveLobbySession } = require('../../../utils/lobbyAccess');
 const lobbyStore = require('../../../state/lobby');
 
 router.post('/', async (req, res) => {
   try {
-    let { userId } = req.body || {};
-    let userInfo = await resolveUserFromRequest(req);
-
-    if (userInfo && userInfo.userId) {
-      userId = userInfo.userId;
-    } else {
-      userInfo = await ensureUser(userId);
-      userId = userInfo.userId;
-    }
+    const userInfo = await resolveLobbySession(req, res);
+    if (!userInfo) return;
+    const userId = userInfo.userId;
 
     const { removed, state } = lobbyStore.removeFromQueue('quickplay', userId);
     if (removed) {

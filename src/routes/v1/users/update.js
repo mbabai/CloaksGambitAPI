@@ -2,15 +2,27 @@ const express = require('express');
 const router = express.Router();
 const User = require('../../../models/User');
 const eventBus = require('../../../eventBus');
-const { buildAuthCookieOptions } = require('../../../utils/authCookies');
-const { createAuthToken, TOKEN_COOKIE_NAME } = require('../../../utils/authTokens');
+const { isAdminSession } = require('../../../utils/adminAccess');
+const {
+  applyAuthenticatedCookies,
+  resolveSessionFromRequest,
+} = require('../../../utils/requestSession');
 
 // PATCH /v1/users/update
 router.patch('/', async (req, res) => {
   try {
     const { userId, username, email } = req.body;
-    if (!userId) {
+    const session = await resolveSessionFromRequest(req, { createGuest: false });
+    if (!session?.userId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+    const adminSession = isAdminSession(session);
+    const targetUserId = adminSession && userId ? userId : session.userId;
+    if (!targetUserId) {
       return res.status(400).json({ message: 'userId is required' });
+    }
+    if (!adminSession && userId && String(userId) !== String(session.userId)) {
+      return res.status(403).json({ message: 'Forbidden' });
     }
 
     const update = {};
@@ -21,19 +33,24 @@ router.patch('/', async (req, res) => {
         return res.status(400).json({ message: 'Username must be between 3 and 18 characters' });
       }
       const existing = await User.findOne({ username: trimmed });
-      if (existing && existing._id.toString() !== userId) {
+      if (existing && existing._id.toString() !== targetUserId) {
         return res.status(409).json({ message: 'Username already taken' });
       }
       update.username = trimmed;
     }
 
-    if (email) update.email = email;
+    if (email !== undefined) {
+      if (!adminSession && String(targetUserId) !== String(session.userId)) {
+        return res.status(403).json({ message: 'Forbidden' });
+      }
+      update.email = email;
+    }
 
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ message: 'No fields to update' });
     }
 
-    const user = await User.findByIdAndUpdate(userId, update, { new: true });
+    const user = await User.findByIdAndUpdate(targetUserId, update, { new: true });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -42,18 +59,23 @@ router.patch('/', async (req, res) => {
       const payload = { userId: user._id.toString(), username: user.username };
       eventBus.emit('user:updated', payload);
 
-      try {
-        const cookieOptions = buildAuthCookieOptions();
-        res.cookie('userId', payload.userId, cookieOptions);
-        res.cookie('username', user.username, cookieOptions);
-        const token = createAuthToken(user);
-        res.cookie(TOKEN_COOKIE_NAME, token, { ...cookieOptions, httpOnly: false });
-      } catch (cookieErr) {
-        console.warn('Failed to refresh auth cookies after username update:', cookieErr);
+      if (String(user._id) === String(session.userId) && !session.isGuest) {
+        try {
+          applyAuthenticatedCookies(req, res, user);
+        } catch (cookieErr) {
+          console.warn('Failed to refresh auth cookies after username update:', cookieErr);
+        }
       }
     }
 
-    res.json(user);
+    res.json({
+      _id: user._id,
+      username: user.username,
+      elo: user.elo,
+      isBot: Boolean(user.isBot),
+      isGuest: Boolean(user.isGuest),
+      email: adminSession || String(user._id) === String(session.userId) ? user.email || '' : undefined,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

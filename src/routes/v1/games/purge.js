@@ -3,11 +3,12 @@ const router = express.Router();
 const Game = require('../../../models/Game');
 const eventBus = require('../../../eventBus');
 const lobbyStore = require('../../../state/lobby');
-const ensureAdminSecret = require('../../../utils/adminSecret');
+const { ensureAdminRequest } = require('../../../utils/adminAccess');
 
 router.post('/', async (req, res) => {
 	try {
-                if (!ensureAdminSecret(req, res)) return;
+                const adminSession = await ensureAdminRequest(req, res);
+                if (!adminSession) return;
 
                 const result = await Game.deleteMany({});
                 const before = lobbyStore.getState();

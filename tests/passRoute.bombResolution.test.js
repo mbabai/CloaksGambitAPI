@@ -4,10 +4,14 @@ jest.mock('../src/models/Game', () => ({
 
 jest.mock('../src/utils/getServerConfig', () => jest.fn());
 jest.mock('../src/eventBus', () => ({ emit: jest.fn() }));
+jest.mock('../src/utils/gameAccess', () => ({
+  requireGamePlayerContext: jest.fn(),
+}));
 
 const sharedConstants = require('../shared/constants');
 const Game = require('../src/models/Game');
 const getServerConfig = require('../src/utils/getServerConfig');
+const { requireGamePlayerContext } = require('../src/utils/gameAccess');
 const passRouter = require('../src/routes/v1/gameAction/pass');
 
 function extractPostHandler(router) {
@@ -98,7 +102,16 @@ describe('pass route bomb resolution', () => {
       },
     };
 
-    Game.findById.mockResolvedValue(game);
+    requireGamePlayerContext.mockResolvedValue({
+      game,
+      color: 0,
+      requesterDetails: {
+        userId: 'player-0',
+        username: 'Player0',
+        isBot: false,
+        botDifficulty: null,
+      },
+    });
 
     const response = await callPost(handler, {
       gameId: game._id,

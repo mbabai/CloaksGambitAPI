@@ -3,8 +3,6 @@ const Game = require('./models/Game');
 const Match = require('./models/Match');
 const maskGameForColor = require('./utils/gameView');
 const eventBus = require('./eventBus');
-const ensureUser = require('./utils/ensureUser');
-const { resolveUserFromToken } = require('./utils/authTokens');
 const User = require('./models/User');
 const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
@@ -14,6 +12,8 @@ const { buildClockPayload } = require('./utils/gameClock');
 const { appendLocalDebugLog } = require('./utils/localDebugLogger');
 const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/activeMatches');
 const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
+const { ensureAdminSocketHandshake } = require('./utils/adminAccess');
+const { resolveSessionFromSocketHandshake } = require('./utils/requestSession');
 
 function initSocket(httpServer) {
   const mlWorkflowEnabled = isMlWorkflowEnabled();
@@ -506,6 +506,45 @@ function initSocket(httpServer) {
   const defaultNamespace = io.of('/');
   // Admin namespace for dashboard metrics
   const adminNamespace = io.of('/admin');
+  let adminMetricsTimer = null;
+
+  function scheduleAdminMetricsEmit(delayMs = 25) {
+    if (adminMetricsTimer) return;
+    adminMetricsTimer = setTimeout(() => {
+      adminMetricsTimer = null;
+      emitAdminMetrics().catch((err) => {
+        console.error('Error emitting scheduled admin metrics:', err);
+      });
+    }, delayMs);
+  }
+
+  defaultNamespace.use(async (socket, next) => {
+    try {
+      const session = await resolveSessionFromSocketHandshake(socket.handshake, { createGuest: false });
+      if (!session?.userId) {
+        return next(new Error('Unauthorized'));
+      }
+      socket.data = socket.data || {};
+      socket.data.session = session;
+      return next();
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  adminNamespace.use(async (socket, next) => {
+    try {
+      const session = await ensureAdminSocketHandshake(socket.handshake);
+      if (!session?.userId) {
+        return next(new Error('Forbidden'));
+      }
+      socket.data = socket.data || {};
+      socket.data.session = session;
+      return next();
+    } catch (err) {
+      return next(err);
+    }
+  });
 
   function getRoomSize(adapter, roomName) {
     if (!adapter || !roomName) return 0;
@@ -632,7 +671,7 @@ function initSocket(httpServer) {
     lobbyState.botQueue = newBots;
 
     // Emit updated metrics to admin dashboard
-    emitAdminMetrics();
+    scheduleAdminMetricsEmit();
   });
 
   eventBus.on('match:created', (payload) => {
@@ -651,7 +690,7 @@ function initSocket(httpServer) {
   eventBus.on('match:ended', (payload) => {
     if (!payload) return;
     cleanupMatchTracking(payload.matchId);
-    emitAdminMetrics();
+    scheduleAdminMetricsEmit();
     if (payload.matchId) {
       emitSpectateUpdate(payload.matchId).catch((err) => {
         console.error('Error emitting spectate update after match end:', err);
@@ -693,7 +732,7 @@ function initSocket(httpServer) {
   }
 
   eventBus.on('match:updated', (payload) => {
-    emitAdminMetrics();
+    scheduleAdminMetricsEmit();
     try {
       const normalized = buildAdminMatchPayload(payload || {});
       if (normalized) {
@@ -720,7 +759,7 @@ function initSocket(httpServer) {
       const message = { userId: id, username };
       io.emit('user:nameUpdated', message);
       adminNamespace.emit('user:nameUpdated', message);
-      emitAdminMetrics();
+      scheduleAdminMetricsEmit();
     } catch (err) {
       console.error('Error broadcasting user update:', err);
     }
@@ -917,7 +956,7 @@ function initSocket(httpServer) {
   });
 
   // Allow other parts of the app to request an on-demand admin metrics refresh
-  eventBus.on('adminRefresh', () => emitAdminMetrics());
+  eventBus.on('adminRefresh', () => scheduleAdminMetricsEmit());
 
   if (mlWorkflowEnabled) {
     eventBus.on('ml:trainingProgress', (payload) => {
@@ -938,37 +977,17 @@ function initSocket(httpServer) {
   }
 
   io.on('connection', async (socket) => {
-    const { token, userId: providedUserId } = socket.handshake.auth || {};
-    let userId = providedUserId;
-    let userInfo = null;
-    let authenticated = false;
-
-    if (token) {
-      try {
-        userInfo = await resolveUserFromToken(token);
-        if (userInfo && userInfo.userId) {
-          userId = userInfo.userId;
-          authenticated = !userInfo.isGuest;
-        }
-      } catch (err) {
-        console.warn('[socket] Failed to resolve user from token', { socketId: socket.id, message: err?.message });
-      }
+    const session = socket.data?.session || null;
+    const userId = session?.userId;
+    if (!userId) {
+      return socket.disconnect(true);
     }
-
-    if (!userInfo) {
-      try {
-        userInfo = await ensureUser(userId);
-        userId = userInfo.userId;
-      } catch (err) {
-        console.error('Failed to ensure user account:', err);
-        return socket.disconnect(true);
-      }
-    }
+    const authenticated = Boolean(session?.authenticated && !session?.isGuest);
 
     const userRecord = await User.findById(userId).lean().catch(() => null);
     const isBotUser = Boolean(userRecord?.isBot);
-    const isGuestUser = Boolean(userInfo?.isGuest ?? userRecord?.isGuest);
-    const usernameForLog = userRecord?.username || userInfo?.username;
+    const isGuestUser = Boolean(session?.isGuest ?? userRecord?.isGuest);
+    const usernameForLog = userRecord?.username || session?.username;
     const connectionLabel = authenticated ? 'logged-in' : 'anonymous';
     console.log('[socket] connection established', {
       socketId: socket.id,
@@ -985,9 +1004,9 @@ function initSocket(httpServer) {
       try { prev.disconnect(true) } catch (_) {}
     }
     clients.set(userId, socket);
-    setConnectedUsername(userId, userInfo.username);
+    setConnectedUsername(userId, session.username);
     markPlayerConnectedToAllMatches(userId);
-    socket.emit('user:init', { userId, username: userInfo.username, guest: isGuestUser });
+    socket.emit('user:init', { userId, username: session.username, guest: isGuestUser });
     socket.data = socket.data || {};
     socket.data.isBot = isBotUser;
     socket.data.isGuest = isGuestUser;
@@ -1005,7 +1024,7 @@ function initSocket(httpServer) {
     socket.data.spectating = new Set();
 
     // Emit updated metrics to admin dashboard on new connection
-    emitAdminMetrics();
+    scheduleAdminMetricsEmit();
 
     try {
       const lobby = lobbyStore.getState();
@@ -1143,7 +1162,7 @@ function initSocket(httpServer) {
 
         const targetSocket = clients.get(targetId);
         const targetUsername = userIdToUsername.get(targetId) || trimmed;
-        const inviterName = userIdToUsername.get(inviterId) || userInfo.username;
+        const inviterName = userIdToUsername.get(inviterId) || session.username;
 
         socket.emit('custom:inviteResult', {
           inviteId,
@@ -1269,15 +1288,19 @@ function initSocket(httpServer) {
         }, 3000);
       }
       // Emit updated metrics to admin dashboard
-      emitAdminMetrics();
+      scheduleAdminMetricsEmit();
     });
   });
 
   // Admin namespace connections
   adminNamespace.on('connection', (socket) => {
-    console.log('Admin connected', socket.id);
+    console.log('Admin connected', {
+      socketId: socket.id,
+      userId: socket.data?.session?.userId || null,
+      email: socket.data?.session?.email || socket.data?.session?.user?.email || null,
+    });
     // Send initial metrics snapshot
-    emitAdminMetrics();
+    scheduleAdminMetricsEmit(0);
 
     socket.data = socket.data || {};
     socket.data.spectating = new Set();
@@ -1300,6 +1323,9 @@ function initSocket(httpServer) {
 
   async function emitAdminMetrics() {
     try {
+      if ((adminNamespace?.sockets?.size || 0) === 0) {
+        return;
+      }
       const connectedEntries = Array.from(clients.entries());
       const connectedIds = [];
       let connectedUserCount = 0;
@@ -1327,7 +1353,7 @@ function initSocket(httpServer) {
 
       try {
         const results = await fetchMatchList({ status: 'active' });
-        matchesList = Array.isArray(results) ? results : [];
+        matchesList = Array.isArray(results?.items) ? results.items : [];
       } catch (err) {
         console.error('Error fetching active matches for admin metrics:', err);
       }

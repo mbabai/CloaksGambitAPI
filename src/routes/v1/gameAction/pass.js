@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const {
   ensureStoredClockState,
   transitionStoredClockState,
@@ -18,18 +18,12 @@ const {
 router.post('/', async (req, res) => {
   try {
     const { gameId, color } = req.body;
-
-    const game = await Game.findById(gameId);
-    if (!game) {
-      return res.status(404).json({ message: 'Game not found' });
-    }
+    const context = await requireGamePlayerContext(req, res, { gameId, color });
+    if (!context) return;
+    const { game, color: normalizedColor } = context;
 
     const config = await getServerConfig();
     const now = Date.now();
-    const normalizedColor = parseInt(color, 10);
-    if (normalizedColor !== 0 && normalizedColor !== 1) {
-      return res.status(400).json({ message: 'Invalid color' });
-    }
     ensureStoredClockState(game, {
       now,
       setupActionType: config.actions.get('SETUP'),

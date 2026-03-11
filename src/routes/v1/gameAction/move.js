@@ -1,12 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
 const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
-const { resolveUserFromRequest } = require('../../../utils/authTokens');
-const User = require('../../../models/User');
+const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const {
   ensureStoredClockState,
   transitionStoredClockState,
@@ -24,21 +22,12 @@ const {
 router.post('/', async (req, res) => {
   try {
     const { gameId, color, from, to, declaration } = req.body;
-
-    const requester = await resolveUserFromRequest(req).catch(() => null);
-    let requesterRecord = null;
-    if (requester?.userId) {
-      requesterRecord = await User.findById(requester.userId).lean().catch(() => null);
-    }
-    const requesterDetails = {
-      userId: requester?.userId || null,
-      username: requester?.username || requesterRecord?.username || null,
-      isBot: requesterRecord?.isBot || false,
-      botDifficulty: requesterRecord?.botDifficulty || null,
-    };
+    const context = await requireGamePlayerContext(req, res, { gameId, color });
+    if (!context) return;
+    const { game, color: normalizedColor, requesterDetails } = context;
     debugLog('[gameAction:move] incoming request', {
       gameId,
-      color,
+      color: normalizedColor,
       from,
       to,
       declaration,
@@ -53,21 +42,12 @@ router.post('/', async (req, res) => {
       botDifficulty: requesterDetails.botDifficulty,
     };
 
-    const game = await Game.findById(gameId);
-    if (!game) {
-      return res.status(404).json({ message: 'Game not found' });
-    }
-
     if (!game.isActive) {
       return res.status(400).json({ message: 'Game is not active' });
     }
 
     const config = await getServerConfig();
     const now = Date.now();
-    const normalizedColor = parseInt(color, 10);
-    if (normalizedColor !== 0 && normalizedColor !== 1) {
-      return res.status(400).json({ message: 'Invalid color' });
-    }
 
     ensureStoredClockState(game, {
       now,

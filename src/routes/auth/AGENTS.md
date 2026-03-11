@@ -13,7 +13,8 @@
   - `username`
   - `photo`
   - `cgToken`
-- `cgToken` is intentionally readable by browser JavaScript (`httpOnly: false`) because the current client copies it into `localStorage['cg_token']` for `fetch()` headers and Socket.IO auth. Do not change that casually.
+- `cgToken` is now `httpOnly` and server-owned. Browser fetches and sockets should rely on cookies rather than copying the JWT into JavaScript storage.
+- OAuth now also uses a short-lived `cgOAuthState` cookie plus a nonce embedded in the `state` payload, and the callback rejects mismatches.
 - Cookie flags come from `src/utils/authCookies.js` and the env vars:
   - `AUTH_COOKIE_SAME_SITE`
   - `AUTH_COOKIE_SECURE`
@@ -31,10 +32,11 @@
   3. Guest fallback through `ensureUser()`.
 - The recovery step also repairs bad `isGuest` flags on real users and bots.
 - `ensureUser()` was updated at the same time so real-email accounts are preserved instead of normalized into guest data.
+- Queue and socket guest flows now reuse the same request/session helper rather than accepting body or handshake `userId` values.
 
 ## Frontend Contract
 - The browser expects `/session` to return `userId`, `username`, `isGuest`, and `authenticated`.
-- Login/logout also needs to keep the browser's cookie/localStorage token sync working in `public/index.js`.
+- Login/logout should keep the browser's session bootstrap working in `public/index.js`, but there is no longer any supported browser-side token mirroring contract.
 
 ## Required Test Coverage
 - If you change session recovery, cookie naming, token extraction, or guest fallback, update:

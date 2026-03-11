@@ -3,7 +3,7 @@ const router = express.Router();
 const Match = require('../../../models/Match');
 const Game = require('../../../models/Game');
 const eventBus = require('../../../eventBus');
-const { resolveUserFromRequest } = require('../../../utils/authTokens');
+const { resolveLobbySession } = require('../../../utils/lobbyAccess');
 const lobbyStore = require('../../../state/lobby');
 const getServerConfig = require('../../../utils/getServerConfig');
 const { ensureGuestForBotGame, ensureBotUser, normalizeDifficulty } = require('../../../services/bots/registry');
@@ -26,7 +26,7 @@ async function resolveQuickplaySettings() {
 
 router.post('/', async (req, res) => {
   try {
-    let { userId, difficulty } = req.body || {};
+    const { difficulty } = req.body || {};
     const diffKey = normalizeDifficulty(difficulty);
     const allowedDifficulties = new Set(['easy', 'medium']);
     if (!allowedDifficulties.has(diffKey)) {
@@ -35,10 +35,9 @@ router.post('/', async (req, res) => {
         .json({ message: 'Only easy and medium bots are currently available.' });
     }
 
-    let userInfo = await resolveUserFromRequest(req);
-    if (userInfo && userInfo.userId) {
-      userId = userInfo.userId;
-    }
+    const userInfo = await resolveLobbySession(req, res);
+    if (!userInfo) return;
+    let userId = userInfo.userId;
 
     const ensured = await ensureGuestForBotGame(userId);
     userId = ensured.userId;

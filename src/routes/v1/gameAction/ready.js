@@ -5,34 +5,19 @@ const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
 const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
 const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
-const { resolveUserFromRequest } = require('../../../utils/authTokens');
-const User = require('../../../models/User');
+const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 
 router.post('/', async (req, res) => {
   try {
     const { gameId, color } = req.body;
-    const requester = await resolveUserFromRequest(req).catch(() => null);
-    let requesterRecord = null;
-    if (requester?.userId) {
-      requesterRecord = await User.findById(requester.userId).lean().catch(() => null);
-    }
-    const requesterDetails = {
-      userId: requester?.userId || null,
-      username: requester?.username || requesterRecord?.username || null,
-      isBot: requesterRecord?.isBot || false,
-      botDifficulty: requesterRecord?.botDifficulty || null,
-    };
+    const context = await requireGamePlayerContext(req, res, { gameId, color });
+    if (!context) return;
+    const { requesterDetails, color: normalizedColor } = context;
     debugLog('Ready endpoint called with:', {
       gameId,
-      color,
+      color: normalizedColor,
       ...requesterDetails,
     });
-
-    const normalizedColor = parseInt(color, 10);
-    if (normalizedColor !== 0 && normalizedColor !== 1) {
-      debugLog('Invalid color:', color);
-      return res.status(400).json({ message: 'Invalid color' });
-    }
 
     const config = await getServerConfig();
 

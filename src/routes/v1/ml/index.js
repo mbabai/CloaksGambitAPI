@@ -1,12 +1,13 @@
 const express = require('express');
-const ensureAdminSecret = require('../../../utils/adminSecret');
+const { ensureAdminRequest } = require('../../../utils/adminAccess');
 const { getMlRuntime } = require('../../../services/ml/runtime');
 
 const router = express.Router();
 const mlRuntime = getMlRuntime();
 
-router.use((req, res, next) => {
-  if (!ensureAdminSecret(req, res)) {
+router.use(async (req, res, next) => {
+  const adminSession = await ensureAdminRequest(req, res);
+  if (!adminSession) {
     return;
   }
   next();

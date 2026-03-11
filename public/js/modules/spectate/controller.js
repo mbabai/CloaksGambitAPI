@@ -1,7 +1,6 @@
 import { normalizeId } from '../history/dashboard.js';
-import { createBoardView } from '../components/boardView.js';
+import { createGameView } from '../gameView/view.js';
 import { PIECE_IMAGES, ACTIONS, WIN_REASONS } from '../constants.js';
-import { renderBars } from '../render/bars.js';
 import { computeBoardMetrics } from '../layout.js';
 import { formatClock, describeTimeControl } from '../utils/timeControl.js';
 import {
@@ -9,7 +8,6 @@ import {
   normalizeClockSnapshot,
   advanceClockSnapshot,
 } from '../utils/clockState.js';
-import { getBubbleAsset } from '../ui/icons.js';
 import { setBannerState, applyBannerVariant } from '../ui/banners.js';
 import { createOverlay } from '../ui/overlays.js';
 import { deriveSpectateView } from './viewModel.js';
@@ -128,15 +126,20 @@ export function createSpectateController(options) {
     bannerEl.hidden = true;
   }
 
-  const boardView = boardEl
-    ? createBoardView({
-        container: boardEl,
+  const gameView = playAreaEl
+    ? createGameView({
+        container: playAreaEl,
+        boardEl,
+        topBarEl,
+        bottomBarEl,
         identityMap: PIECE_IMAGES,
         refs: spectateRefs,
         alwaysAttachGameRefs: true,
         annotationsEnabled: true,
       })
     : null;
+
+  const boardView = gameView ? gameView.boardView : null;
 
   if (boardView) {
     boardView.setReadOnly(true);
@@ -244,55 +247,20 @@ export function createSpectateController(options) {
   }
 
   function clearSpectateBubbles() {
-    if (!Array.isArray(spectateRefs.activeBubbles)) {
-      spectateRefs.activeBubbles = [];
-      return;
+    if (gameView) {
+      gameView.clearBubbleOverlays();
     }
-    spectateRefs.activeBubbles.forEach((img) => {
-      try {
-        if (img && img.parentNode) {
-          img.parentNode.removeChild(img);
-        }
-      } catch (_) {}
-    });
-    spectateRefs.activeBubbles = [];
   }
 
-  function makeSpectateBubbleImg(type, squareSize) {
-    const src = getBubbleAsset(type);
-    if (!src) return null;
-    const img = document.createElement('img');
-    img.dataset.bubble = '1';
-    img.dataset.bubbleType = type;
-    img.draggable = false;
-    img.classList.add('cg-spectate-bubble');
-    const size = Math.max(0, Math.floor(squareSize * 1.08));
-    img.style.setProperty('--cg-spectate-bubble-size', `${size}px`);
-    const offsetX = Math.floor(squareSize * 0.6);
-    const offsetY = Math.floor(squareSize * 0.5);
-    img.style.setProperty('--cg-spectate-bubble-offset-x', `${offsetX}px`);
-    img.style.setProperty('--cg-spectate-bubble-offset-y', `${offsetY}px`);
-    if (typeof type === 'string' && type.endsWith('Right')) {
-      img.classList.add('cg-spectate-bubble--right');
-    }
-    img.src = src;
-    img.alt = '';
-    return img;
-  }
-
-  function applySpectateMoveOverlay(squareSize, overlay) {
-    if (!spectateRefs.boardCells) return;
+  function applySpectateMoveOverlay(overlay) {
     clearSpectateBubbles();
-    if (!overlay) return;
-    const cellRef = spectateRefs.boardCells?.[overlay.uiR]?.[overlay.uiC];
-    if (!cellRef || !cellRef.el) return;
-    overlay.types.forEach((type) => {
-      const img = makeSpectateBubbleImg(type, squareSize);
-      if (!img) return;
-      try { cellRef.el.style.position = 'relative'; } catch (_) {}
-      cellRef.el.appendChild(img);
-      spectateRefs.activeBubbles.push(img);
-    });
+    if (!overlay || !gameView) return;
+    gameView.setBubbleOverlays([{
+      uiR: overlay.uiR,
+      uiC: overlay.uiC,
+      types: overlay.types,
+      interactive: false,
+    }]);
   }
 
   function clearSpectateVisuals() {
@@ -302,9 +270,7 @@ export function createSpectateController(options) {
       setBannerState(bannerEl, { text: '', variant: ['spectate'], hidden: true });
     }
     if (metaEl) metaEl.textContent = '';
-    if (topBarEl) topBarEl.innerHTML = '';
-    if (bottomBarEl) bottomBarEl.innerHTML = '';
-    if (boardView) boardView.destroy();
+    if (gameView) gameView.destroy();
     spectateRefs.boardCells = [];
     clearSpectateBubbles();
     resetSpectateClockState();
@@ -600,13 +566,10 @@ export function createSpectateController(options) {
     hideSpectateGameBanner();
   }
 
-  function renderSpectateBarsForSnapshot(snapshot, baseSizes) {
-    if (!boardView || !topBarEl || !bottomBarEl) return;
-    topBarEl.innerHTML = '';
-    bottomBarEl.innerHTML = '';
-    if (!snapshot) return;
+  function buildSpectateBarsState(snapshot) {
+    if (!snapshot) return null;
     const game = snapshot.game;
-    if (!game) return;
+    if (!game) return null;
     const match = snapshot.match || {};
     const rawPlayers = Array.isArray(game.players) ? game.players : [];
     const whiteId = rawPlayers[0] || match.player1Id || match.player1?.id || match.player1?._id;
@@ -633,78 +596,35 @@ export function createSpectateController(options) {
 
     const topPlayerId = normalizeId(blackId);
     const bottomPlayerId = normalizeId(whiteId);
-
-    const bars = renderBars({
-      topBar: topBarEl,
-      bottomBar: bottomBarEl,
-      sizes: {
-        squareSize: baseSizes.squareSize,
-        boardWidth: baseSizes.boardWidth,
-        boardHeight: baseSizes.boardHeight,
-        boardLeft: baseSizes.boardLeft,
-        boardTop: baseSizes.boardTop,
-        playAreaHeight: playAreaEl?.clientHeight || (baseSizes.boardHeight * 2),
-      },
-      state: {
-        currentIsWhite: true,
-        currentCaptured: captured,
-        currentDaggers: daggers,
-        showChallengeTop,
-        showChallengeBottom,
-        clockTop: formatClock(blackMs),
-        clockBottom: formatClock(whiteMs),
-        clockLabel,
-        nameTop: black.name,
-        nameBottom: white.name,
-        winsTop: p2Score,
-        winsBottom: p1Score,
-        connectionTop: null,
-        connectionBottom: null,
-        isRankedMatch,
-        eloTop: black.elo,
-        eloBottom: white.elo,
-        playerIdTop: topPlayerId,
-        playerIdBottom: bottomPlayerId,
-      },
-      identityMap: PIECE_IMAGES,
-      onNameClick: (info) => {
-        if (!info || !info.userId) return;
-        try {
-          onPlayerClick({
-            userId: info.userId,
-            username: info.name,
-            elo: info.elo,
-            position: info.position || 'top',
-            source: 'spectate'
-          });
-        } catch (_) {
-          // ignore handler errors to avoid breaking render
-        }
-      },
-      shouldAllowPlayerClick: (id, context) => {
-        try {
-          return shouldAllowPlayerClick(id, context);
-        } catch (err) {
-          console.warn('Error evaluating spectate player click allowance', err);
-          return false;
-        }
-      },
-    });
-    spectateState.clockRefs = {
-      top: bars?.topClockEl || null,
-      bottom: bars?.bottomClockEl || null,
+    return {
+      currentIsWhite: true,
+      currentCaptured: captured,
+      currentDaggers: daggers,
+      showChallengeTop,
+      showChallengeBottom,
+      clockTop: formatClock(blackMs),
+      clockBottom: formatClock(whiteMs),
+      clockLabel,
+      nameTop: black.name,
+      nameBottom: white.name,
+      winsTop: p2Score,
+      winsBottom: p1Score,
+      connectionTop: null,
+      connectionBottom: null,
+      isRankedMatch,
+      eloTop: black.elo,
+      eloBottom: white.elo,
+      playerIdTop: topPlayerId,
+      playerIdBottom: bottomPlayerId,
     };
-    updateSpectateClockElements();
   }
 
   function renderSpectateBoard(snapshot) {
-    if (!boardView || !playAreaEl) return;
+    if (!gameView || !boardView || !playAreaEl) return;
     const game = snapshot?.game;
     if (!game || !Array.isArray(game.board) || !game.board.length) {
-      boardView.destroy();
+      gameView.destroy();
       spectateRefs.boardCells = [];
-      if (topBarEl) topBarEl.innerHTML = '';
-      if (bottomBarEl) bottomBarEl.innerHTML = '';
       return;
     }
     const viewState = deriveSpectateView(game);
@@ -722,8 +642,7 @@ export function createSpectateController(options) {
       cols,
       rows,
     );
-    spectateRefs.boardCells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null));
-    boardView.render({
+    const bars = gameView.render({
       sizes: {
         rows,
         cols,
@@ -731,7 +650,7 @@ export function createSpectateController(options) {
         boardLeft: metrics.boardLeft,
         boardTop: metrics.boardTop,
       },
-      state: {
+      boardState: {
         currentBoard: boardForRender,
         currentIsWhite: true,
         selected: null,
@@ -741,25 +660,39 @@ export function createSpectateController(options) {
         pendingMoveFrom,
         challengeRemoved,
       },
-      onAttachGameHandlers: (cell, uiR, uiC) => {
-        if (!spectateRefs.boardCells[uiR]) {
-          spectateRefs.boardCells[uiR] = [];
-        }
-        spectateRefs.boardCells[uiR][uiC] = { el: cell, uiR, uiC };
-      },
+      barsState: buildSpectateBarsState(snapshot),
+      viewMode: 'spectator',
       labelFont: Math.max(10, Math.floor(0.024 * playAreaEl.clientHeight)),
       fileLetters: ['A', 'B', 'C', 'D', 'E'],
       readOnly: true,
       deploymentLines: true,
+      onNameClick: (info) => {
+        if (!info || !info.userId) return;
+        try {
+          onPlayerClick({
+            userId: info.userId,
+            username: info.name,
+            elo: info.elo,
+            position: info.position || 'top',
+            source: 'spectate'
+          });
+        } catch (_) {}
+      },
+      shouldAllowPlayerClick: (id, context) => {
+        try {
+          return shouldAllowPlayerClick(id, context);
+        } catch (err) {
+          console.warn('Error evaluating spectate player click allowance', err);
+          return false;
+        }
+      },
     });
-    renderSpectateBarsForSnapshot(snapshot, {
-      squareSize: metrics.squareSize,
-      boardWidth: metrics.boardWidth,
-      boardHeight: metrics.boardHeight,
-      boardLeft: metrics.boardLeft,
-      boardTop: metrics.boardTop,
-    });
-    applySpectateMoveOverlay(metrics.squareSize, overlay);
+    spectateState.clockRefs = {
+      top: bars?.topClockEl || null,
+      bottom: bars?.bottomClockEl || null,
+    };
+    updateSpectateClockElements();
+    applySpectateMoveOverlay(overlay);
   }
 
   function getSpectateDisplaySnapshot(snapshot) {
@@ -804,7 +737,7 @@ export function createSpectateController(options) {
   }
 
   function openSpectateModal(matchId) {
-    if (!overlayEl || !boardView || !socket) return;
+    if (!overlayEl || !gameView || !socket) return;
     const normalizedId = normalizeId(matchId);
     if (!normalizedId) return;
     if (spectateState.matchId && spectateState.matchId !== normalizedId) {

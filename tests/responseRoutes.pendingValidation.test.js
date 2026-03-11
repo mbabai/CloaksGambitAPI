@@ -4,10 +4,14 @@ jest.mock('../src/models/Game', () => ({
 
 jest.mock('../src/utils/getServerConfig', () => jest.fn());
 jest.mock('../src/eventBus', () => ({ emit: jest.fn() }));
+jest.mock('../src/utils/gameAccess', () => ({
+  requireGamePlayerContext: jest.fn(),
+}));
 
 const sharedConstants = require('../shared/constants');
 const Game = require('../src/models/Game');
 const getServerConfig = require('../src/utils/getServerConfig');
+const { requireGamePlayerContext } = require('../src/utils/gameAccess');
 const bombRouter = require('../src/routes/v1/gameAction/bomb');
 const passRouter = require('../src/routes/v1/gameAction/pass');
 
@@ -59,7 +63,7 @@ describe('bomb and pass routes require a pending move window', () => {
   });
 
   test('bomb rejects moves that are already resolved', async () => {
-    Game.findById.mockResolvedValue({
+    const game = {
       _id: 'game-bomb-1',
       isActive: true,
       playerTurn: 1,
@@ -76,6 +80,16 @@ describe('bomb and pass routes require a pending move window', () => {
         },
       ],
       board: Array.from({ length: 6 }, () => Array.from({ length: 5 }, () => null)),
+    };
+    requireGamePlayerContext.mockResolvedValue({
+      game,
+      color: 1,
+      requesterDetails: {
+        userId: 'player-1',
+        username: 'Player1',
+        isBot: false,
+        botDifficulty: null,
+      },
     });
 
     const response = await callPost(bombHandler, {
@@ -91,7 +105,7 @@ describe('bomb and pass routes require a pending move window', () => {
     const board = Array.from({ length: 6 }, () => Array.from({ length: 5 }, () => null));
     board[1][1] = { color: 0, identity: sharedConstants.identities.ROOK };
 
-    Game.findById.mockResolvedValue({
+    const game = {
       _id: 'game-pass-1',
       isActive: true,
       playerTurn: 0,
@@ -110,6 +124,16 @@ describe('bomb and pass routes require a pending move window', () => {
         },
       ],
       board,
+    };
+    requireGamePlayerContext.mockResolvedValue({
+      game,
+      color: 0,
+      requesterDetails: {
+        userId: 'player-0',
+        username: 'Player0',
+        isBot: false,
+        botDifficulty: null,
+      },
     });
 
     const response = await callPost(passHandler, {

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Match = require('../../../models/Match');
+const { resolveMatchViewerContext } = require('../../../utils/gameAccess');
 
 router.post('/', async (req, res) => {
   try {
@@ -11,14 +12,19 @@ router.post('/', async (req, res) => {
     }
 
     const match = await Match.findById(matchId)
-      .populate('games')
-      .populate('player1')
-      .populate('player2')
-      .populate('winner')
+      .populate({ path: 'games', select: '_id isActive winner winReason createdAt startTime endTime players' })
+      .populate({ path: 'player1', select: '_id username elo isBot' })
+      .populate({ path: 'player2', select: '_id username elo isBot' })
+      .populate({ path: 'winner', select: '_id username elo isBot' })
       .lean();
 
     if (!match) {
       return res.status(404).json({ message: 'Match not found' });
+    }
+
+    const viewer = await resolveMatchViewerContext(req, match);
+    if (viewer.role === 'spectator') {
+      return res.status(403).json({ message: 'Forbidden' });
     }
 
     res.json(match);

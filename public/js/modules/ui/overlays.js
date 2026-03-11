@@ -39,6 +39,21 @@ function isElementVisible(el) {
   return true;
 }
 
+function focusElement(el, { preventScroll = true } = {}) {
+  if (!el || typeof el.focus !== 'function') return false;
+  try {
+    el.focus({ preventScroll });
+    return true;
+  } catch (_) {
+    try {
+      el.focus();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
 function resolveFocusTarget(target, { dialog, content, closeButton }) {
   if (!target) return null;
   if (typeof target === 'function') {
@@ -151,6 +166,43 @@ export function createOverlay({
   let lastFocusedElement = null;
   let lastShowOptions = null;
 
+  function moveFocusOutsideOverlay({ restoreFocus = true } = {}) {
+    const active = doc.activeElement;
+    if (!active || !root.contains(active)) {
+      return false;
+    }
+
+    const canRestoreFocus = restoreFocus !== false
+      && lastFocusedElement
+      && lastFocusedElement !== active
+      && !root.contains(lastFocusedElement)
+      && typeof lastFocusedElement.focus === 'function';
+
+    if (canRestoreFocus && focusElement(lastFocusedElement)) {
+      return true;
+    }
+
+    if (typeof active.blur === 'function') {
+      try { active.blur(); } catch (_) {}
+    }
+
+    if (doc.activeElement && root.contains(doc.activeElement) && doc.body) {
+      const hadTabIndex = doc.body.hasAttribute('tabindex');
+      const previousTabIndex = doc.body.getAttribute('tabindex');
+      if (!hadTabIndex) {
+        doc.body.setAttribute('tabindex', '-1');
+      }
+      const focusedBody = focusElement(doc.body);
+      if (!hadTabIndex) {
+        if (previousTabIndex == null) doc.body.removeAttribute('tabindex');
+        else doc.body.setAttribute('tabindex', previousTabIndex);
+      }
+      return focusedBody;
+    }
+
+    return false;
+  }
+
   function getFocusableElements() {
     const nodes = Array.from(dialog.querySelectorAll(focusableSelector));
     return nodes.filter(el => {
@@ -168,9 +220,7 @@ export function createOverlay({
     const focusables = getFocusableElements();
     const fallback = focusables.length > 0 ? focusables[0] : dialog;
     const el = target && isElementVisible(target) ? target : fallback;
-    if (el && typeof el.focus === 'function') {
-      try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (_) {} }
-    }
+    focusElement(el);
   }
 
   function handleKeyDown(ev) {
@@ -282,6 +332,7 @@ export function createOverlay({
   function hide({ restoreFocus = true, reason } = {}) {
     if (!isOpen) return;
     isOpen = false;
+    const restoredBeforeHide = moveFocusOutsideOverlay({ restoreFocus });
     removeClasses(root, openClasses);
     removeClasses(doc.body, bodyOpenClasses);
     root.setAttribute('aria-hidden', 'true');
@@ -293,10 +344,12 @@ export function createOverlay({
     if (lastShowOptions && typeof lastShowOptions.onHide === 'function') {
       try { lastShowOptions.onHide({ overlay: api, reason }); } catch (_) {}
     }
-    const shouldRestore = restoreFocus !== false && lastFocusedElement && typeof lastFocusedElement.focus === 'function';
+    const shouldRestore = !restoredBeforeHide
+      && restoreFocus !== false
+      && lastFocusedElement
+      && typeof lastFocusedElement.focus === 'function';
     if (shouldRestore) {
-      try { lastFocusedElement.focus({ preventScroll: true }); }
-      catch (_) { try { lastFocusedElement.focus(); } catch (_) {} }
+      focusElement(lastFocusedElement);
     }
     lastFocusedElement = null;
     lastShowOptions = null;

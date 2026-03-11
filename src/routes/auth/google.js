@@ -1,15 +1,18 @@
 const express = require('express');
+const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../../models/User');
 const ensureUser = require('../../utils/ensureUser');
 const { buildAuthCookieOptions } = require('../../utils/authCookies');
 const {
   createAuthToken,
-  TOKEN_COOKIE_NAME,
-  extractTokenFromRequest,
-  resolveUserFromToken,
-  parseCookies,
 } = require('../../utils/authTokens');
+const {
+  applyAuthenticatedCookies,
+  applyGuestCookies,
+  clearCookie,
+  resolveSessionFromRequest,
+} = require('../../utils/requestSession');
 
 const router = express.Router();
 
@@ -21,103 +24,8 @@ const scopes = [
 
 const FALLBACK_USERNAME = 'GoogleUser';
 const DEFAULT_RETURN_TO = '/';
-const GUEST_EMAIL_REGEX = /@guest\.local$/i;
-
-function clearCookie(res, name, baseOptions = {}) {
-  res.cookie(name, '', {
-    ...baseOptions,
-    maxAge: 0,
-    expires: new Date(0),
-  });
-}
-
-function applyAuthenticatedCookies(req, res, user, token) {
-  const options = buildAuthCookieOptions(req);
-  const userId = user._id.toString();
-  const username = user.username || FALLBACK_USERNAME;
-  const photo = user.photoUrl || '/assets/images/cloakHood.jpg';
-
-  if (userId) {
-    res.cookie('userId', userId, options);
-  } else {
-    clearCookie(res, 'userId', options);
-  }
-  res.cookie('username', username, options);
-  res.cookie('photo', photo, options);
-  res.cookie(TOKEN_COOKIE_NAME, token, { ...options, httpOnly: false });
-}
-
-function applyGuestCookies(req, res, guestInfo) {
-  const options = buildAuthCookieOptions(req);
-  const userId = guestInfo.userId ? String(guestInfo.userId) : '';
-  const username = guestInfo.username || FALLBACK_USERNAME;
-  res.cookie('userId', userId, options);
-  res.cookie('username', username, options);
-  clearCookie(res, 'photo', options);
-  clearCookie(res, TOKEN_COOKIE_NAME, { ...options, httpOnly: false });
-}
-
-function hasRecoverableAuthenticatedUser(user) {
-  if (!user) return false;
-  if (user.isBot) return true;
-  const email = typeof user.email === 'string' ? user.email.trim().toLowerCase() : '';
-  return Boolean(email) && !GUEST_EMAIL_REGEX.test(email);
-}
-
-async function resolveSessionFromRequest(req) {
-  const token = extractTokenFromRequest(req);
-  if (token) {
-    try {
-      const resolved = await resolveUserFromToken(token);
-      if (resolved?.user) {
-        return {
-          type: 'authenticated',
-          token,
-          user: resolved.user,
-          userId: resolved.userId,
-          username: resolved.username,
-          isGuest: resolved.isGuest,
-        };
-      }
-    } catch (err) {
-      console.warn('Failed to resolve user from token', err);
-    }
-  }
-
-  const cookies = parseCookies(req.headers?.cookie);
-  const cookieUserId = cookies?.userId;
-  if (cookieUserId) {
-    try {
-      if (process.env.NODE_ENV !== 'production') {
-        const localUser = await User.findById(cookieUserId);
-        if (hasRecoverableAuthenticatedUser(localUser)) {
-          if (localUser.isGuest) {
-            localUser.isGuest = false;
-            if (typeof localUser.save === 'function') {
-              await localUser.save();
-            }
-          }
-          return {
-            type: 'authenticated',
-            user: localUser,
-            userId: localUser._id.toString(),
-            username: localUser.username || FALLBACK_USERNAME,
-            isGuest: false,
-          };
-        }
-      }
-      const ensured = await ensureUser(cookieUserId);
-      if (ensured && ensured.isGuest) {
-        return { type: 'guest', ...ensured };
-      }
-    } catch (err) {
-      console.warn('Failed to reuse cookie userId', err);
-    }
-  }
-
-  const guest = await ensureUser();
-  return { type: 'guest', ...guest };
-}
+const OAUTH_STATE_COOKIE_NAME = 'cgOAuthState';
+const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
 function sanitizeSegment(segment) {
   if (!segment) return '';
@@ -236,6 +144,16 @@ function decodeOAuthState(value) {
   }
 }
 
+function buildOAuthStateCookieOptions(req) {
+  const authCookieOptions = buildAuthCookieOptions(req);
+  return {
+    ...authCookieOptions,
+    sameSite: 'lax',
+    httpOnly: true,
+    maxAge: OAUTH_STATE_MAX_AGE_MS,
+  };
+}
+
 router.get('/google', (req, res) => {
   const clientId = getGoogleClientId();
   const clientSecret = getGoogleClientSecret();
@@ -244,8 +162,10 @@ router.get('/google', (req, res) => {
     return res.status(500).json({ message: 'Google OAuth is not configured' });
   }
   const returnTo = sanitizeReturnTo(req.query?.returnTo);
-  const state = encodeOAuthState({ returnTo });
+  const nonce = crypto.randomBytes(24).toString('hex');
+  const state = encodeOAuthState({ returnTo, nonce });
   const redirectUri = resolveRedirectUri(req);
+  res.cookie(OAUTH_STATE_COOKIE_NAME, nonce, buildOAuthStateCookieOptions(req));
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -270,9 +190,22 @@ router.get('/google/callback', async (req, res) => {
     const clientSecret = getGoogleClientSecret();
     const state = decodeOAuthState(req.query?.state);
     const returnTo = sanitizeReturnTo(state?.returnTo);
+    const cookies = req.headers?.cookie
+      ? req.headers.cookie.split(';').reduce((acc, part) => {
+          const [key, ...rest] = part.trim().split('=');
+          if (!key) return acc;
+          acc[decodeURIComponent(key)] = decodeURIComponent(rest.join('=') || '');
+          return acc;
+        }, {})
+      : {};
+    const cookieNonce = cookies?.[OAUTH_STATE_COOKIE_NAME] || '';
+    clearCookie(res, OAUTH_STATE_COOKIE_NAME, buildOAuthStateCookieOptions(req));
 
     if (!clientId || !clientSecret) {
       return res.status(500).json({ message: 'Google OAuth is not configured' });
+    }
+    if (!state?.nonce || !cookieNonce || state.nonce !== cookieNonce) {
+      return res.status(400).json({ message: 'Invalid OAuth state' });
     }
     const redirectUri = resolveRedirectUri(req);
     const client = new OAuth2Client(clientId, clientSecret, redirectUri);
@@ -328,7 +261,7 @@ router.get('/google/callback', async (req, res) => {
 router.get('/session', async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
-    const session = await resolveSessionFromRequest(req);
+    const session = await resolveSessionFromRequest(req, { createGuest: true });
     if (session.type === 'authenticated' && !session.isGuest) {
       const token = createAuthToken(session.user);
       applyAuthenticatedCookies(req, res, session.user, token);

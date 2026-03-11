@@ -2,7 +2,6 @@ import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId
 import { createPlayerStatsOverlay } from '/js/modules/history/playerStatsOverlay.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
-import { getCookie } from '/js/modules/utils/cookies.js';
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { createSpectateController } from '/js/modules/spectate/controller.js';
 import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/spectate/activeMatches.js';
@@ -12,7 +11,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   preloadAssets();
 
   const origin = window.location.origin.replace(/\/$/, '');
-  const socket = io(origin + '/admin');
+  const socket = io(origin + '/admin', { withCredentials: true });
   const params = new URLSearchParams(window.location.search);
   const adminIdParam = params.get('adminId');
   const adminUserId = adminIdParam || localStorage.getItem('cg_userId') || null;
@@ -22,55 +21,9 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   const botStatusCache = new Map();
   const botStatusRequests = new Map();
 
-  const TOKEN_STORAGE_KEY = 'cg_token';
-  const TOKEN_COOKIE_NAME = 'cgToken';
-
-  function getStoredAuthToken() {
-    try {
-      return localStorage.getItem(TOKEN_STORAGE_KEY);
-    } catch (err) {
-      console.warn('Unable to read auth token from localStorage', err);
-      return null;
-    }
-  }
-
-  function setStoredAuthToken(token) {
-    try {
-      if (token) {
-        localStorage.setItem(TOKEN_STORAGE_KEY, token);
-      } else {
-        localStorage.removeItem(TOKEN_STORAGE_KEY);
-      }
-    } catch (err) {
-      console.warn('Unable to persist auth token to localStorage', err);
-    }
-  }
-
-  function ensureAuthToken() {
-    const cookieToken = getCookie(TOKEN_COOKIE_NAME) || null;
-    const stored = getStoredAuthToken();
-
-    if (cookieToken) {
-      if (stored !== cookieToken) {
-        setStoredAuthToken(cookieToken);
-      }
-      return cookieToken;
-    }
-
-    if (stored) {
-      setStoredAuthToken(null);
-    }
-
-    return null;
-  }
-
   function authFetch(input, init = {}) {
     const headers = { ...(init && init.headers ? init.headers : {}) };
-    const token = ensureAuthToken();
-    if (token && !headers.Authorization) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    return fetch(input, { ...init, headers });
+    return fetch(input, { credentials: 'include', ...init, headers });
   }
 
   if (!statsOverlayController) {
@@ -694,7 +647,6 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-secret': localStorage.getItem('ADMIN_SECRET') || ''
         },
         body: JSON.stringify({ userId })
       });
@@ -927,7 +879,6 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-secret': localStorage.getItem('ADMIN_SECRET') || ''
         },
         body: JSON.stringify({ matchId: id })
       });
@@ -1074,7 +1025,6 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
         },
         body: JSON.stringify({ matchId: normalizedId })
       });
@@ -1318,7 +1268,6 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-admin-secret': (localStorage.getItem('ADMIN_SECRET') || '')
           }
         });
         if (!res.ok) {

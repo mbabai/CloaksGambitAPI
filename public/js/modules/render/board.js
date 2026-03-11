@@ -1,220 +1,231 @@
-import { ASSET_MANIFEST } from '/js/shared/assetManifest.js';
-import { pieceGlyph as makePieceGlyph } from './pieceGlyph.js';
-import { serverCoordsForCell, setCellNotation } from './notation.js';
-
-/**
- * Renders the board grid and pieces. This is a wrapper so we can gradually move code here.
- * To avoid behavior change, we accept callbacks/state from the legacy script.
- */
-export function renderBoard({
-  container,
-  sizes,
-  state,
-  refs,
-  identityMap,
-  onAttachHandlers,
-  onAttachGameHandlers,
-  labelFont,
-  fileLetters,
-  options = {}
-}) {
-  const { rows, cols, squareSize, boardLeft, boardTop } = sizes;
-  const { currentBoard, currentIsWhite, selected, isInSetup, workingRank, pendingCapture, pendingMoveFrom, challengeRemoved } = state;
-  const { showDeploymentLines = true } = options;
-
-  // Clear container and build grid
-  container.style.width = (squareSize * cols) + 'px';
-  container.style.height = (squareSize * rows) + 'px';
-  container.style.left = boardLeft + 'px';
-  container.style.top = boardTop + 'px';
-  container.style.display = 'grid';
-  container.style.gridTemplateColumns = `repeat(${cols}, ${squareSize}px)`;
-  container.style.gridTemplateRows = `repeat(${rows}, ${squareSize}px)`;
-  while (container.firstChild) container.removeChild(container.firstChild);
-
-  const BOARD_TEXTURE_SRC = (ASSET_MANIFEST?.textures && ASSET_MANIFEST.textures.boardMarble) || '/assets/images/MarbleTexture.svg';
-  const texture = document.createElement('img');
-  texture.src = BOARD_TEXTURE_SRC;
-  texture.style.position = 'absolute';
-  texture.style.top = '0';
-  texture.style.left = '0';
-  texture.style.width = '100%';
-  texture.style.height = '100%';
-  texture.style.objectFit = 'cover';
-  texture.style.border = '1px solid var(--CG-gray-light)';
-  texture.style.boxSizing = 'border-box';
-  texture.style.opacity = '0.45';
-  texture.style.zIndex = '1';
-  texture.style.pointerEvents = 'none';
-  container.appendChild(texture);
-  // Prepare matrix for in-game hit-testing when not in setup
-  if (!state.isInSetup) {
-    refs.boardCells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null));
-  }
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      // Board colors should flip based on the current player's color. Without
-      // this adjustment both players would see a light square in the bottom
-      // left. By swapping the parity when viewing as black we ensure the
-      // checkered pattern is oriented correctly for each player.
-      const light = currentIsWhite ? ((r + c) % 2 === 1) : ((r + c) % 2 === 0);
-      const cell = document.createElement('div');
-      cell.dataset.boardCell = '1';
-      cell.dataset.uiRow = String(r);
-      cell.dataset.uiCol = String(c);
-      cell.style.width = squareSize + 'px';
-      cell.style.height = squareSize + 'px';
-      cell.style.boxSizing = 'border-box';
-      cell.style.position = 'relative';
-      cell.style.border = '1px solid var(--CG-gray)';
-      cell.style.background = light ? 'var(--CG-white)' : 'var(--CG-black)';
-
-      const { serverRow, serverCol } = serverCoordsForCell(r, c, rows, cols, currentIsWhite);
-      // Store server-oriented coordinates for payload building
-      setCellNotation(cell, serverRow, serverCol);
-      if (pendingMoveFrom && pendingMoveFrom.row === serverRow && pendingMoveFrom.col === serverCol) {
-        cell.style.boxShadow = 'inset 0 0 0 9999px rgba(16,185,129,0.3)';
-      }
-      if (challengeRemoved && challengeRemoved.row === serverRow && challengeRemoved.col === serverCol) {
-        cell.style.boxShadow = 'inset 0 0 0 9999px rgba(239,68,68,0.4)';
-      }
-
-      // File label on UI bottom row (letters A..E oriented to player's perspective)
-      if (r === rows - 1) {
-        const fileIdx = currentIsWhite ? c : (cols - 1 - c);
-        const file = (fileLetters && fileLetters[fileIdx]) || '';
-        if (file) {
-          const fileSpan = document.createElement('span');
-          fileSpan.textContent = file;
-          fileSpan.style.position = 'absolute';
-          fileSpan.style.right = '3px';
-          fileSpan.style.bottom = '2px';
-          fileSpan.style.color = 'var(--CG-black)';
-          fileSpan.style.fontWeight = '400';
-          fileSpan.style.fontSize = (labelFont || 12) + 'px';
-          fileSpan.style.lineHeight = '1';
-          fileSpan.style.userSelect = 'none';
-          fileSpan.style.pointerEvents = 'none';
-          fileSpan.style.zIndex = '2';
-          cell.appendChild(fileSpan);
-        }
-      }
-
-      // Rank label on UI left column (numbers 1..N oriented to player's perspective)
-      if (c === 0) {
-        const rank = currentIsWhite ? (rows - r) : (r + 1);
-        const rankSpan = document.createElement('span');
-        rankSpan.textContent = String(rank);
-        rankSpan.style.position = 'absolute';
-        rankSpan.style.left = '3px';
-        rankSpan.style.top = '2px';
-        rankSpan.style.color = 'var(--CG-black)';
-        rankSpan.style.fontWeight = '400';
-        rankSpan.style.fontSize = (labelFont || 12) + 'px';
-        rankSpan.style.lineHeight = '1';
-        rankSpan.style.userSelect = 'none';
-        rankSpan.style.pointerEvents = 'none';
-        rankSpan.style.zIndex = '2';
-        cell.appendChild(rankSpan);
-      }
-
-      // Piece mapping: during setup, bottom UI row shows workingRank; otherwise show server board
-      let piece = null;
-      const isUiBottom = (r === rows - 1);
-      if (isInSetup && isUiBottom) {
-        piece = (workingRank && workingRank[c]) || null;
-      } else if (currentBoard) {
-        const srcR = currentIsWhite ? (rows - 1 - r) : r;
-        const srcC = currentIsWhite ? c : (cols - 1 - c);
-        piece = currentBoard?.[srcR]?.[srcC] || null;
-      }
-      const isPendingCaptureSquare = pendingCapture && pendingCapture.row === serverRow && pendingCapture.col === serverCol;
-      const capturedPiece = isPendingCaptureSquare ? pendingCapture.piece : null;
-      if (piece || capturedPiece) {
-        const myColorIdx = currentIsWhite ? 0 : 1;
-        let movingImg = null;
-        let capturedImg = null;
-        if (piece) {
-          movingImg = makePieceGlyph(piece, squareSize, identityMap);
-          if (movingImg) {
-            movingImg.style.position = 'absolute';
-            movingImg.style.left = '50%';
-            movingImg.style.top = '50%';
-            movingImg.style.transform = 'translate(-50%, -50%)';
-            movingImg.style.zIndex = '3';
-            if (selected && selected.type === 'board' && selected.index === c && isUiBottom) {
-              movingImg.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
-            }
-            if (!isInSetup && selected && selected.type === 'boardAny' && selected.uiR === r && selected.uiC === c) {
-              movingImg.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
-            }
-          }
-        }
-        if (capturedPiece) {
-          capturedImg = makePieceGlyph(capturedPiece, squareSize, identityMap);
-          if (capturedImg) {
-            capturedImg.style.position = 'absolute';
-            capturedImg.style.left = '50%';
-            capturedImg.style.top = '50%';
-            capturedImg.style.transformOrigin = '100% 100%';
-            // Tilt the captured piece 30° clockwise and drop it slightly for depth
-            capturedImg.style.transform = 'translate(-50%, -30%) rotate(30deg)';
-            capturedImg.style.clipPath = "inset(0% 20% 5% 13%)";
-            capturedImg.style.zIndex = '3';
-          }
-        }
-        if (movingImg && capturedImg) {
-          if (capturedPiece.color === myColorIdx) {
-            capturedImg.style.zIndex = '4';
-            movingImg.style.zIndex = '3';
-          } else {
-            movingImg.style.zIndex = '4';
-            capturedImg.style.zIndex = '3';
-          }
-        }
-        if (capturedImg) cell.appendChild(capturedImg);
-        if (movingImg) cell.appendChild(movingImg);
-      }
-
-      // Attach setup interactions and expose bottom cells for hit-testing
-      if (isInSetup && isUiBottom && onAttachHandlers) {
-        onAttachHandlers(cell, { type: 'board', index: c });
-        if (Array.isArray(refs.bottomCells)) refs.bottomCells[c] = { el: cell, col: c };
-      }
-      // Attach in-game handlers for all cells when not in setup
-      if (!isInSetup && onAttachGameHandlers) {
-        onAttachGameHandlers(cell, r, c);
-        if (refs.boardCells) refs.boardCells[r][c] = { el: cell, uiR: r, uiC: c };
-      }
-
-      container.appendChild(cell);
+function resolveCssColor(scope, name, fallback) {
+  try {
+    const root = scope || document.documentElement;
+    const value = getComputedStyle(root).getPropertyValue(name);
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
     }
+  } catch (_) {}
+  return fallback;
+}
+
+function getBoardPalette(scope) {
+  return {
+    lightSquare: resolveCssColor(scope, '--CG-white', '#f7efe1'),
+    darkSquare: resolveCssColor(scope, '--CG-black', '#1a1026'),
+    border: resolveCssColor(scope, '--CG-gray', '#65536f'),
+    boardBorder: resolveCssColor(scope, '--CG-gray-light', '#9ca3af'),
+    label: resolveCssColor(scope, '--CG-black', '#0c0612'),
+    deploymentLine: resolveCssColor(scope, '--CG-deep-gold', '#cba135'),
+    pendingMove: 'rgba(16, 185, 129, 0.30)',
+    challengeRemoved: 'rgba(239, 68, 68, 0.40)',
+    textureAlpha: 0.45,
+    textureFallback: 'rgba(224, 224, 224, 0.16)',
+    selectionGlow: 'rgba(255, 200, 0, 0.92)',
+  };
+}
+
+function getLoadedImage(imageCache, src) {
+  if (!imageCache || !src) return null;
+  try {
+    return imageCache.getLoadedImage(src);
+  } catch (_) {
+    return null;
+  }
+}
+
+function ensureImageLoaded(imageCache, src) {
+  if (!imageCache || !src) return;
+  try {
+    imageCache.get(src);
+  } catch (_) {}
+}
+
+function configureCanvas(canvas, width, height) {
+  const cssWidth = Math.max(0, Math.round(width || 0));
+  const cssHeight = Math.max(0, Math.round(height || 0));
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const targetWidth = Math.max(1, Math.round(cssWidth * dpr));
+  const targetHeight = Math.max(1, Math.round(cssHeight * dpr));
+
+  if (canvas.width !== targetWidth) {
+    canvas.width = targetWidth;
+  }
+  if (canvas.height !== targetHeight) {
+    canvas.height = targetHeight;
   }
 
-  if (showDeploymentLines) {
-    // Overlay gold lines indicating deployment zones
-    const lineThickness = 4;
-    const topLine = document.createElement('div');
-    topLine.style.position = 'absolute';
-    topLine.style.left = '0';
-    topLine.style.top = (squareSize - lineThickness / 2) + 'px';
-    topLine.style.width = '100%';
-    topLine.style.height = lineThickness + 'px';
-    topLine.style.background = 'var(--CG-deep-gold)';
-    topLine.style.zIndex = '5';
-    topLine.style.pointerEvents = 'none';
-    container.appendChild(topLine);
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  return dpr;
+}
 
-    const bottomLine = document.createElement('div');
-    bottomLine.style.position = 'absolute';
-    bottomLine.style.left = '0';
-    bottomLine.style.top = (squareSize * (rows - 1) - lineThickness / 2) + 'px';
-    bottomLine.style.width = '100%';
-    bottomLine.style.height = lineThickness + 'px';
-    bottomLine.style.background = 'var(--CG-deep-gold)';
-    bottomLine.style.zIndex = '5';
-    bottomLine.style.pointerEvents = 'none';
-    container.appendChild(bottomLine);
+function drawTexture(ctx, imageCache, src, width, height, palette) {
+  if (!src) return;
+  ensureImageLoaded(imageCache, src);
+  const texture = getLoadedImage(imageCache, src);
+  ctx.save();
+  ctx.globalAlpha = palette.textureAlpha;
+  if (texture) {
+    ctx.drawImage(texture, 0, 0, width, height);
+  } else {
+    ctx.fillStyle = palette.textureFallback;
+    ctx.fillRect(0, 0, width, height);
   }
+  ctx.restore();
+}
+
+function drawSquareLabel(ctx, cell, labelFont, palette) {
+  const fileLabel = cell.fileLabel || '';
+  const rankLabel = cell.rankLabel || '';
+  if (!fileLabel && !rankLabel) return;
+
+  ctx.save();
+  ctx.fillStyle = palette.label;
+  ctx.font = `400 ${labelFont}px serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+
+  if (rankLabel) {
+    ctx.fillText(rankLabel, cell.x + 3, cell.y + 2);
+  }
+  if (fileLabel) {
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(fileLabel, cell.x + cell.width - 3, cell.y + cell.height - 3);
+  }
+  ctx.restore();
+}
+
+function drawPieceFallback(ctx, piece, x, y, size) {
+  ctx.save();
+  ctx.fillStyle = piece.color === 0 ? '#f9f5ea' : '#0f1117';
+  ctx.beginPath();
+  ctx.arc(x + (size / 2), y + (size / 2), size * 0.34, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = piece.color === 0 ? '#111827' : '#f9f5ea';
+  ctx.lineWidth = Math.max(2, size * 0.05);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawPieceImage(ctx, imageCache, identityMap, piece, x, y, size) {
+  const src = identityMap?.[piece.identity]?.[piece.color];
+  if (!src) {
+    drawPieceFallback(ctx, piece, x, y, size);
+    return;
+  }
+  ensureImageLoaded(imageCache, src);
+  const image = getLoadedImage(imageCache, src);
+  if (image) {
+    ctx.drawImage(image, x, y, size, size);
+    return;
+  }
+  drawPieceFallback(ctx, piece, x, y, size);
+}
+
+function drawMainPiece(ctx, imageCache, identityMap, cell, palette) {
+  if (!cell.piece) return;
+  const size = Math.floor(cell.width * 0.9);
+  const x = cell.x + ((cell.width - size) / 2);
+  const y = cell.y + ((cell.height - size) / 2);
+
+  ctx.save();
+  ctx.globalAlpha = Number.isFinite(cell.pieceOpacity) ? cell.pieceOpacity : 1;
+  if (cell.selectedBottomPiece || cell.selectedBoardCell) {
+    ctx.shadowColor = palette.selectionGlow;
+    ctx.shadowBlur = Math.max(10, Math.floor(cell.width * 0.2));
+  }
+  drawPieceImage(ctx, imageCache, identityMap, cell.piece, x, y, size);
+  ctx.restore();
+}
+
+function drawCapturedPiece(ctx, imageCache, identityMap, cell) {
+  if (!cell.capturedPiece) return;
+  const size = Math.floor(cell.width * 0.9);
+
+  ctx.save();
+  ctx.translate(cell.centerX, cell.centerY - (cell.height * 0.04));
+  ctx.rotate(Math.PI / 6);
+  ctx.beginPath();
+  ctx.rect(-size * 0.42, -size * 0.52, size * 0.84, size * 0.84);
+  ctx.clip();
+  drawPieceImage(ctx, imageCache, identityMap, cell.capturedPiece, -size / 2, -size / 2, size);
+  ctx.restore();
+}
+
+function drawCellBase(ctx, cell, palette) {
+  ctx.save();
+  ctx.fillStyle = cell.light ? palette.lightSquare : palette.darkSquare;
+  ctx.fillRect(cell.x, cell.y, cell.width, cell.height);
+
+  if (cell.highlight === 'pending-move') {
+    ctx.fillStyle = palette.pendingMove;
+    ctx.fillRect(cell.x, cell.y, cell.width, cell.height);
+  } else if (cell.highlight === 'challenge-removed') {
+    ctx.fillStyle = palette.challengeRemoved;
+    ctx.fillRect(cell.x, cell.y, cell.width, cell.height);
+  }
+  ctx.restore();
+}
+
+function drawCellGrid(ctx, cell, palette) {
+  ctx.save();
+  ctx.strokeStyle = palette.border;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cell.x + 0.5, cell.y + 0.5, cell.width - 1, cell.height - 1);
+  ctx.restore();
+}
+
+function drawCellForeground(ctx, imageCache, identityMap, cell, labelFont, palette) {
+  ctx.save();
+  drawSquareLabel(ctx, cell, labelFont, palette);
+  drawCapturedPiece(ctx, imageCache, identityMap, cell);
+  drawMainPiece(ctx, imageCache, identityMap, cell, palette);
+  ctx.restore();
+}
+
+function drawBoardBorder(ctx, scene, palette) {
+  ctx.save();
+  ctx.strokeStyle = palette.boardBorder;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, scene.width - 1, scene.height - 1);
+  ctx.restore();
+}
+
+function drawDeploymentLines(ctx, scene, palette) {
+  if (!Array.isArray(scene.deploymentLines) || !scene.deploymentLines.length) {
+    return;
+  }
+  const lineThickness = 4;
+  ctx.save();
+  ctx.fillStyle = palette.deploymentLine;
+  scene.deploymentLines.forEach((lineModel) => {
+    ctx.fillRect(0, lineModel.top, scene.width, lineThickness);
+  });
+  ctx.restore();
+}
+
+export function renderBoard({
+  canvas,
+  scene,
+  identityMap,
+  imageCache,
+  scope,
+} = {}) {
+  if (!canvas || !scene) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const dpr = configureCanvas(canvas, scene.width, scene.height);
+  const palette = getBoardPalette(scope || canvas);
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, scene.width, scene.height);
+  scene.cells.forEach((cell) => drawCellBase(ctx, cell, palette));
+  drawTexture(ctx, imageCache, scene.boardTextureSrc, scene.width, scene.height, palette);
+  scene.cells.forEach((cell) => drawCellGrid(ctx, cell, palette));
+  drawBoardBorder(ctx, scene, palette);
+  scene.cells.forEach((cell) => drawCellForeground(ctx, imageCache, identityMap, cell, scene.labelFont || 12, palette));
+  drawDeploymentLines(ctx, scene, palette);
 }

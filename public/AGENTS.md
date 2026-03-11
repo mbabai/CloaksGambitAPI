@@ -18,13 +18,18 @@
 
 ## Session and Token Behavior
 - The browser refreshes identity through `/api/auth/session`.
-- `cgToken` is mirrored from cookie to `localStorage['cg_token']`.
-- `authFetch()` adds the bearer token when present and always sends cookies with `credentials: 'include'`.
-- The socket handshake sends the JWT token when available and otherwise falls back to the stored `userId`.
+- Auth is cookie-first now. `authFetch()` should send `credentials: 'include'`, and the browser should not depend on reading `cgToken` from JavaScript.
+- The socket handshake relies on the server-owned cookie session; do not reintroduce raw `userId` fallback auth.
+- `localStorage` may still cache harmless UX state such as queue timers or the last known username, but not the auth token.
 
 ## Board and Spectator Notes
-- `public/js/modules/components/boardView.js` is the shared board wrapper for player and spectator surfaces.
-- Board annotations and spectator overlays already rely on the partially modularized board stack.
+- `public/js/modules/gameView/view.js` is now the shared single-board surface for live play, spectate, and replay/admin uses. It composes the board, bars, overlays, and visibility mode.
+- `public/js/modules/components/boardView.js` is the board-only wrapper used underneath `gameView`. It now renders through Canvas, keeps a lightweight hit layer for interactions, and exposes geometry plus bubble-overlay helpers.
+- `public/js/modules/board/scene.js` remains the renderer-neutral board scene builder. `public/js/modules/render/board.js` now paints that scene onto Canvas instead of rebuilding visible DOM squares.
+- Visibility rules live in `public/js/modules/gameView/modes.js`. Use explicit `player`, `spectator`, and `god` modes rather than ad hoc masking in individual screens.
+- Board annotations still attach to the board container, so keep the board surface positioned and sized through the shared wrappers instead of bypassing them.
+- The board Canvas must paint in the same order as the old DOM board: squares first, marble texture over the board, then borders/labels/pieces. Drawing the texture underneath opaque squares makes the board look flatter and loses the original grey marble feel.
+- Keep the board container below overlay buttons in stacking order. The board hit layer is intentionally interactive, so `gameView` should own z-index ordering for board vs. bars vs. setup/action buttons.
 - `public/js/modules/utils/clockState.js` should be used to animate from the server clock snapshot, not to replace server clock authority.
 
 ## Server Contract Notes
@@ -41,3 +46,4 @@
 - If you split more code out of `public/index.js`, keep the public behavior unchanged first and move logic second.
 - If you change auth or socket payloads, verify both the live board and the spectate flow.
 - If you change browser-side rule presentation, cross-check `rules.md` and the server routes so the UI text still matches the backend.
+- The player history overlay uses `.player-history-sections` as the desktop scroll container. Do not bind wheel handling to individual game-square rows or turn the match list into a separate nested desktop scroll pane unless the layout is being redesigned on purpose.

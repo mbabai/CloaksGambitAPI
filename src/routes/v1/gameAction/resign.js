@@ -1,23 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 
 router.post('/', async (req, res) => {
   try {
     const { gameId, color } = req.body;
-    
-    const game = await Game.findById(gameId);
-    if (!game) {
-      return res.status(404).json({ message: 'Game not found' });
-    }
-
-    // Validate color
-    const normalizedColor = parseInt(color, 10);
-    if (normalizedColor !== 0 && normalizedColor !== 1) {
-      return res.status(400).json({ message: 'Invalid color' });
-    }
+    const context = await requireGamePlayerContext(req, res, { gameId, color });
+    if (!context) return;
+    const { game, color: normalizedColor } = context;
 
     // Check if game is still active
     if (!game.isActive) {
@@ -46,7 +38,8 @@ router.post('/', async (req, res) => {
 
     res.json({ message: 'Game resigned successfully' });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
+    res.status(statusCode).json({ message: err.message });
   }
 });
 

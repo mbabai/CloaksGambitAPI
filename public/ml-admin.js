@@ -1,10 +1,8 @@
 import { ACTIONS, WIN_REASONS, PIECE_IMAGES } from '/js/modules/constants.js';
-import { createBoardView } from '/js/modules/components/boardView.js';
-import { renderBars } from '/js/modules/render/bars.js';
+import { createGameView } from '/js/modules/gameView/view.js';
 import { renderStash } from '/js/modules/render/stash.js';
 import { computeBoardMetrics } from '/js/modules/layout.js';
 import { deriveSpectateView } from '/js/modules/spectate/viewModel.js';
-import { getBubbleAsset } from '/js/modules/ui/icons.js';
 import { pieceGlyph } from '/js/modules/render/pieceGlyph.js';
 
 const BUILTIN_MEDIUM_ID = 'builtin:medium-bot';
@@ -92,8 +90,6 @@ const state = {
   liveTraining: null,
   trainingRequestActive: false,
   trainingHasLiveProgress: false,
-  trainingHeartbeatTimer: null,
-  trainingHeartbeatStartedAt: 0,
   trainingSelection: new Set(),
   trainingVisibleIds: [],
   liveSimulation: null,
@@ -104,6 +100,7 @@ const state = {
     hoverIndex: null,
   },
   replayRenderer: {
+    gameView: null,
     boardView: null,
     refs: {
       boardCells: [],
@@ -1173,71 +1170,39 @@ function buildReplayHistoryFallback(decisions) {
 }
 
 function clearReplayBubbles() {
-  const refs = state.replayRenderer.refs;
-  if (!Array.isArray(refs.activeBubbles)) {
-    refs.activeBubbles = [];
-    return;
-  }
-  refs.activeBubbles.forEach((img) => {
-    try {
-      if (img && img.parentNode) img.parentNode.removeChild(img);
-    } catch (_) {}
-  });
-  refs.activeBubbles = [];
+  state.replayRenderer.gameView?.clearBubbleOverlays();
 }
 
-function makeReplayBubbleImg(type, squareSize) {
-  const src = getBubbleAsset(type);
-  if (!src) return null;
-  const img = document.createElement('img');
-  img.dataset.bubble = '1';
-  img.dataset.bubbleType = type;
-  img.draggable = false;
-  img.classList.add('cg-spectate-bubble');
-  const size = Math.max(0, Math.floor(squareSize * 1.08));
-  img.style.setProperty('--cg-spectate-bubble-size', `${size}px`);
-  const offsetX = Math.floor(squareSize * 0.6);
-  const offsetY = Math.floor(squareSize * 0.5);
-  img.style.setProperty('--cg-spectate-bubble-offset-x', `${offsetX}px`);
-  img.style.setProperty('--cg-spectate-bubble-offset-y', `${offsetY}px`);
-  if (typeof type === 'string' && type.endsWith('Right')) {
-    img.classList.add('cg-spectate-bubble--right');
-  }
-  img.src = src;
-  img.alt = '';
-  return img;
-}
-
-function applyReplayOverlay(squareSize, overlay) {
+function applyReplayOverlay(overlay) {
   clearReplayBubbles();
-  const refs = state.replayRenderer.refs;
-  if (!overlay) return;
-  const cellRef = refs.boardCells?.[overlay.uiR]?.[overlay.uiC];
-  if (!cellRef || !cellRef.el) return;
-  overlay.types.forEach((type) => {
-    const img = makeReplayBubbleImg(type, squareSize);
-    if (!img) return;
-    try { cellRef.el.style.position = 'relative'; } catch (_) {}
-    cellRef.el.appendChild(img);
-    refs.activeBubbles.push(img);
-  });
+  if (!overlay || !state.replayRenderer.gameView) return;
+  state.replayRenderer.gameView.setBubbleOverlays([{
+    uiR: overlay.uiR,
+    uiC: overlay.uiC,
+    types: overlay.types,
+    interactive: false,
+  }]);
 }
 
 function ensureReplayRenderer() {
-  if (state.replayRenderer.boardView) return;
-  if (!els.replayBoardLayer) return;
+  if (state.replayRenderer.gameView) return;
+  if (!els.replayBoardLayer || !els.replayPlayArea) return;
   state.replayRenderer.refs = {
     boardCells: [],
     activeBubbles: [],
     stashSlots: [],
     deckEl: null,
   };
-  state.replayRenderer.boardView = createBoardView({
-    container: els.replayBoardLayer,
+  state.replayRenderer.gameView = createGameView({
+    container: els.replayPlayArea,
+    boardEl: els.replayBoardLayer,
+    topBarEl: els.replayTopBar,
+    bottomBarEl: els.replayBottomBar,
     identityMap: PIECE_IMAGES,
     refs: state.replayRenderer.refs,
     alwaysAttachGameRefs: true,
   });
+  state.replayRenderer.boardView = state.replayRenderer.gameView.boardView;
   state.replayRenderer.boardView.setReadOnly(true);
 }
 
@@ -1265,12 +1230,10 @@ function renderReplayDeckCard(container, title, piece) {
 
 function renderReplayBoardFrame(frame, frameIndex) {
   ensureReplayRenderer();
-  if (!state.replayRenderer.boardView || !els.replayPlayArea) return;
+  if (!state.replayRenderer.gameView || !state.replayRenderer.boardView || !els.replayPlayArea) return;
   if (!frame || !Array.isArray(frame.board)) {
-    state.replayRenderer.boardView.destroy();
+    state.replayRenderer.gameView.destroy();
     clearReplayBubbles();
-    if (els.replayTopBar) els.replayTopBar.innerHTML = '';
-    if (els.replayBottomBar) els.replayBottomBar.innerHTML = '';
     if (els.replayStashLayer) els.replayStashLayer.innerHTML = '';
     renderReplayDeckCard(els.replayWhiteDeck, 'White On-Deck', null);
     renderReplayDeckCard(els.replayBlackDeck, 'Black On-Deck', null);
@@ -1316,10 +1279,9 @@ function renderReplayBoardFrame(frame, frameIndex) {
     rows,
   );
 
-  state.replayRenderer.refs.boardCells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => null));
   state.replayRenderer.refs.stashSlots = [];
 
-  state.replayRenderer.boardView.render({
+  state.replayRenderer.gameView.render({
     sizes: {
       rows,
       cols,
@@ -1327,7 +1289,7 @@ function renderReplayBoardFrame(frame, frameIndex) {
       boardLeft: metrics.boardLeft,
       boardTop: metrics.boardTop,
     },
-    state: {
+    boardState: {
       currentBoard: viewState.board,
       currentIsWhite: true,
       selected: null,
@@ -1337,33 +1299,7 @@ function renderReplayBoardFrame(frame, frameIndex) {
       pendingMoveFrom: viewState.pendingMoveFrom,
       challengeRemoved: viewState.challengeRemoved,
     },
-    onAttachGameHandlers: (cell, uiR, uiC) => {
-      if (!state.replayRenderer.refs.boardCells[uiR]) {
-        state.replayRenderer.refs.boardCells[uiR] = [];
-      }
-      state.replayRenderer.refs.boardCells[uiR][uiC] = { el: cell, uiR, uiC };
-    },
-    labelFont: Math.max(10, Math.floor(0.024 * els.replayPlayArea.clientHeight)),
-    fileLetters: ['A', 'B', 'C', 'D', 'E'],
-    readOnly: true,
-    deploymentLines: true,
-  });
-
-  const whiteName = state.replayPayload?.game?.whiteParticipantLabel || state.replayPayload?.simulation?.participantALabel || 'White';
-  const blackName = state.replayPayload?.game?.blackParticipantLabel || state.replayPayload?.simulation?.participantBLabel || 'Black';
-
-  renderBars({
-    topBar: els.replayTopBar,
-    bottomBar: els.replayBottomBar,
-    sizes: {
-      squareSize: metrics.squareSize,
-      boardWidth: metrics.boardWidth,
-      boardHeight: metrics.boardHeight,
-      boardLeft: metrics.boardLeft,
-      boardTop: metrics.boardTop,
-      playAreaHeight: els.replayPlayArea.clientHeight,
-    },
-    state: {
+    barsState: {
       currentIsWhite: true,
       currentCaptured: Array.isArray(frame.captured) ? frame.captured : [[], []],
       currentDaggers: Array.isArray(frame.daggers) ? frame.daggers : [0, 0],
@@ -1372,15 +1308,19 @@ function renderReplayBoardFrame(frame, frameIndex) {
       clockTop: '--:--',
       clockBottom: '--:--',
       clockLabel: 'Replay',
-      nameTop: blackName,
-      nameBottom: whiteName,
+      nameTop: state.replayPayload?.game?.blackParticipantLabel || state.replayPayload?.simulation?.participantBLabel || 'Black',
+      nameBottom: state.replayPayload?.game?.whiteParticipantLabel || state.replayPayload?.simulation?.participantALabel || 'White',
       winsTop: 0,
       winsBottom: 0,
       connectionTop: null,
       connectionBottom: null,
       isRankedMatch: false,
     },
-    identityMap: PIECE_IMAGES,
+    viewMode: 'god',
+    labelFont: Math.max(10, Math.floor(0.024 * els.replayPlayArea.clientHeight)),
+    fileLetters: ['A', 'B', 'C', 'D', 'E'],
+    readOnly: true,
+    deploymentLines: true,
   });
 
   renderStash({
@@ -1414,7 +1354,7 @@ function renderReplayBoardFrame(frame, frameIndex) {
   renderReplayDeckCard(els.replayWhiteDeck, 'White On-Deck', whiteDeck);
   renderReplayDeckCard(els.replayBlackDeck, 'Black On-Deck', blackDeck);
 
-  applyReplayOverlay(metrics.squareSize, viewState.overlay);
+  applyReplayOverlay(viewState.overlay);
 }
 
 function renderReplayFrame(index) {
@@ -1841,7 +1781,6 @@ async function runTraining() {
   setTrainingProgress(0, { indeterminate: true });
   setTrainingMeta('Submitting training request...');
   setLiveTrainingBadge(`Training ${snapshotId} queued`, 'ok');
-  startTrainingHeartbeat();
   try {
     const result = await apiFetch('/api/v1/ml/training/run', {
       method: 'POST',
@@ -1869,7 +1808,6 @@ async function runTraining() {
   } finally {
     state.trainingRequestActive = false;
     state.trainingHasLiveProgress = false;
-    stopTrainingHeartbeat();
     setTrainingButtonBusy(false);
   }
 }
@@ -1954,25 +1892,6 @@ function setTrainingButtonBusy(isBusy) {
   els.runTrainingBtn.textContent = isBusy ? 'Training...' : 'Run Training';
 }
 
-function stopTrainingHeartbeat() {
-  if (state.trainingHeartbeatTimer) {
-    window.clearInterval(state.trainingHeartbeatTimer);
-    state.trainingHeartbeatTimer = null;
-  }
-  state.trainingHeartbeatStartedAt = 0;
-}
-
-function startTrainingHeartbeat() {
-  stopTrainingHeartbeat();
-  state.trainingHeartbeatStartedAt = Date.now();
-  state.trainingHeartbeatTimer = window.setInterval(() => {
-    if (!state.trainingRequestActive || state.trainingHasLiveProgress) return;
-    const elapsedMs = Date.now() - state.trainingHeartbeatStartedAt;
-    const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000));
-    setTrainingMeta(`Training request in progress... ${elapsedSec}s elapsed`);
-  }, 1000);
-}
-
 function setStopSimulationEnabled(enabled) {
   if (!els.stopSimulationBtn) return;
   els.stopSimulationBtn.disabled = !enabled;
@@ -2039,7 +1958,6 @@ function handleTrainingProgress(payload = {}) {
   if (phase === 'complete') {
     state.trainingRequestActive = false;
     state.trainingHasLiveProgress = false;
-    stopTrainingHeartbeat();
     setTrainingProgress(1);
     setLiveTrainingBadge(`Complete: ${payload.newSnapshotId || 'snapshot created'}`, 'ok');
     setTrainingMeta(`Training complete. New snapshot: ${payload.newSnapshotId || 'created'}`);
@@ -2049,7 +1967,6 @@ function handleTrainingProgress(payload = {}) {
   if (phase === 'error') {
     state.trainingRequestActive = false;
     state.trainingHasLiveProgress = false;
-    stopTrainingHeartbeat();
     setTrainingProgress(0, { error: true });
     setLiveTrainingBadge('Training failed', 'error');
     setTrainingMeta(payload.message || 'Training failed.');

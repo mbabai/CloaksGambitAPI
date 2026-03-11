@@ -1,10 +1,8 @@
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { pieceGlyph as modulePieceGlyph } from '/js/modules/render/pieceGlyph.js';
-import { createBoardView } from '/js/modules/components/boardView.js';
+import { createGameView } from '/js/modules/gameView/view.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
-import { renderBars as renderBarsModule } from '/js/modules/render/bars.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
-import { dimOriginEl, restoreOriginEl } from '/js/modules/dragOpacity.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
@@ -954,9 +952,6 @@ logBootConstantsOnce();
       setStoredUsername(null);
     }
 
-    const tokenValue = getCookie(TOKEN_COOKIE_NAME) || null;
-    setStoredAuthToken(tokenValue);
-
     if (syncCookies) {
       if (sessionInfo.userId) {
         setCookie('userId', sessionInfo.userId, 60 * 60 * 24 * 365);
@@ -1285,12 +1280,11 @@ logBootConstantsOnce();
       if (!fallbackName) {
         fallbackName = getCookie('username') || '';
       }
-      const token = ensureAuthToken();
       updateSessionInfo({
         userId: fallbackId || null,
         username: fallbackName || '',
-        authenticated: Boolean(token),
-        isGuest: !token,
+        authenticated: false,
+        isGuest: true,
       });
     }
 
@@ -1348,36 +1342,22 @@ logBootConstantsOnce();
 
   function setStoredAuthToken(token) {
     try {
-      if (token) {
-        localStorage.setItem(TOKEN_STORAGE_KEY, token);
-      } else {
-        localStorage.removeItem(TOKEN_STORAGE_KEY);
-      }
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
     } catch (err) {
       console.warn('Unable to persist cg_token to localStorage', err);
     }
   }
 
   function ensureAuthToken() {
-    const cookieToken = getCookie(TOKEN_COOKIE_NAME) || null;
     const stored = getStoredAuthToken();
-
-    if (cookieToken) {
-      if (stored !== cookieToken) {
-        setStoredAuthToken(cookieToken);
-      }
-      return cookieToken;
+    if (stored) {
+      setStoredAuthToken(null);
     }
-
-    return stored || null;
+    return null;
   }
 
   function authFetch(input, init = {}) {
     const headers = { ...(init && init.headers ? init.headers : {}) };
-    const token = ensureAuthToken();
-    if (token && !headers.Authorization) {
-      headers.Authorization = `Bearer ${token}`;
-    }
     return fetch(input, { credentials: 'include', ...init, headers });
   }
 
@@ -1416,6 +1396,7 @@ logBootConstantsOnce();
   // Simple board + bars state (plain page)
   let boardRoot = null;
   let boardView = null;
+  let gameView = null;
   let topBar = null;
   let bottomBar = null;
   let stashRoot = null;
@@ -2601,17 +2582,7 @@ logBootConstantsOnce();
       }
       preloadPieceImages();
       preloadBubbleImages();
-      const socketAuth = {};
-      const authToken = ensureAuthToken();
-      if (authToken) {
-        socketAuth.token = authToken;
-      }
-      const handshakeUserId = getStoredUserId() || userId;
-      if (handshakeUserId) {
-        socketAuth.userId = handshakeUserId;
-        userId = handshakeUserId;
-      }
-      socket = io('/', { auth: socketAuth, autoConnect: false });
+      socket = io('/', { withCredentials: true, autoConnect: false });
       spectateController = createSpectateController({
         overlayEl: spectateOverlay,
         playAreaEl: spectatePlayArea,
@@ -4219,27 +4190,31 @@ logBootConstantsOnce();
 
     // Removed global diagnostic click logger now that bubble click handling works
 
-    boardRoot = document.createElement('div');
-    boardRoot.id = 'playAreaBoard';
-    boardRoot.style.position = 'absolute';
-    playAreaRoot.appendChild(boardRoot);
-
-    boardView = createBoardView({
-      container: boardRoot,
-      identityMap: PIECE_IMAGES,
-      refs,
-      annotationsEnabled: true,
-    });
-
     topBar = document.createElement('div');
     topBar.id = 'playAreaTopBar';
     topBar.style.position = 'absolute';
     playAreaRoot.appendChild(topBar);
 
+    boardRoot = document.createElement('div');
+    boardRoot.id = 'playAreaBoard';
+    boardRoot.style.position = 'absolute';
+    playAreaRoot.appendChild(boardRoot);
+
     bottomBar = document.createElement('div');
     bottomBar.id = 'playAreaBottomBar';
     bottomBar.style.position = 'absolute';
     playAreaRoot.appendChild(bottomBar);
+
+    gameView = createGameView({
+      container: playAreaRoot,
+      boardEl: boardRoot,
+      topBarEl: topBar,
+      bottomBarEl: bottomBar,
+      identityMap: PIECE_IMAGES,
+      refs,
+      annotationsEnabled: true,
+    });
+    boardView = gameView.boardView;
 
     // Stash area container
     stashRoot = document.createElement('div');
@@ -4323,7 +4298,7 @@ logBootConstantsOnce();
   }
 
   function renderBoardAndBars() {
-    if (!playAreaRoot || !boardRoot || !boardView || !currentRows || !currentCols) return;
+    if (!playAreaRoot || !boardRoot || !gameView || !boardView || !currentRows || !currentCols) return;
     purgeDanglingDragArtifacts();
     // Reset interactive refs each render
     refs.bottomCells = [];
@@ -4339,33 +4314,6 @@ logBootConstantsOnce();
     // Label font scales with play area height for consistency
     const labelFont = Math.max(10, Math.floor(0.024 * playAreaRoot.clientHeight));
     const fileLetters = ['A','B','C','D','E'];
-
-    // Use modular board renderer
-    boardView.render({
-      sizes: {
-        rows: currentRows,
-        cols: currentCols,
-        squareSize: s,
-        boardLeft: leftPx,
-        boardTop: topPx
-      },
-      state: {
-        currentBoard,
-        currentIsWhite,
-        selected,
-        isInSetup,
-        workingRank,
-        pendingCapture,
-        pendingMoveFrom,
-        challengeRemoved
-      },
-      onAttachHandlers: (cell, target) => attachInteractiveHandlers(cell, target),
-      onAttachGameHandlers: (cell, r, c) => attachGameHandlers(cell, r, c),
-      labelFont,
-      fileLetters,
-      readOnly: false,
-      deploymentLines: true
-    });
 
     // Determine whether to show challenge bubbles on player bars
     const topColor = currentIsWhite ? 1 : 0;
@@ -4430,18 +4378,26 @@ logBootConstantsOnce();
     const connectionBottom = getConnectionDisplayForPlayer(bottomPlayerId, bottomPlayerId && bottomPlayerId !== userId);
     const eloTop = playerElos[topIdx];
     const eloBottom = playerElos[bottomIdx];
-    const bars = renderBarsModule({
-      topBar,
-      bottomBar,
+    const bars = gameView.render({
       sizes: {
+        rows: currentRows,
+        cols: currentCols,
         squareSize: s,
-        boardWidth: bW,
-        boardHeight: bH,
         boardLeft: leftPx,
         boardTop: topPx,
-        playAreaHeight: playAreaRoot.clientHeight
       },
-      state: {
+      boardState: {
+        currentBoard,
+        currentIsWhite,
+        selected,
+        isInSetup,
+        workingRank,
+        pendingCapture,
+        pendingMoveFrom,
+        challengeRemoved,
+        draggingOrigin: dragging?.origin || null,
+      },
+      barsState: {
         currentIsWhite,
         currentCaptured,
         currentDaggers,
@@ -4462,7 +4418,14 @@ logBootConstantsOnce();
         playerIdTop: topPlayerId,
         playerIdBottom: bottomPlayerId
       },
-      identityMap: PIECE_IMAGES,
+      viewMode: 'player',
+      viewerColor: currentIsWhite ? 0 : 1,
+      labelFont,
+      fileLetters,
+      readOnly: false,
+      deploymentLines: true,
+      onAttachHandlers: (cell, target) => attachInteractiveHandlers(cell, target),
+      onAttachGameHandlers: (cell, r, c) => attachGameHandlers(cell, r, c),
       onNameClick: (info) => {
         if (!info || !info.userId) return;
         if (isKnownBotId(info.userId)) return;
@@ -4474,8 +4437,8 @@ logBootConstantsOnce();
       },
       shouldAllowPlayerClick: (id) => !isKnownBotId(id)
     });
-    topClockEl = bars.topClockEl;
-    bottomClockEl = bars.bottomClockEl;
+    topClockEl = bars?.topClockEl || null;
+    bottomClockEl = bars?.bottomClockEl || null;
     updateClockDisplay();
 
     renderDrawOfferPrompt();
@@ -4702,30 +4665,26 @@ logBootConstantsOnce();
     })();
 
     // After board render, apply any pending move overlay bubbles
-    if (!isInSetup && postMoveOverlay && refs.boardCells) {
-      const cellRef = refs.boardCells?.[postMoveOverlay.uiR]?.[postMoveOverlay.uiC];
-      if (cellRef && cellRef.el) {
-        Array.from(cellRef.el.querySelectorAll('img[data-bubble]')).forEach(function(n){ try { n.remove(); } catch(_) {} });
-        const interactive = !!postMoveOverlay.interactive;
-        for (const t of postMoveOverlay.types) {
-          const img = makeBubbleImg(t, currentSquareSize);
-          if (!img) continue;
-          try { cellRef.el.style.position = 'relative'; } catch(_) {}
-          img.style.zIndex = '1001';
-          if (interactive) {
-            img.style.pointerEvents = 'auto';
-            img.style.cursor = 'pointer';
-            img.addEventListener('click', function(ev){
-              try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {}
-              const decl = t.includes('king') ? Declaration.KING : (t.includes('bishop') ? Declaration.BISHOP : (t.includes('rook') ? Declaration.ROOK : Declaration.KNIGHT));
-              commitMoveFromOverlay(decl, { originUI: lastChoiceOrigin, destUI: { uiR: postMoveOverlay.uiR, uiC: postMoveOverlay.uiC } });
-            });
-          } else {
-            img.style.pointerEvents = 'none';
-          }
-          cellRef.el.appendChild(img);
+    if (!isInSetup && postMoveOverlay) {
+      gameView.setBubbleOverlays([{
+        uiR: postMoveOverlay.uiR,
+        uiC: postMoveOverlay.uiC,
+        types: postMoveOverlay.types,
+        interactive: Boolean(postMoveOverlay.interactive),
+        onBubbleClick: ({ type }) => {
+          const decl = type.includes('king')
+            ? Declaration.KING
+            : (type.includes('bishop')
+              ? Declaration.BISHOP
+              : (type.includes('rook') ? Declaration.ROOK : Declaration.KNIGHT));
+          commitMoveFromOverlay(decl, {
+            originUI: lastChoiceOrigin,
+            destUI: { uiR: postMoveOverlay.uiR, uiC: postMoveOverlay.uiC }
+          });
         }
-      }
+      }]);
+    } else {
+      gameView.clearBubbleOverlays();
     }
 
     const readyVisible = (isInSetup && isSetupCompletable());
@@ -5358,23 +5317,6 @@ logBootConstantsOnce();
       }
       return null;
     } catch (_) { return null; }
-  }
-
-  let dragPreview = null; // { uiR, uiC }
-  function updateDragPreview(newUIR, newUIC, types) {
-    try {
-      // Remove previous preview images
-      if (dragPreview && refs.boardCells?.[dragPreview.uiR]?.[dragPreview.uiC]?.el) {
-        const prevCell = refs.boardCells[dragPreview.uiR][dragPreview.uiC].el;
-        Array.from(prevCell.querySelectorAll('img[data-bubble][data-preview]')).forEach(function(n){ try { n.remove(); } catch(_) {} });
-      }
-      dragPreview = null;
-      if (!types || !Array.isArray(types) || types.length === 0) return;
-      const cell = refs.boardCells?.[newUIR]?.[newUIC]?.el;
-      if (!cell) return;
-      types.forEach(function(t){ const img = makeBubbleImg(t, currentSquareSize, { preview: true }); if (img) cell.appendChild(img); });
-      dragPreview = { uiR: newUIR, uiC: newUIC };
-    } catch (_) {}
   }
 
   function serverToUICoords(row, col) {
@@ -6040,11 +5982,7 @@ logBootConstantsOnce();
       }
 
       // Choice UI: if KING + (ROOK or BISHOP), or other two-options, show clickable overlays on the destination
-      const cellRef = refs.boardCells?.[dest.uiR]?.[dest.uiC];
-      if (!cellRef || !cellRef.el) return false;
-      // Clear existing previews and overlays
       clearDragPreviewImgs();
-      Array.from(cellRef.el.querySelectorAll('img[data-bubble]')).forEach(function(n){ try { n.remove(); } catch(_) {} });
       // Optimistically place the piece at destination so it visually moves with the choice bubbles
       const movingNow = currentBoard[from.row][from.col];
       if (movingNow && movingNow.color === myColorIdx) {
@@ -6065,22 +6003,6 @@ logBootConstantsOnce();
         if (legal.includes(Declaration.BISHOP)) types.push('bishopSpeechLeft');
         if (legal.includes(Declaration.ROOK)) types.push('rookSpeechLeft');
       }
-      // Create clickable images
-      types.forEach(function(t){
-        const img = makeBubbleImg(t, currentSquareSize, {});
-        if (!img) return;
-        img.style.cursor = 'pointer';
-        img.addEventListener('click', function(ev){
-          ev.preventDefault(); ev.stopPropagation();
-          const decl = t.includes('king') ? Declaration.KING : (t.includes('bishop') ? Declaration.BISHOP : Declaration.ROOK);
-          commitMove(decl, { alwaysShow: true });
-        });
-        // Ensure overlays remain clickable above the cell content
-        try { cellRef.el.style.position = 'relative'; } catch(_) {}
-        img.style.pointerEvents = 'auto';
-        img.style.zIndex = '1001';
-        cellRef.el.appendChild(img);
-      });
       // Also set overlay so re-render (if any) keeps them
       postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types, interactive: true };
       // Lock interactions while awaiting choice
@@ -6270,9 +6192,21 @@ logBootConstantsOnce();
     ghost.style.left = startCX + 'px';
     ghost.style.top = startCY + 'px';
     document.body.appendChild(ghost);
-    // Dim the origin element directly so we don't need to re-render immediately
-    let originEl = dimOriginEl(origin, refs, 0.5);
-    dragging = { piece, origin, ghostEl: ghost, originEl };
+    let originEl = null;
+    let boardOriginDimming = false;
+    if (origin && (origin.type === 'boardAny' || origin.type === 'board')) {
+      try {
+        boardView?.setTransientState({ draggingOrigin: origin });
+        boardOriginDimming = true;
+      } catch (_) {}
+    } else {
+      if (origin.type === 'stash') originEl = refs.stashSlots?.[origin.index]?.el || null;
+      else if (origin.type === 'deck') originEl = refs.deckEl || null;
+      try {
+        if (originEl) originEl.style.opacity = '0.5';
+      } catch (_) {}
+    }
+    dragging = { piece, origin, ghostEl: ghost, originEl, boardOriginDimming };
     suppressMouseUntil = Date.now() + 700; // extend suppression window during drag
     // if (DRAG_DEBUG) console.log('[drag] ghost init', { x: startCX, y: startCY, origin });
     // Do not re-render here; we dim the origin element directly to avoid disrupting touch event streams
@@ -6285,17 +6219,8 @@ logBootConstantsOnce();
       if (typeof x === 'number') ghost.style.left = x + 'px';
       if (typeof y === 'number') ghost.style.top = y + 'px';
       // Drag preview bubbles following the pointer over legal destination squares
-      if (!isInSetup && refs.boardCells) {
-        let over = null; let overRect = null;
-        for (let rIdx = 0; rIdx < refs.boardCells.length; rIdx++) {
-          const row = refs.boardCells[rIdx]; if (!row) continue;
-          for (let cIdx = 0; cIdx < row.length; cIdx++) {
-            const entry = row[cIdx]; if (!entry || !entry.el) continue;
-            const b = entry.el.getBoundingClientRect();
-            if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) { over = entry; overRect = b; break; }
-          }
-          if (over) break;
-        }
+      if (!isInSetup && boardView) {
+        const over = boardView.hitTestBoard(x, y);
         if (over && dragging.origin && dragging.origin.type === 'boardAny' && (currentPlayerTurn === (currentIsWhite ? 0 : 1))) {
           const types = computeBubbleTypesForMove(dragging.origin, { uiR: over.uiR, uiC: over.uiC });
           if (types) {
@@ -6362,7 +6287,13 @@ logBootConstantsOnce();
         }
       }
       try { document.body.removeChild(ghost); } catch (_) {}
-      try { restoreOriginEl(dragging.originEl); } catch(_) {}
+      try {
+        if (dragging.boardOriginDimming) {
+          boardView?.clearTransientState(['draggingOrigin']);
+        } else if (dragging.originEl) {
+          dragging.originEl.style.opacity = '';
+        }
+      } catch(_) {}
       dragging = null; selected = null; renderBoardAndBars();
       purgeDanglingDragArtifacts();
       suppressMouseUntil = Date.now() + 400; // brief suppression post-drag
@@ -6377,18 +6308,10 @@ logBootConstantsOnce();
 
   function hitTestDrop(x, y) {
     // If not in setup, allow dropping on any board cell
-    if (!isInSetup && refs.boardCells) {
-      for (let rIdx = 0; rIdx < refs.boardCells.length; rIdx++) {
-        const row = refs.boardCells[rIdx];
-        if (!row) continue;
-        for (let cIdx = 0; cIdx < row.length; cIdx++) {
-          const entry = row[cIdx];
-          if (!entry || !entry.el) continue;
-          const b = entry.el.getBoundingClientRect();
-          if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) {
-            return { type: 'boardAny', uiR: entry.uiR, uiC: entry.uiC };
-          }
-        }
+    if (!isInSetup && boardView) {
+      const hit = boardView.hitTestBoard(x, y);
+      if (hit) {
+        return { type: 'boardAny', uiR: hit.uiR, uiC: hit.uiC };
       }
     }
     // Deck first

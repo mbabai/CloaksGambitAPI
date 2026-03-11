@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const Game = require('../../../models/Game');
 const getServerConfig = require('../../../utils/getServerConfig');
 const eventBus = require('../../../eventBus');
+const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 
 const DRAW_COOLDOWN_MS = 10000;
 
@@ -16,19 +16,13 @@ function normalizeTime(value) {
 router.post('/', async (req, res) => {
   try {
     const { gameId, color, action } = req.body || {};
-    const normalizedColor = parseInt(color, 10);
-    if (normalizedColor !== 0 && normalizedColor !== 1) {
-      return res.status(400).json({ message: 'Invalid color' });
-    }
+    const context = await requireGamePlayerContext(req, res, { gameId, color });
+    if (!context) return;
+    const { game, color: normalizedColor } = context;
 
     const normalizedAction = typeof action === 'string' ? action.toLowerCase() : '';
     if (!['offer', 'accept', 'decline'].includes(normalizedAction)) {
       return res.status(400).json({ message: 'Invalid draw action' });
-    }
-
-    const game = await Game.findById(gameId);
-    if (!game) {
-      return res.status(404).json({ message: 'Game not found' });
     }
 
     if (!game.isActive) {
