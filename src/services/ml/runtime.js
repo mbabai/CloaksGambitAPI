@@ -1,6 +1,9 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const mongoose = require('mongoose');
+const { execFile } = require('child_process');
+const { Worker } = require('worker_threads');
 
 const {
   WHITE,
@@ -11,13 +14,16 @@ const {
   actionKey,
 } = require('./engine');
 const {
+  INFERRED_IDENTITIES,
   createDefaultModelBundle,
   cloneModelBundle,
   createOptimizerState,
+  normalizeModelBundle,
   trainPolicyModel,
   trainValueModel,
   trainIdentityModel,
 } = require('./modeling');
+const { getPythonTrainingBridge } = require('./pythonTrainingBridge');
 const { runHiddenInfoMcts } = require('./mcts');
 const {
   BUILTIN_PARTICIPANTS,
@@ -26,12 +32,22 @@ const {
   getBuiltinParticipant,
   chooseBuiltinAction,
 } = require('./builtinBots');
+const {
+  appendMlDebugLog,
+  appendMlRunDebugLog,
+  appendMlTrainingDebugLog,
+  getMlDebugLogPaths,
+} = require('./mlDebugLogger');
 const eventBus = require('../../eventBus');
+const MlRunModel = require('../../models/MlRun');
+const MlRunCheckpointModel = require('../../models/MlRunCheckpoint');
 const SimulationModel = require('../../models/Simulation');
 const SimulationGameModel = require('../../models/SimulationGame');
 const TrainingRunModel = require('../../models/TrainingRun');
 const Match = require('../../models/Match');
 const Game = require('../../models/Game');
+const User = require('../../models/User');
+const lobbyStore = require('../../state/lobby');
 const getServerConfig = require('../../utils/getServerConfig');
 const matchesCreateRoute = require('../../routes/v1/matches/create');
 const gamesCreateRoute = require('../../routes/v1/games/create');
@@ -50,17 +66,309 @@ const SIMULATION_CHECKPOINT_GAME_INTERVAL = 2;
 const SIMULATION_CHECKPOINT_MS = 5000;
 const LIVE_STATUS_RETENTION_MS = 30000;
 const SAVE_RENAME_RETRY_DELAYS_MS = [25, 75, 150];
+const DEFAULT_RUN_CHECKPOINT_INTERVAL = 100;
+const DEFAULT_RUN_MAX_REPLAY_GAMES = 240;
+const RUN_LOOP_YIELD_EVERY_GAMES = 1;
+const RUN_PROGRESS_EMIT_MIN_INTERVAL_MS = 750;
+const RUN_STATE_SAVE_INTERVAL_MS = 5000;
+const RUN_STATE_PERSIST_REPLAY_POSITION_LIMIT = 1024;
+const RUN_STATE_PERSIST_REPLAY_IDENTITY_MULTIPLIER = 8;
+const RUN_STATE_PERSIST_REPLAY_POSITION_FALLBACK_LIMIT = 128;
+const RUN_PERSISTENCE_LAYOUT_VERSION = 1;
+const RUN_CHECKPOINT_HISTORY_LIMIT = 12;
+const RUN_REPLAY_ACTION_STATS_LIMIT = 8;
+const RUN_REPLAY_PARITY_MISMATCH_LIMIT = 8;
+const RUN_EVAL_BASELINE_GAMES = 50;
+const RUN_EVAL_BASELINE_ADVANCE_STREAK = 3;
+const RESOURCE_SAMPLE_INTERVAL_MS = 2000;
+const RESOURCE_HISTORY_WINDOW_MS = 10 * 60 * 1000;
+const RESOURCE_SAMPLE_HISTORY_LIMIT = Math.ceil(RESOURCE_HISTORY_WINDOW_MS / RESOURCE_SAMPLE_INTERVAL_MS);
+const ML_PARALLEL_TASK_WORKER_PATH = path.join(__dirname, 'parallelTaskWorker.js');
+const TRAINING_BACKENDS = Object.freeze({
+  AUTO: 'auto',
+  NODE: 'node',
+  PYTHON: 'python',
+});
+const TRAINING_DEVICE_PREFERENCES = Object.freeze({
+  AUTO: 'auto',
+  CPU: 'cpu',
+  CUDA: 'cuda',
+});
+const RUN_SEED_MODES = Object.freeze({
+  BOOTSTRAP: 'bootstrap',
+  RANDOM: 'random',
+  PROMOTED_GENERATION: 'promoted_generation',
+});
+const LIVE_TEST_SIDE_PREFERENCES = Object.freeze({
+  RANDOM: 'random',
+  WHITE: 'white',
+  BLACK: 'black',
+});
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeRunStatus(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isRunStatusActive(value) {
+  const status = normalizeRunStatus(value);
+  return status === 'running' || status === 'stopping';
+}
+
+function isRunStatusResumable(value) {
+  const status = normalizeRunStatus(value);
+  return status === 'running' || status === 'stopping' || status === 'stopped';
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getSystemParallelism() {
+  if (typeof os.availableParallelism === 'function') {
+    return Math.max(1, Math.floor(os.availableParallelism()));
+  }
+  return Math.max(1, Math.floor((Array.isArray(os.cpus()) ? os.cpus().length : 1) || 1));
+}
+
+function defaultParallelGameWorkers() {
+  return Math.max(1, getSystemParallelism());
+}
+
+function defaultParallelTrainingHeadWorkers() {
+  return Math.max(1, Math.min(3, getSystemParallelism()));
+}
+
+function normalizeTrainingBackend(value, fallback = TRAINING_BACKENDS.AUTO) {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  if (normalized === TRAINING_BACKENDS.NODE) return TRAINING_BACKENDS.NODE;
+  if (normalized === TRAINING_BACKENDS.PYTHON) return TRAINING_BACKENDS.PYTHON;
+  return TRAINING_BACKENDS.AUTO;
+}
+
+function normalizeTrainingDevicePreference(value, fallback = TRAINING_DEVICE_PREFERENCES.AUTO) {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  if (normalized === TRAINING_DEVICE_PREFERENCES.CPU) return TRAINING_DEVICE_PREFERENCES.CPU;
+  if (normalized === TRAINING_DEVICE_PREFERENCES.CUDA) return TRAINING_DEVICE_PREFERENCES.CUDA;
+  return TRAINING_DEVICE_PREFERENCES.AUTO;
+}
+
+function normalizeLiveTestSidePreference(value, fallback = LIVE_TEST_SIDE_PREFERENCES.RANDOM) {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  if (normalized === LIVE_TEST_SIDE_PREFERENCES.WHITE) return LIVE_TEST_SIDE_PREFERENCES.WHITE;
+  if (normalized === LIVE_TEST_SIDE_PREFERENCES.BLACK) return LIVE_TEST_SIDE_PREFERENCES.BLACK;
+  return LIVE_TEST_SIDE_PREFERENCES.RANDOM;
+}
+
+function compactAlphaNumeric(value, maxLength = 6) {
+  const sanitized = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  return sanitized.slice(-Math.max(1, maxLength)) || 'run';
+}
+
+function buildMlTestBotUsername(runId, generation) {
+  const runSuffix = compactAlphaNumeric(runId, 4).toUpperCase();
+  const generationLabel = `G${Math.max(0, Number(generation || 0))}`;
+  const base = `ML${runSuffix}${generationLabel}`;
+  return base.slice(0, 18);
+}
+
+function buildMlTestBotEmail(runId, generation) {
+  const runSuffix = compactAlphaNumeric(runId, 12);
+  const generationLabel = Math.max(0, Number(generation || 0));
+  return `ml.test.${runSuffix}.g${generationLabel}@cg-bots.local`;
+}
+
+function buildPromotedModelBotId(runId, generation) {
+  const normalizedRunId = String(runId || '').trim();
+  const normalizedGeneration = Math.max(0, Number(generation || 0));
+  return `generation:${normalizedRunId}:${normalizedGeneration}`;
+}
+
+function parsePromotedModelBotId(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(/^generation:([^:]+):(\d+)$/i);
+  if (!match) return null;
+  return {
+    runId: match[1],
+    generation: Number.parseInt(match[2], 10),
+  };
+}
+
+function uniqueStrings(values = []) {
+  const normalized = [];
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    if (typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (!trimmed || normalized.includes(trimmed)) return;
+    normalized.push(trimmed);
+  });
+  return normalized;
+}
+
+function isPromotedGenerationRecord(generation) {
+  if (!generation || generation.approved === false || !generation.modelBundle) {
+    return false;
+  }
+  return Boolean(
+    generation.promotedAt
+    || generation.isBest
+    || String(generation.source || '').toLowerCase() === 'promoted'
+  );
+}
+
+function isNodeAdamOptimizerState(state) {
+  return Boolean(
+    state
+    && typeof state === 'object'
+    && Number.isFinite(state.step)
+    && Array.isArray(state.layers)
+  );
+}
+
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeWorkerError(err, fallback = 'Worker task failed') {
+  if (!err) return fallback;
+  if (typeof err === 'string') return err;
+  if (typeof err?.message === 'string' && err.message.trim()) return err.message;
+  return fallback;
+}
+
+async function terminateWorkers(workerInfos = []) {
+  await Promise.all((Array.isArray(workerInfos) ? workerInfos : []).map(async (workerInfo) => {
+    if (!workerInfo?.worker) return;
+    try {
+      await workerInfo.worker.terminate();
+    } catch (_) {}
+  }));
+}
+
+async function runParallelWorkerTasks(taskPayloads = [], workerCount = 1, options = {}) {
+  const tasks = Array.isArray(taskPayloads) ? taskPayloads.filter(Boolean) : [];
+  if (!tasks.length) return [];
+  const concurrency = Math.max(1, Math.min(Math.floor(workerCount || 1), tasks.length));
+  if (concurrency <= 1) {
+    const sequentialResults = [];
+    for (let index = 0; index < tasks.length; index += 1) {
+      if (typeof options.shouldStop === 'function' && options.shouldStop()) {
+        break;
+      }
+      if (typeof options.runTask !== 'function') {
+        throw new Error('runParallelWorkerTasks requires options.runTask for sequential execution');
+      }
+      sequentialResults.push(await options.runTask(tasks[index], index));
+    }
+    return sequentialResults;
+  }
+
+  const workerInfos = [];
+  const results = [];
+  let nextTaskIndex = 0;
+  let activeTasks = 0;
+  let completedTasks = 0;
+  let stopping = false;
+  let resolved = false;
+
+  return new Promise((resolve, reject) => {
+    const finishResolve = async () => {
+      if (resolved) return;
+      resolved = true;
+      await terminateWorkers(workerInfos);
+      resolve(results.filter((entry) => entry !== undefined));
+    };
+
+    const finishReject = async (err) => {
+      if (resolved) return;
+      resolved = true;
+      stopping = true;
+      await terminateWorkers(workerInfos);
+      reject(err);
+    };
+
+    const maybeDone = () => {
+      if (resolved) return;
+      const noMoreTasks = nextTaskIndex >= tasks.length || (typeof options.shouldStop === 'function' && options.shouldStop());
+      if (noMoreTasks && activeTasks === 0) {
+        finishResolve().catch((err) => {
+          reject(err);
+        });
+      }
+    };
+
+    const assignNextTask = (workerInfo) => {
+      if (!workerInfo || stopping || resolved) return;
+      if (typeof options.shouldStop === 'function' && options.shouldStop()) {
+        maybeDone();
+        return;
+      }
+      if (nextTaskIndex >= tasks.length) {
+        maybeDone();
+        return;
+      }
+      const taskIndex = nextTaskIndex;
+      nextTaskIndex += 1;
+      activeTasks += 1;
+      workerInfo.activeTaskIndex = taskIndex;
+      workerInfo.worker.postMessage({
+        requestId: taskIndex,
+        task: tasks[taskIndex],
+      });
+    };
+
+    for (let workerIndex = 0; workerIndex < concurrency; workerIndex += 1) {
+      const worker = new Worker(ML_PARALLEL_TASK_WORKER_PATH);
+      const workerInfo = {
+        worker,
+        activeTaskIndex: null,
+      };
+      workerInfos.push(workerInfo);
+
+      worker.on('message', (message = {}) => {
+        if (resolved || stopping) return;
+        const taskIndex = Number.isInteger(message.requestId)
+          ? message.requestId
+          : workerInfo.activeTaskIndex;
+        workerInfo.activeTaskIndex = null;
+        activeTasks = Math.max(0, activeTasks - 1);
+        completedTasks += 1;
+
+        if (message.ok !== true) {
+          stopping = true;
+          finishReject(new Error(normalizeWorkerError(message.error, 'Parallel worker task failed'))).catch(() => {});
+          return;
+        }
+
+        results[taskIndex] = message.result;
+        assignNextTask(workerInfo);
+        if (!stopping && completedTasks >= tasks.length) {
+          maybeDone();
+        }
+      });
+
+      worker.on('error', (err) => {
+        if (resolved || stopping) return;
+        stopping = true;
+        finishReject(err).catch(() => {});
+      });
+
+      worker.on('exit', (code) => {
+        if (resolved || stopping) return;
+        if (code !== 0) {
+          stopping = true;
+          finishReject(new Error(`Parallel worker exited with code ${code}`)).catch(() => {});
+        }
+      });
+    }
+
+    workerInfos.forEach((workerInfo) => assignNextTask(workerInfo));
+  });
 }
 
 function ensureDirSync(targetDir) {
@@ -69,9 +377,21 @@ function ensureDirSync(targetDir) {
   }
 }
 
+function sanitizePathSegment(value, fallback = 'item') {
+  const sanitized = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return sanitized || fallback;
+}
+
 function isRetriableRenameError(err) {
   const code = String(err?.code || '').toUpperCase();
   return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+}
+
+function isInvalidStringLengthError(err) {
+  return err instanceof RangeError && /invalid string length/i.test(String(err?.message || ''));
 }
 
 async function persistJsonWithFallback(targetPath, payload) {
@@ -104,10 +424,177 @@ async function persistJsonWithFallback(targetPath, payload) {
   }
 }
 
+async function readJsonIfExists(targetPath) {
+  try {
+    const raw = await fs.promises.readFile(targetPath, 'utf8');
+    return JSON.parse(raw);
+  } catch (err) {
+    if (String(err?.code || '').toUpperCase() === 'ENOENT') {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function removeFileIfExists(targetPath) {
+  if (!targetPath) return;
+  await fs.promises.unlink(targetPath).catch(() => {});
+}
+
+async function removeDirectoryIfExists(targetPath) {
+  if (!targetPath) return;
+  await fs.promises.rm(targetPath, { recursive: true, force: true }).catch(() => {});
+}
+
+function toPortableRelativePath(rootDir, targetPath) {
+  if (!rootDir || !targetPath) return null;
+  const relativePath = path.relative(rootDir, targetPath);
+  return relativePath.split(path.sep).join('/');
+}
+
+function resolvePortableRelativePath(rootDir, relativePath) {
+  if (!rootDir || !relativePath) return null;
+  return path.resolve(rootDir, ...String(relativePath).split(/[\\/]+/));
+}
+
 function clampPositiveInt(value, fallback, min = 1, max = 100000) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function clampNonNegativeInt(value, fallback, max = 100000) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(0, Math.floor(parsed)));
+}
+
+function createCpuUsageSnapshot() {
+  const cpus = Array.isArray(os.cpus()) ? os.cpus() : [];
+  const totals = cpus.reduce((acc, cpu) => {
+    const times = cpu?.times || {};
+    acc.idle += Number(times.idle || 0);
+    acc.total += Object.values(times).reduce((sum, value) => sum + Number(value || 0), 0);
+    return acc;
+  }, { idle: 0, total: 0 });
+  return {
+    capturedAtMs: Date.now(),
+    idle: totals.idle,
+    total: totals.total,
+  };
+}
+
+function computeCpuUsagePercent(previousSnapshot, nextSnapshot) {
+  if (!previousSnapshot || !nextSnapshot) return null;
+  const totalDelta = Number(nextSnapshot.total || 0) - Number(previousSnapshot.total || 0);
+  const idleDelta = Number(nextSnapshot.idle || 0) - Number(previousSnapshot.idle || 0);
+  if (!Number.isFinite(totalDelta) || totalDelta <= 0) return null;
+  const usagePercent = ((totalDelta - Math.max(0, idleDelta)) / totalDelta) * 100;
+  if (!Number.isFinite(usagePercent)) return null;
+  return Math.max(0, Math.min(100, usagePercent));
+}
+
+function appendResourceSample(history = [], sample = null) {
+  const nextHistory = Array.isArray(history) ? history.slice() : [];
+  if (sample && Number.isFinite(sample.percent)) {
+    nextHistory.push({
+      timestamp: sample.timestamp || nowIso(),
+      percent: Math.max(0, Math.min(100, Number(sample.percent))),
+    });
+  }
+  while (nextHistory.length > RESOURCE_SAMPLE_HISTORY_LIMIT) {
+    nextHistory.shift();
+  }
+  return nextHistory;
+}
+
+function createEmptyResourceTelemetry() {
+  return {
+    sampleIntervalMs: RESOURCE_SAMPLE_INTERVAL_MS,
+    windowMs: RESOURCE_HISTORY_WINDOW_MS,
+    cpu: {
+      available: true,
+      currentPercent: null,
+      updatedAt: null,
+      history: [],
+    },
+    gpu: {
+      available: null,
+      currentPercent: null,
+      updatedAt: null,
+      history: [],
+      label: null,
+      source: null,
+    },
+  };
+}
+
+function queryGpuUsageFromNvidiaSmi() {
+  return new Promise((resolve) => {
+    execFile(
+      'nvidia-smi',
+      ['--query-gpu=utilization.gpu,name', '--format=csv,noheader,nounits'],
+      { timeout: 1500, windowsHide: true },
+      (err, stdout = '') => {
+        if (err) {
+          resolve({
+            available: false,
+            currentPercent: null,
+            label: null,
+            source: 'nvidia-smi',
+          });
+          return;
+        }
+        const rows = String(stdout || '')
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        if (!rows.length) {
+          resolve({
+            available: false,
+            currentPercent: null,
+            label: null,
+            source: 'nvidia-smi',
+          });
+          return;
+        }
+
+        const parsedRows = rows
+          .map((line) => {
+            const parts = line.split(',').map((part) => part.trim());
+            const usagePercent = Number.parseFloat(parts[0] || '');
+            const label = parts.slice(1).join(', ') || null;
+            return {
+              usagePercent: Number.isFinite(usagePercent) ? Math.max(0, Math.min(100, usagePercent)) : null,
+              label,
+            };
+          })
+          .filter((entry) => Number.isFinite(entry.usagePercent));
+
+        if (!parsedRows.length) {
+          resolve({
+            available: false,
+            currentPercent: null,
+            label: null,
+            source: 'nvidia-smi',
+          });
+          return;
+        }
+
+        const hottest = parsedRows.reduce((best, entry) => (
+          !best || Number(entry.usagePercent) > Number(best.usagePercent) ? entry : best
+        ), null);
+        resolve({
+          available: true,
+          currentPercent: Number(hottest?.usagePercent || 0),
+          label: parsedRows.length === 1
+            ? (parsedRows[0].label || 'GPU')
+            : `${parsedRows.length} GPUs`,
+          source: 'nvidia-smi',
+        });
+      },
+    );
+  });
 }
 
 function normalizeFloat(value, fallback, min = -Infinity, max = Infinity) {
@@ -261,11 +748,15 @@ function summarizeGameForStorage(game) {
 
 function compactSimulationForState(simulation) {
   if (!simulation || typeof simulation !== 'object') return simulation;
-  if (!simulation.gamesStoredExternally) return simulation;
   const games = Array.isArray(simulation.games) ? simulation.games : [];
+  const isTerminal = !['running', 'stopping'].includes(String(simulation.status || '').toLowerCase());
+  if (!simulation.gamesStoredExternally && !isTerminal) {
+    return simulation;
+  }
   return {
     ...simulation,
-    gamesStoredExternally: true,
+    gamesStoredExternally: Boolean(simulation.gamesStoredExternally),
+    gameDetailsCompacted: simulation.gamesStoredExternally ? Boolean(simulation.gameDetailsCompacted) : true,
     gameCount: Number.isFinite(simulation.gameCount)
       ? simulation.gameCount
       : games.length,
@@ -275,23 +766,703 @@ function compactSimulationForState(simulation) {
   };
 }
 
+function compactActionStatsForReplay(stats = []) {
+  return (Array.isArray(stats) ? stats : [])
+    .slice()
+    .sort((left, right) => Number(right?.visits || 0) - Number(left?.visits || 0))
+    .slice(0, RUN_REPLAY_ACTION_STATS_LIMIT)
+    .map((entry) => ({
+      actionKey: typeof entry?.actionKey === 'string'
+        ? entry.actionKey
+        : (typeof entry?.moveKey === 'string' ? entry.moveKey : ''),
+      moveKey: typeof entry?.moveKey === 'string'
+        ? entry.moveKey
+        : (typeof entry?.actionKey === 'string' ? entry.actionKey : ''),
+      visits: Number(entry?.visits || 0),
+      prior: Number(entry?.prior || 0),
+      q: Number(entry?.q || 0),
+    }));
+}
+
+function compactDecisionTraceForReplay(trace = {}) {
+  const actionStats = compactActionStatsForReplay(trace?.actionStats || trace?.moveStats || []);
+  return {
+    iterations: Number(trace?.iterations || 0),
+    rootVisits: Number(trace?.rootVisits || 0),
+    kingBluffGuardApplied: Boolean(trace?.kingBluffGuardApplied),
+    actionStats,
+    moveStats: actionStats,
+    liveRoute: {
+      fallbackUsed: Boolean(trace?.liveRoute?.fallbackUsed),
+      parityMismatches: Array.isArray(trace?.liveRoute?.parityMismatches)
+        ? trace.liveRoute.parityMismatches
+          .slice(0, RUN_REPLAY_PARITY_MISMATCH_LIMIT)
+          .map((entry) => String(entry))
+        : [],
+    },
+  };
+}
+
+function compactDecisionTrainingRecordForReplay(trainingRecord = null) {
+  const selectedActionKey = trainingRecord?.policy?.selectedActionKey || trainingRecord?.policy?.selectedMoveKey || null;
+  const selectedMoveKey = trainingRecord?.policy?.selectedMoveKey || trainingRecord?.policy?.selectedActionKey || null;
+  if (!selectedActionKey && !selectedMoveKey) {
+    return null;
+  }
+  return {
+    policy: {
+      selectedActionKey,
+      selectedMoveKey,
+    },
+  };
+}
+
+function compactDecisionForReplay(decision = null) {
+  if (!decision || typeof decision !== 'object') return null;
+  return {
+    ply: Number.isFinite(decision?.ply) ? Number(decision.ply) : null,
+    player: Number.isFinite(decision?.player) ? Number(decision.player) : null,
+    participantId: decision?.participantId || null,
+    participantLabel: decision?.participantLabel || null,
+    snapshotId: decision?.snapshotId || null,
+    action: decision?.action ? deepClone(decision.action) : null,
+    move: decision?.move ? deepClone(decision.move) : null,
+    valueEstimate: Number.isFinite(decision?.valueEstimate) ? Number(decision.valueEstimate) : 0,
+    trace: compactDecisionTraceForReplay(decision?.trace || {}),
+    trainingRecord: compactDecisionTrainingRecordForReplay(decision?.trainingRecord || null),
+  };
+}
+
+function compactReplayFrameForRun(frame = null) {
+  if (!frame || typeof frame !== 'object') return null;
+  return {
+    ply: Number.isFinite(frame?.ply) ? Number(frame.ply) : 0,
+    toMove: Number.isFinite(frame?.toMove) ? Number(frame.toMove) : null,
+    winner: Number.isFinite(frame?.winner) ? Number(frame.winner) : null,
+    winReason: frame?.winReason ?? null,
+    note: frame?.note || null,
+    isActive: frame?.isActive !== false,
+    board: Array.isArray(frame?.board) ? deepClone(frame.board) : [],
+    stashes: Array.isArray(frame?.stashes) ? deepClone(frame.stashes) : [[], []],
+    onDecks: Array.isArray(frame?.onDecks) ? deepClone(frame.onDecks) : [null, null],
+    onDeckingPlayer: Number.isFinite(frame?.onDeckingPlayer) ? Number(frame.onDeckingPlayer) : null,
+    daggers: Array.isArray(frame?.daggers) ? deepClone(frame.daggers) : [0, 0],
+    captured: Array.isArray(frame?.captured) ? deepClone(frame.captured) : [[], []],
+    lastMove: frame?.lastMove ? deepClone(frame.lastMove) : null,
+    lastAction: frame?.lastAction ? deepClone(frame.lastAction) : null,
+    actionCount: Number.isFinite(frame?.actionCount) ? Number(frame.actionCount) : 0,
+    moveCount: Number.isFinite(frame?.moveCount) ? Number(frame.moveCount) : 0,
+    decision: compactDecisionForReplay(frame?.decision || null),
+  };
+}
+
+function compactRunRetainedGame(game = null) {
+  if (!game || typeof game !== 'object') return null;
+  return {
+    id: game.id,
+    createdAt: game.createdAt || nowIso(),
+    seed: game.seed,
+    setupMode: game.setupMode || 'live-route',
+    whiteParticipantId: game.whiteParticipantId || null,
+    blackParticipantId: game.blackParticipantId || null,
+    whiteParticipantLabel: game.whiteParticipantLabel || null,
+    blackParticipantLabel: game.blackParticipantLabel || null,
+    winner: Number.isFinite(game?.winner) ? Number(game.winner) : null,
+    winReason: game?.winReason ?? null,
+    plies: Number.isFinite(game?.plies) ? Number(game.plies) : 0,
+    phase: game.phase || 'selfplay',
+    checkpointIndex: Number(game.checkpointIndex || 0),
+    whiteGeneration: Number.isFinite(game?.whiteGeneration) ? Number(game.whiteGeneration) : null,
+    blackGeneration: Number.isFinite(game?.blackGeneration) ? Number(game.blackGeneration) : null,
+    retainedAt: game.retainedAt || nowIso(),
+    actionHistory: Array.isArray(game?.actionHistory) ? deepClone(game.actionHistory) : [],
+    moveHistory: Array.isArray(game?.moveHistory) ? deepClone(game.moveHistory) : [],
+    replay: Array.isArray(game?.replay)
+      ? game.replay.map((frame) => compactReplayFrameForRun(frame)).filter(Boolean)
+      : [],
+    result: game?.result ? deepClone(game.result) : null,
+  };
+}
+
+function summarizeRunReplayGame(game = null) {
+  if (!game || typeof game !== 'object') return null;
+  return {
+    id: game.id,
+    createdAt: game.createdAt || nowIso(),
+    durationMs: Number(game.durationMs || 0),
+    phase: game.phase || 'selfplay',
+    whiteGeneration: Number.isFinite(game?.whiteGeneration) ? Number(game.whiteGeneration) : 0,
+    blackGeneration: Number.isFinite(game?.blackGeneration) ? Number(game.blackGeneration) : 0,
+    whiteParticipantLabel: game.whiteParticipantLabel || `G${game.whiteGeneration}`,
+    blackParticipantLabel: game.blackParticipantLabel || `G${game.blackGeneration}`,
+    winner: Number.isFinite(game.winner) ? Number(game.winner) : null,
+    winnerGeneration: Number.isFinite(game.winner)
+      ? (Number(game.winner) === WHITE
+        ? Number(game.whiteGeneration || 0)
+        : Number(game.blackGeneration || 0))
+      : null,
+    winnerLabel: Number.isFinite(game.winner)
+      ? (Number(game.winner) === WHITE
+        ? (game.whiteParticipantLabel || `G${game.whiteGeneration}`)
+        : (game.blackParticipantLabel || `G${game.blackGeneration}`))
+      : 'Draw',
+    title: `${game.whiteParticipantLabel || `G${game.whiteGeneration}`} vs ${game.blackParticipantLabel || `G${game.blackGeneration}`}`,
+    winReason: game.winReason ?? null,
+    plies: Number(game.plies || 0),
+    replayFrameCount: Array.isArray(game?.replay) ? game.replay.length : 0,
+  };
+}
+
 function createEmptyState() {
   return {
-    version: 2,
+    version: 3,
     counters: {
       snapshot: 1,
       simulation: 1,
       game: 1,
       training: 1,
+      run: 1,
     },
     snapshots: [],
     simulations: [],
     trainingRuns: [],
+    runs: [],
+    promotedBots: {
+      enabledIds: [],
+    },
     activeJobs: {
       simulation: null,
       training: null,
     },
   };
+}
+
+function normalizePromotedBotState(state) {
+  return {
+    enabledIds: uniqueStrings(state?.enabledIds || []),
+  };
+}
+
+function normalizeModelBundleForStorage(modelBundle) {
+  if (!modelBundle || typeof modelBundle !== 'object') return null;
+  return cloneModelBundle(normalizeModelBundle(deepClone(modelBundle)));
+}
+
+function getNetworkShapeSignature(network) {
+  return {
+    inputSize: Number(network?.inputSize || 0),
+    outputSize: Number(network?.outputSize || 0),
+    hiddenSizes: Array.isArray(network?.hiddenSizes)
+      ? network.hiddenSizes.map((size) => Number(size || 0))
+      : [],
+    layers: Array.isArray(network?.layers)
+      ? network.layers.map((layer) => ({
+        inputSize: Number(layer?.inputSize || 0),
+        outputSize: Number(layer?.outputSize || 0),
+      }))
+      : [],
+  };
+}
+
+function getModelBundleShapeSignature(modelBundle) {
+  return {
+    version: Number(modelBundle?.version || 0),
+    policy: getNetworkShapeSignature(modelBundle?.policy?.network),
+    value: getNetworkShapeSignature(modelBundle?.value?.network),
+    identity: {
+      network: getNetworkShapeSignature(modelBundle?.identity?.network),
+      inferredIdentityCount: Array.isArray(modelBundle?.identity?.inferredIdentities)
+        ? modelBundle.identity.inferredIdentities.length
+        : 0,
+    },
+  };
+}
+
+function normalizeModelBundleArtifact(modelBundle) {
+  if (!modelBundle || typeof modelBundle !== 'object') {
+    return {
+      modelBundle: null,
+      shapeChanged: false,
+    };
+  }
+  const normalizedModelBundle = normalizeModelBundleForStorage(modelBundle);
+  const shapeChanged = JSON.stringify(getModelBundleShapeSignature(modelBundle))
+    !== JSON.stringify(getModelBundleShapeSignature(normalizedModelBundle));
+  return {
+    modelBundle: normalizedModelBundle,
+    shapeChanged,
+  };
+}
+
+function isNodeAdamLayerCompatible(stateLayer, networkLayer) {
+  const inputSize = Number(networkLayer?.inputSize || 0);
+  const outputSize = Number(networkLayer?.outputSize || 0);
+  if (!stateLayer || typeof stateLayer !== 'object') return false;
+  if (!Array.isArray(stateLayer.mWeights) || stateLayer.mWeights.length !== outputSize) return false;
+  if (!Array.isArray(stateLayer.vWeights) || stateLayer.vWeights.length !== outputSize) return false;
+  if (!Array.isArray(stateLayer.mBiases) || stateLayer.mBiases.length !== outputSize) return false;
+  if (!Array.isArray(stateLayer.vBiases) || stateLayer.vBiases.length !== outputSize) return false;
+  if (stateLayer.mWeights.some((row) => !Array.isArray(row) || row.length !== inputSize)) return false;
+  if (stateLayer.vWeights.some((row) => !Array.isArray(row) || row.length !== inputSize)) return false;
+  return true;
+}
+
+function isNodeAdamOptimizerStateCompatibleWithNetwork(state, network) {
+  if (!isNodeAdamOptimizerState(state)) return false;
+  const layers = Array.isArray(network?.layers) ? network.layers : [];
+  if (state.layers.length !== layers.length) return false;
+  return layers.every((layer, index) => isNodeAdamLayerCompatible(state.layers[index], layer));
+}
+
+function hasNodeStyleOptimizerState(optimizerState) {
+  return Boolean(
+    optimizerState
+    && typeof optimizerState === 'object'
+    && (
+      isNodeAdamOptimizerState(optimizerState.policy)
+      || isNodeAdamOptimizerState(optimizerState.value)
+      || isNodeAdamOptimizerState(optimizerState.identity)
+    )
+  );
+}
+
+function createDefaultRunConfig() {
+  return {
+    seedMode: RUN_SEED_MODES.BOOTSTRAP,
+    seedSnapshotId: null,
+    seedRunId: null,
+    seedGeneration: null,
+    seed: null,
+    numSelfplayWorkers: 6,
+    parallelGameWorkers: defaultParallelGameWorkers(),
+    numMctsSimulationsPerMove: 128,
+    maxDepth: 32,
+    hypothesisCount: 4,
+    riskBias: 0,
+    exploration: 1.5,
+    replayBufferMaxPositions: 10000,
+    batchSize: 64,
+    learningRate: 0.0005,
+    weightDecay: 0.0001,
+    gradientClipNorm: 1,
+    trainingStepsPerCycle: 16,
+    parallelTrainingHeadWorkers: defaultParallelTrainingHeadWorkers(),
+    trainingBackend: TRAINING_BACKENDS.AUTO,
+    trainingDevicePreference: TRAINING_DEVICE_PREFERENCES.AUTO,
+    checkpointInterval: DEFAULT_RUN_CHECKPOINT_INTERVAL,
+    evalGamesPerCheckpoint: 50,
+    promotionWinrateThreshold: 0.55,
+    prePromotionTestGames: 50,
+    prePromotionTestWinRate: 0.55,
+    promotionTestGames: 100,
+    promotionTestWinRate: 0.55,
+    promotionTestPriorGenerations: 3,
+    modelRefreshIntervalForWorkers: 5,
+    olderGenerationSampleProbability: 0.10,
+    generationComparisonStride: 5,
+    stopOnMaxGenerations: true,
+    maxGenerations: 200,
+    stopOnMaxSelfPlayGames: true,
+    maxSelfPlayGames: 10000,
+    stopOnMaxTrainingSteps: true,
+    maxTrainingSteps: 200000,
+    stopOnMaxFailedPromotions: true,
+    maxFailedPromotions: 50,
+    retainedReplayGames: DEFAULT_RUN_MAX_REPLAY_GAMES,
+  };
+}
+
+function normalizeRunLabel(input) {
+  if (typeof input !== 'string') return '';
+  return input.trim();
+}
+
+function normalizeRunConfig(options = {}) {
+  const defaults = createDefaultRunConfig();
+  const prePromotionTestGames = clampPositiveInt(
+    options.prePromotionTestGames ?? options.evalGamesPerCheckpoint,
+    defaults.prePromotionTestGames,
+    1,
+    400,
+  );
+  const prePromotionTestWinRate = normalizeFloat(
+    options.prePromotionTestWinRate ?? options.promotionWinrateThreshold,
+    defaults.prePromotionTestWinRate,
+    0,
+    1,
+  );
+  const promotionTestGames = clampPositiveInt(
+    options.promotionTestGames ?? options.evalGamesPerCheckpoint,
+    defaults.promotionTestGames,
+    1,
+    400,
+  );
+  const promotionTestWinRate = normalizeFloat(
+    options.promotionTestWinRate ?? options.promotionWinrateThreshold,
+    defaults.promotionTestWinRate,
+    0,
+    1,
+  );
+  const promotionTestPriorGenerations = clampPositiveInt(
+    options.promotionTestPriorGenerations,
+    defaults.promotionTestPriorGenerations,
+    1,
+    10,
+  );
+  const rawSeedMode = String(options.seedMode || defaults.seedMode).trim();
+  const directPromotedSelection = parsePromotedModelBotId(
+    typeof options.seedModelId === 'string' && options.seedModelId.trim()
+      ? options.seedModelId.trim()
+      : rawSeedMode,
+  );
+  let seedMode = RUN_SEED_MODES.BOOTSTRAP;
+  let seedRunId = null;
+  let seedGeneration = null;
+  if (directPromotedSelection) {
+    seedMode = RUN_SEED_MODES.PROMOTED_GENERATION;
+    seedRunId = directPromotedSelection.runId;
+    seedGeneration = directPromotedSelection.generation;
+  } else {
+    const normalizedSeedMode = rawSeedMode.toLowerCase();
+    if (normalizedSeedMode === RUN_SEED_MODES.RANDOM) {
+      seedMode = RUN_SEED_MODES.RANDOM;
+    } else if ([
+      RUN_SEED_MODES.PROMOTED_GENERATION,
+      'promoted',
+      'generation',
+      'run_generation',
+    ].includes(normalizedSeedMode)) {
+      const parsedSeedGeneration = Number.parseInt(options.seedGeneration, 10);
+      if (
+        typeof options.seedRunId === 'string'
+        && options.seedRunId.trim()
+        && Number.isFinite(parsedSeedGeneration)
+      ) {
+        seedMode = RUN_SEED_MODES.PROMOTED_GENERATION;
+        seedRunId = options.seedRunId.trim();
+        seedGeneration = Math.max(0, parsedSeedGeneration);
+      }
+    }
+  }
+  const seedSnapshotId = seedMode === RUN_SEED_MODES.BOOTSTRAP
+    && typeof options.seedSnapshotId === 'string'
+    && options.seedSnapshotId.trim()
+    ? options.seedSnapshotId.trim()
+    : null;
+  const seed = Number.isFinite(options.seed) ? Math.floor(options.seed) : null;
+  return {
+    seedMode,
+    seedSnapshotId,
+    seedRunId,
+    seedGeneration,
+    seed,
+    numSelfplayWorkers: clampPositiveInt(options.numSelfplayWorkers, defaults.numSelfplayWorkers, 1, 128),
+    parallelGameWorkers: clampPositiveInt(
+      options.parallelGameWorkers,
+      defaults.parallelGameWorkers,
+      1,
+      Math.max(1, getSystemParallelism()),
+    ),
+    numMctsSimulationsPerMove: clampPositiveInt(
+      options.numMctsSimulationsPerMove,
+      defaults.numMctsSimulationsPerMove,
+      1,
+      1200,
+    ),
+    maxDepth: clampPositiveInt(options.maxDepth, defaults.maxDepth, 1, 128),
+    hypothesisCount: clampPositiveInt(options.hypothesisCount, defaults.hypothesisCount, 1, 32),
+    riskBias: normalizeFloat(options.riskBias, defaults.riskBias, 0, 5),
+    exploration: normalizeFloat(options.exploration, defaults.exploration, 0, 8),
+    replayBufferMaxPositions: clampPositiveInt(
+      options.replayBufferMaxPositions,
+      defaults.replayBufferMaxPositions,
+      16,
+      500000,
+    ),
+    batchSize: clampPositiveInt(options.batchSize, defaults.batchSize, 1, 4096),
+    learningRate: normalizeFloat(options.learningRate, defaults.learningRate, 0.00001, 1),
+    weightDecay: normalizeFloat(options.weightDecay, defaults.weightDecay, 0, 1),
+    gradientClipNorm: normalizeFloat(options.gradientClipNorm, defaults.gradientClipNorm, 0, 100),
+    trainingStepsPerCycle: clampPositiveInt(options.trainingStepsPerCycle, defaults.trainingStepsPerCycle, 1, 5000),
+    parallelTrainingHeadWorkers: clampPositiveInt(
+      options.parallelTrainingHeadWorkers,
+      defaults.parallelTrainingHeadWorkers,
+      1,
+      3,
+    ),
+    trainingBackend: normalizeTrainingBackend(options.trainingBackend, defaults.trainingBackend),
+    trainingDevicePreference: normalizeTrainingDevicePreference(
+      options.trainingDevicePreference,
+      defaults.trainingDevicePreference,
+    ),
+    checkpointInterval: clampPositiveInt(options.checkpointInterval, defaults.checkpointInterval, 1, 100000),
+    evalGamesPerCheckpoint: prePromotionTestGames,
+    promotionWinrateThreshold: prePromotionTestWinRate,
+    prePromotionTestGames,
+    prePromotionTestWinRate,
+    promotionTestGames,
+    promotionTestWinRate,
+    promotionTestPriorGenerations,
+    modelRefreshIntervalForWorkers: clampPositiveInt(
+      options.modelRefreshIntervalForWorkers,
+      defaults.modelRefreshIntervalForWorkers,
+      1,
+      1000,
+    ),
+    olderGenerationSampleProbability: normalizeFloat(
+      options.olderGenerationSampleProbability,
+      defaults.olderGenerationSampleProbability,
+      0,
+      1,
+    ),
+    generationComparisonStride: clampPositiveInt(
+      options.generationComparisonStride,
+      defaults.generationComparisonStride,
+      1,
+      1000,
+    ),
+    stopOnMaxGenerations: options.stopOnMaxGenerations !== false,
+    maxGenerations: clampPositiveInt(options.maxGenerations, defaults.maxGenerations, 1, 100000),
+    stopOnMaxSelfPlayGames: options.stopOnMaxSelfPlayGames !== false,
+    maxSelfPlayGames: clampPositiveInt(options.maxSelfPlayGames, defaults.maxSelfPlayGames, 1, 100000000),
+    stopOnMaxTrainingSteps: options.stopOnMaxTrainingSteps !== false,
+    maxTrainingSteps: clampPositiveInt(options.maxTrainingSteps, defaults.maxTrainingSteps, 1, 100000000),
+    stopOnMaxFailedPromotions: options.stopOnMaxFailedPromotions !== false,
+    maxFailedPromotions: clampPositiveInt(options.maxFailedPromotions, defaults.maxFailedPromotions, 1, 1000000),
+    retainedReplayGames: clampPositiveInt(
+      options.retainedReplayGames,
+      defaults.retainedReplayGames,
+      20,
+      10000,
+    ),
+  };
+}
+
+function computeEntropy(probabilities = []) {
+  if (!Array.isArray(probabilities) || !probabilities.length) return 0;
+  return probabilities.reduce((sum, value) => {
+    const probability = Number(value);
+    if (!Number.isFinite(probability) || probability <= 0) return sum;
+    return sum - (probability * Math.log(probability));
+  }, 0);
+}
+
+function averageNumbers(values = []) {
+  const numbers = (Array.isArray(values) ? values : []).filter((value) => Number.isFinite(value));
+  if (!numbers.length) return 0;
+  return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
+}
+
+function computeRunElapsedMs(run, nowMs = Date.now()) {
+  const startedAtMs = parseTimeValue(run?.createdAt);
+  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) return 0;
+  const status = String(run?.status || '').toLowerCase();
+  const isActive = ['running', 'stopping'].includes(status);
+  const endedAtMs = isActive
+    ? nowMs
+    : Math.max(parseTimeValue(run?.updatedAt), startedAtMs);
+  return Math.max(0, endedAtMs - startedAtMs);
+}
+
+function summarizeDistinctNumbers(values = [], limit = 8) {
+  const distinct = Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+      .filter((value) => Number.isFinite(value))
+      .map((value) => Number(value)),
+  ));
+  distinct.sort((left, right) => left - right);
+  return distinct.slice(0, limit);
+}
+
+function getErrorStatusCode(err) {
+  if (Number.isFinite(err?.statusCode)) {
+    return Number(err.statusCode);
+  }
+  if (Number.isFinite(err?.status)) {
+    return Number(err.status);
+  }
+  return null;
+}
+
+function summarizeError(err) {
+  if (!err) return null;
+  return {
+    name: err?.name || null,
+    message: err?.message || String(err),
+    code: err?.code || null,
+    statusCode: getErrorStatusCode(err),
+    stack: typeof err?.stack === 'string' ? err.stack : null,
+    details: err?.details || null,
+  };
+}
+
+function summarizePolicySamplesForDebug(policySamples = [], expectedInputSize = 0) {
+  const samples = Array.isArray(policySamples) ? policySamples : [];
+  const actionCounts = [];
+  const featureLengths = [];
+  let targetLengthMismatchCount = 0;
+  let emptyTargetCount = 0;
+  samples.forEach((sample) => {
+    const features = Array.isArray(sample?.features) ? sample.features : [];
+    const target = Array.isArray(sample?.target) ? sample.target : [];
+    actionCounts.push(features.length);
+    if (!target.length) emptyTargetCount += 1;
+    if (features.length !== target.length) targetLengthMismatchCount += 1;
+    features.forEach((vector) => {
+      if (Array.isArray(vector)) {
+        featureLengths.push(vector.length);
+      }
+    });
+  });
+  return {
+    count: samples.length,
+    actionCountValues: summarizeDistinctNumbers(actionCounts),
+    featureLengthValues: summarizeDistinctNumbers(featureLengths),
+    expectedInputSize: Number(expectedInputSize || 0),
+    targetLengthMismatchCount,
+    emptyTargetCount,
+  };
+}
+
+function summarizeValueSamplesForDebug(valueSamples = [], expectedInputSize = 0) {
+  const samples = Array.isArray(valueSamples) ? valueSamples : [];
+  const featureLengths = samples
+    .map((sample) => (Array.isArray(sample?.features) ? sample.features.length : null))
+    .filter((value) => Number.isFinite(value));
+  const targetValues = samples
+    .map((sample) => (Number.isFinite(sample?.target) ? Number(sample.target) : null))
+    .filter((value) => Number.isFinite(value));
+  return {
+    count: samples.length,
+    featureLengthValues: summarizeDistinctNumbers(featureLengths),
+    expectedInputSize: Number(expectedInputSize || 0),
+    minTarget: targetValues.length ? Math.min(...targetValues) : null,
+    maxTarget: targetValues.length ? Math.max(...targetValues) : null,
+  };
+}
+
+function summarizeIdentitySamplesForDebug(identitySamples = [], expectedInputSize = 0, expectedOutputSize = 0) {
+  const samples = Array.isArray(identitySamples) ? identitySamples : [];
+  const featureLengths = [];
+  const truthIndexHistogram = {};
+  let unknownTruthCount = 0;
+  let maxTruthIndex = -1;
+  samples.forEach((sample) => {
+    if (Array.isArray(sample?.pieceFeatures)) {
+      featureLengths.push(sample.pieceFeatures.length);
+    }
+    const truthIndex = INFERRED_IDENTITIES.indexOf(sample?.trueIdentity);
+    if (truthIndex < 0) {
+      unknownTruthCount += 1;
+      return;
+    }
+    truthIndexHistogram[truthIndex] = (truthIndexHistogram[truthIndex] || 0) + 1;
+    if (truthIndex > maxTruthIndex) {
+      maxTruthIndex = truthIndex;
+    }
+  });
+  return {
+    count: samples.length,
+    featureLengthValues: summarizeDistinctNumbers(featureLengths),
+    expectedInputSize: Number(expectedInputSize || 0),
+    expectedOutputSize: Number(expectedOutputSize || 0),
+    inferredIdentityCount: INFERRED_IDENTITIES.length,
+    unknownTruthCount,
+    maxTruthIndex,
+    truthIndexHistogram,
+  };
+}
+
+function buildTrainingBatchDebugSummary(options = {}, backendResolution = null) {
+  const modelBundle = options.modelBundle || {};
+  const policyInputSize = Number(modelBundle?.policy?.network?.inputSize || 0);
+  const valueInputSize = Number(modelBundle?.value?.network?.inputSize || 0);
+  const identityInputSize = Number(modelBundle?.identity?.network?.inputSize || 0);
+  const identityOutputSize = Number(modelBundle?.identity?.network?.outputSize || 0);
+  return {
+    debugContext: options.debugContext || null,
+    requestedBackend: options.trainingBackend || null,
+    requestedDevicePreference: options.trainingDevicePreference || null,
+    resolvedBackend: backendResolution?.backend || null,
+    resolvedDevice: backendResolution?.device || null,
+    epochs: Number(options.epochs || 1),
+    trainingOptions: {
+      learningRate: Number(options.learningRate || 0),
+      batchSize: Number(options.batchSize || 0),
+      weightDecay: Number(options.weightDecay || 0),
+      gradientClipNorm: Number(options.gradientClipNorm || 0),
+      parallelTrainingHeadWorkers: Number(options.parallelTrainingHeadWorkers || 0),
+    },
+    model: {
+      policyInputSize,
+      valueInputSize,
+      identityInputSize,
+      identityOutputSize,
+      inferredIdentities: INFERRED_IDENTITIES.slice(),
+      inferredIdentityCount: INFERRED_IDENTITIES.length,
+    },
+    samples: {
+      policy: summarizePolicySamplesForDebug(options?.samples?.policySamples || [], policyInputSize),
+      value: summarizeValueSamplesForDebug(options?.samples?.valueSamples || [], valueInputSize),
+      identity: summarizeIdentitySamplesForDebug(
+        options?.samples?.identitySamples || [],
+        identityInputSize,
+        identityOutputSize,
+      ),
+    },
+  };
+}
+
+function getTrainingBatchDebugIssues(summary = {}) {
+  const issues = [];
+  const model = summary.model || {};
+  const samples = summary.samples || {};
+  if (model.identityOutputSize > 0 && model.identityOutputSize !== model.inferredIdentityCount) {
+    issues.push(
+      `Identity network output size ${model.identityOutputSize} does not match inferred identity count ${model.inferredIdentityCount}`,
+    );
+  }
+  if ((samples.policy?.featureLengthValues || []).some((value) => value !== samples.policy.expectedInputSize)) {
+    issues.push(`Policy feature length mismatch: expected ${samples.policy.expectedInputSize}, saw ${samples.policy.featureLengthValues.join(',')}`);
+  }
+  if (Number(samples.policy?.targetLengthMismatchCount || 0) > 0) {
+    issues.push(`Policy samples with feature/target length mismatch: ${samples.policy.targetLengthMismatchCount}`);
+  }
+  if ((samples.value?.featureLengthValues || []).some((value) => value !== samples.value.expectedInputSize)) {
+    issues.push(`Value feature length mismatch: expected ${samples.value.expectedInputSize}, saw ${samples.value.featureLengthValues.join(',')}`);
+  }
+  if ((samples.identity?.featureLengthValues || []).some((value) => value !== samples.identity.expectedInputSize)) {
+    issues.push(`Identity feature length mismatch: expected ${samples.identity.expectedInputSize}, saw ${samples.identity.featureLengthValues.join(',')}`);
+  }
+  if (Number(samples.identity?.unknownTruthCount || 0) > 0) {
+    issues.push(`Identity samples with unknown truth labels: ${samples.identity.unknownTruthCount}`);
+  }
+  if (
+    Number.isFinite(samples.identity?.maxTruthIndex)
+    && Number(samples.identity.maxTruthIndex) >= Number(model.identityOutputSize || 0)
+  ) {
+    issues.push(
+      `Identity truth index ${samples.identity.maxTruthIndex} exceeds output size ${model.identityOutputSize}`,
+    );
+  }
+  return issues;
+}
+
+function safeWinRate(wins, losses, draws) {
+  const total = Number(wins || 0) + Number(losses || 0) + Number(draws || 0);
+  if (total <= 0) return 0;
+  return (Number(wins || 0) + (Number(draws || 0) * 0.5)) / total;
+}
+
+function estimateEloDeltaFromWinRate(winRate) {
+  const clamped = Math.max(0.001, Math.min(0.999, Number(winRate) || 0.5));
+  return 400 * Math.log10(clamped / (1 - clamped));
+}
+
+function buildGenerationPairKey(generationA, generationB) {
+  const left = Number.isFinite(generationA) ? Number(generationA) : -1;
+  const right = Number.isFinite(generationB) ? Number(generationB) : -1;
+  return left <= right ? `${left}:${right}` : `${right}:${left}`;
 }
 
 function extractPostHandler(router) {
@@ -382,11 +1553,16 @@ async function callPostHandler(handler, body = {}, options = {}) {
       }
     };
 
-    runInSimulationRequestContext(() => Promise.resolve(handler(req, res, next)), {
-      route: options.routeName || 'internal',
-      gameId: body?.gameId || null,
-      matchId: body?.matchId || null,
-    })
+    const execute = () => Promise.resolve(handler(req, res, next));
+    const runner = options.simulationContext === false
+      ? execute()
+      : runInSimulationRequestContext(execute, {
+        route: options.routeName || 'internal',
+        gameId: body?.gameId || null,
+        matchId: body?.matchId || null,
+      });
+
+    runner
       .then(() => {
         if (!res.headersSent) {
           finish(resolve, {});
@@ -414,6 +1590,52 @@ const ROUTE_HANDLERS = Object.freeze({
 
 function normalizeActionType(type) {
   return String(type || '').trim().toUpperCase();
+}
+
+function isRecoverableLiveActionError(err) {
+  const statusCode = getErrorStatusCode(err);
+  return statusCode === 400 || statusCode === 404 || statusCode === 409;
+}
+
+function buildPreferredLiveActionCandidates(search, legalActions = []) {
+  const legalByKey = new Map(
+    (Array.isArray(legalActions) ? legalActions : []).map((action) => [actionKey(action), action]),
+  );
+  const candidates = [];
+  const seen = new Set();
+  const appendCandidate = (action) => {
+    if (!action) return;
+    const key = actionKey(action);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    candidates.push(action);
+  };
+
+  const requestedAction = search?.action || null;
+  const requestedKey = requestedAction ? actionKey(requestedAction) : '';
+  if (requestedKey && legalByKey.has(requestedKey)) {
+    appendCandidate(legalByKey.get(requestedKey));
+  }
+
+  const rankedCandidates = Array.isArray(search?.trace?.actionStats)
+    ? search.trace.actionStats
+    : [];
+  rankedCandidates.forEach((entry) => {
+    appendCandidate(legalByKey.get(String(entry?.actionKey || '')));
+  });
+
+  legalByKey.forEach((action) => {
+    appendCandidate(action);
+  });
+
+  return candidates;
+}
+
+function liveTestBotMustAct(game, botColor) {
+  return (
+    (Number.isFinite(game?.playerTurn) && Number(game.playerTurn) === botColor)
+    || (Number.isFinite(game?.onDeckingPlayer) && Number(game.onDeckingPlayer) === botColor)
+  );
 }
 
 function clonePiece(piece, fallbackColor = null) {
@@ -480,6 +1702,40 @@ function buildRandomSetupFromGame(game, color, rng, config) {
     onDeck: {
       color,
       identity: onDeck.identity,
+    },
+  };
+}
+
+function buildLiveTestSetupFromGame(game, color, config) {
+  const ranks = Number(config?.boardDimensions?.RANKS) || 6;
+  const files = Number(config?.boardDimensions?.FILES) || 5;
+  const kingIdentity = config?.identities?.get
+    ? config.identities.get('KING')
+    : 1;
+  const row = color === WHITE ? 0 : (ranks - 1);
+  const stash = Array.isArray(game?.stashes?.[color]) ? game.stashes[color] : [];
+  const candidates = stash
+    .map((piece) => clonePiece(piece, color))
+    .filter(Boolean);
+  const kingPiece = candidates.find((piece) => piece.identity === kingIdentity) || null;
+  const nonKingPieces = candidates.filter((piece) => piece.identity !== kingIdentity);
+  if (!kingPiece || nonKingPieces.length < files) {
+    throw new Error(`Insufficient stash pieces for live test setup (color ${color})`);
+  }
+
+  const rankPieces = [kingPiece, ...nonKingPieces.slice(0, files - 1)];
+  const onDeckPiece = nonKingPieces[files - 1];
+
+  return {
+    pieces: rankPieces.map((piece, index) => ({
+      row,
+      col: index,
+      color,
+      identity: piece.identity,
+    })),
+    onDeck: {
+      color,
+      identity: onDeckPiece.identity,
     },
   };
 }
@@ -710,20 +1966,26 @@ function createShadowStateFromLiveGame(game, options = {}) {
   return state;
 }
 
-async function createApiBackedGame(seed) {
+async function resolveLiveAiMatchSettings() {
   const config = typeof getServerConfig.getServerConfigSnapshotSync === 'function'
     ? getServerConfig.getServerConfigSnapshotSync()
     : await getServerConfig();
   const quickplaySettings = config?.gameModeSettings?.get
     ? (config.gameModeSettings.get('QUICKPLAY') || {})
     : (config?.gameModeSettings?.QUICKPLAY || {});
-  const modeSettings = config?.gameModeSettings || {};
-  const timeControlStart = Number(quickplaySettings.TIME_CONTROL || 300000);
-  const increment = Number(
-    modeSettings?.get
-      ? modeSettings.get('INCREMENT')
-      : modeSettings.INCREMENT,
-  ) || 0;
+  const incrementSetting = config?.gameModeSettings?.get
+    ? config.gameModeSettings.get('INCREMENT')
+    : config?.gameModeSettings?.INCREMENT;
+  const timeControl = Number(quickplaySettings?.TIME_CONTROL) || 300000;
+  const increment = Number(incrementSetting) || 0;
+  const type = config?.gameModes?.get
+    ? (config.gameModes.get('AI') || 'AI')
+    : (config?.gameModes?.AI || 'AI');
+  return { timeControl, increment, type, config };
+}
+
+async function createApiBackedGame(seed) {
+  const { config, timeControl, increment } = await resolveLiveAiMatchSettings();
   const type = config?.gameModes?.get
     ? (config.gameModes.get('QUICKPLAY') || 'QUICKPLAY')
     : (config?.gameModes?.QUICKPLAY || 'QUICKPLAY');
@@ -752,8 +2014,8 @@ async function createApiBackedGame(seed) {
 
   const game = await callPostHandler(ROUTE_HANDLERS.gameCreate, {
     matchId,
-    players: [player1, player2],
-    timeControlStart,
+      players: [player1, player2],
+    timeControlStart: timeControl,
     increment,
   });
   const gameId = String(game?._id || '');
@@ -926,22 +2188,22 @@ async function applyLiveActionToGame(context, action, shadowState) {
       from: action.from,
       to: action.to,
       declaration: action.declaration,
-    }, { session });
+    }, { session, simulationContext: context?.simulationContext });
   } else if (type === 'CHALLENGE') {
     await callPostHandler(ROUTE_HANDLERS.challenge, {
       gameId: context.gameId,
       color,
-    }, { session });
+    }, { session, simulationContext: context?.simulationContext });
   } else if (type === 'BOMB') {
     await callPostHandler(ROUTE_HANDLERS.bomb, {
       gameId: context.gameId,
       color,
-    }, { session });
+    }, { session, simulationContext: context?.simulationContext });
   } else if (type === 'PASS') {
     await callPostHandler(ROUTE_HANDLERS.pass, {
       gameId: context.gameId,
       color,
-    }, { session });
+    }, { session, simulationContext: context?.simulationContext });
   } else if (type === 'ON_DECK') {
     const onDeckPiece = action.pieceId ? shadowState?.pieces?.[action.pieceId] : null;
     await callPostHandler(ROUTE_HANDLERS.onDeck, {
@@ -952,12 +2214,12 @@ async function applyLiveActionToGame(context, action, shadowState) {
           ? action.identity
           : onDeckPiece?.identity,
       },
-    }, { session });
+    }, { session, simulationContext: context?.simulationContext });
   } else if (type === 'RESIGN') {
     await callPostHandler(ROUTE_HANDLERS.resign, {
       gameId: context.gameId,
       color,
-    }, { session });
+    }, { session, simulationContext: context?.simulationContext });
   } else {
     throw new Error(`Unsupported live action type: ${type || 'unknown'}`);
   }
@@ -967,6 +2229,39 @@ async function applyLiveActionToGame(context, action, shadowState) {
     throw new Error('Live simulation game disappeared after action');
   }
   return liveGame;
+}
+
+async function tryApplyLiveActionCandidates(context, shadowState, candidates = [], options = {}) {
+  const rejectedCandidates = Array.isArray(options.rejectedCandidates)
+    ? options.rejectedCandidates.slice()
+    : [];
+
+  for (let idx = 0; idx < candidates.length; idx += 1) {
+    const candidate = candidates[idx];
+    try {
+      const liveGame = await applyLiveActionToGame(context, candidate, shadowState);
+      return {
+        executedAction: candidate,
+        liveGame,
+        rejectedCandidates,
+      };
+    } catch (err) {
+      if (!isRecoverableLiveActionError(err)) {
+        throw err;
+      }
+      rejectedCandidates.push({
+        actionKey: actionKey(candidate),
+        message: err?.message || 'Action rejected',
+        statusCode: getErrorStatusCode(err),
+      });
+    }
+  }
+
+  return {
+    executedAction: null,
+    liveGame: null,
+    rejectedCandidates,
+  };
 }
 
 async function forceLiveGameDraw(context) {
@@ -987,23 +2282,146 @@ class MlRuntime {
     this.dataFilePath = options.dataFilePath || defaultPath;
     this.persist = options.persist !== false;
     this.useMongoSimulations = options.useMongoSimulations !== false;
+    this.useMongoRuns = options.useMongoRuns !== false;
     this.maxSimulationHistory = clampPositiveInt(options.maxSimulationHistory, 200000, 100, 1000000);
     this.trimMongoSimulationHistoryEnabled = options.trimMongoSimulationHistory === true;
     this.state = createEmptyState();
     this.loaded = false;
     this.savePromise = Promise.resolve();
+    this.saveQueued = false;
+    this.pendingSaveRequested = false;
     this.didAttemptMongoSimulationMigration = false;
     this.simulationTasks = new Map();
     this.trainingTasks = new Map();
+    this.runTasks = new Map();
+    this.liveTestGameTasks = new Map();
+    this.liveTestGameConfigs = new Map();
     this.resumePromise = null;
     this.lastLiveStatus = {
       simulation: null,
       training: null,
+      runs: [],
     };
+    this.resourceTelemetry = createEmptyResourceTelemetry();
+    this.previousCpuUsageSnapshot = createCpuUsageSnapshot();
+    this.resourceTelemetrySamplePromise = null;
+    this.resourceTelemetryTimer = setInterval(() => {
+      this.collectResourceTelemetrySample().catch(() => {});
+    }, RESOURCE_SAMPLE_INTERVAL_MS);
+    if (typeof this.resourceTelemetryTimer?.unref === 'function') {
+      this.resourceTelemetryTimer.unref();
+    }
+    this.collectResourceTelemetrySample().catch(() => {});
+    this.lastLoadedFileMtimeMs = 0;
+    this.mlDebugLogPaths = getMlDebugLogPaths();
+    this.boundHandleMlTestGameChanged = this.handleMlTestGameChanged.bind(this);
+    eventBus.on('gameChanged', this.boundHandleMlTestGameChanged);
+  }
+
+  logMlEvent(event, payload = {}) {
+    return appendMlDebugLog(event, payload);
+  }
+
+  logRunEvent(runOrId, event, payload = {}) {
+    const runId = typeof runOrId === 'string' ? runOrId : runOrId?.id;
+    if (!runId) {
+      return this.logMlEvent(event, payload);
+    }
+    return appendMlRunDebugLog(runId, event, payload);
+  }
+
+  logTrainingEvent(trainingRunOrId, event, payload = {}) {
+    const trainingRunId = typeof trainingRunOrId === 'string'
+      ? trainingRunOrId
+      : trainingRunOrId?.id;
+    if (!trainingRunId) {
+      return this.logMlEvent(event, payload);
+    }
+    return appendMlTrainingDebugLog(trainingRunId, event, payload);
+  }
+
+  dispose() {
+    if (this.boundHandleMlTestGameChanged) {
+      eventBus.off('gameChanged', this.boundHandleMlTestGameChanged);
+    }
+    if (this.resourceTelemetryTimer) {
+      clearInterval(this.resourceTelemetryTimer);
+      this.resourceTelemetryTimer = null;
+    }
+  }
+
+  async collectResourceTelemetrySample() {
+    if (this.resourceTelemetrySamplePromise) {
+      return this.resourceTelemetrySamplePromise;
+    }
+    this.resourceTelemetrySamplePromise = (async () => {
+      const capturedAt = nowIso();
+      const cpuSnapshot = createCpuUsageSnapshot();
+      const cpuPercent = computeCpuUsagePercent(this.previousCpuUsageSnapshot, cpuSnapshot);
+      this.previousCpuUsageSnapshot = cpuSnapshot;
+
+      const gpuSnapshot = await queryGpuUsageFromNvidiaSmi();
+      this.resourceTelemetry = {
+        sampleIntervalMs: RESOURCE_SAMPLE_INTERVAL_MS,
+        windowMs: RESOURCE_HISTORY_WINDOW_MS,
+        cpu: {
+          available: true,
+          currentPercent: Number.isFinite(cpuPercent) ? Number(cpuPercent.toFixed(1)) : null,
+          updatedAt: capturedAt,
+          history: appendResourceSample(this.resourceTelemetry?.cpu?.history, {
+            timestamp: capturedAt,
+            percent: cpuPercent,
+          }),
+        },
+        gpu: {
+          available: gpuSnapshot?.available === true,
+          currentPercent: Number.isFinite(gpuSnapshot?.currentPercent)
+            ? Number(Number(gpuSnapshot.currentPercent).toFixed(1))
+            : null,
+          updatedAt: capturedAt,
+          history: appendResourceSample(this.resourceTelemetry?.gpu?.history, {
+            timestamp: capturedAt,
+            percent: gpuSnapshot?.currentPercent,
+          }),
+          label: gpuSnapshot?.label || this.resourceTelemetry?.gpu?.label || null,
+          source: gpuSnapshot?.source || null,
+        },
+      };
+      return this.resourceTelemetry;
+    })();
+
+    try {
+      return await this.resourceTelemetrySamplePromise;
+    } finally {
+      this.resourceTelemetrySamplePromise = null;
+    }
+  }
+
+  async ensureFreshResourceTelemetry() {
+    const lastSampleAtMs = Date.parse(
+      this.resourceTelemetry?.cpu?.updatedAt
+      || this.resourceTelemetry?.gpu?.updatedAt
+      || '',
+    );
+    if (!Number.isFinite(lastSampleAtMs) || (Date.now() - lastSampleAtMs) >= RESOURCE_SAMPLE_INTERVAL_MS) {
+      await this.collectResourceTelemetrySample();
+    }
+    return this.resourceTelemetry;
+  }
+
+  getResourceTelemetryPayload() {
+    return deepClone(this.resourceTelemetry || createEmptyResourceTelemetry());
   }
 
   async ensureLoaded() {
-    if (this.loaded) return;
+    if (this.loaded) {
+      await this.refreshPersistedStateIfChanged();
+      const normalization = this.normalizeActiveModelArtifacts();
+      if (normalization.changed) {
+        await this.save();
+      }
+      return;
+    }
     if (!this.persist) {
       this.state = createEmptyState();
       this.ensureBootstrapSnapshot();
@@ -1013,43 +2431,133 @@ class MlRuntime {
 
     try {
       if (fs.existsSync(this.dataFilePath)) {
-        const raw = await fs.promises.readFile(this.dataFilePath, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          const emptyState = createEmptyState();
-          this.state = {
-            ...emptyState,
-            ...parsed,
-            counters: {
-              ...emptyState.counters,
-              ...(parsed.counters || {}),
-            },
-            activeJobs: {
-              ...emptyState.activeJobs,
-              ...(parsed.activeJobs || {}),
-            },
-          };
-          if (Array.isArray(this.state.simulations)) {
-            this.state.simulations = this.state.simulations
-              .map((simulation) => compactSimulationForState(simulation))
-              .slice(0, this.maxSimulationHistory);
-          }
-          if (!Array.isArray(this.state.trainingRuns)) {
-            this.state.trainingRuns = [];
-          }
-        }
+        await this.loadStateFromDisk();
       } else {
         ensureDirSync(path.dirname(this.dataFilePath));
       }
     } catch (err) {
       console.error('[ml-runtime] failed to load persisted state, resetting runtime', err);
+      this.logMlEvent('runtime_load_error', {
+        dataFilePath: this.dataFilePath,
+        error: summarizeError(err),
+      });
       this.state = createEmptyState();
     }
 
     this.ensureBootstrapSnapshot();
+    this.normalizeActiveModelArtifacts();
     this.loaded = true;
+    this.logMlEvent('runtime_loaded', {
+      persist: this.persist,
+      dataFilePath: this.dataFilePath,
+      snapshotCount: Array.isArray(this.state.snapshots) ? this.state.snapshots.length : 0,
+      trainingRunCount: Array.isArray(this.state.trainingRuns) ? this.state.trainingRuns.length : 0,
+      runCount: Array.isArray(this.state.runs) ? this.state.runs.length : 0,
+      logPaths: this.mlDebugLogPaths,
+    });
     await this.save();
     await this.ensureResumedJobs();
+  }
+
+  hasActiveLocalTasks() {
+    return this.runTasks.size > 0 || this.trainingTasks.size > 0 || this.simulationTasks.size > 0;
+  }
+
+  async loadStateFromDisk() {
+    const raw = await fs.promises.readFile(this.dataFilePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return false;
+    }
+    const emptyState = createEmptyState();
+    this.state = {
+      ...emptyState,
+      ...parsed,
+      counters: {
+        ...emptyState.counters,
+        ...(parsed.counters || {}),
+      },
+      activeJobs: {
+        ...emptyState.activeJobs,
+        ...(parsed.activeJobs || {}),
+      },
+    };
+    this.state.promotedBots = normalizePromotedBotState(this.state.promotedBots);
+    if (Array.isArray(this.state.snapshots)) {
+      this.state.snapshots = this.state.snapshots
+        .map((snapshot) => this.normalizeStoredSnapshotRecord(snapshot))
+        .filter(Boolean);
+    } else {
+      this.state.snapshots = [];
+    }
+    if (Array.isArray(this.state.simulations)) {
+      this.state.simulations = this.state.simulations
+        .map((simulation) => compactSimulationForState(simulation))
+        .slice(0, this.maxSimulationHistory);
+    }
+    if (!Array.isArray(this.state.trainingRuns)) {
+      this.state.trainingRuns = [];
+    } else {
+      this.state.trainingRuns = this.state.trainingRuns
+        .map((trainingRun) => this.normalizeStoredTrainingRunRecord(trainingRun))
+        .filter(Boolean);
+    }
+    if (!Array.isArray(this.state.runs)) {
+      this.state.runs = [];
+    } else {
+      const persistedRunEntries = this.state.runs.slice();
+      const runReferences = persistedRunEntries.filter((entry) => (
+        entry?.manifestPath
+        || entry?.latestCheckpointPath
+        || entry?.persistence?.manifestPath
+        || entry?.persistence?.latestCheckpointPath
+      ));
+      const legacyRuns = persistedRunEntries
+        .filter((entry) => !runReferences.includes(entry))
+        .map((run) => this.normalizeStoredRunRecord(run))
+        .filter(Boolean);
+      const persistedRuns = await this.loadPersistedRuns(runReferences);
+      const mergedRuns = [];
+      const seenIds = new Set();
+      [...persistedRuns, ...legacyRuns].forEach((run) => {
+        if (!run?.id || seenIds.has(run.id)) return;
+        seenIds.add(run.id);
+        mergedRuns.push(run);
+      });
+      this.state.runs = mergedRuns;
+    }
+    this.state.activeJobs.training = this.normalizeStoredTrainingJob(this.state.activeJobs?.training);
+    try {
+      const stat = await fs.promises.stat(this.dataFilePath);
+      this.lastLoadedFileMtimeMs = Number(stat?.mtimeMs || 0);
+    } catch (_) {
+      this.lastLoadedFileMtimeMs = Date.now();
+    }
+    return true;
+  }
+
+  async refreshPersistedStateIfChanged() {
+    if (!this.persist || !this.loaded || this.hasActiveLocalTasks()) return false;
+    if (!fs.existsSync(this.dataFilePath)) return false;
+    let stat = null;
+    try {
+      stat = await fs.promises.stat(this.dataFilePath);
+    } catch (_) {
+      return false;
+    }
+    const mtimeMs = Number(stat?.mtimeMs || 0);
+    if (!Number.isFinite(mtimeMs) || mtimeMs <= Number(this.lastLoadedFileMtimeMs || 0)) {
+      return false;
+    }
+    await this.loadStateFromDisk();
+    return true;
+  }
+
+  async syncPersistedStateForRead() {
+    if (!this.persist || !this.loaded || this.hasActiveLocalTasks()) return false;
+    if (!fs.existsSync(this.dataFilePath)) return false;
+    await this.loadStateFromDisk();
+    return true;
   }
 
   ensureBootstrapSnapshot() {
@@ -1071,7 +2579,9 @@ class MlRuntime {
         ? 'simulation'
         : prefix === 'game'
           ? 'game'
-          : 'training';
+          : prefix === 'run'
+            ? 'run'
+            : 'training';
     const current = clampPositiveInt(this.state.counters[key], 1);
     this.state.counters[key] = current + 1;
     return `${prefix}-${String(current).padStart(4, '0')}`;
@@ -1101,16 +2611,453 @@ class MlRuntime {
     };
   }
 
+  maybeRememberNormalizedId(target, value, limit = 12) {
+    if (!Array.isArray(target) || !value || target.includes(value) || target.length >= limit) {
+      return;
+    }
+    target.push(value);
+  }
+
+  reconcileOptimizerStateForModelBundle(modelBundle, optimizerState, options = {}) {
+    const normalizedModelBundle = options.normalizedModelBundle || normalizeModelBundleForStorage(modelBundle);
+    if (!normalizedModelBundle) return null;
+
+    const trainingBackend = normalizeTrainingBackend(options.trainingBackend, TRAINING_BACKENDS.AUTO);
+    if (options.forceReset === true) {
+      return trainingBackend === TRAINING_BACKENDS.NODE
+        ? createOptimizerState(normalizedModelBundle)
+        : null;
+    }
+
+    const isCompatibleNodeState = Boolean(
+      optimizerState
+      && typeof optimizerState === 'object'
+      && isNodeAdamOptimizerStateCompatibleWithNetwork(optimizerState.policy, normalizedModelBundle.policy.network)
+      && isNodeAdamOptimizerStateCompatibleWithNetwork(optimizerState.value, normalizedModelBundle.value.network)
+      && isNodeAdamOptimizerStateCompatibleWithNetwork(optimizerState.identity, normalizedModelBundle.identity.network)
+    );
+    if (isCompatibleNodeState) {
+      return optimizerState;
+    }
+    if (trainingBackend === TRAINING_BACKENDS.NODE) {
+      return createOptimizerState(normalizedModelBundle);
+    }
+    if (hasNodeStyleOptimizerState(optimizerState)) {
+      return null;
+    }
+    return optimizerState || null;
+  }
+
+  normalizeActiveModelArtifacts() {
+    const summary = {
+      snapshotBundlesNormalized: 0,
+      runGenerationBundlesNormalized: 0,
+      runWorkingBundlesNormalized: 0,
+      trainingRunCheckpointBundlesNormalized: 0,
+      activeTrainingJobBundlesNormalized: 0,
+      optimizerStatesReset: 0,
+      snapshotIds: [],
+      runIds: [],
+      trainingRunIds: [],
+    };
+    let changed = false;
+
+    (this.state.snapshots || []).forEach((snapshot) => {
+      if (!snapshot?.modelBundle) return;
+      const normalized = normalizeModelBundleArtifact(snapshot.modelBundle);
+      if (!normalized.shapeChanged) return;
+      snapshot.modelBundle = normalized.modelBundle;
+      snapshot.updatedAt = nowIso();
+      changed = true;
+      summary.snapshotBundlesNormalized += 1;
+      this.maybeRememberNormalizedId(summary.snapshotIds, snapshot.id);
+    });
+
+    (this.state.trainingRuns || []).forEach((trainingRun) => {
+      if (!trainingRun?.checkpoint?.modelBundle) return;
+      const normalized = normalizeModelBundleArtifact(trainingRun.checkpoint.modelBundle);
+      let recordChanged = false;
+      if (normalized.shapeChanged) {
+        trainingRun.checkpoint.modelBundle = normalized.modelBundle;
+        recordChanged = true;
+        summary.trainingRunCheckpointBundlesNormalized += 1;
+        this.maybeRememberNormalizedId(summary.trainingRunIds, trainingRun.id);
+      }
+      const shouldReconcileOptimizer = Boolean(
+        normalized.shapeChanged
+        || trainingRun?.status === 'running'
+        || trainingRun?.checkpoint?.optimizerState,
+      );
+      if (shouldReconcileOptimizer) {
+        const nextOptimizerState = this.reconcileOptimizerStateForModelBundle(
+          normalized.modelBundle || trainingRun.checkpoint.modelBundle,
+          trainingRun.checkpoint.optimizerState,
+          {
+            normalizedModelBundle: normalized.modelBundle || trainingRun.checkpoint.modelBundle,
+            trainingBackend: trainingRun.trainingBackend,
+            forceReset: normalized.shapeChanged,
+          },
+        );
+        if (nextOptimizerState !== trainingRun.checkpoint.optimizerState) {
+          trainingRun.checkpoint.optimizerState = nextOptimizerState ? deepClone(nextOptimizerState) : null;
+          recordChanged = true;
+          summary.optimizerStatesReset += 1;
+          this.maybeRememberNormalizedId(summary.trainingRunIds, trainingRun.id);
+        }
+      }
+      if (recordChanged) {
+        trainingRun.updatedAt = nowIso();
+        changed = true;
+      }
+    });
+
+    (this.state.runs || []).forEach((run) => {
+      let runChanged = false;
+      (run.generations || []).forEach((generation) => {
+        if (!generation?.modelBundle) return;
+        const normalized = normalizeModelBundleArtifact(generation.modelBundle);
+        if (!normalized.shapeChanged) return;
+        generation.modelBundle = normalized.modelBundle;
+        generation.updatedAt = nowIso();
+        runChanged = true;
+        summary.runGenerationBundlesNormalized += 1;
+        this.maybeRememberNormalizedId(summary.runIds, run.id);
+      });
+
+      if (run?.working?.modelBundle) {
+        const normalized = normalizeModelBundleArtifact(run.working.modelBundle);
+        if (normalized.shapeChanged) {
+          run.working.modelBundle = normalized.modelBundle;
+          runChanged = true;
+          summary.runWorkingBundlesNormalized += 1;
+          this.maybeRememberNormalizedId(summary.runIds, run.id);
+        }
+        const nextOptimizerState = this.reconcileOptimizerStateForModelBundle(
+          normalized.modelBundle || run.working.modelBundle,
+          run.working.optimizerState,
+          {
+            normalizedModelBundle: normalized.modelBundle || run.working.modelBundle,
+            trainingBackend: run?.config?.trainingBackend,
+            forceReset: normalized.shapeChanged,
+          },
+        );
+        if (nextOptimizerState !== run.working.optimizerState) {
+          run.working.optimizerState = nextOptimizerState ? deepClone(nextOptimizerState) : null;
+          runChanged = true;
+          summary.optimizerStatesReset += 1;
+          this.maybeRememberNormalizedId(summary.runIds, run.id);
+        }
+      }
+
+      if (runChanged) {
+        run.updatedAt = nowIso();
+        changed = true;
+      }
+    });
+
+    if (this.state.activeJobs?.training?.checkpoint?.modelBundle) {
+      const job = this.state.activeJobs.training;
+      const normalized = normalizeModelBundleArtifact(job.checkpoint.modelBundle);
+      let jobChanged = false;
+      if (normalized.shapeChanged) {
+        job.checkpoint.modelBundle = normalized.modelBundle;
+        jobChanged = true;
+        summary.activeTrainingJobBundlesNormalized += 1;
+        this.maybeRememberNormalizedId(summary.trainingRunIds, job.trainingRunId);
+      }
+      const nextOptimizerState = this.reconcileOptimizerStateForModelBundle(
+        normalized.modelBundle || job.checkpoint.modelBundle,
+        job.checkpoint.optimizerState,
+        {
+          normalizedModelBundle: normalized.modelBundle || job.checkpoint.modelBundle,
+          trainingBackend: job.trainingBackend,
+          forceReset: normalized.shapeChanged,
+        },
+      );
+      if (nextOptimizerState !== job.checkpoint.optimizerState) {
+        job.checkpoint.optimizerState = nextOptimizerState ? deepClone(nextOptimizerState) : null;
+        jobChanged = true;
+        summary.optimizerStatesReset += 1;
+        this.maybeRememberNormalizedId(summary.trainingRunIds, job.trainingRunId);
+      }
+      if (jobChanged) {
+        job.updatedAt = nowIso();
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.logMlEvent('runtime_state_normalized', summary);
+    }
+    return {
+      changed,
+      summary,
+    };
+  }
+
+  compactTerminalRunState(run) {
+    if (!run || typeof run !== 'object') return run;
+    if (isRunStatusResumable(run?.status)) return run;
+    const replayBufferSummary = this.summarizeRunReplayBuffer(run);
+    run.replayBuffer = {
+      maxPositions: Number(run?.replayBuffer?.maxPositions || run?.config?.replayBufferMaxPositions || 0),
+      totalPositionsSeen: Number(run?.replayBuffer?.totalPositionsSeen || 0),
+      evictedPositions: Number(run?.replayBuffer?.evictedPositions || 0),
+      summary: replayBufferSummary,
+      policySamples: [],
+      valueSamples: [],
+      identitySamples: [],
+    };
+    (run.generations || []).forEach((generation) => {
+      if (generation?.approved === false) {
+        generation.modelBundle = null;
+      }
+    });
+    run.working = {
+      baseGeneration: Number(run?.working?.baseGeneration || run?.bestGeneration || 0),
+      checkpointIndex: Number(run?.working?.checkpointIndex || 0),
+      lastLoss: run?.working?.lastLoss ? deepClone(run.working.lastLoss) : null,
+      modelBundle: null,
+      optimizerState: null,
+    };
+    return run;
+  }
+
+  normalizeStoredRunRecord(run) {
+    if (!run || typeof run !== 'object') return null;
+    const normalized = {
+      ...run,
+      status: run.status || 'completed',
+      stopReason: run.stopReason || null,
+      lastError: run?.lastError ? summarizeError(run.lastError) : null,
+      evaluationTargetGeneration: Number.isFinite(run?.evaluationTargetGeneration)
+        ? Number(run.evaluationTargetGeneration)
+        : 0,
+      generations: Array.isArray(run.generations) ? run.generations.map((generation) => ({
+        ...generation,
+        approved: generation?.approved !== false,
+        stats: generation?.stats || {},
+        latestLoss: generation?.latestLoss || null,
+        promotionEvaluation: generation?.promotionEvaluation || null,
+        modelBundle: generation?.approved === false
+          ? null
+          : (generation?.modelBundle ? normalizeModelBundleForStorage(generation.modelBundle) : null),
+      })) : [],
+      replayBuffer: {
+        maxPositions: Number(run?.replayBuffer?.maxPositions || run?.config?.replayBufferMaxPositions || 0),
+        totalPositionsSeen: Number(run?.replayBuffer?.totalPositionsSeen || 0),
+        evictedPositions: Number(run?.replayBuffer?.evictedPositions || 0),
+        summary: run?.replayBuffer?.summary ? deepClone(run.replayBuffer.summary) : null,
+        policySamples: Array.isArray(run?.replayBuffer?.policySamples) ? run.replayBuffer.policySamples : [],
+        valueSamples: Array.isArray(run?.replayBuffer?.valueSamples) ? run.replayBuffer.valueSamples : [],
+        identitySamples: Array.isArray(run?.replayBuffer?.identitySamples) ? run.replayBuffer.identitySamples : [],
+      },
+      retainedGames: Array.isArray(run.retainedGames)
+        ? run.retainedGames.map((game) => compactRunRetainedGame(game)).filter(Boolean)
+        : [],
+      metricsHistory: Array.isArray(run.metricsHistory) ? run.metricsHistory : [],
+      evaluationHistory: Array.isArray(run.evaluationHistory) ? run.evaluationHistory : [],
+      working: {
+        modelBundle: run?.working?.modelBundle ? normalizeModelBundleForStorage(run.working.modelBundle) : null,
+        optimizerState: run?.working?.optimizerState || null,
+        baseGeneration: Number(run?.working?.baseGeneration || run?.bestGeneration || 0),
+        checkpointIndex: Number(run?.working?.checkpointIndex || 0),
+        lastLoss: run?.working?.lastLoss || null,
+      },
+    };
+    if (['running', 'stopping'].includes(String(normalized.status).toLowerCase()) && !normalized.working.modelBundle) {
+      normalized.status = 'error';
+      normalized.stopReason = normalized.stopReason || 'missing_working_model';
+    }
+    if (!['running', 'stopping'].includes(String(normalized.status).toLowerCase())) {
+      this.compactTerminalRunState(normalized);
+    }
+    return normalized;
+  }
+
+  compactRunForPersistence(run, options = {}) {
+    if (!run || typeof run !== 'object') return null;
+    const isTerminal = !isRunStatusResumable(run.status);
+    const replayBufferSummary = this.summarizeRunReplayBuffer(run);
+    const replayPositionLimit = clampNonNegativeInt(
+      options.replayPositionLimit,
+      RUN_STATE_PERSIST_REPLAY_POSITION_LIMIT,
+    );
+    const replayIdentityLimit = clampNonNegativeInt(
+      options.replayIdentityLimit,
+      replayPositionLimit
+        ? replayPositionLimit * RUN_STATE_PERSIST_REPLAY_IDENTITY_MULTIPLIER
+        : 0,
+    );
+    const replayBuffer = run?.replayBuffer || {};
+    const policySamples = Array.isArray(replayBuffer.policySamples) ? replayBuffer.policySamples : [];
+    const valueSamples = Array.isArray(replayBuffer.valueSamples) ? replayBuffer.valueSamples : [];
+    const identitySamples = Array.isArray(replayBuffer.identitySamples) ? replayBuffer.identitySamples : [];
+    const replayStartIndex = (!isTerminal && replayPositionLimit > 0 && policySamples.length > replayPositionLimit)
+      ? (policySamples.length - replayPositionLimit)
+      : 0;
+    const persistedPolicySamples = isTerminal || replayPositionLimit === 0
+      ? []
+      : deepClone(policySamples.slice(replayStartIndex));
+    const persistedValueSamples = isTerminal || replayPositionLimit === 0
+      ? []
+      : deepClone(valueSamples.slice(replayStartIndex));
+    let persistedIdentitySamples = [];
+    if (!isTerminal && replayIdentityLimit > 0) {
+      const oldestPersistedPolicySample = policySamples[replayStartIndex] || null;
+      const identityCutoffMs = parseTimeValue(oldestPersistedPolicySample?.createdAt);
+      const filteredIdentitySamples = identityCutoffMs > 0
+        ? identitySamples.filter((sample) => parseTimeValue(sample?.createdAt) >= identityCutoffMs)
+        : identitySamples;
+      persistedIdentitySamples = deepClone(filteredIdentitySamples.slice(-replayIdentityLimit));
+    }
+    return {
+      id: run.id,
+      label: run.label,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt || run.createdAt,
+      status: run.status || 'completed',
+      stopReason: run.stopReason || null,
+      lastError: run?.lastError ? summarizeError(run.lastError) : null,
+      config: deepClone(run.config || {}),
+      bestGeneration: Number(run.bestGeneration || 0),
+      evaluationTargetGeneration: Number.isFinite(run.evaluationTargetGeneration)
+        ? Number(run.evaluationTargetGeneration)
+        : 0,
+      workerGeneration: Number(run.workerGeneration || 0),
+      pendingWorkerGeneration: Number.isFinite(run.pendingWorkerGeneration) ? Number(run.pendingWorkerGeneration) : null,
+      cyclesSinceWorkerRefresh: Number(run.cyclesSinceWorkerRefresh || 0),
+      generations: (run.generations || []).map((generation) => ({
+        id: generation.id,
+        generation: Number(generation.generation || 0),
+        label: generation.label || `G${Number(generation.generation || 0)}`,
+        createdAt: generation.createdAt || null,
+        updatedAt: generation.updatedAt || generation.createdAt || null,
+        promotedAt: generation.promotedAt || null,
+        parentGeneration: Number.isFinite(generation.parentGeneration) ? Number(generation.parentGeneration) : null,
+        isBest: Boolean(generation.isBest),
+        approved: generation.approved !== false,
+        source: generation.source || 'promoted',
+        modelBundle: generation.approved === false ? null : (generation.modelBundle ? cloneModelBundle(generation.modelBundle) : null),
+        stats: deepClone(generation.stats || {}),
+        latestLoss: generation.latestLoss ? deepClone(generation.latestLoss) : null,
+        promotionEvaluation: generation.promotionEvaluation ? deepClone(generation.promotionEvaluation) : null,
+      })),
+      replayBuffer: {
+        maxPositions: Number(run?.replayBuffer?.maxPositions || run?.config?.replayBufferMaxPositions || 0),
+        totalPositionsSeen: Number(run?.replayBuffer?.totalPositionsSeen || 0),
+        evictedPositions: Number(run?.replayBuffer?.evictedPositions || 0),
+        summary: replayBufferSummary,
+        policySamples: persistedPolicySamples,
+        valueSamples: persistedValueSamples,
+        identitySamples: persistedIdentitySamples,
+      },
+      retainedGames: (run.retainedGames || []).map((game) => compactRunRetainedGame(game)).filter(Boolean),
+      metricsHistory: deepClone(run.metricsHistory || []),
+      evaluationHistory: deepClone(run.evaluationHistory || []),
+      working: {
+        baseGeneration: Number(run?.working?.baseGeneration || run?.bestGeneration || 0),
+        checkpointIndex: Number(run?.working?.checkpointIndex || 0),
+        lastLoss: run?.working?.lastLoss ? deepClone(run.working.lastLoss) : null,
+        modelBundle: isTerminal ? null : (run?.working?.modelBundle ? cloneModelBundle(run.working.modelBundle) : null),
+        optimizerState: isTerminal ? null : (run?.working?.optimizerState ? deepClone(run.working.optimizerState) : null),
+      },
+      stats: deepClone(run.stats || {}),
+    };
+  }
+
+  buildPersistedState(options = {}) {
+    const persistedRunRefs = Array.isArray(options.persistedRunRefs)
+      ? options.persistedRunRefs.filter(Boolean)
+      : (this.state.runs || []).map((run) => this.buildPersistedRunReference(run)).filter(Boolean);
+    return {
+      version: this.state.version,
+      counters: deepClone(this.state.counters || {}),
+      snapshots: deepClone(this.state.snapshots || []),
+      simulations: deepClone((this.state.simulations || []).map((simulation) => compactSimulationForState(simulation))),
+      trainingRuns: deepClone(this.state.trainingRuns || []),
+      runs: persistedRunRefs,
+      promotedBots: normalizePromotedBotState(this.state.promotedBots),
+      activeJobs: deepClone(this.state.activeJobs || {}),
+    };
+  }
+
   async save() {
     if (!this.persist) return;
     ensureDirSync(path.dirname(this.dataFilePath));
-    const payload = JSON.stringify(this.state, null, 2);
+    this.pendingSaveRequested = true;
+    if (this.saveQueued) {
+      await this.savePromise;
+      return;
+    }
+    this.saveQueued = true;
     this.savePromise = this.savePromise
       .then(async () => {
-        await persistJsonWithFallback(this.dataFilePath, payload);
+        while (this.pendingSaveRequested) {
+          this.pendingSaveRequested = false;
+          let payload = null;
+          let payloadReplayPositionLimit = RUN_STATE_PERSIST_REPLAY_POSITION_LIMIT;
+          const persistAttempts = [
+            {
+              replayPositionLimit: RUN_STATE_PERSIST_REPLAY_POSITION_LIMIT,
+              replayIdentityLimit: RUN_STATE_PERSIST_REPLAY_POSITION_LIMIT * RUN_STATE_PERSIST_REPLAY_IDENTITY_MULTIPLIER,
+            },
+            {
+              replayPositionLimit: RUN_STATE_PERSIST_REPLAY_POSITION_FALLBACK_LIMIT,
+              replayIdentityLimit: RUN_STATE_PERSIST_REPLAY_POSITION_FALLBACK_LIMIT * RUN_STATE_PERSIST_REPLAY_IDENTITY_MULTIPLIER,
+            },
+            {
+              replayPositionLimit: 0,
+              replayIdentityLimit: 0,
+            },
+          ];
+          let stringifyError = null;
+          for (let attemptIndex = 0; attemptIndex < persistAttempts.length; attemptIndex += 1) {
+            const persistOptions = persistAttempts[attemptIndex];
+            try {
+              const persistedRunRefs = [];
+              for (let runIndex = 0; runIndex < (this.state.runs || []).length; runIndex += 1) {
+                const persistedRunRef = await this.persistRunToFilesystem(this.state.runs[runIndex], {
+                  persistOptions,
+                  force: attemptIndex > 0,
+                });
+                if (persistedRunRef) {
+                  persistedRunRefs.push(persistedRunRef);
+                }
+              }
+              payload = JSON.stringify(this.buildPersistedState({
+                persistedRunRefs,
+              }));
+              payloadReplayPositionLimit = persistOptions.replayPositionLimit;
+              stringifyError = null;
+              break;
+            } catch (err) {
+              if (!isInvalidStringLengthError(err)) {
+                throw err;
+              }
+              stringifyError = err;
+            }
+          }
+          if (stringifyError) {
+            throw stringifyError;
+          }
+          if (payloadReplayPositionLimit !== RUN_STATE_PERSIST_REPLAY_POSITION_LIMIT) {
+            console.warn('[ml-runtime] persisted state with reduced replay buffer checkpoint', {
+              replayPositionLimit: payloadReplayPositionLimit,
+            });
+          }
+          await persistJsonWithFallback(this.dataFilePath, payload);
+          try {
+            const stat = await fs.promises.stat(this.dataFilePath);
+            this.lastLoadedFileMtimeMs = Number(stat?.mtimeMs || this.lastLoadedFileMtimeMs || 0);
+          } catch (_) {}
+        }
       })
       .catch((err) => {
         console.error('[ml-runtime] failed to persist state', err);
+      })
+      .finally(() => {
+        this.saveQueued = false;
       });
     await this.savePromise;
   }
@@ -1125,6 +3072,7 @@ class MlRuntime {
       .then(async () => {
         await this.hydrateActiveJobsFromMongo();
         await this.resumePersistedJobs();
+        await this.resumeRunTasks();
       })
       .catch((err) => {
         console.error('[ml-runtime] failed to resume persisted jobs', err);
@@ -1235,6 +3183,11 @@ class MlRuntime {
       }
     }
 
+    const activeRunsHydrated = await this.hydrateActiveRunsFromMongo();
+    if (activeRunsHydrated) {
+      stateChanged = true;
+    }
+
     if (stateChanged) {
       await this.save();
     }
@@ -1278,6 +3231,15 @@ class MlRuntime {
     return (this.state.trainingRuns || []).find((item) => item.id === trainingRunId) || null;
   }
 
+  normalizeStoredSnapshotRecord(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    const normalized = deepClone(snapshot);
+    if (normalized.modelBundle) {
+      normalized.modelBundle = normalizeModelBundleForStorage(normalized.modelBundle);
+    }
+    return normalized;
+  }
+
   normalizeStoredTrainingRunRecord(trainingRun) {
     if (!trainingRun || typeof trainingRun !== 'object') return null;
     const normalized = deepClone(trainingRun);
@@ -1287,7 +3249,526 @@ class MlRuntime {
     if (Object.prototype.hasOwnProperty.call(normalized, '__v')) {
       delete normalized.__v;
     }
+    if (normalized?.checkpoint?.modelBundle) {
+      normalized.checkpoint.modelBundle = normalizeModelBundleForStorage(normalized.checkpoint.modelBundle);
+    }
     return normalized;
+  }
+
+  normalizeStoredTrainingJob(job) {
+    if (!job || typeof job !== 'object') return null;
+    const normalized = deepClone(job);
+    if (normalized?.checkpoint?.modelBundle) {
+      normalized.checkpoint.modelBundle = normalizeModelBundleForStorage(normalized.checkpoint.modelBundle);
+    }
+    return normalized;
+  }
+
+  getRuntimeDataRootDir() {
+    return path.dirname(this.dataFilePath);
+  }
+
+  getRunsDataDir() {
+    return path.join(this.getRuntimeDataRootDir(), 'runs');
+  }
+
+  getRunStorageDir(runId) {
+    return path.join(this.getRunsDataDir(), sanitizePathSegment(runId, 'run'));
+  }
+
+  getRunArtifactsDir(runId) {
+    return path.join(this.getRunStorageDir(runId), 'artifacts');
+  }
+
+  getRunCheckpointsDir(runId) {
+    return path.join(this.getRunStorageDir(runId), 'checkpoints');
+  }
+
+  getRunManifestPath(runId) {
+    return path.join(this.getRunStorageDir(runId), 'manifest.json');
+  }
+
+  getRunJournalDir(runId) {
+    return path.join(this.getRunStorageDir(runId), 'journal');
+  }
+
+  getRunJournalArtifactsDir(runId) {
+    return path.join(this.getRunJournalDir(runId), 'artifacts');
+  }
+
+  getRunJournalPath(runId) {
+    return path.join(this.getRunJournalDir(runId), 'events.jsonl');
+  }
+
+  buildRunCheckpointId(run) {
+    const checkpointIndex = String(Number(run?.working?.checkpointIndex || 0)).padStart(6, '0');
+    return `ckpt-${checkpointIndex}-${Date.now()}`;
+  }
+
+  buildPersistedRunReference(run) {
+    if (!run?.id) return null;
+    return {
+      id: run.id,
+      createdAt: run.createdAt || null,
+      updatedAt: run.updatedAt || run.createdAt || null,
+      status: run.status || 'completed',
+      manifestPath: run?.persistence?.manifestPath || null,
+      latestCheckpointId: run?.persistence?.latestCheckpointId || null,
+      latestCheckpointPath: run?.persistence?.latestCheckpointPath || null,
+      checkpointedAt: run?.persistence?.checkpointedAt || null,
+      journalPath: run?.persistence?.journalPath || null,
+      latestJournalSequence: Number(run?.persistence?.latestJournalSequence || 0),
+      latestJournalEventAt: run?.persistence?.latestJournalEventAt || null,
+    };
+  }
+
+  buildRunCheckpointPayload(run, persistOptions = {}) {
+    const checkpointRun = this.compactRunForPersistence(run, persistOptions);
+    const replayBuffer = checkpointRun?.replayBuffer
+      ? deepClone(checkpointRun.replayBuffer)
+      : {
+        maxPositions: Number(run?.replayBuffer?.maxPositions || run?.config?.replayBufferMaxPositions || 0),
+        totalPositionsSeen: Number(run?.replayBuffer?.totalPositionsSeen || 0),
+        evictedPositions: Number(run?.replayBuffer?.evictedPositions || 0),
+        summary: this.summarizeRunReplayBuffer(run),
+        policySamples: [],
+        valueSamples: [],
+        identitySamples: [],
+      };
+    const retainedGames = Array.isArray(checkpointRun?.retainedGames)
+      ? deepClone(checkpointRun.retainedGames)
+      : [];
+    const workingArtifacts = {
+      modelBundle: checkpointRun?.working?.modelBundle
+        ? cloneModelBundle(checkpointRun.working.modelBundle)
+        : null,
+      optimizerState: checkpointRun?.working?.optimizerState
+        ? deepClone(checkpointRun.working.optimizerState)
+        : null,
+    };
+
+    checkpointRun.replayBuffer = {
+      maxPositions: Number(replayBuffer.maxPositions || run?.config?.replayBufferMaxPositions || 0),
+      totalPositionsSeen: Number(replayBuffer.totalPositionsSeen || 0),
+      evictedPositions: Number(replayBuffer.evictedPositions || 0),
+      summary: replayBuffer.summary ? deepClone(replayBuffer.summary) : this.summarizeRunReplayBuffer(run),
+      policySamples: [],
+      valueSamples: [],
+      identitySamples: [],
+    };
+    checkpointRun.retainedGames = [];
+    checkpointRun.working = {
+      ...(checkpointRun.working || {}),
+      modelBundle: null,
+      optimizerState: null,
+    };
+
+    return {
+      run: checkpointRun,
+      replayBuffer,
+      retainedGames,
+      workingArtifacts,
+    };
+  }
+
+  buildRunJournalPayload(run) {
+    const payload = this.buildRunCheckpointPayload(run, {
+      replayPositionLimit: 0,
+      replayIdentityLimit: 0,
+    });
+    payload.replayBuffer = {
+      maxPositions: Number(run?.replayBuffer?.maxPositions || run?.config?.replayBufferMaxPositions || 0),
+      totalPositionsSeen: Number(run?.replayBuffer?.totalPositionsSeen || 0),
+      evictedPositions: Number(run?.replayBuffer?.evictedPositions || 0),
+      summary: this.summarizeRunReplayBuffer(run),
+      policySamples: Array.isArray(run?.replayBuffer?.policySamples) ? deepClone(run.replayBuffer.policySamples) : [],
+      valueSamples: Array.isArray(run?.replayBuffer?.valueSamples) ? deepClone(run.replayBuffer.valueSamples) : [],
+      identitySamples: Array.isArray(run?.replayBuffer?.identitySamples) ? deepClone(run.replayBuffer.identitySamples) : [],
+    };
+    payload.retainedGames = (run?.retainedGames || []).map((game) => compactRunRetainedGame(game)).filter(Boolean);
+    payload.workingArtifacts = {
+      modelBundle: run?.working?.modelBundle ? cloneModelBundle(run.working.modelBundle) : null,
+      optimizerState: Object.prototype.hasOwnProperty.call(run?.working || {}, 'optimizerState')
+        ? deepClone(run.working.optimizerState)
+        : null,
+    };
+    return payload;
+  }
+
+  buildRunCheckpointMetadata(run, checkpointId, relativePaths = {}, checkpointSavedAt = nowIso()) {
+    return {
+      id: checkpointId,
+      createdAt: checkpointSavedAt,
+      updatedAt: run?.updatedAt || run?.createdAt || checkpointSavedAt,
+      status: run?.status || 'completed',
+      bestGeneration: Number(run?.bestGeneration || 0),
+      workerGeneration: Number(run?.workerGeneration || 0),
+      checkpointIndex: Number(run?.working?.checkpointIndex || 0),
+      totalTrainingSteps: Number(run?.stats?.totalTrainingSteps || 0),
+      totalSelfPlayGames: Number(run?.stats?.totalSelfPlayGames || 0),
+      totalEvaluationGames: Number(run?.stats?.totalEvaluationGames || 0),
+      generationCount: Array.isArray(run?.generations) ? run.generations.length : 0,
+      retainedGameCount: Array.isArray(run?.retainedGames) ? run.retainedGames.length : 0,
+      replayBuffer: this.summarizeRunReplayBuffer(run),
+      paths: {
+        checkpoint: relativePaths.checkpoint || null,
+        replayBuffer: relativePaths.replayBuffer || null,
+        retainedGames: relativePaths.retainedGames || null,
+        workingState: relativePaths.workingState || null,
+      },
+    };
+  }
+
+  buildRunManifestRecord(run, checkpointMetadata, options = {}) {
+    return {
+      version: RUN_PERSISTENCE_LAYOUT_VERSION,
+      id: run?.id || null,
+      createdAt: run?.createdAt || null,
+      updatedAt: run?.updatedAt || run?.createdAt || null,
+      status: run?.status || 'completed',
+      summary: this.summarizeRun(run),
+      checkpoints: Array.isArray(options.checkpoints) ? deepClone(options.checkpoints) : [],
+      latestCheckpointId: checkpointMetadata?.id || null,
+      latestCheckpointPath: checkpointMetadata?.paths?.checkpoint || null,
+      checkpointedAt: checkpointMetadata?.createdAt || null,
+      persistence: {
+        layoutVersion: RUN_PERSISTENCE_LAYOUT_VERSION,
+        manifestPath: options.manifestPath || null,
+        latestCheckpointId: checkpointMetadata?.id || null,
+        latestCheckpointPath: checkpointMetadata?.paths?.checkpoint || null,
+        replayBufferPath: checkpointMetadata?.paths?.replayBuffer || null,
+        retainedGamesPath: checkpointMetadata?.paths?.retainedGames || null,
+        workingStatePath: checkpointMetadata?.paths?.workingState || null,
+        journalPath: options.journalPath || run?.persistence?.journalPath || null,
+        latestJournalSequence: Number(options.latestJournalSequence || 0),
+        latestJournalEventAt: options.latestJournalEventAt || null,
+        checkpointedAt: checkpointMetadata?.createdAt || null,
+        checkpointedForUpdatedAt: run?.updatedAt || run?.createdAt || null,
+        mongo: options.mongo || run?.persistence?.mongo || null,
+      },
+    };
+  }
+
+  async persistRunToFilesystem(run, options = {}) {
+    if (!run?.id) return null;
+    const currentUpdatedAt = run.updatedAt || run.createdAt || nowIso();
+    if (
+      options.force !== true
+      && run?.persistence?.checkpointedForUpdatedAt
+      && String(run.persistence.checkpointedForUpdatedAt) === String(currentUpdatedAt)
+      && run?.persistence?.manifestPath
+    ) {
+      return this.buildPersistedRunReference(run);
+    }
+
+    const rootDir = this.getRuntimeDataRootDir();
+    const runManifestPath = this.getRunManifestPath(run.id);
+    const journalPath = this.getRunJournalPath(run.id);
+    const checkpointsDir = this.getRunCheckpointsDir(run.id);
+    const artifactsDir = this.getRunArtifactsDir(run.id);
+    ensureDirSync(checkpointsDir);
+    ensureDirSync(artifactsDir);
+
+    const checkpointId = this.buildRunCheckpointId(run);
+    const checkpointSavedAt = nowIso();
+    const checkpointPath = path.join(checkpointsDir, `${checkpointId}.json`);
+    const replayBufferPath = path.join(artifactsDir, `replay-buffer.${checkpointId}.json`);
+    const retainedGamesPath = path.join(artifactsDir, `retained-games.${checkpointId}.json`);
+    const workingStatePath = path.join(artifactsDir, `working-state.${checkpointId}.json`);
+    const relativePaths = {
+      checkpoint: toPortableRelativePath(rootDir, checkpointPath),
+      replayBuffer: toPortableRelativePath(rootDir, replayBufferPath),
+      retainedGames: toPortableRelativePath(rootDir, retainedGamesPath),
+      workingState: toPortableRelativePath(rootDir, workingStatePath),
+    };
+
+    const payload = this.buildRunCheckpointPayload(run, options.persistOptions);
+    await persistJsonWithFallback(replayBufferPath, JSON.stringify(payload.replayBuffer));
+    await persistJsonWithFallback(retainedGamesPath, JSON.stringify(payload.retainedGames));
+    await persistJsonWithFallback(workingStatePath, JSON.stringify(payload.workingArtifacts));
+    await persistJsonWithFallback(checkpointPath, JSON.stringify({
+      version: RUN_PERSISTENCE_LAYOUT_VERSION,
+      checkpointId,
+      runId: run.id,
+      createdAt: checkpointSavedAt,
+      run: payload.run,
+      artifacts: {
+        replayBufferPath: relativePaths.replayBuffer,
+        retainedGamesPath: relativePaths.retainedGames,
+        workingStatePath: relativePaths.workingState,
+      },
+    }));
+
+    const existingManifest = await readJsonIfExists(runManifestPath);
+    const existingCheckpoints = Array.isArray(existingManifest?.checkpoints)
+      ? existingManifest.checkpoints.filter(Boolean)
+      : (Array.isArray(run?.persistence?.checkpoints) ? run.persistence.checkpoints.filter(Boolean) : []);
+    const checkpointMetadata = this.buildRunCheckpointMetadata(run, checkpointId, relativePaths, checkpointSavedAt);
+    const mergedCheckpoints = [
+      checkpointMetadata,
+      ...existingCheckpoints.filter((entry) => entry?.id && entry.id !== checkpointId),
+    ];
+    const retainedCheckpoints = mergedCheckpoints.slice(0, RUN_CHECKPOINT_HISTORY_LIMIT);
+    const removedCheckpoints = mergedCheckpoints.slice(RUN_CHECKPOINT_HISTORY_LIMIT);
+    const manifestRelativePath = toPortableRelativePath(rootDir, runManifestPath);
+    const journalRelativePath = toPortableRelativePath(rootDir, journalPath);
+    const manifestRecord = this.buildRunManifestRecord(run, checkpointMetadata, {
+      checkpoints: retainedCheckpoints,
+      manifestPath: manifestRelativePath,
+      journalPath: journalRelativePath,
+      mongo: run?.persistence?.mongo || null,
+    });
+    await persistJsonWithFallback(runManifestPath, JSON.stringify(manifestRecord));
+    await removeDirectoryIfExists(this.getRunJournalDir(run.id));
+
+    await Promise.all(removedCheckpoints.flatMap((entry) => ([
+      removeFileIfExists(resolvePortableRelativePath(rootDir, entry?.paths?.checkpoint)),
+      removeFileIfExists(resolvePortableRelativePath(rootDir, entry?.paths?.replayBuffer)),
+      removeFileIfExists(resolvePortableRelativePath(rootDir, entry?.paths?.retainedGames)),
+      removeFileIfExists(resolvePortableRelativePath(rootDir, entry?.paths?.workingState)),
+    ])));
+
+    const mongoStatus = await this.persistRunMetadataToMongo(run, manifestRecord, checkpointMetadata);
+    run.persistence = {
+      layoutVersion: RUN_PERSISTENCE_LAYOUT_VERSION,
+      manifestPath: manifestRelativePath,
+      latestCheckpointId: checkpointMetadata.id,
+      latestCheckpointPath: checkpointMetadata.paths.checkpoint,
+      replayBufferPath: checkpointMetadata.paths.replayBuffer,
+      retainedGamesPath: checkpointMetadata.paths.retainedGames,
+      workingStatePath: checkpointMetadata.paths.workingState,
+      journalPath: journalRelativePath,
+      latestJournalSequence: 0,
+      latestJournalEventAt: null,
+      checkpointedAt: checkpointSavedAt,
+      checkpointedForUpdatedAt: currentUpdatedAt,
+      checkpoints: retainedCheckpoints,
+      mongo: mongoStatus?.saved ? mongoStatus : (run?.persistence?.mongo || mongoStatus || null),
+    };
+    return this.buildPersistedRunReference(run);
+  }
+
+  async hydrateRunFromExternalState(runState, artifacts = {}, persistence = {}) {
+    if (!runState || typeof runState !== 'object') return null;
+    const rootDir = this.getRuntimeDataRootDir();
+    const replayBuffer = await readJsonIfExists(
+      resolvePortableRelativePath(rootDir, artifacts.replayBufferPath || persistence.replayBufferPath),
+    );
+    const retainedGames = await readJsonIfExists(
+      resolvePortableRelativePath(rootDir, artifacts.retainedGamesPath || persistence.retainedGamesPath),
+    );
+    const workingState = await readJsonIfExists(
+      resolvePortableRelativePath(rootDir, artifacts.workingStatePath || persistence.workingStatePath),
+    );
+
+    const hydratedRun = {
+      ...deepClone(runState),
+      replayBuffer: replayBuffer || runState.replayBuffer || {},
+      retainedGames: Array.isArray(retainedGames) ? retainedGames : (runState.retainedGames || []),
+      working: {
+        ...(runState.working || {}),
+        modelBundle: workingState?.modelBundle || runState?.working?.modelBundle || null,
+        optimizerState: Object.prototype.hasOwnProperty.call(workingState || {}, 'optimizerState')
+          ? workingState.optimizerState
+          : (runState?.working?.optimizerState || null),
+      },
+    };
+    const normalized = this.normalizeStoredRunRecord(hydratedRun);
+    if (!normalized) return null;
+    normalized.persistence = {
+      ...(normalized.persistence || {}),
+      ...deepClone(persistence || {}),
+    };
+    return normalized;
+  }
+
+  async hydrateRunFromCheckpointRecord(checkpointRecord, manifestRecord = null) {
+    if (!checkpointRecord?.run || !checkpointRecord?.runId) return null;
+    const artifacts = checkpointRecord.artifacts || {};
+    return this.hydrateRunFromExternalState(checkpointRecord.run, artifacts, {
+      layoutVersion: RUN_PERSISTENCE_LAYOUT_VERSION,
+      manifestPath: manifestRecord?.persistence?.manifestPath || manifestRecord?.manifestPath || null,
+      latestCheckpointId: manifestRecord?.latestCheckpointId || checkpointRecord?.checkpointId || null,
+      latestCheckpointPath: manifestRecord?.latestCheckpointPath || manifestRecord?.persistence?.latestCheckpointPath || null,
+      replayBufferPath: manifestRecord?.persistence?.replayBufferPath || artifacts.replayBufferPath || null,
+      retainedGamesPath: manifestRecord?.persistence?.retainedGamesPath || artifacts.retainedGamesPath || null,
+      workingStatePath: manifestRecord?.persistence?.workingStatePath || artifacts.workingStatePath || null,
+      journalPath: manifestRecord?.persistence?.journalPath || null,
+      latestJournalSequence: Number(manifestRecord?.persistence?.latestJournalSequence || 0),
+      latestJournalEventAt: manifestRecord?.persistence?.latestJournalEventAt || null,
+      checkpointedAt: manifestRecord?.checkpointedAt || checkpointRecord?.createdAt || null,
+      checkpointedForUpdatedAt: checkpointRecord?.run?.updatedAt || checkpointRecord?.run?.createdAt || null,
+      checkpoints: Array.isArray(manifestRecord?.checkpoints) ? deepClone(manifestRecord.checkpoints) : [],
+      mongo: manifestRecord?.persistence?.mongo || null,
+    });
+  }
+
+  async loadLatestRunJournalEvent(runId, manifestRecord = null) {
+    if (!runId) return null;
+    const rootDir = this.getRuntimeDataRootDir();
+    const journalRelativePath = manifestRecord?.persistence?.journalPath
+      || toPortableRelativePath(rootDir, this.getRunJournalPath(runId));
+    const journalPath = resolvePortableRelativePath(rootDir, journalRelativePath);
+    if (!journalPath || !fs.existsSync(journalPath)) {
+      return null;
+    }
+    const raw = await fs.promises.readFile(journalPath, 'utf8').catch(() => '');
+    const lines = String(raw || '').split(/\r?\n/).filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        const parsed = JSON.parse(lines[index]);
+        if (parsed?.runId === runId && parsed?.state) {
+          return {
+            ...parsed,
+            journalPath: journalRelativePath,
+          };
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  async hydrateRunFromJournalEvent(journalEvent, manifestRecord = null) {
+    if (!journalEvent?.state || !journalEvent?.runId) return null;
+    const checkpointedAt = manifestRecord?.checkpointedAt || manifestRecord?.persistence?.checkpointedAt || null;
+    if (checkpointedAt && parseTimeValue(journalEvent.createdAt) <= parseTimeValue(checkpointedAt)) {
+      return null;
+    }
+    return this.hydrateRunFromExternalState(journalEvent.state, journalEvent.artifacts || {}, {
+      layoutVersion: RUN_PERSISTENCE_LAYOUT_VERSION,
+      manifestPath: manifestRecord?.persistence?.manifestPath || manifestRecord?.manifestPath || null,
+      latestCheckpointId: manifestRecord?.latestCheckpointId || manifestRecord?.persistence?.latestCheckpointId || null,
+      latestCheckpointPath: manifestRecord?.latestCheckpointPath || manifestRecord?.persistence?.latestCheckpointPath || null,
+      replayBufferPath: journalEvent?.artifacts?.replayBufferPath || manifestRecord?.persistence?.replayBufferPath || null,
+      retainedGamesPath: journalEvent?.artifacts?.retainedGamesPath || manifestRecord?.persistence?.retainedGamesPath || null,
+      workingStatePath: journalEvent?.artifacts?.workingStatePath || manifestRecord?.persistence?.workingStatePath || null,
+      journalPath: journalEvent?.journalPath || manifestRecord?.persistence?.journalPath || null,
+      latestJournalSequence: Number(journalEvent?.sequence || 0),
+      latestJournalEventAt: journalEvent?.createdAt || null,
+      checkpointedAt: manifestRecord?.checkpointedAt || null,
+      checkpointedForUpdatedAt: journalEvent?.state?.updatedAt || journalEvent?.state?.createdAt || null,
+      checkpoints: Array.isArray(manifestRecord?.checkpoints) ? deepClone(manifestRecord.checkpoints) : [],
+      mongo: manifestRecord?.persistence?.mongo || null,
+    });
+  }
+
+  async appendRunJournalSnapshot(run, reason, options = {}) {
+    if (!this.persist || !run?.id) return null;
+    const rootDir = this.getRuntimeDataRootDir();
+    const journalDir = this.getRunJournalDir(run.id);
+    const journalArtifactsDir = this.getRunJournalArtifactsDir(run.id);
+    const journalPath = this.getRunJournalPath(run.id);
+    ensureDirSync(journalDir);
+    ensureDirSync(journalArtifactsDir);
+
+    const sequence = Number(run?.persistence?.latestJournalSequence || 0) + 1;
+    const eventId = `evt-${String(sequence).padStart(6, '0')}-${Date.now()}`;
+    const payload = this.buildRunJournalPayload(run);
+    let replayBufferRelativePath = run?.persistence?.journalReplayBufferPath || run?.persistence?.replayBufferPath || null;
+    let retainedGamesRelativePath = run?.persistence?.journalRetainedGamesPath || run?.persistence?.retainedGamesPath || null;
+    let workingStateRelativePath = run?.persistence?.journalWorkingStatePath || run?.persistence?.workingStatePath || null;
+
+    if (options.includeReplayBuffer === true || !replayBufferRelativePath) {
+      const replayBufferPath = path.join(journalArtifactsDir, `replay-buffer.${eventId}.json`);
+      await persistJsonWithFallback(replayBufferPath, JSON.stringify(payload.replayBuffer));
+      replayBufferRelativePath = toPortableRelativePath(rootDir, replayBufferPath);
+    }
+    if (options.includeRetainedGames === true || !retainedGamesRelativePath) {
+      const retainedGamesPath = path.join(journalArtifactsDir, `retained-games.${eventId}.json`);
+      await persistJsonWithFallback(retainedGamesPath, JSON.stringify(payload.retainedGames));
+      retainedGamesRelativePath = toPortableRelativePath(rootDir, retainedGamesPath);
+    }
+    if (options.includeWorkingState === true || !workingStateRelativePath) {
+      const workingStatePath = path.join(journalArtifactsDir, `working-state.${eventId}.json`);
+      await persistJsonWithFallback(workingStatePath, JSON.stringify(payload.workingArtifacts));
+      workingStateRelativePath = toPortableRelativePath(rootDir, workingStatePath);
+    }
+
+    const entry = {
+      version: RUN_PERSISTENCE_LAYOUT_VERSION,
+      sequence,
+      type: 'state',
+      reason: reason || 'update',
+      createdAt: nowIso(),
+      runId: run.id,
+      state: payload.run,
+      artifacts: {
+        replayBufferPath: replayBufferRelativePath,
+        retainedGamesPath: retainedGamesRelativePath,
+        workingStatePath: workingStateRelativePath,
+      },
+    };
+    await fs.promises.appendFile(journalPath, `${JSON.stringify(entry)}\n`, 'utf8');
+
+    run.persistence = {
+      ...(run.persistence || {}),
+      layoutVersion: RUN_PERSISTENCE_LAYOUT_VERSION,
+      journalPath: toPortableRelativePath(rootDir, journalPath),
+      latestJournalSequence: sequence,
+      latestJournalEventAt: entry.createdAt,
+      journalReplayBufferPath: replayBufferRelativePath,
+      journalRetainedGamesPath: retainedGamesRelativePath,
+      journalWorkingStatePath: workingStateRelativePath,
+    };
+    return {
+      sequence,
+      createdAt: entry.createdAt,
+    };
+  }
+
+  async loadPersistedRunFromReference(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    const manifestRelativePath = entry.manifestPath || entry?.persistence?.manifestPath || null;
+    if (!manifestRelativePath) {
+      return this.normalizeStoredRunRecord(entry);
+    }
+    const rootDir = this.getRuntimeDataRootDir();
+    const manifestPath = resolvePortableRelativePath(rootDir, manifestRelativePath);
+    const manifestRecord = await readJsonIfExists(manifestPath);
+    if (!manifestRecord || !manifestRecord.id) {
+      return null;
+    }
+    manifestRecord.persistence = {
+      ...(manifestRecord.persistence || {}),
+      manifestPath: manifestRelativePath,
+    };
+    const checkpointRelativePath = manifestRecord.latestCheckpointPath
+      || manifestRecord?.persistence?.latestCheckpointPath
+      || entry.latestCheckpointPath
+      || entry?.persistence?.latestCheckpointPath
+      || null;
+    if (!checkpointRelativePath) {
+      return null;
+    }
+    const checkpointPath = resolvePortableRelativePath(rootDir, checkpointRelativePath);
+    const checkpointRecord = await readJsonIfExists(checkpointPath);
+    if (!checkpointRecord) {
+      return null;
+    }
+    manifestRecord.latestCheckpointPath = checkpointRelativePath;
+    const checkpointRun = await this.hydrateRunFromCheckpointRecord(checkpointRecord, manifestRecord);
+    const journalEvent = await this.loadLatestRunJournalEvent(manifestRecord.id, manifestRecord);
+    if (!journalEvent) {
+      return checkpointRun;
+    }
+    const journalRun = await this.hydrateRunFromJournalEvent(journalEvent, manifestRecord);
+    return journalRun || checkpointRun;
+  }
+
+  async loadPersistedRuns(entries = []) {
+    const loadedRuns = [];
+    for (let index = 0; index < entries.length; index += 1) {
+      const run = await this.loadPersistedRunFromReference(entries[index]);
+      if (run?.id) {
+        loadedRuns.push(run);
+      }
+    }
+    return loadedRuns;
+  }
+
+  async deletePersistedRunArtifacts(runId) {
+    if (!runId) return;
+    await removeDirectoryIfExists(this.getRunStorageDir(runId));
   }
 
   isMongoSimulationPersistenceAvailable() {
@@ -1579,6 +4060,156 @@ class MlRuntime {
     return this.isMongoSimulationPersistenceAvailable();
   }
 
+  isMongoRunPersistenceAvailable() {
+    if (!this.persist || !this.useMongoRuns) return false;
+    return mongoose.connection && mongoose.connection.readyState === 1;
+  }
+
+  async persistRunMetadataToMongo(run, manifestRecord, checkpointMetadata) {
+    if (!run?.id || !this.isMongoRunPersistenceAvailable()) {
+      return {
+        saved: false,
+        reason: 'mongo_unavailable',
+      };
+    }
+
+    try {
+      const summary = this.summarizeRun(run) || {};
+      const mongoStatus = {
+        saved: true,
+        mode: 'metadata',
+        manifestPath: manifestRecord?.persistence?.manifestPath || null,
+        latestCheckpointId: checkpointMetadata?.id || null,
+        latestCheckpointPath: checkpointMetadata?.paths?.checkpoint || null,
+        checkpointedAt: checkpointMetadata?.createdAt || null,
+      };
+
+      await MlRunModel.updateOne(
+        { id: run.id },
+        {
+          $set: {
+            id: run.id,
+            createdAt: run.createdAt || nowIso(),
+            updatedAt: run.updatedAt || run.createdAt || nowIso(),
+            status: run.status || 'completed',
+            stopReason: run.stopReason || null,
+            label: run.label || '',
+            config: deepClone(run.config || {}),
+            stats: {
+              totalTrainingSteps: Number(run.stats?.totalTrainingSteps || 0),
+              totalSelfPlayGames: Number(run.stats?.totalSelfPlayGames || 0),
+              totalEvaluationGames: Number(run.stats?.totalEvaluationGames || 0),
+              totalPromotions: Number(run.stats?.totalPromotions || 0),
+              failedPromotions: Number(run.stats?.failedPromotions || 0),
+            },
+            replayBuffer: deepClone(summary.replayBuffer || {}),
+            latestLoss: summary.latestLoss ? deepClone(summary.latestLoss) : null,
+            latestEvaluation: summary.latestEvaluation ? deepClone(summary.latestEvaluation) : null,
+            persistence: {
+              layoutVersion: RUN_PERSISTENCE_LAYOUT_VERSION,
+              storage: 'filesystem',
+              manifestPath: manifestRecord?.persistence?.manifestPath || null,
+              latestCheckpointId: checkpointMetadata?.id || null,
+              latestCheckpointPath: checkpointMetadata?.paths?.checkpoint || null,
+              checkpointedAt: checkpointMetadata?.createdAt || null,
+              replayBufferPath: checkpointMetadata?.paths?.replayBuffer || null,
+              retainedGamesPath: checkpointMetadata?.paths?.retainedGames || null,
+              workingStatePath: checkpointMetadata?.paths?.workingState || null,
+              mongo: mongoStatus,
+            },
+          },
+        },
+        { upsert: true, setDefaultsOnInsert: true },
+      );
+
+      await MlRunCheckpointModel.updateOne(
+        { runId: run.id, checkpointId: checkpointMetadata?.id || '' },
+        {
+          $set: {
+            runId: run.id,
+            checkpointId: checkpointMetadata?.id || '',
+            createdAt: checkpointMetadata?.createdAt || nowIso(),
+            updatedAt: checkpointMetadata?.updatedAt || checkpointMetadata?.createdAt || nowIso(),
+            status: checkpointMetadata?.status || run.status || 'completed',
+            bestGeneration: Number(checkpointMetadata?.bestGeneration || 0),
+            workerGeneration: Number(checkpointMetadata?.workerGeneration || 0),
+            checkpointIndex: Number(checkpointMetadata?.checkpointIndex || 0),
+            totalTrainingSteps: Number(checkpointMetadata?.totalTrainingSteps || 0),
+            totalSelfPlayGames: Number(checkpointMetadata?.totalSelfPlayGames || 0),
+            totalEvaluationGames: Number(checkpointMetadata?.totalEvaluationGames || 0),
+            replayBuffer: deepClone(checkpointMetadata?.replayBuffer || {}),
+            paths: deepClone(checkpointMetadata?.paths || {}),
+          },
+        },
+        { upsert: true, setDefaultsOnInsert: true },
+      );
+
+      const retainedCheckpointIds = Array.isArray(manifestRecord?.checkpoints)
+        ? manifestRecord.checkpoints.map((entry) => entry?.id).filter(Boolean)
+        : [];
+      if (retainedCheckpointIds.length) {
+        await MlRunCheckpointModel.deleteMany({
+          runId: run.id,
+          checkpointId: { $nin: retainedCheckpointIds },
+        });
+      }
+
+      return mongoStatus;
+    } catch (err) {
+      const status = {
+        saved: false,
+        reason: 'mongo_write_failed',
+        message: err?.message || 'MongoDB write failed',
+      };
+      console.error('[ml-runtime] failed to persist run metadata to MongoDB', err);
+      return status;
+    }
+  }
+
+  async deleteRunMetadataFromMongo(runId) {
+    if (!runId || !this.isMongoRunPersistenceAvailable()) return;
+    try {
+      await MlRunModel.deleteOne({ id: runId });
+      await MlRunCheckpointModel.deleteMany({ runId });
+    } catch (err) {
+      console.error('[ml-runtime] failed to delete run metadata from MongoDB', err);
+    }
+  }
+
+  async hydrateActiveRunsFromMongo() {
+    if (!this.isMongoRunPersistenceAvailable()) return false;
+    const docs = await MlRunModel.find(
+      { status: { $in: ['running', 'stopping'] } },
+      { _id: 0, __v: 0 },
+    )
+      .sort({ updatedAt: -1 })
+      .lean()
+      .catch(() => []);
+    let changed = false;
+    for (let index = 0; index < (Array.isArray(docs) ? docs.length : 0); index += 1) {
+      const doc = docs[index];
+      if (!doc?.id || this.getRunById(doc.id)) {
+        continue;
+      }
+      const run = await this.loadPersistedRunFromReference({
+        id: doc.id,
+        manifestPath: doc?.persistence?.manifestPath || null,
+        latestCheckpointId: doc?.persistence?.latestCheckpointId || null,
+        latestCheckpointPath: doc?.persistence?.latestCheckpointPath || null,
+      });
+      if (!run?.id) {
+        continue;
+      }
+      run.persistence = {
+        ...(run.persistence || {}),
+        mongo: doc?.persistence?.mongo || null,
+      };
+      this.state.runs.unshift(run);
+      changed = true;
+    }
+    return changed;
+  }
+
   async persistTrainingRunToMongo(trainingRun, options = {}) {
     if (!trainingRun || !this.isMongoTrainingPersistenceAvailable()) {
       return {
@@ -1787,6 +4418,8 @@ class MlRuntime {
       newSnapshotId: trainingRun.newSnapshotId || null,
       epochs: Number(trainingRun.epochs || 0),
       learningRate: Number(trainingRun.learningRate || 0),
+      trainingBackend: trainingRun.trainingBackend || TRAINING_BACKENDS.NODE,
+      trainingDevicePreference: trainingRun.trainingDevicePreference || TRAINING_DEVICE_PREFERENCES.AUTO,
       sourceSimulationIds: Array.isArray(trainingRun.sourceSimulationIds)
         ? trainingRun.sourceSimulationIds.slice()
         : [],
@@ -1808,6 +4441,7 @@ class MlRuntime {
     const snapshots = (this.state.snapshots || []).map((snapshot) => this.summarizeSnapshot(snapshot));
     const simulations = await this.listStoredSimulations({ limit: this.maxSimulationHistory });
     const trainingRuns = await this.listStoredTrainingRuns({ limit: 1 });
+    const runs = await this.listRuns({ limit: 1 });
     const totalGames = simulations.reduce((acc, simulation) => (
       acc + ((simulation.stats && simulation.stats.games) || 0)
     ), 0);
@@ -1822,9 +4456,11 @@ class MlRuntime {
         simulations: simulations.length,
         games: totalGames,
         trainingRuns: totalTrainingRuns,
+        runs: (this.state.runs || []).length,
       },
       latestSimulation,
       latestTraining,
+      latestRun: runs.length ? runs[0] : null,
     };
   }
 
@@ -1997,12 +4633,19 @@ class MlRuntime {
   getDisplayParticipantId(participant) {
     if (!participant) return '';
     if (participant.type === 'builtin') return participant.id || '';
+    if (participant.type === 'generation') return participant.id || '';
     if (participant.snapshotId) return toSnapshotParticipantId(participant.snapshotId);
     return participant.id || '';
   }
 
   getDisplayParticipantLabel(participant, fallbackId = '') {
     if (!participant) return fallbackId || 'Unknown';
+    if (participant.type === 'generation') {
+      if (Number.isFinite(participant.generation)) {
+        return participant.label || `G${participant.generation}`;
+      }
+      return participant.label || participant.id || fallbackId || 'Unknown';
+    }
     return participant.label || participant.snapshot?.label || participant.snapshotId || participant.id || fallbackId || 'Unknown';
   }
 
@@ -2047,7 +4690,8 @@ class MlRuntime {
       return chooseBuiltinAction(participant.id, state, options);
     }
 
-    if (!participant.snapshot || !participant.snapshot.modelBundle) {
+    const modelBundle = participant.snapshot?.modelBundle || participant.modelBundle || null;
+    if (!modelBundle) {
       return {
         action: null,
         trace: { reason: 'snapshot_missing_model' },
@@ -2056,7 +4700,7 @@ class MlRuntime {
       };
     }
 
-    return runHiddenInfoMcts(participant.snapshot.modelBundle, state, {
+    return runHiddenInfoMcts(modelBundle, state, {
       rootPlayer: state.toMove,
       iterations: options.iterations,
       maxDepth: options.maxDepth,
@@ -2102,6 +4746,7 @@ class MlRuntime {
           || null;
         policySamples.push({
           snapshotId: record.snapshotId,
+          generation: Number.isFinite(record.sourceGeneration) ? record.sourceGeneration : null,
           player: record.player,
           features: record.policy.features.map((vector) => vector.slice()),
           target: record.policy.target.slice(),
@@ -2115,6 +4760,7 @@ class MlRuntime {
       if (record.value && Array.isArray(record.value.features)) {
         valueSamples.push({
           snapshotId: record.snapshotId,
+          generation: Number.isFinite(record.sourceGeneration) ? record.sourceGeneration : null,
           player: record.player,
           features: record.value.features.slice(),
           target: valueTarget,
@@ -2125,6 +4771,7 @@ class MlRuntime {
         record.identitySamples.forEach((sample) => {
           identitySamples.push({
             snapshotId: record.snapshotId,
+            generation: Number.isFinite(record.sourceGeneration) ? record.sourceGeneration : null,
             player: record.player,
             pieceId: sample.pieceId,
             trueIdentity: sample.trueIdentity,
@@ -2176,6 +4823,7 @@ class MlRuntime {
   }
 
   async runSingleGame(options = {}) {
+    const startedAtMs = Date.now();
     const whiteParticipant = options.whiteParticipant || null;
     const blackParticipant = options.blackParticipant || null;
     const whiteParticipantId = this.getDisplayParticipantId(whiteParticipant);
@@ -2188,7 +4836,7 @@ class MlRuntime {
       iterations: clampPositiveInt(options.iterations, 90, 10, 800),
       maxDepth: clampPositiveInt(options.maxDepth, 16, 4, 80),
       hypothesisCount: clampPositiveInt(options.hypothesisCount, 8, 1, 24),
-      riskBias: normalizeFloat(options.riskBias, 0.75, 0, 3),
+      riskBias: normalizeFloat(options.riskBias, 0, 0, 3),
       exploration: normalizeFloat(options.exploration, 1.25, 0, 5),
     };
     const maxDecisionSafety = Math.max(maxPlies * 6, maxPlies + 24);
@@ -2253,21 +4901,9 @@ class MlRuntime {
           ...mctsOptions,
           seed: seed + (decisions.length * 104729),
         });
+        const requestedKey = actionKey(search?.action);
 
-        const legalByKey = new Map(legalActions.map((action) => [actionKey(action), action]));
-        const requestedAction = search?.action || null;
-        const requestedKey = requestedAction ? actionKey(requestedAction) : '';
-        const primary = requestedKey && legalByKey.has(requestedKey)
-          ? legalByKey.get(requestedKey)
-          : null;
-
-        const candidates = [];
-        if (primary) candidates.push(primary);
-        legalActions.forEach((action) => {
-          if (!primary || actionKey(action) !== actionKey(primary)) {
-            candidates.push(action);
-          }
-        });
+        const candidates = buildPreferredLiveActionCandidates(search, legalActions);
 
         let executedAction = null;
         let nextLiveGame = liveGame;
@@ -2358,6 +4994,7 @@ class MlRuntime {
             ? {
               ...deepClone(search.trainingRecord),
               snapshotId: participant.snapshotId || null,
+              sourceGeneration: Number.isFinite(participant.generation) ? participant.generation : null,
             }
             : null,
         };
@@ -2408,8 +5045,9 @@ class MlRuntime {
       const plies = decisions.length;
 
       return {
-        id: this.nextId('game'),
+        id: options.gameId || this.nextId('game'),
         createdAt: nowIso(),
+        durationMs: Math.max(0, Date.now() - startedAtMs),
         seed,
         setupMode: 'live-route',
         whiteParticipantId,
@@ -3471,8 +6109,8 @@ class MlRuntime {
         decisionCount: Number.isFinite(game.decisionCount)
           ? game.decisionCount
           : (Array.isArray(game.decisions) ? game.decisions.length : 0),
-      })),
-    };
+    })),
+  };
   }
 
   async getReplay(simulationId, gameId) {
@@ -3592,6 +6230,10 @@ class MlRuntime {
       totalEpochs,
       epoch: completedEpochs,
       learningRate: Number(job?.learningRate || trainingRun?.learningRate || 0),
+      trainingBackend: job?.trainingBackend || trainingRun?.trainingBackend || TRAINING_BACKENDS.NODE,
+      trainingDevicePreference: job?.trainingDevicePreference
+        || trainingRun?.trainingDevicePreference
+        || TRAINING_DEVICE_PREFERENCES.AUTO,
       sourceSimulationIds: Array.isArray(job?.sourceSimulationIds)
         ? job.sourceSimulationIds.slice()
         : (Array.isArray(trainingRun?.sourceSimulationIds) ? trainingRun.sourceSimulationIds.slice() : []),
@@ -3609,6 +6251,17 @@ class MlRuntime {
     const payload = this.buildTrainingJobPayload(job, phase, overrides);
     this.rememberLiveStatus('training', payload);
     eventBus.emit('ml:trainingProgress', payload);
+    this.logTrainingEvent(payload.trainingRunId || job?.trainingRunId, 'training_progress', {
+      phase: payload.phase,
+      status: payload.status,
+      epoch: payload.epoch,
+      totalEpochs: payload.totalEpochs,
+      baseSnapshotId: payload.baseSnapshotId,
+      newSnapshotId: payload.newSnapshotId || null,
+      trainingBackend: payload.trainingBackend,
+      trainingDevicePreference: payload.trainingDevicePreference,
+      loss: payload.loss || null,
+    });
     return payload;
   }
 
@@ -3692,6 +6345,11 @@ class MlRuntime {
     }
     const epochs = clampPositiveInt(options.epochs, 2, 1, 50);
     const learningRate = normalizeFloat(options.learningRate, 0.01, 0.0001, 0.5);
+    const trainingBackend = normalizeTrainingBackend(options.trainingBackend, TRAINING_BACKENDS.AUTO);
+    const trainingDevicePreference = normalizeTrainingDevicePreference(
+      options.trainingDevicePreference,
+      TRAINING_DEVICE_PREFERENCES.AUTO,
+    );
     const simulationIds = Array.isArray(options.simulationIds)
       ? options.simulationIds.filter(Boolean)
       : null;
@@ -3720,7 +6378,9 @@ class MlRuntime {
     const trainingRunId = this.nextId('training');
     const taskId = `training:${trainingRunId}`;
     const checkpointBundle = cloneModelBundle(baseSnapshot.modelBundle);
-    const checkpointOptimizer = createOptimizerState(checkpointBundle);
+    const checkpointOptimizer = trainingBackend === TRAINING_BACKENDS.NODE
+      ? createOptimizerState(checkpointBundle)
+      : null;
     const createdAt = nowIso();
     const trainingRun = {
       id: trainingRunId,
@@ -3733,6 +6393,8 @@ class MlRuntime {
       newSnapshotId: null,
       epochs,
       learningRate,
+      trainingBackend,
+      trainingDevicePreference,
       sourceSimulationIds: simulationIds || [],
       sourceGames: samples.sourceGames,
       sourceSimulations: samples.sourceSimulations,
@@ -3756,6 +6418,8 @@ class MlRuntime {
       baseSnapshotId: baseSnapshot.id,
       epochs,
       learningRate,
+      trainingBackend,
+      trainingDevicePreference,
       sourceSimulationIds: simulationIds || [],
       sourceGames: samples.sourceGames,
       sourceSimulations: samples.sourceSimulations,
@@ -3771,6 +6435,17 @@ class MlRuntime {
       },
     };
 
+    this.logTrainingEvent(trainingRunId, 'training_job_started', {
+      taskId,
+      baseSnapshotId: baseSnapshot.id,
+      epochs,
+      learningRate,
+      trainingBackend,
+      trainingDevicePreference,
+      sampleCounts,
+      sourceGames: samples.sourceGames,
+      sourceSimulations: samples.sourceSimulations,
+    });
     this.state.activeJobs.training = deepClone(job);
     this.upsertTrainingRunRecord(trainingRun);
     await this.persistTrainingRunToMongo({
@@ -3824,7 +6499,7 @@ class MlRuntime {
       : cloneModelBundle(baseSnapshot.modelBundle);
     let optimizerState = job?.checkpoint?.optimizerState
       ? deepClone(job.checkpoint.optimizerState)
-      : createOptimizerState(trainedBundle);
+      : (job.trainingBackend === TRAINING_BACKENDS.NODE ? createOptimizerState(trainedBundle) : null);
     let completedEpochs = Number(job?.checkpoint?.completedEpochs || trainingRun.history.length || 0);
 
     this.emitTrainingJobProgress(job, completedEpochs > 0 ? 'epoch' : 'start', {
@@ -3836,33 +6511,43 @@ class MlRuntime {
 
     try {
       for (let epoch = completedEpochs; epoch < job.epochs; epoch += 1) {
-        const policy = trainPolicyModel(trainedBundle, samples.policySamples, {
+        const trainingResult = await this.trainModelBundleBatch({
+          modelBundle: trainedBundle,
+          optimizerState,
+          samples,
           learningRate: job.learningRate,
-          optimizerState: optimizerState.policy,
+          batchSize: samples.policySamples.length || 24,
+          weightDecay: 0.0001,
+          gradientClipNorm: 5,
+          epochs: 1,
+          trainingBackend: job.trainingBackend,
+          trainingDevicePreference: job.trainingDevicePreference,
+          parallelTrainingHeadWorkers: 1,
+          debugContext: {
+            trainingRunId: trainingRun.id,
+            taskId: job.taskId,
+            baseSnapshotId: job.baseSnapshotId,
+            epoch: epoch + 1,
+            source: 'background_training_job',
+          },
         });
-        const value = trainValueModel(trainedBundle, samples.valueSamples, {
-          learningRate: job.learningRate,
-          optimizerState: optimizerState.value,
-        });
-        const identity = trainIdentityModel(trainedBundle, samples.identitySamples, {
-          learningRate: job.learningRate,
-          optimizerState: optimizerState.identity,
-        });
-        optimizerState = {
-          policy: policy.optimizerState || optimizerState.policy,
-          value: value.optimizerState || optimizerState.value,
-          identity: identity.optimizerState || optimizerState.identity,
-        };
+        trainedBundle = trainingResult.modelBundle;
+        optimizerState = trainingResult.optimizerState || optimizerState;
+        const latestMetrics = Array.isArray(trainingResult.history) && trainingResult.history.length
+          ? trainingResult.history[trainingResult.history.length - 1]
+          : {};
 
         const epochLoss = {
           epoch: epoch + 1,
-          policyLoss: policy.loss,
-          valueLoss: value.loss,
-          identityLoss: identity.loss,
-          identityAccuracy: identity.accuracy,
-          policySamples: policy.samples,
-          valueSamples: value.samples,
-          identitySamples: identity.samples,
+          policyLoss: Number(latestMetrics.policyLoss || 0),
+          valueLoss: Number(latestMetrics.valueLoss || 0),
+          identityLoss: Number(latestMetrics.identityLoss || 0),
+          identityAccuracy: Number(latestMetrics.identityAccuracy || 0),
+          policySamples: Number(latestMetrics.policySamples || 0),
+          valueSamples: Number(latestMetrics.valueSamples || 0),
+          identitySamples: Number(latestMetrics.identitySamples || 0),
+          trainingBackend: trainingResult.backend || TRAINING_BACKENDS.NODE,
+          trainingDevice: trainingResult.device || TRAINING_DEVICE_PREFERENCES.CPU,
         };
         trainingRun.history.push(epochLoss);
         trainingRun.finalLoss = epochLoss;
@@ -3949,6 +6634,13 @@ class MlRuntime {
         history: deepClone(trainingRun.history),
         loss: latestLoss,
       });
+      this.logTrainingEvent(trainingRun.id, 'training_job_completed', {
+        taskId: job.taskId,
+        baseSnapshotId: baseSnapshot.id,
+        newSnapshotId: newSnapshot.id,
+        epochs: completedEpochs,
+        finalLoss: latestLoss || null,
+      });
     } catch (err) {
       trainingRun.status = 'error';
       trainingRun.updatedAt = nowIso();
@@ -3965,6 +6657,13 @@ class MlRuntime {
         history: deepClone(trainingRun.history || []),
         loss: trainingRun.finalLoss || null,
         message: err.message || 'Training failed',
+      });
+      this.logTrainingEvent(trainingRun.id, 'training_job_error', {
+        taskId: job.taskId,
+        baseSnapshotId: baseSnapshot.id,
+        epochsCompleted: completedEpochs,
+        finalLoss: trainingRun.finalLoss || null,
+        error: summarizeError(err),
       });
       throw err;
     } finally {
@@ -3983,6 +6682,11 @@ class MlRuntime {
     }
     const epochs = clampPositiveInt(options.epochs, 2, 1, 50);
     const learningRate = normalizeFloat(options.learningRate, 0.01, 0.0001, 0.5);
+    const trainingBackend = normalizeTrainingBackend(options.trainingBackend, TRAINING_BACKENDS.AUTO);
+    const trainingDevicePreference = normalizeTrainingDevicePreference(
+      options.trainingDevicePreference,
+      TRAINING_DEVICE_PREFERENCES.AUTO,
+    );
     const simulationIds = Array.isArray(options.simulationIds)
       ? options.simulationIds.filter(Boolean)
       : null;
@@ -4023,6 +6727,17 @@ class MlRuntime {
       });
     };
 
+    this.logMlEvent('train_snapshot_started', {
+      taskId,
+      baseSnapshotId: baseSnapshot.id,
+      epochs,
+      learningRate,
+      trainingBackend,
+      trainingDevicePreference,
+      sampleCounts,
+      sourceGames: samples.sourceGames,
+      sourceSimulations: samples.sourceSimulations,
+    });
     emitTrainingProgress('start', {
       sourceGames: samples.sourceGames,
       sourceSimulations: samples.sourceSimulations,
@@ -4030,34 +6745,46 @@ class MlRuntime {
 
     try {
       const trainedBundle = cloneModelBundle(baseSnapshot.modelBundle);
-      const optimizerState = createOptimizerState(trainedBundle);
+      let optimizerState = trainingBackend === TRAINING_BACKENDS.NODE
+        ? createOptimizerState(trainedBundle)
+        : null;
       const lossEntries = [];
 
       for (let epoch = 0; epoch < epochs; epoch += 1) {
-        const policy = trainPolicyModel(trainedBundle, samples.policySamples, {
+        const trainingResult = await this.trainModelBundleBatch({
+          modelBundle: trainedBundle,
+          optimizerState,
+          samples,
           learningRate,
-          optimizerState: optimizerState.policy,
+          batchSize: 24,
+          weightDecay: 0.0001,
+          gradientClipNorm: 5,
+          epochs: 1,
+          trainingBackend,
+          trainingDevicePreference,
+          parallelTrainingHeadWorkers: 1,
+          debugContext: {
+            taskId,
+            snapshotId: baseSnapshot.id,
+            epoch: epoch + 1,
+            source: 'train_snapshot',
+          },
         });
-        const value = trainValueModel(trainedBundle, samples.valueSamples, {
-          learningRate,
-          optimizerState: optimizerState.value,
-        });
-        const identity = trainIdentityModel(trainedBundle, samples.identitySamples, {
-          learningRate,
-          optimizerState: optimizerState.identity,
-        });
-        optimizerState.policy = policy.optimizerState || optimizerState.policy;
-        optimizerState.value = value.optimizerState || optimizerState.value;
-        optimizerState.identity = identity.optimizerState || optimizerState.identity;
+        optimizerState = trainingResult.optimizerState || optimizerState;
+        const latestMetrics = Array.isArray(trainingResult.history) && trainingResult.history.length
+          ? trainingResult.history[trainingResult.history.length - 1]
+          : {};
         const epochLoss = {
           epoch: epoch + 1,
-          policyLoss: policy.loss,
-          valueLoss: value.loss,
-          identityLoss: identity.loss,
-          identityAccuracy: identity.accuracy,
-          policySamples: policy.samples,
-          valueSamples: value.samples,
-          identitySamples: identity.samples,
+          policyLoss: Number(latestMetrics.policyLoss || 0),
+          valueLoss: Number(latestMetrics.valueLoss || 0),
+          identityLoss: Number(latestMetrics.identityLoss || 0),
+          identityAccuracy: Number(latestMetrics.identityAccuracy || 0),
+          policySamples: Number(latestMetrics.policySamples || 0),
+          valueSamples: Number(latestMetrics.valueSamples || 0),
+          identitySamples: Number(latestMetrics.identitySamples || 0),
+          trainingBackend: trainingResult.backend || trainingBackend,
+          trainingDevice: trainingResult.device || TRAINING_DEVICE_PREFERENCES.CPU,
         };
         lossEntries.push(epochLoss);
         emitTrainingProgress('epoch', {
@@ -4101,6 +6828,8 @@ class MlRuntime {
         newSnapshotId: newSnapshot.id,
         epochs,
         learningRate,
+        trainingBackend,
+        trainingDevicePreference,
         sourceSimulationIds: simulationIds || [],
         sourceGames: samples.sourceGames,
         sourceSimulations: samples.sourceSimulations,
@@ -4126,6 +6855,13 @@ class MlRuntime {
         newSnapshotId: newSnapshot.id,
         loss: latestLoss,
       });
+      this.logTrainingEvent(trainingRun.id, 'train_snapshot_completed', {
+        taskId,
+        baseSnapshotId: baseSnapshot.id,
+        newSnapshotId: newSnapshot.id,
+        epochs,
+        finalLoss: latestLoss || null,
+      });
 
       return {
         trainingRun,
@@ -4136,6 +6872,14 @@ class MlRuntime {
     } catch (err) {
       emitTrainingProgress('error', {
         message: err.message || 'Training failed',
+      });
+      this.logMlEvent('train_snapshot_error', {
+        taskId,
+        baseSnapshotId: baseSnapshot.id,
+        epochs,
+        trainingBackend,
+        trainingDevicePreference,
+        error: summarizeError(err),
       });
       throw err;
     }
@@ -4156,8 +6900,2738 @@ class MlRuntime {
     })));
   }
 
+  getRunIndex(runId) {
+    return (this.state.runs || []).findIndex((run) => run.id === runId);
+  }
+
+  getRunById(runId) {
+    return (this.state.runs || []).find((run) => run.id === runId) || null;
+  }
+
+  getRunGeneration(run, generationNumber) {
+    if (!run || !Number.isFinite(generationNumber)) return null;
+    return (run.generations || []).find((generation) => Number(generation?.generation) === Number(generationNumber)) || null;
+  }
+
+  buildRunGenerationId(runId, generationNumber) {
+    return `${runId}:g${String(generationNumber).padStart(4, '0')}`;
+  }
+
+  createRunGenerationRecord(run, options = {}) {
+    const generationNumber = Number.isFinite(options.generation)
+      ? Number(options.generation)
+      : Number(run?.generations?.length || 0);
+    const createdAt = nowIso();
+    return {
+      id: this.buildRunGenerationId(run?.id || this.nextId('run'), generationNumber),
+      generation: generationNumber,
+      label: options.label || `G${generationNumber}`,
+      createdAt,
+      updatedAt: createdAt,
+      promotedAt: options.promotedAt || (options.isBest ? createdAt : null),
+      parentGeneration: Number.isFinite(options.parentGeneration) ? Number(options.parentGeneration) : null,
+      isBest: Boolean(options.isBest),
+      approved: options.approved !== false,
+      source: options.source || 'promoted',
+      modelBundle: cloneModelBundle(options.modelBundle || createDefaultModelBundle({ seed: Date.now() })),
+      stats: {
+        selfPlayGames: 0,
+        evaluationGames: 0,
+        replayPositions: 0,
+        ...deepClone(options.stats || {}),
+      },
+      latestLoss: options.latestLoss ? deepClone(options.latestLoss) : null,
+      promotionEvaluation: options.promotionEvaluation ? deepClone(options.promotionEvaluation) : null,
+    };
+  }
+
+  createGenerationParticipant(run, generationNumber) {
+    const generation = this.getRunGeneration(run, generationNumber);
+    if (!generation) return null;
+    return {
+      id: buildPromotedModelBotId(run.id, generation.generation),
+      type: 'generation',
+      label: generation.label || `G${generation.generation}`,
+      generation: generation.generation,
+      runId: run.id,
+      modelBundle: generation.modelBundle,
+    };
+  }
+
+  buildPromotedBotCatalogEntry(run, generation) {
+    if (!run || !isPromotedGenerationRecord(generation)) return null;
+    const id = buildPromotedModelBotId(run.id, generation.generation);
+    const enabledIds = new Set(this.state?.promotedBots?.enabledIds || []);
+    return {
+      id,
+      type: 'promoted_model',
+      label: this.buildMlTestLabel(run, generation),
+      runId: run.id,
+      runLabel: run.label || run.id,
+      generation: Number(generation.generation || 0),
+      generationId: generation.id || null,
+      generationLabel: generation.label || `G${Number(generation.generation || 0)}`,
+      promotedAt: generation.promotedAt || null,
+      createdAt: generation.createdAt || null,
+      updatedAt: generation.updatedAt || generation.createdAt || null,
+      isBest: Boolean(generation.isBest),
+      enabled: enabledIds.has(id),
+      botUsername: buildMlTestBotUsername(run.id, generation.generation),
+    };
+  }
+
+  listPromotedBotCatalogEntries() {
+    const items = [];
+    (this.state.runs || []).forEach((run) => {
+      (run.generations || []).forEach((generation) => {
+        const entry = this.buildPromotedBotCatalogEntry(run, generation);
+        if (entry) items.push(entry);
+      });
+    });
+    return items.sort((left, right) => {
+      const promotedDelta = parseTimeValue(right?.promotedAt) - parseTimeValue(left?.promotedAt);
+      if (promotedDelta !== 0) return promotedDelta;
+      const createdDelta = parseTimeValue(right?.createdAt) - parseTimeValue(left?.createdAt);
+      if (createdDelta !== 0) return createdDelta;
+      const generationDelta = Number(right?.generation || 0) - Number(left?.generation || 0);
+      if (generationDelta !== 0) return generationDelta;
+      return String(left?.label || '').localeCompare(String(right?.label || ''));
+    });
+  }
+
+  prunePromotedBotSelections() {
+    const availableIds = new Set(this.listPromotedBotCatalogEntries().map((entry) => entry.id));
+    const currentIds = uniqueStrings(this.state?.promotedBots?.enabledIds || []);
+    const nextIds = currentIds.filter((id) => availableIds.has(id));
+    const changed = currentIds.length !== nextIds.length || currentIds.some((id, index) => id !== nextIds[index]);
+    this.state.promotedBots = {
+      enabledIds: nextIds,
+    };
+    return changed;
+  }
+
+  buildPromotedBotCatalogSummary() {
+    const items = this.listPromotedBotCatalogEntries();
+    const enabledIds = items.filter((entry) => entry.enabled).map((entry) => entry.id);
+    return {
+      items,
+      enabledIds,
+      total: items.length,
+      enabledCount: enabledIds.length,
+    };
+  }
+
+  getEnabledPromotedBotCatalogEntry(botId) {
+    if (typeof botId !== 'string' || !botId.trim()) return null;
+    return this.listPromotedBotCatalogEntries()
+      .find((entry) => entry.id === botId && entry.enabled)
+      || null;
+  }
+
+  async getPromotedBotCatalog() {
+    await this.ensureLoaded();
+    this.prunePromotedBotSelections();
+    return this.buildPromotedBotCatalogSummary();
+  }
+
+  async updatePromotedBotCatalog(enabledIds = []) {
+    await this.ensureLoaded();
+    const availableIds = new Set(this.listPromotedBotCatalogEntries().map((entry) => entry.id));
+    this.state.promotedBots = {
+      enabledIds: uniqueStrings(enabledIds).filter((id) => availableIds.has(id)),
+    };
+    await this.save();
+    return this.buildPromotedBotCatalogSummary();
+  }
+
+  async listEnabledPromotedBotCatalog() {
+    await this.ensureLoaded();
+    this.prunePromotedBotSelections();
+    return this.listPromotedBotCatalogEntries()
+      .filter((entry) => entry.enabled)
+      .map((entry) => ({
+        ...entry,
+        playable: true,
+      }));
+  }
+
+  async ensureMlTestBotUser(runId, generationNumber, options = {}) {
+    const email = buildMlTestBotEmail(runId, generationNumber);
+    const username = buildMlTestBotUsername(runId, generationNumber);
+    const botDifficulty = typeof options.botDifficulty === 'string' && options.botDifficulty.trim()
+      ? options.botDifficulty.trim()
+      : buildPromotedModelBotId(runId, generationNumber);
+    const hasMongoConnection = Boolean(mongoose.connection && mongoose.connection.readyState === 1);
+    if (!hasMongoConnection) {
+      return {
+        _id: new mongoose.Types.ObjectId(),
+        username,
+        email,
+        elo: 1600,
+        isBot: true,
+        botDifficulty,
+        isGuest: false,
+      };
+    }
+
+    let bot = await User.findOne({ email }).lean();
+    if (bot) {
+      return bot;
+    }
+
+    const existingByUsername = await User.findOne({ username }).lean();
+    if (existingByUsername) {
+      await User.updateOne(
+        { _id: existingByUsername._id },
+        {
+          $set: {
+            email,
+            isBot: true,
+            botDifficulty,
+            isGuest: false,
+          },
+        },
+      );
+      return {
+        ...existingByUsername,
+        email,
+        isBot: true,
+        botDifficulty,
+        isGuest: false,
+      };
+    }
+
+    const created = await User.create({
+      username,
+      email,
+      elo: 1600,
+      isBot: true,
+      botDifficulty,
+      isGuest: false,
+    });
+    return created.toObject();
+  }
+
+  buildMlTestLabel(run, generationRecord) {
+    const generation = Number(generationRecord?.generation || 0);
+    const runLabel = String(run?.label || run?.id || 'Run').trim();
+    return `${runLabel} G${generation}`;
+  }
+
+  async registerMlTestGame(gameId, mlTestConfig) {
+    const normalizedGameId = typeof gameId === 'string' ? gameId : gameId?.toString?.();
+    if (!normalizedGameId || !mlTestConfig?.enabled) {
+      return null;
+    }
+    this.liveTestGameConfigs.set(normalizedGameId, deepClone(mlTestConfig));
+    await this.scheduleMlTestGame(normalizedGameId);
+    return mlTestConfig;
+  }
+
+  async startLiveMlMatch(options = {}) {
+    const run = options.run || null;
+    const generationRecord = options.generationRecord || null;
+    const userId = typeof options.userId === 'string' ? options.userId.trim() : '';
+    const username = typeof options.username === 'string' ? options.username.trim() : '';
+    const sidePreference = normalizeLiveTestSidePreference(options.sidePreference);
+    const initiatorAction = typeof options.initiatorAction === 'string' && options.initiatorAction.trim()
+      ? options.initiatorAction.trim()
+      : 'ml-test-match-created';
+    const logEvent = typeof options.logEvent === 'string' && options.logEvent.trim()
+      ? options.logEvent.trim()
+      : 'test_game_started';
+
+    if (!run?.id) {
+      const err = new Error('Run not found');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (!generationRecord || generationRecord.approved === false || !generationRecord.modelBundle) {
+      const err = new Error(`Generation G${Number(generationRecord?.generation || 0)} is not available for live testing`);
+      err.statusCode = 404;
+      throw err;
+    }
+    if (!userId) {
+      const err = new Error('User session is required');
+      err.statusCode = 401;
+      throw err;
+    }
+
+    if (lobbyStore.isInGame(userId)) {
+      const err = new Error('User is already in a game');
+      err.statusCode = 409;
+      throw err;
+    }
+
+    if (lobbyStore.isInAnyQueue(userId)) {
+      lobbyStore.removeFromAllQueues(userId);
+      lobbyStore.emitQueueChanged([userId]);
+    }
+
+    const botId = buildPromotedModelBotId(run.id, generationRecord.generation);
+    const botUser = await this.ensureMlTestBotUser(run.id, generationRecord.generation, {
+      botDifficulty: botId,
+    });
+    const { timeControl, increment, type } = await resolveLiveAiMatchSettings();
+    const userPlaysWhite = sidePreference === LIVE_TEST_SIDE_PREFERENCES.WHITE
+      ? true
+      : (sidePreference === LIVE_TEST_SIDE_PREFERENCES.BLACK ? false : Math.random() < 0.5);
+    const players = userPlaysWhite
+      ? [userId, botUser._id.toString()]
+      : [botUser._id.toString(), userId];
+
+    const match = await Match.create({
+      player1: userId,
+      player2: botUser._id,
+      type,
+      player1Score: 0,
+      player2Score: 0,
+      games: [],
+    });
+
+    const mlTestConfig = {
+      enabled: true,
+      botId,
+      runId: run.id,
+      runLabel: run.label || run.id,
+      generation: generationRecord.generation,
+      generationLabel: generationRecord.label || `G${generationRecord.generation}`,
+      participantId: buildPromotedModelBotId(run.id, generationRecord.generation),
+      modelLabel: this.buildMlTestLabel(run, generationRecord),
+      botUserId: botUser._id.toString(),
+      botUsername: botUser.username,
+      sidePreference,
+      createdAt: nowIso(),
+    };
+
+    const game = await Game.create({
+      players,
+      match: match._id,
+      timeControlStart: timeControl,
+      increment,
+      mlTestConfig,
+    });
+
+    match.games.push(game._id);
+    await match.save();
+
+    lobbyStore.addInGame([userId]);
+    lobbyStore.emitQueueChanged([userId]);
+
+    const affectedUsers = players.map((id) => id.toString());
+    const gamePayload = typeof game.toObject === 'function' ? game.toObject() : game;
+
+    eventBus.emit('gameChanged', {
+      game: gamePayload,
+      affectedUsers,
+      initiator: {
+        action: initiatorAction,
+        userId,
+        username,
+      },
+      botPlayers: [botUser._id.toString()],
+    });
+
+    eventBus.emit('players:bothNext', {
+      game: gamePayload,
+      affectedUsers,
+      botPlayers: [botUser._id.toString()],
+    });
+
+    eventBus.emit('match:created', {
+      matchId: match._id.toString(),
+      players: affectedUsers,
+      type,
+      botPlayers: [botUser._id.toString()],
+    });
+
+    await this.registerMlTestGame(game._id.toString(), mlTestConfig);
+    this.logMlEvent(logEvent, {
+      runId: run.id,
+      generation: generationRecord.generation,
+      gameId: game._id.toString(),
+      matchId: match._id.toString(),
+      userId,
+      botId,
+      botUserId: botUser._id.toString(),
+      sidePreference,
+      userPlaysWhite,
+    });
+
+    return {
+      status: 'matched',
+      userId,
+      username,
+      matchId: match._id.toString(),
+      gameId: game._id.toString(),
+      runId: run.id,
+      generation: generationRecord.generation,
+      generationLabel: generationRecord.label || `G${generationRecord.generation}`,
+      botId,
+      botUserId: botUser._id.toString(),
+      botUsername: botUser.username,
+      userColor: userPlaysWhite ? WHITE : BLACK,
+      launchUrl: '/',
+    };
+  }
+
+  async startPromotedBotGame(options = {}) {
+    await this.ensureLoaded();
+
+    const botId = typeof options.botId === 'string' ? options.botId.trim() : '';
+    const userId = typeof options.userId === 'string' ? options.userId.trim() : '';
+    const username = typeof options.username === 'string' ? options.username.trim() : '';
+    if (!botId) {
+      const err = new Error('Bot is required');
+      err.statusCode = 400;
+      throw err;
+    }
+    const selection = this.getEnabledPromotedBotCatalogEntry(botId);
+    if (!selection) {
+      const err = new Error('Selected promoted bot is not available');
+      err.statusCode = 404;
+      throw err;
+    }
+    const run = this.getRunById(selection.runId);
+    const generationRecord = this.getRunGeneration(run, selection.generation);
+    return this.startLiveMlMatch({
+      run,
+      generationRecord,
+      userId,
+      username,
+      sidePreference: options.sidePreference || LIVE_TEST_SIDE_PREFERENCES.RANDOM,
+      initiatorAction: 'bot-match-created',
+      logEvent: 'promoted_bot_game_started',
+    });
+  }
+
+  async startTestGame(options = {}) {
+    await this.ensureLoaded();
+
+    const runId = typeof options.runId === 'string' ? options.runId.trim() : '';
+    const requestedGeneration = Number.parseInt(options.generation, 10);
+    const generationNumber = Number.isFinite(requestedGeneration) ? requestedGeneration : 0;
+    const userId = typeof options.userId === 'string' ? options.userId.trim() : '';
+    const username = typeof options.username === 'string' ? options.username.trim() : '';
+    const sidePreference = normalizeLiveTestSidePreference(options.sidePreference);
+
+    if (!runId) {
+      const err = new Error('Run is required');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (!userId) {
+      const err = new Error('User session is required');
+      err.statusCode = 401;
+      throw err;
+    }
+
+    const run = this.getRunById(runId);
+    if (!run) {
+      const err = new Error('Run not found');
+      err.statusCode = 404;
+      throw err;
+    }
+    const generationRecord = this.getRunGeneration(run, generationNumber);
+    return this.startLiveMlMatch({
+      run,
+      generationRecord,
+      userId,
+      username,
+      sidePreference,
+      initiatorAction: 'ml-test-match-created',
+      logEvent: 'test_game_started',
+    });
+  }
+
+  handleMlTestGameChanged(payload = {}) {
+    let game = payload?.game;
+    if (game && typeof game.toObject === 'function') {
+      game = game.toObject();
+    }
+    const gameId = game?._id?.toString?.() || payload?.gameId?.toString?.() || null;
+    const mlTestConfig = game?.mlTestConfig || this.liveTestGameConfigs.get(gameId) || null;
+    if (!gameId || !mlTestConfig?.enabled) return;
+    this.scheduleMlTestGame(gameId);
+  }
+
+  scheduleMlTestGame(gameId) {
+    const id = typeof gameId === 'string' ? gameId : gameId?.toString?.();
+    if (!id) return Promise.resolve();
+    if (this.liveTestGameTasks.has(id)) {
+      return this.liveTestGameTasks.get(id);
+    }
+    const task = this.runMlTestGameLoop(id)
+      .catch((err) => {
+        this.logMlEvent('test_game_loop_error', {
+          gameId: id,
+          error: summarizeError(err),
+        });
+        return false;
+      })
+      .finally(() => {
+        this.liveTestGameTasks.delete(id);
+      });
+    this.liveTestGameTasks.set(id, task);
+    return task;
+  }
+
+  async runMlTestGameLoop(gameId) {
+    for (let step = 0; step < 12; step += 1) {
+      const didAct = await this.runMlTestGameStep(gameId);
+      if (!didAct) return;
+      await sleep(10);
+    }
+  }
+
+  async runMlTestGameStep(gameId) {
+    const game = await loadGameLean(gameId);
+    const mlTestConfig = game?.mlTestConfig || this.liveTestGameConfigs.get(gameId) || null;
+    if (!game?.isActive || !mlTestConfig?.enabled) {
+      if (!game?.isActive) {
+        this.liveTestGameConfigs.delete(gameId);
+      }
+      return false;
+    }
+    const botUserId = String(mlTestConfig.botUserId || '');
+    if (!botUserId) return false;
+    const botColor = Array.isArray(game.players)
+      ? game.players.findIndex((playerId) => String(playerId) === botUserId)
+      : -1;
+    if (botColor !== WHITE && botColor !== BLACK) {
+      return false;
+    }
+
+    const botSession = createInternalRequestSession(botUserId, mlTestConfig.botUsername || 'ML Test Bot');
+    const gameConfig = typeof getServerConfig.getServerConfigSnapshotSync === 'function'
+      ? getServerConfig.getServerConfigSnapshotSync()
+      : await getServerConfig();
+
+    if (!Array.isArray(game.setupComplete) || !game.setupComplete[botColor]) {
+      const setup = buildLiveTestSetupFromGame(game, botColor, gameConfig);
+      await callPostHandler(ROUTE_HANDLERS.setup, {
+        gameId,
+        color: botColor,
+        pieces: setup.pieces,
+        onDeck: setup.onDeck,
+      }, { session: botSession, routeName: 'ml-test-setup', simulationContext: false });
+      return true;
+    }
+
+    if (!Array.isArray(game.playersReady) || !game.playersReady[botColor]) {
+      await callPostHandler(ROUTE_HANDLERS.ready, {
+        gameId,
+        color: botColor,
+      }, { session: botSession, routeName: 'ml-test-ready', simulationContext: false });
+      return true;
+    }
+
+    if (!liveTestBotMustAct(game, botColor)) {
+      return false;
+    }
+
+    const run = this.getRunById(String(mlTestConfig.runId || ''));
+    const participant = run
+      ? this.createGenerationParticipant(run, Number(mlTestConfig.generation || 0))
+      : null;
+    if (!participant?.modelBundle) {
+      await callPostHandler(ROUTE_HANDLERS.resign, {
+        gameId,
+        color: botColor,
+      }, { session: botSession, routeName: 'ml-test-resign-missing-model', simulationContext: false });
+      return true;
+    }
+
+    const runConfig = run?.config || {};
+    const searchOptions = {
+      iterations: runConfig.numMctsSimulationsPerMove,
+      maxDepth: runConfig.maxDepth,
+      hypothesisCount: runConfig.hypothesisCount,
+      riskBias: runConfig.riskBias,
+      exploration: runConfig.exploration,
+    };
+    const liveContext = {
+      gameId,
+      sessionsByColor: {
+        [botColor]: botSession,
+      },
+      simulationContext: false,
+    };
+    const buildActionAttempt = (liveGame, seed) => {
+      const shadowState = createShadowStateFromLiveGame(liveGame, {
+        maxPlies: 200,
+        seed,
+      });
+      const legalActions = getLegalActions(shadowState, botColor);
+      const search = legalActions.length
+        ? this.chooseActionForParticipant(participant, shadowState, searchOptions)
+        : null;
+      return {
+        shadowState,
+        legalActions,
+        candidates: buildPreferredLiveActionCandidates(search, legalActions),
+      };
+    };
+
+    const initialAttempt = buildActionAttempt(game, Date.now());
+    if (!initialAttempt.legalActions.length) {
+      await callPostHandler(ROUTE_HANDLERS.resign, {
+        gameId,
+        color: botColor,
+      }, { session: botSession, routeName: 'ml-test-resign-no-legal-actions', simulationContext: false });
+      return true;
+    }
+
+    const initialResult = await tryApplyLiveActionCandidates(
+      liveContext,
+      initialAttempt.shadowState,
+      initialAttempt.candidates,
+    );
+    if (initialResult.executedAction) {
+      return true;
+    }
+
+    const refreshedGame = await loadGameLean(gameId);
+    if (!refreshedGame?.isActive) {
+      this.liveTestGameConfigs.delete(gameId);
+      return false;
+    }
+    if (!liveTestBotMustAct(refreshedGame, botColor)) {
+      return false;
+    }
+
+    const refreshedAttempt = buildActionAttempt(refreshedGame, Date.now() + 1);
+    if (!refreshedAttempt.legalActions.length) {
+      await callPostHandler(ROUTE_HANDLERS.resign, {
+        gameId,
+        color: botColor,
+      }, { session: botSession, routeName: 'ml-test-resign-no-legal-actions', simulationContext: false });
+      return true;
+    }
+
+    const refreshedResult = await tryApplyLiveActionCandidates(
+      liveContext,
+      refreshedAttempt.shadowState,
+      refreshedAttempt.candidates,
+      { rejectedCandidates: initialResult.rejectedCandidates },
+    );
+    if (refreshedResult.executedAction) {
+      return true;
+    }
+
+    this.logMlEvent('test_game_all_legal_actions_rejected', {
+      gameId,
+      runId: run?.id || null,
+      generation: Number(mlTestConfig.generation || 0),
+      botColor,
+      rejectedCandidates: refreshedResult.rejectedCandidates,
+    });
+    try {
+      await callPostHandler(ROUTE_HANDLERS.resign, {
+        gameId,
+        color: botColor,
+      }, { session: botSession, routeName: 'ml-test-resign-all-actions-rejected', simulationContext: false });
+      return true;
+    } catch (err) {
+      if (isRecoverableLiveActionError(err)) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  summarizeRunReplayBuffer(run) {
+    const replayBuffer = run?.replayBuffer || {};
+    const policySamples = Array.isArray(replayBuffer.policySamples) ? replayBuffer.policySamples : [];
+    if (!policySamples.length && replayBuffer.summary && typeof replayBuffer.summary === 'object') {
+      return {
+        positions: Number(replayBuffer.summary.positions || 0),
+        maxPositions: Number(replayBuffer.maxPositions || replayBuffer.summary.maxPositions || 0),
+        totalPositionsSeen: Number(replayBuffer.totalPositionsSeen || replayBuffer.summary.totalPositionsSeen || 0),
+        oldestGeneration: Number.isFinite(replayBuffer.summary.oldestGeneration)
+          ? Number(replayBuffer.summary.oldestGeneration)
+          : null,
+        newestGeneration: Number.isFinite(replayBuffer.summary.newestGeneration)
+          ? Number(replayBuffer.summary.newestGeneration)
+          : null,
+        freshness: Number.isFinite(replayBuffer.summary.freshness)
+          ? Number(replayBuffer.summary.freshness)
+          : null,
+        oldestAt: replayBuffer.summary.oldestAt || null,
+        newestAt: replayBuffer.summary.newestAt || null,
+      };
+    }
+    const sorted = policySamples
+      .filter((sample) => sample && typeof sample === 'object')
+      .sort((left, right) => parseTimeValue(left?.createdAt) - parseTimeValue(right?.createdAt));
+    const oldest = sorted[0] || null;
+    const newest = sorted.length ? sorted[sorted.length - 1] : null;
+    const oldestGeneration = Number.isFinite(oldest?.generation) ? Number(oldest.generation) : null;
+    const newestGeneration = Number.isFinite(newest?.generation) ? Number(newest.generation) : null;
+    return {
+      positions: policySamples.length,
+      maxPositions: Number(replayBuffer.maxPositions || 0),
+      totalPositionsSeen: Number(replayBuffer.totalPositionsSeen || 0),
+      oldestGeneration,
+      newestGeneration,
+      freshness: (
+        Number.isFinite(oldestGeneration)
+        && Number.isFinite(newestGeneration)
+        ? Math.max(0, newestGeneration - oldestGeneration)
+        : null
+      ),
+      oldestAt: oldest?.createdAt || null,
+      newestAt: newest?.createdAt || null,
+    };
+  }
+
+  summarizeRun(run) {
+    if (!run) return null;
+    const elapsedMs = computeRunElapsedMs(run);
+    const generations = Array.isArray(run.generations) ? run.generations : [];
+    const evaluationHistory = Array.isArray(run.evaluationHistory) ? run.evaluationHistory : [];
+    const latestEvaluation = evaluationHistory.length ? evaluationHistory[evaluationHistory.length - 1] : null;
+    const latestMetrics = Array.isArray(run.metricsHistory) && run.metricsHistory.length
+      ? run.metricsHistory[run.metricsHistory.length - 1]
+      : null;
+    return {
+      id: run.id,
+      label: run.label,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt || run.createdAt,
+      status: run.status || 'completed',
+      stopReason: run.stopReason || null,
+      lastError: run?.lastError ? summarizeError(run.lastError) : null,
+      config: deepClone(run.config || {}),
+      bestGeneration: Number(run.bestGeneration || 0),
+      evaluationTargetGeneration: Number.isFinite(run.evaluationTargetGeneration)
+        ? Number(run.evaluationTargetGeneration)
+        : 0,
+      workerGeneration: Number(run.workerGeneration || 0),
+      generationCount: generations.length,
+      totalSelfPlayGames: Number(run.stats?.totalSelfPlayGames || 0),
+      totalEvaluationGames: Number(run.stats?.totalEvaluationGames || 0),
+      averageSelfPlayGameDurationMs: Number(run.stats?.averageSelfPlayGameDurationMs || 0),
+      averageEvaluationGameDurationMs: Number(run.stats?.averageEvaluationGameDurationMs || 0),
+      elapsedMs,
+      totalTrainingSteps: Number(run.stats?.totalTrainingSteps || 0),
+      totalPromotions: Number(run.stats?.totalPromotions || 0),
+      failedPromotions: Number(run.stats?.failedPromotions || 0),
+      canContinue: this.canContinueRun(run),
+      replayBuffer: this.summarizeRunReplayBuffer(run),
+      latestLoss: latestMetrics?.latestLoss || run.working?.lastLoss || null,
+      latestEvaluation: latestEvaluation ? deepClone(latestEvaluation) : null,
+      generations: generations.map((generation) => ({
+        id: generation.id,
+        generation: generation.generation,
+        label: generation.label,
+        isBest: Boolean(generation.isBest),
+        approved: generation.approved !== false,
+        createdAt: generation.createdAt,
+        promotedAt: generation.promotedAt || null,
+        latestLoss: generation.latestLoss ? deepClone(generation.latestLoss) : null,
+        promotionEvaluation: generation.promotionEvaluation ? deepClone(generation.promotionEvaluation) : null,
+        stats: deepClone(generation.stats || {}),
+      })),
+    };
+  }
+
+  buildRunEvaluationSeries(run) {
+    const hasStagedEvaluations = (run?.evaluationHistory || []).some((evaluation) => (
+      this.getEvaluationBaselineInfo(evaluation)
+      || evaluation?.prePromotionTest
+      || Array.isArray(evaluation?.promotionTests)
+    ));
+    if (hasStagedEvaluations) {
+      const baselineSeries = {
+        key: 'baseline-info',
+        opponentGeneration: null,
+        label: 'vs baseline target',
+        points: [],
+      };
+      const prePromotionSeries = {
+        key: 'pre-promotion',
+        opponentGeneration: -1,
+        label: 'vs prior promotion',
+        points: [],
+      };
+
+      (run?.evaluationHistory || []).forEach((evaluation) => {
+        const candidateGeneration = Number.isFinite(evaluation?.candidateGeneration)
+          ? Number(evaluation.candidateGeneration)
+          : null;
+        if (!Number.isFinite(candidateGeneration)) return;
+        const tooltipSections = Array.isArray(evaluation?.tooltipSections)
+          ? deepClone(evaluation.tooltipSections)
+          : this.createEvaluationTooltipSections(evaluation);
+        const baselineInfo = this.getEvaluationBaselineInfo(evaluation);
+        if (baselineInfo) {
+          baselineSeries.points.push({
+            candidateGeneration,
+            checkpointIndex: Number(evaluation?.checkpointIndex || 0),
+            generation: Number(baselineInfo.generation || 0),
+            winRate: Number(baselineInfo.winRate || 0),
+            games: Number(baselineInfo.games || 0),
+            wins: Number(baselineInfo.wins || 0),
+            losses: Number(baselineInfo.losses || 0),
+            draws: Number(baselineInfo.draws || 0),
+            promoted: Boolean(evaluation?.promoted),
+            timestamp: evaluation?.evaluatedAt || null,
+            markerShape: 'circle',
+            tooltipSections,
+          });
+        }
+        if (evaluation?.prePromotionTest) {
+          prePromotionSeries.points.push({
+            candidateGeneration,
+            checkpointIndex: Number(evaluation?.checkpointIndex || 0),
+            winRate: Number(evaluation.prePromotionTest.winRate || 0),
+            games: Number(evaluation.prePromotionTest.games || 0),
+            wins: Number(evaluation.prePromotionTest.wins || 0),
+            losses: Number(evaluation.prePromotionTest.losses || 0),
+            draws: Number(evaluation.prePromotionTest.draws || 0),
+            promoted: Boolean(evaluation?.promoted),
+            timestamp: evaluation?.evaluatedAt || null,
+            markerShape: evaluation?.prePromotionPassed ? 'star' : 'dot',
+            tooltipSections,
+          });
+        }
+      });
+
+      return [baselineSeries, prePromotionSeries]
+        .map((series) => ({
+          ...series,
+          points: (series.points || [])
+            .filter((point) => Number.isFinite(point.candidateGeneration))
+            .sort((left, right) => Number(left.candidateGeneration || 0) - Number(right.candidateGeneration || 0)),
+        }))
+        .filter((series) => series.points.length);
+    }
+
+    const seriesByOpponent = new Map();
+    (run?.evaluationHistory || []).forEach((evaluation) => {
+      const points = [];
+      if (evaluation?.againstBest) points.push(evaluation.againstBest);
+      if (
+        evaluation?.againstTarget
+        && Number(evaluation.againstTarget?.generation) !== Number(evaluation.againstBest?.generation)
+      ) {
+        points.push(evaluation.againstTarget);
+      }
+      (evaluation?.againstGenerations || []).forEach((entry) => points.push(entry));
+      points.forEach((entry) => {
+        const candidateGeneration = Number.isFinite(evaluation?.candidateGeneration)
+          ? Number(evaluation.candidateGeneration)
+          : null;
+        const opponentGeneration = Number(entry?.generation);
+        if (!Number.isFinite(opponentGeneration) || !Number.isFinite(candidateGeneration)) return;
+        if (candidateGeneration <= opponentGeneration) return;
+        if (!seriesByOpponent.has(opponentGeneration)) {
+          seriesByOpponent.set(opponentGeneration, []);
+        }
+        seriesByOpponent.get(opponentGeneration).push({
+          candidateGeneration,
+          checkpointIndex: Number(evaluation?.checkpointIndex || 0),
+          winRate: Number(entry?.winRate || 0),
+          games: Number(entry?.games || 0),
+          wins: Number(entry?.wins || 0),
+          losses: Number(entry?.losses || 0),
+          draws: Number(entry?.draws || 0),
+          promoted: Boolean(evaluation?.promoted),
+          timestamp: evaluation?.evaluatedAt || null,
+        });
+      });
+    });
+    return Array.from(seriesByOpponent.entries())
+      .map(([opponentGeneration, points]) => ({
+        opponentGeneration: Number(opponentGeneration),
+        label: `vs G${opponentGeneration}`,
+        points: points
+          .filter((point) => Number.isFinite(point.candidateGeneration))
+          .sort((left, right) => Number(left.candidateGeneration || 0) - Number(right.candidateGeneration || 0)),
+      }))
+      .sort((left, right) => left.opponentGeneration - right.opponentGeneration);
+  }
+
+  getRunConfigDefaults() {
+    return deepClone(createDefaultRunConfig());
+  }
+
+  createRunRecord(options = {}) {
+    const id = options.id || this.nextId('run');
+    const label = normalizeRunLabel(options.label) || `Run ${String(id).replace(/^run-/, '')}`;
+    const config = normalizeRunConfig(options.config || {});
+    const createdAt = nowIso();
+    const seedBundle = options.seedBundle || createDefaultModelBundle({
+      seed: Number.isFinite(config.seed) ? config.seed : Date.now(),
+    });
+    const generation0 = this.createRunGenerationRecord({
+      id,
+      generations: [],
+    }, {
+      generation: 0,
+      label: 'G0',
+      source: options.seedSource || config.seedMode,
+      modelBundle: seedBundle,
+      isBest: true,
+      promotedAt: createdAt,
+    });
+    return {
+      id,
+      label,
+      createdAt,
+      updatedAt: createdAt,
+      status: 'running',
+      stopReason: null,
+      lastError: null,
+      config,
+      bestGeneration: 0,
+      evaluationTargetGeneration: 0,
+      workerGeneration: 0,
+      pendingWorkerGeneration: null,
+      cyclesSinceWorkerRefresh: 0,
+      generations: [generation0],
+      replayBuffer: {
+        maxPositions: config.replayBufferMaxPositions,
+        policySamples: [],
+        valueSamples: [],
+        identitySamples: [],
+        totalPositionsSeen: 0,
+        evictedPositions: 0,
+      },
+      retainedGames: [],
+      metricsHistory: [],
+      evaluationHistory: [],
+      working: {
+        modelBundle: cloneModelBundle(seedBundle),
+        optimizerState: createOptimizerState(seedBundle),
+        baseGeneration: 0,
+        checkpointIndex: 0,
+        lastLoss: null,
+      },
+      stats: {
+        totalSelfPlayGames: 0,
+        totalEvaluationGames: 0,
+        timedSelfPlayGames: 0,
+        timedEvaluationGames: 0,
+        totalSelfPlayGameDurationMs: 0,
+        totalEvaluationGameDurationMs: 0,
+        averageSelfPlayGameDurationMs: 0,
+        averageEvaluationGameDurationMs: 0,
+        totalTrainingSteps: 0,
+        totalPromotions: 0,
+        failedPromotions: 0,
+        averageGameLength: 0,
+        policyEntropy: 0,
+        moveDiversity: 0,
+      },
+      live: null,
+    };
+  }
+
+  appendRunReplayBuffer(run, samples = {}, options = {}) {
+    if (!run) return this.summarizeRunReplayBuffer(run);
+    const replayBuffer = run.replayBuffer || {};
+    replayBuffer.maxPositions = Number(replayBuffer.maxPositions || run.config?.replayBufferMaxPositions || 0);
+    replayBuffer.policySamples = Array.isArray(replayBuffer.policySamples) ? replayBuffer.policySamples : [];
+    replayBuffer.valueSamples = Array.isArray(replayBuffer.valueSamples) ? replayBuffer.valueSamples : [];
+    replayBuffer.identitySamples = Array.isArray(replayBuffer.identitySamples) ? replayBuffer.identitySamples : [];
+    replayBuffer.totalPositionsSeen = Number(replayBuffer.totalPositionsSeen || 0);
+    replayBuffer.evictedPositions = Number(replayBuffer.evictedPositions || 0);
+
+    const generation = Number.isFinite(options.generation) ? Number(options.generation) : null;
+    const createdAt = options.createdAt || nowIso();
+    const policySamples = Array.isArray(samples.policySamples) ? samples.policySamples : [];
+    const valueSamples = Array.isArray(samples.valueSamples) ? samples.valueSamples : [];
+    const identitySamples = Array.isArray(samples.identitySamples) ? samples.identitySamples : [];
+
+    const normalizeSample = (sample) => ({
+      ...deepClone(sample),
+      generation: Number.isFinite(sample?.generation) ? Number(sample.generation) : generation,
+      createdAt,
+    });
+
+    replayBuffer.policySamples.push(...policySamples.map(normalizeSample));
+    replayBuffer.valueSamples.push(...valueSamples.map(normalizeSample));
+    replayBuffer.identitySamples.push(...identitySamples.map(normalizeSample));
+    replayBuffer.totalPositionsSeen += policySamples.length;
+
+    const maxPositions = Math.max(1, Number(replayBuffer.maxPositions || 1));
+    while (replayBuffer.policySamples.length > maxPositions) {
+      replayBuffer.policySamples.shift();
+      if (replayBuffer.valueSamples.length) replayBuffer.valueSamples.shift();
+      replayBuffer.evictedPositions += 1;
+    }
+
+    const identityCutoff = replayBuffer.policySamples.length
+      ? Math.min(
+        ...replayBuffer.policySamples.map((sample) => parseTimeValue(sample?.createdAt) || Number.MAX_SAFE_INTEGER),
+      )
+      : Number.MAX_SAFE_INTEGER;
+    replayBuffer.identitySamples = replayBuffer.identitySamples.filter((sample) => (
+      (parseTimeValue(sample?.createdAt) || 0) >= identityCutoff
+    ));
+
+    run.replayBuffer = replayBuffer;
+    return this.summarizeRunReplayBuffer(run);
+  }
+
+  sampleReplayBufferSamples(run) {
+    const replayBuffer = run?.replayBuffer || {};
+    const policySamples = Array.isArray(replayBuffer.policySamples) ? replayBuffer.policySamples : [];
+    const valueSamples = Array.isArray(replayBuffer.valueSamples) ? replayBuffer.valueSamples : [];
+    const identitySamples = Array.isArray(replayBuffer.identitySamples) ? replayBuffer.identitySamples : [];
+    const batchSize = clampPositiveInt(run?.config?.batchSize, 32, 1, 4096);
+    const sampleCount = Math.min(batchSize, policySamples.length);
+    if (!sampleCount) {
+      return {
+        policySamples: [],
+        valueSamples: [],
+        identitySamples: [],
+      };
+    }
+
+    const rng = createRng(Date.now() + sampleCount + Number(run?.stats?.totalTrainingSteps || 0));
+    const shuffledIndices = Array.from({ length: policySamples.length }, (_, index) => index);
+    for (let index = shuffledIndices.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(rng() * (index + 1));
+      [shuffledIndices[index], shuffledIndices[swapIndex]] = [shuffledIndices[swapIndex], shuffledIndices[index]];
+    }
+    const sampleIndices = shuffledIndices.slice(0, sampleCount);
+    const selectedTimes = new Set();
+    const selectedPolicy = sampleIndices.map((index) => {
+      const sample = deepClone(policySamples[index]);
+      if (sample?.createdAt) selectedTimes.add(String(sample.createdAt));
+      return sample;
+    });
+    const selectedValue = sampleIndices
+      .map((index) => deepClone(valueSamples[index] || null))
+      .filter(Boolean);
+    const selectedIdentity = identitySamples
+      .filter((sample) => selectedTimes.has(String(sample?.createdAt || '')))
+      .slice(0, Math.max(sampleCount * 3, sampleCount))
+      .map((sample) => deepClone(sample));
+
+    return {
+      policySamples: selectedPolicy,
+      valueSamples: selectedValue,
+      identitySamples: selectedIdentity,
+    };
+  }
+
+  recordRunGameDurations(run, games = [], phase = 'selfplay') {
+    if (!run) return;
+    const durations = (Array.isArray(games) ? games : [])
+      .map((game) => Number(game?.durationMs || 0))
+      .filter((durationMs) => Number.isFinite(durationMs) && durationMs >= 0);
+    if (!durations.length) return;
+
+    const isEvaluation = String(phase || '').toLowerCase() === 'evaluation';
+    const totalKey = isEvaluation ? 'totalEvaluationGameDurationMs' : 'totalSelfPlayGameDurationMs';
+    const countKey = isEvaluation ? 'timedEvaluationGames' : 'timedSelfPlayGames';
+    const averageKey = isEvaluation ? 'averageEvaluationGameDurationMs' : 'averageSelfPlayGameDurationMs';
+    const previousTotalDuration = Number(run.stats?.[totalKey] || 0);
+    const previousCount = Number(run.stats?.[countKey] || 0);
+    const nextTotalDuration = previousTotalDuration + durations.reduce((sum, value) => sum + value, 0);
+    const nextCount = previousCount + durations.length;
+
+    run.stats[totalKey] = nextTotalDuration;
+    run.stats[countKey] = nextCount;
+    run.stats[averageKey] = nextCount > 0 ? (nextTotalDuration / nextCount) : 0;
+  }
+
+  computeRunSelfPlayMetrics(games = []) {
+    const plies = games.map((game) => Number(game?.plies || 0));
+    const policySamples = games.flatMap((game) => game?.training?.policySamples || []);
+    const entropy = averageNumbers(policySamples.map((sample) => computeEntropy(sample?.target || [])));
+    const diversity = policySamples.length
+      ? (new Set(policySamples.map((sample) => sample?.selectedActionKey || sample?.selectedMoveKey || '')).size / policySamples.length)
+      : 0;
+    return {
+      averageGameLength: averageNumbers(plies),
+      policyEntropy: entropy,
+      moveDiversity: diversity,
+    };
+  }
+
+  retainRunGames(run, games = []) {
+    if (!run) return;
+    const retainedGames = Array.isArray(run.retainedGames) ? run.retainedGames : [];
+    games.forEach((game) => {
+      const compactGame = compactRunRetainedGame(game);
+      if (compactGame) {
+        retainedGames.push(compactGame);
+      }
+    });
+    const maxGames = clampPositiveInt(
+      run?.config?.retainedReplayGames,
+      DEFAULT_RUN_MAX_REPLAY_GAMES,
+      20,
+      10000,
+    );
+    while (retainedGames.length > maxGames) {
+      retainedGames.shift();
+    }
+    run.retainedGames = retainedGames;
+  }
+
+  listRunGenerationPairs(run) {
+    const pairs = new Map();
+    (run?.retainedGames || []).forEach((game) => {
+      const key = buildGenerationPairKey(game?.whiteGeneration, game?.blackGeneration);
+      if (!pairs.has(key)) {
+        pairs.set(key, {
+          key,
+          generationA: Math.min(Number(game?.whiteGeneration || 0), Number(game?.blackGeneration || 0)),
+          generationB: Math.max(Number(game?.whiteGeneration || 0), Number(game?.blackGeneration || 0)),
+          games: 0,
+          latestGameAt: game?.createdAt || null,
+        });
+      }
+      const entry = pairs.get(key);
+      entry.games += 1;
+      if (parseTimeValue(game?.createdAt) > parseTimeValue(entry.latestGameAt)) {
+        entry.latestGameAt = game.createdAt;
+      }
+    });
+    return Array.from(pairs.values()).sort((left, right) => (
+      parseTimeValue(right.latestGameAt) - parseTimeValue(left.latestGameAt)
+    ));
+  }
+
+  listRunReplayGameSummaries(run, generationA, generationB, options = {}) {
+    if (!run) return [];
+    const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.floor(Number(options.limit))) : null;
+    const hasGenerationFilter = generationA !== null
+      && generationA !== undefined
+      && generationB !== null
+      && generationB !== undefined;
+    const items = (run.retainedGames || [])
+      .filter((game) => String(game?.phase || '').toLowerCase() === 'evaluation')
+      .filter((game) => {
+        if (!hasGenerationFilter) {
+          return true;
+        }
+        const left = Number(generationA);
+        const right = Number(generationB);
+        if (!Number.isFinite(left) || !Number.isFinite(right)) {
+          return true;
+        }
+        return buildGenerationPairKey(game?.whiteGeneration, game?.blackGeneration) === buildGenerationPairKey(left, right);
+      })
+      .map((game) => summarizeRunReplayGame(game))
+      .filter(Boolean)
+      .sort((leftGame, rightGame) => parseTimeValue(rightGame.createdAt) - parseTimeValue(leftGame.createdAt));
+    return Number.isFinite(limit) ? items.slice(0, limit) : items;
+  }
+
+  async getWorkbench() {
+    await this.ensureLoaded();
+    await this.ensureFreshResourceTelemetry();
+    this.prunePromotedBotSelections();
+    const runs = (this.state.runs || []).map((run) => this.summarizeRun(run));
+    const activeRuns = runs.filter((run) => isRunStatusActive(run?.status));
+    const totalGames = runs.reduce((sum, run) => (
+      sum + Number(run?.totalSelfPlayGames || 0) + Number(run?.totalEvaluationGames || 0)
+    ), 0);
+    return {
+      summary: {
+        counts: {
+          runs: runs.length,
+          activeRuns: activeRuns.length,
+          completedRuns: runs.length - activeRuns.length,
+          games: totalGames,
+          generations: runs.reduce((sum, run) => sum + Number(run?.generationCount || 0), 0),
+        },
+        latestRun: runs.length ? runs[0] : null,
+      },
+      defaults: this.getRunConfigDefaults(),
+      seedSources: {
+        defaultValue: RUN_SEED_MODES.BOOTSTRAP,
+        items: this.listRunSeedSourceOptions(),
+      },
+      runs: {
+        items: runs,
+      },
+      promotedBots: this.buildPromotedBotCatalogSummary(),
+      live: {
+        serverTime: nowIso(),
+        resourceTelemetry: this.getResourceTelemetryPayload(),
+        runs: activeRuns.map((run) => this.buildRunProgressPayload(this.getRunById(run.id))),
+      },
+    };
+  }
+
+  async listRuns(options = {}) {
+    await this.ensureLoaded();
+    const source = Array.isArray(this.state.runs) ? this.state.runs : [];
+    const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.floor(Number(options.limit))) : null;
+    const items = source
+      .slice()
+      .sort((left, right) => (
+        Math.max(parseTimeValue(right?.updatedAt), parseTimeValue(right?.createdAt))
+        - Math.max(parseTimeValue(left?.updatedAt), parseTimeValue(left?.createdAt))
+      ))
+      .map((run) => this.summarizeRun(run));
+    return Number.isFinite(limit) ? items.slice(0, limit) : items;
+  }
+
+  async resolveRunForRead(runId) {
+    await this.ensureLoaded();
+    const inMemoryRun = this.getRunById(runId);
+    if (inMemoryRun) {
+      return inMemoryRun;
+    }
+    await this.syncPersistedStateForRead();
+    return this.getRunById(runId) || null;
+  }
+
+  async getRun(runId) {
+    const run = await this.resolveRunForRead(runId);
+    if (!run) return null;
+    const summary = this.summarizeRun(run);
+    return {
+      ...summary,
+      evaluationSeries: this.buildRunEvaluationSeries(run),
+      metricsHistory: deepClone(run.metricsHistory || []),
+      generationPairs: this.listRunGenerationPairs(run),
+      recentReplayGames: this.listRunReplayGameSummaries(run, null, null, { limit: 60 }),
+    };
+  }
+
+  async listRunGames(runId, generationA, generationB) {
+    const run = await this.resolveRunForRead(runId);
+    if (!run) return [];
+    return this.listRunReplayGameSummaries(run, generationA, generationB);
+  }
+
+  async getRunReplay(runId, gameId) {
+    const run = await this.resolveRunForRead(runId);
+    if (!run) return null;
+    const game = (run.retainedGames || []).find((entry) => entry.id === gameId) || null;
+    if (!game) return null;
+    return {
+      run: this.summarizeRun(run),
+      game: deepClone(game),
+    };
+  }
+
+  buildRunProgressPayload(run, phase = null, overrides = {}) {
+    if (!run) return null;
+    const elapsedMs = computeRunElapsedMs(run);
+    const replayBuffer = this.summarizeRunReplayBuffer(run);
+    const latestEvaluation = Array.isArray(run.evaluationHistory) && run.evaluationHistory.length
+      ? run.evaluationHistory[run.evaluationHistory.length - 1]
+      : null;
+    const payload = {
+      phase: phase || overrides.phase || run.live?.phase || 'running',
+      runId: run.id,
+      label: run.label,
+      createdAt: run.createdAt || null,
+      status: overrides.status || run.status || 'running',
+      bestGeneration: Number(run.bestGeneration || 0),
+      evaluationTargetGeneration: this.getRunEvaluationTargetGeneration(run),
+      workerGeneration: Number(run.workerGeneration || 0),
+      cycle: Number(run.stats?.cycle || 0),
+      totalTrainingSteps: Number(run.stats?.totalTrainingSteps || 0),
+      totalSelfPlayGames: Number(run.stats?.totalSelfPlayGames || 0),
+      totalEvaluationGames: Number(run.stats?.totalEvaluationGames || 0),
+      averageSelfPlayGameDurationMs: Number(run.stats?.averageSelfPlayGameDurationMs || 0),
+      averageEvaluationGameDurationMs: Number(run.stats?.averageEvaluationGameDurationMs || 0),
+      elapsedMs,
+      totalPromotions: Number(run.stats?.totalPromotions || 0),
+      failedPromotions: Number(run.stats?.failedPromotions || 0),
+      replayBuffer,
+      latestLoss: run.working?.lastLoss ? deepClone(run.working.lastLoss) : null,
+      latestEvaluation: latestEvaluation ? deepClone(latestEvaluation) : null,
+      averageGameLength: Number(run.stats?.averageGameLength || 0),
+      policyEntropy: Number(run.stats?.policyEntropy || 0),
+      moveDiversity: Number(run.stats?.moveDiversity || 0),
+      stopReason: run.stopReason || null,
+      lastError: run?.lastError ? summarizeError(run.lastError) : null,
+      timestamp: nowIso(),
+      ...deepClone(overrides || {}),
+    };
+    run.live = deepClone(payload);
+    return payload;
+  }
+
+  emitRunProgress(run, phase, overrides = {}) {
+    if (!run) return null;
+    const payload = this.buildRunProgressPayload(run, phase, overrides);
+    const phaseKey = String(phase || '').toLowerCase();
+    const shouldThrottle = phaseKey === 'selfplay' || phaseKey === 'training';
+    const dispatchState = run.liveDispatchState || {};
+    const lastEmittedAt = Number(dispatchState[phaseKey] || 0);
+    const now = Date.now();
+    if (shouldThrottle && (now - lastEmittedAt) < RUN_PROGRESS_EMIT_MIN_INTERVAL_MS) {
+      run.liveDispatchState = dispatchState;
+      return payload;
+    }
+    dispatchState[phaseKey] = now;
+    run.liveDispatchState = dispatchState;
+    eventBus.emit('ml:runProgress', payload);
+    this.logRunEvent(run, 'run_progress', {
+      phase: payload.phase,
+      status: payload.status,
+      cycle: payload.cycle,
+      bestGeneration: payload.bestGeneration,
+      workerGeneration: payload.workerGeneration,
+      totalTrainingSteps: payload.totalTrainingSteps,
+      totalSelfPlayGames: payload.totalSelfPlayGames,
+      totalEvaluationGames: payload.totalEvaluationGames,
+      totalPromotions: payload.totalPromotions,
+      failedPromotions: payload.failedPromotions,
+      stopReason: payload.stopReason || null,
+      latestLoss: payload.latestLoss || null,
+      latestEvaluation: payload.latestEvaluation || null,
+    });
+    return payload;
+  }
+
+  async maybeSaveRunState(run, options = {}) {
+    if (!this.persist || !run) return false;
+    const force = options.force === true;
+    const now = Date.now();
+    const lastPersistedAt = Number(run.lastPersistedAtMs || 0);
+    if (!force && (now - lastPersistedAt) < RUN_STATE_SAVE_INTERVAL_MS) {
+      return false;
+    }
+    run.lastPersistedAtMs = now;
+    await this.save();
+    return true;
+  }
+
+  refreshRunWorkerGeneration(run, options = {}) {
+    if (!run) return;
+    const targetGeneration = Number(run.bestGeneration || 0);
+    const force = options.force === true;
+    run.cyclesSinceWorkerRefresh = Number(run.cyclesSinceWorkerRefresh || 0) + 1;
+    if (
+      force
+      || !Number.isFinite(run.workerGeneration)
+      || run.workerGeneration === targetGeneration
+      || run.cyclesSinceWorkerRefresh >= Number(run.config?.modelRefreshIntervalForWorkers || 1)
+    ) {
+      run.workerGeneration = targetGeneration;
+      run.pendingWorkerGeneration = null;
+      run.cyclesSinceWorkerRefresh = 0;
+      return;
+    }
+    run.pendingWorkerGeneration = targetGeneration;
+  }
+
+  chooseRunSelfPlayOpponentGeneration(run, rng) {
+    const bestGeneration = Number(run?.workerGeneration || run?.bestGeneration || 0);
+    const allGenerations = (run?.generations || [])
+      .filter((generation) => generation?.approved !== false)
+      .map((generation) => Number(generation?.generation))
+      .filter((generation) => Number.isFinite(generation) && generation < bestGeneration);
+    if (!allGenerations.length) return bestGeneration;
+    const probability = Number(run?.config?.olderGenerationSampleProbability || 0);
+    if ((typeof rng === 'function' ? rng() : Math.random()) >= probability) {
+      return bestGeneration;
+    }
+    const stride = clampPositiveInt(run?.config?.generationComparisonStride, 5, 1, 1000);
+    const candidateGenerations = allGenerations.filter((generation) => generation === 0 || ((bestGeneration - generation) % stride === 0));
+    const source = candidateGenerations.length ? candidateGenerations : allGenerations;
+    const index = Math.floor((typeof rng === 'function' ? rng() : Math.random()) * source.length);
+    return source[index] ?? bestGeneration;
+  }
+
+  buildRunGameRecord(game, options = {}) {
+    return {
+      ...deepClone(game),
+      phase: options.phase || 'selfplay',
+      checkpointIndex: Number(options.checkpointIndex || 0),
+      whiteGeneration: Number.isFinite(options.whiteGeneration) ? Number(options.whiteGeneration) : null,
+      blackGeneration: Number.isFinite(options.blackGeneration) ? Number(options.blackGeneration) : null,
+      retainedAt: nowIso(),
+    };
+  }
+
+  getNextRunGenerationNumber(run) {
+    const generations = Array.isArray(run?.generations) ? run.generations : [];
+    if (!generations.length) return 0;
+    return Math.max(...generations.map((generation) => Number(generation?.generation || 0))) + 1;
+  }
+
+  getApprovedRunGenerations(run) {
+    return (run?.generations || [])
+      .filter((generation) => generation?.approved !== false)
+      .sort((left, right) => Number(left?.generation || 0) - Number(right?.generation || 0));
+  }
+
+  findContinueGenerationRecord(run) {
+    if (!run) return null;
+    const preferredGenerations = [
+      Number(run?.workerGeneration),
+      Number(run?.bestGeneration),
+      Number(run?.working?.baseGeneration),
+    ].filter((generation, index, source) => Number.isFinite(generation) && source.indexOf(generation) === index);
+    for (let index = 0; index < preferredGenerations.length; index += 1) {
+      const generationRecord = this.getRunGeneration(run, preferredGenerations[index]);
+      if (isPromotedGenerationRecord(generationRecord)) {
+        return generationRecord;
+      }
+    }
+    const approvedGenerations = this.getApprovedRunGenerations(run)
+      .filter((generation) => isPromotedGenerationRecord(generation));
+    return approvedGenerations.length ? approvedGenerations[approvedGenerations.length - 1] : null;
+  }
+
+  ensureRunContinueState(run) {
+    if (!run || typeof run !== 'object') return null;
+    if (run?.working?.modelBundle) {
+      return {
+        source: 'working_state',
+        generation: Number(run?.working?.baseGeneration || run?.workerGeneration || run?.bestGeneration || 0),
+      };
+    }
+    const generationRecord = this.findContinueGenerationRecord(run);
+    if (!generationRecord) return null;
+    const restoredBundle = cloneModelBundle(generationRecord.modelBundle);
+    run.working = {
+      ...(run.working || {}),
+      baseGeneration: Number(generationRecord.generation || 0),
+      checkpointIndex: Number(run?.working?.checkpointIndex || 0),
+      lastLoss: run?.working?.lastLoss ? deepClone(run.working.lastLoss) : (generationRecord.latestLoss ? deepClone(generationRecord.latestLoss) : null),
+      modelBundle: restoredBundle,
+      optimizerState: createOptimizerState(restoredBundle),
+    };
+    run.workerGeneration = Number(generationRecord.generation || 0);
+    run.pendingWorkerGeneration = null;
+    run.cyclesSinceWorkerRefresh = 0;
+    run.updatedAt = nowIso();
+    return {
+      source: 'promoted_generation',
+      generation: Number(generationRecord.generation || 0),
+    };
+  }
+
+  canContinueRun(run) {
+    if (normalizeRunStatus(run?.status) !== 'stopped') return false;
+    return Boolean(run?.working?.modelBundle || this.findContinueGenerationRecord(run));
+  }
+
+  buildRunSeedSourceOption(run, generation) {
+    if (!run || !isPromotedGenerationRecord(generation)) return null;
+    const generationNumber = Number(generation?.generation || 0);
+    if (generationNumber < 1) return null;
+    return {
+      id: buildPromotedModelBotId(run.id, generationNumber),
+      value: buildPromotedModelBotId(run.id, generationNumber),
+      type: 'promoted_generation',
+      label: `${run.label || run.id} | G${generationNumber}`,
+      notes: generation?.isBest ? 'Current promoted best generation' : 'Promoted generation',
+      runId: run.id,
+      runLabel: run.label || run.id,
+      generation: generationNumber,
+      generationLabel: generation?.label || `G${generationNumber}`,
+      promotedAt: generation?.promotedAt || null,
+      updatedAt: generation?.updatedAt || generation?.createdAt || run?.updatedAt || run?.createdAt || null,
+      isBest: Boolean(generation?.isBest),
+      status: run?.status || 'completed',
+    };
+  }
+
+  listRunSeedSourceOptions() {
+    const builtins = [
+      {
+        id: RUN_SEED_MODES.BOOTSTRAP,
+        value: RUN_SEED_MODES.BOOTSTRAP,
+        type: 'bootstrap',
+        label: 'Bootstrap Model',
+        notes: 'Start from the latest bootstrap snapshot.',
+      },
+      {
+        id: RUN_SEED_MODES.RANDOM,
+        value: RUN_SEED_MODES.RANDOM,
+        type: 'random',
+        label: 'Random Init',
+        notes: 'Start from a fresh randomized model.',
+      },
+    ];
+    const promoted = [];
+    (this.state.runs || []).forEach((run) => {
+      (run?.generations || []).forEach((generation) => {
+        const entry = this.buildRunSeedSourceOption(run, generation);
+        if (entry) {
+          promoted.push(entry);
+        }
+      });
+    });
+    promoted.sort((left, right) => {
+      const promotedDelta = parseTimeValue(right?.promotedAt) - parseTimeValue(left?.promotedAt);
+      if (promotedDelta !== 0) return promotedDelta;
+      const updatedDelta = parseTimeValue(right?.updatedAt) - parseTimeValue(left?.updatedAt);
+      if (updatedDelta !== 0) return updatedDelta;
+      const generationDelta = Number(right?.generation || 0) - Number(left?.generation || 0);
+      if (generationDelta !== 0) return generationDelta;
+      return String(left?.label || '').localeCompare(String(right?.label || ''));
+    });
+    return [...builtins, ...promoted];
+  }
+
+  resolveRunSeedBundle(config = {}) {
+    if (config.seedMode === RUN_SEED_MODES.RANDOM) {
+      return {
+        seedBundle: createDefaultModelBundle({
+          seed: Number.isFinite(config.seed) ? config.seed : Date.now(),
+        }),
+        seedSource: RUN_SEED_MODES.RANDOM,
+      };
+    }
+
+    if (config.seedMode === RUN_SEED_MODES.PROMOTED_GENERATION) {
+      const sourceRun = this.getRunById(config.seedRunId);
+      if (!sourceRun) {
+        const err = new Error(`Seed run ${config.seedRunId || 'unknown'} was not found`);
+        err.statusCode = 400;
+        err.code = 'seed_run_not_found';
+        throw err;
+      }
+      const generationRecord = this.getRunGeneration(sourceRun, Number(config.seedGeneration));
+      if (!isPromotedGenerationRecord(generationRecord)) {
+        const err = new Error(`Seed generation G${Number(config.seedGeneration || 0)} is not available`);
+        err.statusCode = 400;
+        err.code = 'seed_generation_not_found';
+        throw err;
+      }
+      return {
+        seedBundle: cloneModelBundle(generationRecord.modelBundle),
+        seedSource: buildPromotedModelBotId(sourceRun.id, generationRecord.generation),
+      };
+    }
+
+    const snapshot = this.resolveSnapshot(config.seedSnapshotId || null);
+    return {
+      seedBundle: snapshot?.modelBundle ? cloneModelBundle(snapshot.modelBundle) : createDefaultModelBundle({
+        seed: Number.isFinite(config.seed) ? config.seed : Date.now(),
+      }),
+      seedSource: snapshot?.id ? `bootstrap:${snapshot.id}` : RUN_SEED_MODES.BOOTSTRAP,
+    };
+  }
+
+  getActiveRunsExcluding(exceptRunId = '') {
+    return (this.state.runs || [])
+      .filter((run) => isRunStatusActive(run?.status) && run?.id !== exceptRunId);
+  }
+
+  async settleActiveRunsForActivation(options = {}) {
+    const exceptRunId = typeof options.exceptRunId === 'string' ? options.exceptRunId : '';
+    const activeRuns = this.getActiveRunsExcluding(exceptRunId);
+    if (!activeRuns.length) {
+      return [];
+    }
+    if (options.forceStopOtherRuns !== true) {
+      const err = new Error('Another ML run is already active');
+      err.statusCode = 409;
+      err.code = 'active_run_conflict';
+      err.activeRuns = activeRuns.map((run) => this.summarizeRun(run));
+      throw err;
+    }
+    for (let index = 0; index < activeRuns.length; index += 1) {
+      await this.stopRun(activeRuns[index].id);
+    }
+    const settleDeadline = Date.now() + 30000;
+    while (this.getActiveRunsExcluding(exceptRunId).length) {
+      if (Date.now() > settleDeadline) {
+        const err = new Error('Other runs did not stop in time');
+        err.statusCode = 409;
+        err.code = 'active_run_conflict';
+        err.activeRuns = this.getActiveRunsExcluding(exceptRunId)
+          .map((run) => this.summarizeRun(run));
+        throw err;
+      }
+      await sleep(100);
+    }
+    return activeRuns;
+  }
+
+  markRunBestGeneration(run, generationNumber) {
+    (run?.generations || []).forEach((generation) => {
+      generation.isBest = Number(generation?.generation) === Number(generationNumber);
+      if (generation.isBest) {
+        generation.approved = true;
+        generation.promotedAt = generation.promotedAt || nowIso();
+      }
+    });
+    run.bestGeneration = Number(generationNumber || 0);
+  }
+
+  selectEvaluationOpponentGenerations(run, bestGeneration) {
+    const approvedGenerations = this.getApprovedRunGenerations(run)
+      .map((generation) => Number(generation?.generation))
+      .filter((generation) => Number.isFinite(generation));
+    const stride = clampPositiveInt(run?.config?.generationComparisonStride, 5, 1, 1000);
+    const opponents = approvedGenerations.filter((generation) => generation < bestGeneration && (
+      generation === 0 || ((bestGeneration - generation) % stride === 0)
+    ));
+    return opponents;
+  }
+
+  getEvaluationBaselineInfo(evaluation) {
+    if (!evaluation || typeof evaluation !== 'object') return null;
+    return evaluation.baselineInfo || evaluation.gen0Info || evaluation.againstTarget || null;
+  }
+
+  filterRunTrainingSamplesByGeneration(training, generationNumber) {
+    const generation = Number.isFinite(generationNumber) ? Number(generationNumber) : null;
+    const filterItems = (items = []) => items.filter((sample) => (
+      generation === null || Number(sample?.generation) === generation
+    ));
+    return {
+      policySamples: filterItems(training?.policySamples || []),
+      valueSamples: filterItems(training?.valueSamples || []),
+      identitySamples: filterItems(training?.identitySamples || []),
+    };
+  }
+
+  async resolveEffectiveTrainingBackend(preferredBackend, devicePreference) {
+    const backend = normalizeTrainingBackend(preferredBackend, TRAINING_BACKENDS.AUTO);
+    const device = normalizeTrainingDevicePreference(devicePreference, TRAINING_DEVICE_PREFERENCES.AUTO);
+    if (backend === TRAINING_BACKENDS.NODE) {
+      return {
+        backend: TRAINING_BACKENDS.NODE,
+        device: TRAINING_DEVICE_PREFERENCES.CPU,
+      };
+    }
+
+    try {
+      const bridge = getPythonTrainingBridge();
+      const capabilities = await bridge.getCapabilities();
+      if (backend === TRAINING_BACKENDS.AUTO && !capabilities?.cudaAvailable) {
+        return {
+          backend: TRAINING_BACKENDS.NODE,
+          device: TRAINING_DEVICE_PREFERENCES.CPU,
+          capabilities: capabilities || null,
+        };
+      }
+      if (device === TRAINING_DEVICE_PREFERENCES.CUDA && !capabilities?.cudaAvailable) {
+        throw new Error('Python training backend is available, but CUDA is not available for PyTorch');
+      }
+      return {
+        backend: TRAINING_BACKENDS.PYTHON,
+        device: device === TRAINING_DEVICE_PREFERENCES.AUTO
+          ? (capabilities?.cudaAvailable ? TRAINING_DEVICE_PREFERENCES.CUDA : TRAINING_DEVICE_PREFERENCES.CPU)
+          : device,
+        capabilities: capabilities || null,
+      };
+    } catch (err) {
+      this.logMlEvent('training_backend_resolution_error', {
+        requestedBackend: backend,
+        requestedDevicePreference: device,
+        fallbackBackend: backend === TRAINING_BACKENDS.PYTHON ? null : TRAINING_BACKENDS.NODE,
+        error: summarizeError(err),
+      });
+      if (backend === TRAINING_BACKENDS.PYTHON) {
+        throw err;
+      }
+      return {
+        backend: TRAINING_BACKENDS.NODE,
+        device: TRAINING_DEVICE_PREFERENCES.CPU,
+        error: err,
+      };
+    }
+  }
+
+  async trainModelBundleBatch(options = {}) {
+    const modelBundle = options.modelBundle || createDefaultModelBundle();
+    const samples = options.samples || {};
+    const trainingOptions = {
+      learningRate: options.learningRate,
+      batchSize: options.batchSize,
+      weightDecay: options.weightDecay,
+      gradientClipNorm: options.gradientClipNorm,
+    };
+    const preflightSummary = buildTrainingBatchDebugSummary({
+      ...options,
+      modelBundle,
+      samples,
+      ...trainingOptions,
+    }, null);
+    const debugIssues = getTrainingBatchDebugIssues(preflightSummary);
+    const debugContext = options.debugContext || {};
+    this.logMlEvent('training_batch_preflight', {
+      ...preflightSummary,
+      validationIssues: debugIssues,
+    });
+    if (debugContext.runId) {
+      this.logRunEvent(debugContext.runId, 'training_batch_preflight', {
+        ...preflightSummary,
+        validationIssues: debugIssues,
+      });
+    }
+    if (debugContext.trainingRunId) {
+      this.logTrainingEvent(debugContext.trainingRunId, 'training_batch_preflight', {
+        ...preflightSummary,
+        validationIssues: debugIssues,
+      });
+    }
+    if (debugIssues.length) {
+      const err = new Error(`Training batch validation failed: ${debugIssues.join('; ')}`);
+      err.code = 'ML_TRAINING_BATCH_INVALID';
+      err.details = {
+        summary: preflightSummary,
+        issues: debugIssues,
+      };
+      this.logMlEvent('training_batch_invalid', {
+        ...preflightSummary,
+        validationIssues: debugIssues,
+      });
+      if (debugContext.runId) {
+        this.logRunEvent(debugContext.runId, 'training_batch_invalid', {
+          ...preflightSummary,
+          validationIssues: debugIssues,
+        });
+      }
+      if (debugContext.trainingRunId) {
+        this.logTrainingEvent(debugContext.trainingRunId, 'training_batch_invalid', {
+          ...preflightSummary,
+          validationIssues: debugIssues,
+        });
+      }
+      throw err;
+    }
+    const backendResolution = await this.resolveEffectiveTrainingBackend(
+      options.trainingBackend,
+      options.trainingDevicePreference,
+    );
+    const debugSummary = buildTrainingBatchDebugSummary({
+      ...options,
+      modelBundle,
+      samples,
+      ...trainingOptions,
+    }, backendResolution);
+    this.logMlEvent('training_batch_resolution', debugSummary);
+    if (debugContext.runId) {
+      this.logRunEvent(debugContext.runId, 'training_batch_resolution', debugSummary);
+    }
+    if (debugContext.trainingRunId) {
+      this.logTrainingEvent(debugContext.trainingRunId, 'training_batch_resolution', debugSummary);
+    }
+
+    if (backendResolution.backend === TRAINING_BACKENDS.PYTHON) {
+      const bridge = getPythonTrainingBridge();
+      const payloadBundle = cloneModelBundle(modelBundle);
+      payloadBundle.identity = {
+        ...payloadBundle.identity,
+        inferredIdentities: INFERRED_IDENTITIES.slice(),
+      };
+      try {
+        const result = await bridge.trainBatch({
+          devicePreference: backendResolution.device,
+          epochs: Math.max(1, Number(options.epochs || 1)),
+          modelBundle: payloadBundle,
+          optimizerState: deepClone(options.optimizerState || null),
+          trainingOptions: deepClone(trainingOptions),
+          inferredIdentities: INFERRED_IDENTITIES.slice(),
+          samples: {
+            policySamples: deepClone(samples.policySamples || []),
+            valueSamples: deepClone(samples.valueSamples || []),
+            identitySamples: deepClone(samples.identitySamples || []),
+          },
+        });
+        return {
+          backend: TRAINING_BACKENDS.PYTHON,
+          device: result.device || backendResolution.device,
+          modelBundle: result.modelBundle ? cloneModelBundle(result.modelBundle) : cloneModelBundle(modelBundle),
+          optimizerState: result.optimizerState ? deepClone(result.optimizerState) : null,
+          history: Array.isArray(result.history) ? result.history.map((entry) => deepClone(entry)) : [],
+          capabilities: backendResolution.capabilities || null,
+        };
+      } catch (err) {
+        this.logMlEvent('training_batch_python_error', {
+          summary: debugSummary,
+          error: summarizeError(err),
+          capabilities: backendResolution.capabilities || null,
+        });
+        if (debugContext.runId) {
+          this.logRunEvent(debugContext.runId, 'training_batch_python_error', {
+            summary: debugSummary,
+            error: summarizeError(err),
+          });
+        }
+        if (debugContext.trainingRunId) {
+          this.logTrainingEvent(debugContext.trainingRunId, 'training_batch_python_error', {
+            summary: debugSummary,
+            error: summarizeError(err),
+          });
+        }
+        throw err;
+      }
+    }
+
+    const initialOptimizerState = (
+      options.optimizerState
+      && isNodeAdamOptimizerState(options.optimizerState.policy)
+      && isNodeAdamOptimizerState(options.optimizerState.value)
+      && isNodeAdamOptimizerState(options.optimizerState.identity)
+    )
+      ? options.optimizerState
+      : createOptimizerState(modelBundle);
+
+    const trainedBundle = modelBundle;
+    const optimizerState = {
+      policy: initialOptimizerState.policy,
+      value: initialOptimizerState.value,
+      identity: initialOptimizerState.identity,
+    };
+    const headTaskPayloads = [];
+    if (Array.isArray(samples.policySamples) && samples.policySamples.length) {
+      headTaskPayloads.push({
+        type: 'trainHead',
+        head: 'policy',
+        modelBundle: cloneModelBundle(trainedBundle),
+        samples: deepClone(samples.policySamples),
+        trainingOptions: deepClone(trainingOptions),
+        optimizerState: deepClone(optimizerState.policy || null),
+      });
+    }
+    if (Array.isArray(samples.valueSamples) && samples.valueSamples.length) {
+      headTaskPayloads.push({
+        type: 'trainHead',
+        head: 'value',
+        modelBundle: cloneModelBundle(trainedBundle),
+        samples: deepClone(samples.valueSamples),
+        trainingOptions: deepClone(trainingOptions),
+        optimizerState: deepClone(optimizerState.value || null),
+      });
+    }
+    if (Array.isArray(samples.identitySamples) && samples.identitySamples.length) {
+      headTaskPayloads.push({
+        type: 'trainHead',
+        head: 'identity',
+        modelBundle: cloneModelBundle(trainedBundle),
+        samples: deepClone(samples.identitySamples),
+        trainingOptions: deepClone(trainingOptions),
+        optimizerState: deepClone(optimizerState.identity || null),
+      });
+    }
+
+    const headResults = await runParallelWorkerTasks(
+      headTaskPayloads,
+      clampPositiveInt(options.parallelTrainingHeadWorkers, 1, 1, 3),
+      {
+        runTask: async (taskPayload) => {
+          const head = taskPayload?.head;
+          if (head === 'policy') {
+            const result = trainPolicyModel(taskPayload.modelBundle, taskPayload.samples, {
+              ...(taskPayload.trainingOptions || {}),
+              optimizerState: taskPayload.optimizerState || null,
+            });
+            return {
+              head,
+              updatedModel: taskPayload.modelBundle?.policy || null,
+              optimizerState: result.optimizerState || null,
+              metrics: {
+                samples: Number(result.samples || 0),
+                loss: Number(result.loss || 0),
+              },
+            };
+          }
+          if (head === 'value') {
+            const result = trainValueModel(taskPayload.modelBundle, taskPayload.samples, {
+              ...(taskPayload.trainingOptions || {}),
+              optimizerState: taskPayload.optimizerState || null,
+            });
+            return {
+              head,
+              updatedModel: taskPayload.modelBundle?.value || null,
+              optimizerState: result.optimizerState || null,
+              metrics: {
+                samples: Number(result.samples || 0),
+                loss: Number(result.loss || 0),
+              },
+            };
+          }
+          const result = trainIdentityModel(taskPayload.modelBundle, taskPayload.samples, {
+            ...(taskPayload.trainingOptions || {}),
+            optimizerState: taskPayload.optimizerState || null,
+          });
+          return {
+            head: 'identity',
+            updatedModel: taskPayload.modelBundle?.identity || null,
+            optimizerState: result.optimizerState || null,
+            metrics: {
+              samples: Number(result.samples || 0),
+              loss: Number(result.loss || 0),
+              accuracy: Number(result.accuracy || 0),
+            },
+          };
+        },
+      },
+    );
+
+    const lossEntry = {
+      epoch: 1,
+      policyLoss: 0,
+      valueLoss: 0,
+      identityLoss: 0,
+      identityAccuracy: 0,
+      policySamples: 0,
+      valueSamples: 0,
+      identitySamples: 0,
+    };
+
+    headResults.forEach((result) => {
+      const head = String(result?.head || '').trim().toLowerCase();
+      if (head === 'policy') {
+        if (result.updatedModel) trainedBundle.policy = result.updatedModel;
+        optimizerState.policy = result.optimizerState || optimizerState.policy;
+        lossEntry.policyLoss = Number(result?.metrics?.loss || 0);
+        lossEntry.policySamples = Number(result?.metrics?.samples || 0);
+        return;
+      }
+      if (head === 'value') {
+        if (result.updatedModel) trainedBundle.value = result.updatedModel;
+        optimizerState.value = result.optimizerState || optimizerState.value;
+        lossEntry.valueLoss = Number(result?.metrics?.loss || 0);
+        lossEntry.valueSamples = Number(result?.metrics?.samples || 0);
+        return;
+      }
+      if (head === 'identity') {
+        if (result.updatedModel) trainedBundle.identity = result.updatedModel;
+        optimizerState.identity = result.optimizerState || optimizerState.identity;
+        lossEntry.identityLoss = Number(result?.metrics?.loss || 0);
+        lossEntry.identitySamples = Number(result?.metrics?.samples || 0);
+        lossEntry.identityAccuracy = Number(result?.metrics?.accuracy || 0);
+      }
+    });
+
+    return {
+      backend: TRAINING_BACKENDS.NODE,
+      device: TRAINING_DEVICE_PREFERENCES.CPU,
+      modelBundle: trainedBundle,
+      optimizerState,
+      history: [lossEntry],
+    };
+  }
+
+  buildRunGameTaskPayload(run, options = {}) {
+    const whiteGeneration = Number(options.whiteGeneration);
+    const blackGeneration = Number(options.blackGeneration);
+    const whiteParticipant = this.createGenerationParticipant(run, whiteGeneration);
+    const blackParticipant = this.createGenerationParticipant(run, blackGeneration);
+    if (!whiteParticipant || !blackParticipant) {
+      throw new Error(`Missing generation participant for replay/evaluation game ${whiteGeneration} vs ${blackGeneration}`);
+    }
+    return {
+      type: 'playGame',
+      options: {
+        gameId: options.gameId || this.nextId('game'),
+        whiteParticipant,
+        blackParticipant,
+        seed: options.seed,
+        maxPlies: options.maxPlies,
+        iterations: options.iterations,
+        maxDepth: options.maxDepth,
+        hypothesisCount: options.hypothesisCount,
+        riskBias: options.riskBias,
+        exploration: options.exploration,
+      },
+      meta: {
+        whiteGeneration,
+        blackGeneration,
+      },
+    };
+  }
+
+  async playRunGenerationGames(run, options = {}) {
+    const gameCount = clampPositiveInt(options.gameCount, 1, 1, 400);
+    const phase = options.phase || 'selfplay';
+    const baseSeed = Number.isFinite(options.seed) ? Math.floor(options.seed) : Date.now();
+    const checkpointIndex = Number(options.checkpointIndex || 0);
+    const taskState = options.taskState || null;
+    const maxPlies = run?.config?.maxDepth ? Math.max(60, run.config.maxDepth * 8) : 120;
+    const workerCount = clampPositiveInt(run?.config?.parallelGameWorkers, 1, 1, Math.max(1, getSystemParallelism()));
+    const taskPayloads = [];
+
+    for (let index = 0; index < gameCount; index += 1) {
+      if (taskState?.cancelRequested) break;
+      const shouldSwap = Boolean(options.alternateColors !== false) && (index % 2 === 1);
+      const whiteGeneration = shouldSwap ? Number(options.blackGeneration) : Number(options.whiteGeneration);
+      const blackGeneration = shouldSwap ? Number(options.whiteGeneration) : Number(options.blackGeneration);
+      taskPayloads.push(this.buildRunGameTaskPayload(run, {
+        gameId: this.nextId('game'),
+        whiteGeneration,
+        blackGeneration,
+        seed: baseSeed + (index * 7919),
+        maxPlies,
+        iterations: run?.config?.numMctsSimulationsPerMove,
+        maxDepth: run?.config?.maxDepth,
+        hypothesisCount: run?.config?.hypothesisCount,
+        riskBias: run?.config?.riskBias,
+        exploration: run?.config?.exploration,
+      }));
+    }
+
+    const games = await runParallelWorkerTasks(taskPayloads, workerCount, {
+      shouldStop: () => Boolean(taskState?.cancelRequested),
+      runTask: async (taskPayload) => {
+        if (taskState?.cancelRequested) return null;
+        return this.runSingleGame(taskPayload.options || {});
+      },
+    });
+
+    return games
+      .map((game, index) => (game ? this.buildRunGameRecord(game, {
+        phase,
+        checkpointIndex,
+        whiteGeneration: taskPayloads[index]?.meta?.whiteGeneration,
+        blackGeneration: taskPayloads[index]?.meta?.blackGeneration,
+      }) : null))
+      .filter(Boolean);
+  }
+
+  summarizeGenerationMatchup(games, candidateGeneration, opponentGeneration) {
+    let wins = 0;
+    let losses = 0;
+    let draws = 0;
+    (Array.isArray(games) ? games : []).forEach((game) => {
+      if (game?.winner === null || game?.winner === undefined) {
+        draws += 1;
+        return;
+      }
+      const candidateColor = Number(game?.whiteGeneration) === Number(candidateGeneration) ? WHITE : BLACK;
+      if (Number(game.winner) === candidateColor) wins += 1;
+      else losses += 1;
+    });
+    const gamesPlayed = wins + losses + draws;
+    const winRate = safeWinRate(wins, losses, draws);
+    return {
+      generation: Number(opponentGeneration),
+      games: gamesPlayed,
+      wins,
+      losses,
+      draws,
+      winRate,
+      eloDelta: estimateEloDeltaFromWinRate(winRate),
+    };
+  }
+
+  getRunEvaluationTargetGeneration(run) {
+    if (!run) return 0;
+    const bestGeneration = Math.max(0, Number(run.bestGeneration || 0));
+    const approvedGenerations = this.getApprovedRunGenerations(run)
+      .map((generation) => Number(generation?.generation))
+      .filter((generation) => Number.isFinite(generation) && generation <= bestGeneration);
+    if (!approvedGenerations.length) return bestGeneration;
+    const storedTarget = Number.isFinite(run?.evaluationTargetGeneration)
+      ? Number(run.evaluationTargetGeneration)
+      : approvedGenerations[0];
+    if (storedTarget >= bestGeneration) return bestGeneration;
+    if (approvedGenerations.includes(storedTarget)) return storedTarget;
+    const nextTarget = approvedGenerations.find((generation) => generation >= storedTarget);
+    return Number.isFinite(nextTarget) ? nextTarget : approvedGenerations[approvedGenerations.length - 1];
+  }
+
+  advanceRunEvaluationTargetGeneration(run, completedTargetGeneration) {
+    if (!run) return this.getRunEvaluationTargetGeneration(run);
+    const bestGeneration = Math.max(0, Number(run.bestGeneration || 0));
+    const approvedGenerations = this.getApprovedRunGenerations(run)
+      .map((generation) => Number(generation?.generation))
+      .filter((generation) => Number.isFinite(generation) && generation <= bestGeneration);
+    if (!approvedGenerations.length) {
+      run.evaluationTargetGeneration = bestGeneration;
+      return run.evaluationTargetGeneration;
+    }
+    const nextTarget = approvedGenerations.find((generation) => generation > Number(completedTargetGeneration));
+    run.evaluationTargetGeneration = Number.isFinite(nextTarget) ? nextTarget : bestGeneration;
+    return run.evaluationTargetGeneration;
+  }
+
+  countRunBaselinePerfectSweepStreak(run, targetGeneration) {
+    const evaluations = Array.isArray(run?.evaluationHistory) ? run.evaluationHistory : [];
+    let streak = 0;
+    for (let index = evaluations.length - 1; index >= 0; index -= 1) {
+      const evaluation = evaluations[index];
+      const baselineInfo = this.getEvaluationBaselineInfo(evaluation);
+      const baselineGeneration = Number.isFinite(evaluation?.targetGeneration)
+        ? Number(evaluation.targetGeneration)
+        : Number(baselineInfo?.generation);
+      if (!Number.isFinite(baselineGeneration) || baselineGeneration !== Number(targetGeneration)) {
+        break;
+      }
+      if (Number(baselineInfo?.winRate || 0) < 1) {
+        break;
+      }
+      streak += 1;
+    }
+    return streak;
+  }
+
+  listRunPromotedGenerations(run) {
+    return (run?.generations || [])
+      .filter((generation) => (
+        generation
+        && generation.approved !== false
+        && Number.isFinite(generation.generation)
+        && Number(generation.generation) <= Number(run?.bestGeneration || 0)
+      ))
+      .sort((left, right) => Number(right.generation || 0) - Number(left.generation || 0));
+  }
+
+  listRunPromotionOpponents(run, candidateGeneration, limit) {
+    return this.listRunPromotedGenerations(run)
+      .filter((generation) => Number(generation.generation) < Number(candidateGeneration || 0))
+      .slice(0, clampPositiveInt(limit, 3, 1, 10));
+  }
+
+  recordRunEvaluationGames(run, candidateGenerationRecord, games = []) {
+    if (!Array.isArray(games) || !games.length) return;
+    this.retainRunGames(run, games);
+    this.recordRunGameDurations(run, games, 'evaluation');
+    run.stats.totalEvaluationGames = Number(run.stats.totalEvaluationGames || 0) + games.length;
+    if (candidateGenerationRecord) {
+      candidateGenerationRecord.stats.evaluationGames = Number(candidateGenerationRecord.stats?.evaluationGames || 0) + games.length;
+    }
+  }
+
+  createEvaluationTooltipSections(evaluation) {
+    const sections = [];
+    const appendSection = (title, entry, extra = {}) => {
+      if (!entry || !Number.isFinite(Number(entry.generation))) return;
+      sections.push({
+        title,
+        generation: Number(entry.generation),
+        winRate: Number(entry.winRate || 0),
+        wins: Number(entry.wins || 0),
+        losses: Number(entry.losses || 0),
+        draws: Number(entry.draws || 0),
+        games: Number(entry.games || 0),
+        passed: extra.passed === true ? true : (extra.passed === false ? false : null),
+        requiredWinRate: Number.isFinite(extra.requiredWinRate) ? Number(extra.requiredWinRate) : null,
+      });
+    };
+
+    appendSection('Baseline', this.getEvaluationBaselineInfo(evaluation));
+    appendSection('Pre-promotion', evaluation?.prePromotionTest, {
+      passed: evaluation?.prePromotionPassed,
+      requiredWinRate: evaluation?.prePromotionRequiredWinRate,
+    });
+    (evaluation?.promotionTests || []).forEach((entry) => {
+      appendSection('Promotion', entry, {
+        passed: entry?.passed,
+        requiredWinRate: evaluation?.promotionTestRequiredWinRate,
+      });
+    });
+    return sections;
+  }
+
+  async evaluateRunGeneration(run, candidateGenerationRecord, taskState) {
+    const bestGeneration = Math.max(0, Number(run.bestGeneration || 0));
+    const candidateGeneration = Number(candidateGenerationRecord?.generation || 0);
+    const baselineTargetGeneration = this.getRunEvaluationTargetGeneration(run);
+    const prePromotionGamesRequired = clampPositiveInt(run?.config?.prePromotionTestGames, 50, 1, 400);
+    const prePromotionWinRateRequired = normalizeFloat(run?.config?.prePromotionTestWinRate, 0.55, 0, 1);
+    const promotionTestGamesRequired = clampPositiveInt(run?.config?.promotionTestGames, 100, 1, 400);
+    const promotionTestWinRateRequired = normalizeFloat(run?.config?.promotionTestWinRate, 0.55, 0, 1);
+    const promotionOpponentLimit = clampPositiveInt(run?.config?.promotionTestPriorGenerations, 3, 1, 10);
+
+    const baselineGames = await this.playRunGenerationGames(run, {
+      phase: 'evaluation',
+      whiteGeneration: candidateGeneration,
+      blackGeneration: baselineTargetGeneration,
+      gameCount: RUN_EVAL_BASELINE_GAMES,
+      checkpointIndex: run.working?.checkpointIndex || 0,
+      taskState,
+    });
+    this.recordRunEvaluationGames(run, candidateGenerationRecord, baselineGames);
+    const baselineInfo = this.summarizeGenerationMatchup(
+      baselineGames,
+      candidateGeneration,
+      baselineTargetGeneration,
+    );
+    const previousPerfectSweepStreak = this.countRunBaselinePerfectSweepStreak(run, baselineTargetGeneration);
+    const targetPerfectSweepStreak = Number(baselineInfo?.winRate || 0) >= 1
+      ? previousPerfectSweepStreak + 1
+      : 0;
+    const nextEvaluationTargetGeneration = targetPerfectSweepStreak >= RUN_EVAL_BASELINE_ADVANCE_STREAK
+      ? this.advanceRunEvaluationTargetGeneration(run, baselineTargetGeneration)
+      : baselineTargetGeneration;
+    const targetAdvanced = Number(nextEvaluationTargetGeneration) !== baselineTargetGeneration;
+    if (!targetAdvanced) {
+      run.evaluationTargetGeneration = baselineTargetGeneration;
+    }
+
+    const prePromotionGames = await this.playRunGenerationGames(run, {
+      phase: 'evaluation',
+      whiteGeneration: candidateGeneration,
+      blackGeneration: bestGeneration,
+      gameCount: prePromotionGamesRequired,
+      checkpointIndex: run.working?.checkpointIndex || 0,
+      taskState,
+    });
+    this.recordRunEvaluationGames(run, candidateGenerationRecord, prePromotionGames);
+    const prePromotionTest = this.summarizeGenerationMatchup(
+      prePromotionGames,
+      candidateGeneration,
+      bestGeneration,
+    );
+    const prePromotionPassed = Boolean(
+      prePromotionTest
+      && Number(prePromotionTest.winRate || 0) >= prePromotionWinRateRequired
+    );
+
+    const promotionOpponents = this.listRunPromotionOpponents(run, candidateGeneration, promotionOpponentLimit);
+    const promotionTests = [];
+    if (prePromotionPassed && !taskState?.cancelRequested) {
+      for (const opponent of promotionOpponents) {
+        const promotionGames = await this.playRunGenerationGames(run, {
+          phase: 'evaluation',
+          whiteGeneration: candidateGeneration,
+          blackGeneration: Number(opponent.generation),
+          gameCount: promotionTestGamesRequired,
+          checkpointIndex: run.working?.checkpointIndex || 0,
+          taskState,
+        });
+        this.recordRunEvaluationGames(run, candidateGenerationRecord, promotionGames);
+        const summary = this.summarizeGenerationMatchup(
+          promotionGames,
+          candidateGeneration,
+          Number(opponent.generation),
+        );
+        promotionTests.push({
+          ...summary,
+          label: opponent.label || `G${opponent.generation}`,
+          passed: Boolean(summary && Number(summary.winRate || 0) >= promotionTestWinRateRequired),
+        });
+      }
+    }
+
+    const promoted = Boolean(
+      prePromotionPassed
+      && promotionTests.length > 0
+      && promotionTests.every((entry) => entry?.passed)
+    );
+    const tooltipSections = this.createEvaluationTooltipSections({
+      baselineInfo,
+      gen0Info: baselineInfo,
+      prePromotionTest,
+      prePromotionPassed,
+      prePromotionRequiredWinRate: prePromotionWinRateRequired,
+      promotionTests,
+      promotionTestRequiredWinRate: promotionTestWinRateRequired,
+    });
+
+    return {
+      id: `${run.id}:eval:${String(run.working?.checkpointIndex || 0).padStart(4, '0')}`,
+      checkpointIndex: Number(run.working?.checkpointIndex || 0),
+      evaluatedAt: nowIso(),
+      candidateGeneration,
+      bestGenerationAtEvaluation: bestGeneration,
+      promoted,
+      baselineInfo,
+      gen0Info: baselineInfo,
+      prePromotionTest: prePromotionTest
+        ? {
+          ...prePromotionTest,
+          passed: prePromotionPassed,
+        }
+        : null,
+      prePromotionPassed,
+      prePromotionRequiredWinRate: prePromotionWinRateRequired,
+      promotionTests,
+      promotionTestGames: promotionTestGamesRequired,
+      promotionTestRequiredWinRate: promotionTestWinRateRequired,
+      promotionOpponentLimit,
+      againstBest: prePromotionTest,
+      againstTarget: baselineInfo,
+      againstGenerations: promotionTests,
+      targetGeneration: baselineTargetGeneration,
+      targetWinRateThreshold: null,
+      targetAdvanced,
+      targetAdvancedToGeneration: targetAdvanced ? nextEvaluationTargetGeneration : baselineTargetGeneration,
+      targetPerfectSweepStreak,
+      targetPerfectSweepRequired: RUN_EVAL_BASELINE_ADVANCE_STREAK,
+      tooltipSections,
+      loss: candidateGenerationRecord.latestLoss ? deepClone(candidateGenerationRecord.latestLoss) : null,
+    };
+  }
+
+  async trainRunWorkingModel(run, taskState) {
+    const steps = clampPositiveInt(run?.config?.trainingStepsPerCycle, 1, 1, 5000);
+    const losses = [];
+    for (let stepIndex = 0; stepIndex < steps; stepIndex += 1) {
+      if (taskState?.cancelRequested) break;
+      const batch = this.sampleReplayBufferSamples(run);
+      if (!batch.policySamples.length && !batch.valueSamples.length && !batch.identitySamples.length) {
+        break;
+      }
+      const trainingOptions = {
+        learningRate: run?.config?.learningRate,
+        batchSize: run?.config?.batchSize,
+        weightDecay: run?.config?.weightDecay,
+        gradientClipNorm: run?.config?.gradientClipNorm,
+      };
+      const trainingResult = await this.trainModelBundleBatch({
+        modelBundle: run.working.modelBundle,
+        optimizerState: run.working.optimizerState,
+        samples: batch,
+        ...trainingOptions,
+        epochs: 1,
+        trainingBackend: run?.config?.trainingBackend,
+        trainingDevicePreference: run?.config?.trainingDevicePreference,
+        parallelTrainingHeadWorkers: run?.config?.parallelTrainingHeadWorkers,
+        debugContext: {
+          runId: run.id,
+          cycle: Number(run.stats?.cycle || 0),
+          step: Number(run.stats?.totalTrainingSteps || 0) + 1,
+          checkpointIndex: Number(run.working?.checkpointIndex || 0),
+          source: 'continuous_run_training',
+        },
+      });
+      run.working.modelBundle = trainingResult.modelBundle;
+      run.working.optimizerState = trainingResult.optimizerState || run.working.optimizerState;
+      const latestMetrics = Array.isArray(trainingResult.history) && trainingResult.history.length
+        ? trainingResult.history[trainingResult.history.length - 1]
+        : {};
+
+      const lossEntry = {
+        step: Number(run.stats?.totalTrainingSteps || 0) + 1,
+        policyLoss: Number(latestMetrics.policyLoss || 0),
+        valueLoss: Number(latestMetrics.valueLoss || 0),
+        identityLoss: Number(latestMetrics.identityLoss || 0),
+        identityAccuracy: Number(latestMetrics.identityAccuracy || 0),
+        policySamples: Number(latestMetrics.policySamples || 0),
+        valueSamples: Number(latestMetrics.valueSamples || 0),
+        identitySamples: Number(latestMetrics.identitySamples || 0),
+        trainingBackend: trainingResult.backend || TRAINING_BACKENDS.NODE,
+        trainingDevice: trainingResult.device || TRAINING_DEVICE_PREFERENCES.CPU,
+      };
+      run.working.lastLoss = deepClone(lossEntry);
+      run.stats.totalTrainingSteps = Number(run.stats.totalTrainingSteps || 0) + 1;
+      losses.push(lossEntry);
+      this.emitRunProgress(run, 'training', {
+        latestLoss: lossEntry,
+      });
+      let didEvaluateThisStep = false;
+      if ((run.stats.totalTrainingSteps % clampPositiveInt(run.config?.checkpointInterval, DEFAULT_RUN_CHECKPOINT_INTERVAL, 1, 100000)) === 0) {
+        run.working.checkpointIndex = Number(run.working.checkpointIndex || 0) + 1;
+        const candidateGeneration = this.createRunGenerationRecord(run, {
+          generation: this.getNextRunGenerationNumber(run),
+          label: `G${this.getNextRunGenerationNumber(run)}`,
+          source: 'candidate',
+          modelBundle: run.working.modelBundle,
+          parentGeneration: run.bestGeneration,
+          approved: false,
+          isBest: false,
+          latestLoss: lossEntry,
+        });
+        run.generations.push(candidateGeneration);
+        const evaluation = await this.evaluateRunGeneration(run, candidateGeneration, taskState);
+        didEvaluateThisStep = true;
+        candidateGeneration.promotionEvaluation = deepClone(evaluation);
+        run.evaluationHistory.push(deepClone(evaluation));
+        if (run.evaluationHistory.length > 500) {
+          run.evaluationHistory.shift();
+        }
+        if (evaluation.promoted) {
+          candidateGeneration.approved = true;
+          candidateGeneration.isBest = true;
+          candidateGeneration.source = 'promoted';
+          candidateGeneration.promotedAt = nowIso();
+          this.markRunBestGeneration(run, candidateGeneration.generation);
+          run.working.baseGeneration = candidateGeneration.generation;
+          run.stats.totalPromotions = Number(run.stats.totalPromotions || 0) + 1;
+          run.stats.failedPromotions = 0;
+          this.refreshRunWorkerGeneration(run);
+          this.emitRunProgress(run, 'promotion', {
+            latestEvaluation: evaluation,
+            promotedGeneration: candidateGeneration.generation,
+          });
+        } else {
+          candidateGeneration.modelBundle = null;
+          run.stats.failedPromotions = Number(run.stats.failedPromotions || 0) + 1;
+          this.emitRunProgress(run, 'evaluation', {
+            latestEvaluation: evaluation,
+          });
+        }
+      }
+      run.updatedAt = nowIso();
+      await this.appendRunJournalSnapshot(run, didEvaluateThisStep ? 'training_evaluation_step' : 'training_step', {
+        includeRetainedGames: didEvaluateThisStep,
+        includeWorkingState: true,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    return losses;
+  }
+
+  determineRunStopReason(run, taskState) {
+    if (taskState?.cancelRequested || String(run?.status || '').toLowerCase() === 'stopping') {
+      return 'manual_stop';
+    }
+    if (run?.config?.stopOnMaxGenerations !== false && Number(run?.bestGeneration || 0) >= Number(run?.config?.maxGenerations || 0)) {
+      return 'max_generations';
+    }
+    if (
+      run?.config?.stopOnMaxSelfPlayGames !== false
+      && Number(run?.stats?.totalSelfPlayGames || 0) >= Number(run?.config?.maxSelfPlayGames || 0)
+    ) {
+      return 'max_selfplay_games';
+    }
+    if (
+      run?.config?.stopOnMaxTrainingSteps !== false
+      && Number(run?.stats?.totalTrainingSteps || 0) >= Number(run?.config?.maxTrainingSteps || 0)
+    ) {
+      return 'max_training_steps';
+    }
+    if (
+      run?.config?.stopOnMaxFailedPromotions !== false
+      && Number(run?.stats?.failedPromotions || 0) >= Number(run?.config?.maxFailedPromotions || 0)
+    ) {
+      return 'training_plateau';
+    }
+    return null;
+  }
+
+  recordRunMetrics(run, selfPlayGames = []) {
+    if (!run) return;
+    const selfPlayMetrics = this.computeRunSelfPlayMetrics(selfPlayGames);
+    const previousSelfPlayGames = Number(run.stats.totalSelfPlayGames || 0);
+    const nextSelfPlayGames = previousSelfPlayGames + selfPlayGames.length;
+    run.stats.averageGameLength = nextSelfPlayGames > 0
+      ? (
+        ((Number(run.stats.averageGameLength || 0) * previousSelfPlayGames)
+        + (selfPlayMetrics.averageGameLength * selfPlayGames.length))
+        / nextSelfPlayGames
+      )
+      : 0;
+    run.stats.policyEntropy = selfPlayMetrics.policyEntropy || Number(run.stats.policyEntropy || 0);
+    run.stats.moveDiversity = selfPlayMetrics.moveDiversity || Number(run.stats.moveDiversity || 0);
+    const entry = {
+      timestamp: nowIso(),
+      cycle: Number(run.stats?.cycle || 0),
+      bestGeneration: Number(run.bestGeneration || 0),
+      workerGeneration: Number(run.workerGeneration || 0),
+      totalSelfPlayGames: Number(run.stats?.totalSelfPlayGames || 0),
+      totalTrainingSteps: Number(run.stats?.totalTrainingSteps || 0),
+      replayBuffer: this.summarizeRunReplayBuffer(run),
+      latestLoss: run.working?.lastLoss ? deepClone(run.working.lastLoss) : null,
+      latestEvaluation: Array.isArray(run.evaluationHistory) && run.evaluationHistory.length
+        ? deepClone(run.evaluationHistory[run.evaluationHistory.length - 1])
+        : null,
+      averageSelfPlayGameDurationMs: Number(run.stats?.averageSelfPlayGameDurationMs || 0),
+      averageEvaluationGameDurationMs: Number(run.stats?.averageEvaluationGameDurationMs || 0),
+      elapsedMs: computeRunElapsedMs(run),
+      averageGameLength: Number(run.stats.averageGameLength || 0),
+      policyEntropy: Number(run.stats.policyEntropy || 0),
+      moveDiversity: Number(run.stats.moveDiversity || 0),
+    };
+    run.metricsHistory = Array.isArray(run.metricsHistory) ? run.metricsHistory : [];
+    run.metricsHistory.push(entry);
+    if (run.metricsHistory.length > 1000) {
+      run.metricsHistory.shift();
+    }
+  }
+
+  async runContinuousPipeline(run, taskState) {
+    const rng = createRng(Number(run?.config?.seed) || Date.now());
+    this.refreshRunWorkerGeneration(run, { force: true });
+    this.logRunEvent(run, 'run_pipeline_started', {
+      config: run?.config || null,
+      bestGeneration: Number(run?.bestGeneration || 0),
+      workerGeneration: Number(run?.workerGeneration || 0),
+    });
+    this.emitRunProgress(run, 'start');
+    while (String(run.status || '').toLowerCase() === 'running' || String(run.status || '').toLowerCase() === 'stopping') {
+      const stopReasonBeforeCycle = this.determineRunStopReason(run, taskState);
+      if (stopReasonBeforeCycle) {
+        run.stopReason = stopReasonBeforeCycle;
+        run.status = stopReasonBeforeCycle === 'manual_stop' ? 'stopped' : 'completed';
+        break;
+      }
+
+      run.stats.cycle = Number(run.stats.cycle || 0) + 1;
+      this.logRunEvent(run, 'run_cycle_started', {
+        cycle: Number(run.stats.cycle || 0),
+        workerGeneration: Number(run.workerGeneration || 0),
+        bestGeneration: Number(run.bestGeneration || 0),
+      });
+      this.refreshRunWorkerGeneration(run);
+      const workerGeneration = Number(run.workerGeneration || run.bestGeneration || 0);
+      const opponentGeneration = this.chooseRunSelfPlayOpponentGeneration(run, rng);
+      const selfPlayGames = await this.playRunGenerationGames(run, {
+        phase: 'selfplay',
+        whiteGeneration: workerGeneration,
+        blackGeneration: opponentGeneration,
+        gameCount: run.config?.numSelfplayWorkers,
+        checkpointIndex: run.working?.checkpointIndex || 0,
+        taskState,
+        alternateColors: true,
+        seed: (Number(run.config?.seed) || Date.now()) + (Number(run.stats?.cycle || 0) * 10007),
+      });
+      this.logRunEvent(run, 'run_selfplay_batch_completed', {
+        cycle: Number(run.stats.cycle || 0),
+        gameCount: selfPlayGames.length,
+        workerGeneration,
+        opponentGeneration,
+        replayBufferBeforeTraining: this.summarizeRunReplayBuffer(run),
+      });
+      this.retainRunGames(run, selfPlayGames);
+      this.recordRunGameDurations(run, selfPlayGames, 'selfplay');
+      run.stats.totalSelfPlayGames = Number(run.stats.totalSelfPlayGames || 0) + selfPlayGames.length;
+
+      const generationRecord = this.getRunGeneration(run, workerGeneration);
+      if (generationRecord) {
+        generationRecord.stats.selfPlayGames = Number(generationRecord.stats.selfPlayGames || 0) + selfPlayGames.length;
+      }
+
+      selfPlayGames.forEach((game) => {
+        const filteredTraining = this.filterRunTrainingSamplesByGeneration(game.training, workerGeneration);
+        const replayBufferSummary = this.appendRunReplayBuffer(run, filteredTraining, {
+          generation: workerGeneration,
+          createdAt: game.createdAt || nowIso(),
+        });
+        if (generationRecord) {
+          generationRecord.stats.replayPositions = Number(generationRecord.stats.replayPositions || 0)
+            + Number(filteredTraining.policySamples.length || 0);
+        }
+        this.emitRunProgress(run, 'selfplay', {
+          replayBuffer: replayBufferSummary,
+          latestGameId: game.id,
+        });
+      });
+      run.updatedAt = nowIso();
+      await this.appendRunJournalSnapshot(run, 'selfplay_batch', {
+        includeReplayBuffer: true,
+        includeRetainedGames: true,
+      });
+
+      if (this.summarizeRunReplayBuffer(run).positions >= Number(run.config?.batchSize || 0)) {
+        await this.trainRunWorkingModel(run, taskState);
+      }
+
+      this.recordRunMetrics(run, selfPlayGames);
+      run.updatedAt = nowIso();
+      await this.appendRunJournalSnapshot(run, 'cycle_metrics');
+      await this.maybeSaveRunState(run);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (!isRunStatusActive(run.status)) {
+      this.compactTerminalRunState(run);
+    }
+    run.updatedAt = nowIso();
+    run.live = this.buildRunProgressPayload(run, run.status === 'completed' ? 'complete' : 'stopping', {
+      status: run.status,
+      stopReason: run.stopReason,
+    });
+    await this.maybeSaveRunState(run, { force: true });
+    this.logRunEvent(run, 'run_pipeline_finished', {
+      status: run.status,
+      stopReason: run.stopReason || null,
+      bestGeneration: Number(run.bestGeneration || 0),
+      workerGeneration: Number(run.workerGeneration || 0),
+      totalTrainingSteps: Number(run.stats?.totalTrainingSteps || 0),
+      totalSelfPlayGames: Number(run.stats?.totalSelfPlayGames || 0),
+      totalEvaluationGames: Number(run.stats?.totalEvaluationGames || 0),
+    });
+    this.emitRunProgress(run, run.status === 'completed' ? 'complete' : 'stopping', {
+      status: run.status,
+      stopReason: run.stopReason,
+    });
+  }
+
+  resumeRunTask(runRecord) {
+    const run = runRecord?.id ? runRecord : this.getRunById(runRecord);
+    if (!run?.id) return;
+    if (this.runTasks.has(run.id)) return;
+    const taskState = {
+      id: run.id,
+      cancelRequested: String(run.status || '').toLowerCase() === 'stopping',
+    };
+    this.runTasks.set(run.id, taskState);
+    Promise.resolve()
+      .then(async () => {
+        await this.runContinuousPipeline(run, taskState);
+      })
+      .catch(async (err) => {
+        run.status = 'error';
+        run.stopReason = err.message || 'run_failed';
+        run.lastError = summarizeError(err);
+        console.error('[ml-runtime] run pipeline failed', {
+          runId: run.id,
+          label: run.label,
+          stopReason: run.stopReason,
+          error: run.lastError,
+        });
+        this.logRunEvent(run, 'run_pipeline_error', {
+          status: 'error',
+          stopReason: run.stopReason,
+          error: run.lastError,
+        });
+        this.compactTerminalRunState(run);
+        run.updatedAt = nowIso();
+        await this.appendRunJournalSnapshot(run, 'pipeline_error', {
+          includeWorkingState: true,
+        }).catch(() => {});
+        await this.maybeSaveRunState(run, { force: true }).catch(() => {});
+        this.emitRunProgress(run, 'error', {
+          status: 'error',
+          message: err.message || 'Run failed',
+          stopReason: run.stopReason,
+          lastError: run.lastError,
+        });
+      })
+      .finally(() => {
+        this.runTasks.delete(run.id);
+      });
+  }
+
+  async resumeRunTasks() {
+    await this.ensureLoaded();
+    (this.state.runs || [])
+      .filter((run) => isRunStatusActive(run?.status))
+      .forEach((run) => this.resumeRunTask(run));
+  }
+
+  async startRun(options = {}) {
+    await this.ensureLoaded();
+    await this.settleActiveRunsForActivation({
+      forceStopOtherRuns: options.forceStopOtherRuns === true,
+    });
+    const config = normalizeRunConfig(options);
+    const { seedBundle, seedSource } = this.resolveRunSeedBundle(config);
+
+    const run = this.createRunRecord({
+      label: options.label || options.runName || null,
+      config,
+      seedBundle,
+      seedSource,
+    });
+    this.logRunEvent(run, 'run_started', {
+      label: run.label,
+      config,
+      seedSource,
+      seed: config.seed,
+    });
+    this.state.runs.unshift(run);
+    await this.save();
+    this.resumeRunTask(run);
+    return {
+      run: this.summarizeRun(run),
+      live: this.buildRunProgressPayload(run, 'start'),
+    };
+  }
+
+  async stopRun(runId) {
+    await this.ensureLoaded();
+    const run = this.getRunById(runId);
+    if (!run) return { stopped: false };
+    run.status = 'stopping';
+    run.updatedAt = nowIso();
+    run.stopReason = 'manual_stop';
+    const taskState = this.runTasks.get(run.id);
+    if (taskState) {
+      taskState.cancelRequested = true;
+    }
+    this.logRunEvent(run, 'run_stop_requested', {
+      status: run.status,
+      stopReason: run.stopReason,
+    });
+    await this.save();
+    this.emitRunProgress(run, 'stopping', {
+      status: 'stopping',
+      stopReason: 'manual_stop',
+    });
+    return {
+      stopped: true,
+      run: this.summarizeRun(run),
+    };
+  }
+
+  async continueRun(runId, options = {}) {
+    await this.ensureLoaded();
+    const run = this.getRunById(runId);
+    if (!run) return { continued: false, reason: 'not_found' };
+    if (normalizeRunStatus(run.status) !== 'stopped') {
+      const err = new Error('Only stopped runs can be continued');
+      err.statusCode = 409;
+      err.code = 'run_not_stopped';
+      throw err;
+    }
+    if (!this.canContinueRun(run)) {
+      const err = new Error('This stopped run no longer has resumable state');
+      err.statusCode = 409;
+      err.code = 'run_not_resumable';
+      throw err;
+    }
+    const continueState = this.ensureRunContinueState(run);
+    if (!continueState) {
+      const err = new Error('This stopped run no longer has resumable state');
+      err.statusCode = 409;
+      err.code = 'run_not_resumable';
+      throw err;
+    }
+
+    await this.settleActiveRunsForActivation({
+      exceptRunId: run.id,
+      forceStopOtherRuns: options.forceStopOtherRuns === true,
+    });
+
+    run.status = 'running';
+    run.stopReason = null;
+    run.lastError = null;
+    run.updatedAt = nowIso();
+    run.live = this.buildRunProgressPayload(run, 'continue', {
+      status: 'running',
+      stopReason: null,
+    });
+    this.logRunEvent(run, 'run_continued', {
+      status: run.status,
+      bestGeneration: Number(run.bestGeneration || 0),
+      workerGeneration: Number(run.workerGeneration || 0),
+      continueSource: continueState.source,
+      continueGeneration: Number(continueState.generation || 0),
+      checkpointIndex: Number(run?.working?.checkpointIndex || 0),
+      totalTrainingSteps: Number(run?.stats?.totalTrainingSteps || 0),
+    });
+    await this.save();
+    this.resumeRunTask(run);
+    this.emitRunProgress(run, 'continue', {
+      status: 'running',
+      stopReason: null,
+    });
+    return {
+      continued: true,
+      run: this.summarizeRun(run),
+      live: this.buildRunProgressPayload(run, 'continue'),
+    };
+  }
+
+  async deleteRun(runId) {
+    await this.ensureLoaded();
+    const runs = Array.isArray(this.state.runs) ? this.state.runs : [];
+    const runIndex = runs.findIndex((run) => run.id === runId);
+    if (runIndex < 0) {
+      return { deleted: false, reason: 'not_found' };
+    }
+    const run = runs[runIndex];
+    if (isRunStatusActive(run?.status)) {
+      return {
+        deleted: false,
+        reason: 'run_active',
+        run: this.summarizeRun(run),
+      };
+    }
+    runs.splice(runIndex, 1);
+    this.prunePromotedBotSelections();
+    this.runTasks.delete(runId);
+    await this.deletePersistedRunArtifacts(runId);
+    await this.deleteRunMetadataFromMongo(runId);
+    await this.save();
+    return {
+      deleted: true,
+      id: runId,
+    };
+  }
+
   async getLiveStatus() {
     await this.ensureLoaded();
+    await this.ensureFreshResourceTelemetry();
     const simulationJob = this.state.activeJobs?.simulation || null;
     const trainingJob = this.state.activeJobs?.training || null;
     const simulation = simulationJob
@@ -4168,8 +9642,12 @@ class MlRuntime {
       : this.getRecentRememberedLiveStatus('training');
     return {
       serverTime: nowIso(),
+      resourceTelemetry: this.getResourceTelemetryPayload(),
       simulation,
       training,
+      runs: (this.state.runs || [])
+        .filter((run) => isRunStatusActive(run?.status))
+        .map((run) => this.buildRunProgressPayload(run)),
     };
   }
 

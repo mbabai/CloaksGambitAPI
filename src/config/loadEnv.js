@@ -1,8 +1,12 @@
 const path = require('path');
+const { isMainThread } = require('worker_threads');
 
 function logLocalGoogleClientId() {
+  if (!isMainThread || process.env.QUIET_LOCAL_ENV_LOGS === 'true') {
+    return;
+  }
   const localGoogleId = process.env.GOOGLE_CLIENT_ID;
-  const preview = localGoogleId ? `${localGoogleId.slice(0, 6)}…` : 'MISSING';
+  const preview = localGoogleId ? `${localGoogleId.slice(0, 6)}...` : 'MISSING';
   console.debug('[env] Loaded local environment variables');
   console.debug('[env] GOOGLE_CLIENT_ID preview:', preview);
 }

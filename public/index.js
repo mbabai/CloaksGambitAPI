@@ -6,7 +6,7 @@ import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog } from '/js/modules/api/game.js';
 import { createLocalGameLogger } from '/js/modules/debug/localGameLogger.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
@@ -2506,7 +2506,7 @@ logBootConstantsOnce();
     }
 
     if (mode === 'bots') {
-      showBotMatchPrompt();
+      showDynamicBotMatchPrompt();
       return;
     }
 
@@ -3133,7 +3133,7 @@ logBootConstantsOnce();
     title.style.fontWeight = '700';
 
     const description = document.createElement('div');
-    description.textContent = 'Choose a bot difficulty to start a match.';
+    description.textContent = 'Choose a bot opponent to start a match.';
     description.style.fontSize = clamp(Math.round(16 * modalScale), 12, 16) + 'px';
     description.style.lineHeight = '1.4';
 
@@ -3147,18 +3147,7 @@ logBootConstantsOnce();
     select.style.color = 'var(--CG-black)';
     select.style.textAlign = 'center';
     select.style.cursor = 'pointer';
-
-    const difficulties = [
-      { value: 'easy', label: 'Easy' },
-      { value: 'medium', label: 'Medium' },
-      { value: 'hard', label: 'Hard' }
-    ];
-    difficulties.forEach(({ value, label }) => {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      select.appendChild(option);
-    });
+    select.disabled = true;
 
     const statusEl = document.createElement('div');
     statusEl.style.minHeight = clamp(Math.round(18 * modalScale), 14, 18) + 'px';
@@ -3265,6 +3254,299 @@ logBootConstantsOnce();
   async function startBotMatch(difficulty, promptHandle) {
     try {
       const result = await apiEnterBotQueue({ difficulty });
+      if (result && (result.userId || result.username)) {
+        updateSessionInfo({
+          ...(result.userId ? { userId: result.userId } : {}),
+          ...(result.username ? { username: result.username } : {}),
+        }, { syncCookies: Boolean(result?.userId) });
+        userId = sessionInfo.userId || result.userId || userId;
+      }
+      if (promptHandle && typeof promptHandle.close === 'function') {
+        promptHandle.close();
+      }
+    } catch (err) {
+      if (promptHandle && typeof promptHandle.setStatus === 'function') {
+        const message = (err && err.data && err.data.message) || err?.message || 'Failed to start bot match.';
+        promptHandle.setStatus(message, 'error');
+      }
+      throw err;
+    }
+  }
+
+  function showDynamicBotMatchPrompt() {
+    if (botMatchPrompt && botMatchPrompt.overlay && botMatchPrompt.overlay.isOpen()) {
+      try {
+        botMatchPrompt.select?.focus();
+      } catch (_) {}
+      return;
+    }
+
+    const prompt = {};
+    const overlay = createOverlay({
+      baseClass: 'cg-overlay cg-overlay--banner bot-overlay',
+      dialogClass: 'cg-overlay__dialog cg-overlay__dialog--banner bot-overlay__dialog',
+      contentClass: 'cg-overlay__content cg-overlay__content--banner bot-overlay__content',
+      backdropClass: 'cg-overlay__backdrop cg-overlay__backdrop--banner bot-overlay__backdrop',
+      closeButtonClass: 'cg-overlay__close cg-overlay__close--banner bot-overlay__close',
+      closeLabel: 'Close bot selection',
+      closeText: 'âœ•',
+      openClass: 'cg-overlay--open cg-overlay--banner-open bot-overlay--open',
+      bodyOpenClass: 'cg-overlay-open bot-overlay-open',
+      closeOnBackdrop: true,
+      trapFocus: true,
+      onHide() {
+        if (botMatchPrompt === prompt) {
+          botMatchPrompt = null;
+        }
+      }
+    });
+
+    botMatchPrompt = prompt;
+    prompt.overlay = overlay;
+
+    const { content, dialog, closeButton } = overlay;
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+
+    function closePrompt({ restoreFocus = true } = {}) {
+      try {
+        overlay.hide({ restoreFocus });
+      } catch (_) {
+        overlay.hide();
+      }
+    }
+
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => closePrompt({ restoreFocus: true });
+    }
+
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const card = document.createElement('div');
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '360px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = cardGap + 'px';
+
+    const title = document.createElement('div');
+    title.textContent = 'Play vs Bot';
+    title.style.fontSize = clamp(Math.round(24 * modalScale), 16, 24) + 'px';
+    title.style.fontWeight = '700';
+
+    const description = document.createElement('div');
+    description.textContent = 'Choose a bot opponent to start a match.';
+    description.style.fontSize = clamp(Math.round(16 * modalScale), 12, 16) + 'px';
+    description.style.lineHeight = '1.4';
+
+    const select = document.createElement('select');
+    select.style.padding = `${clamp(Math.round(10 * modalScale), 8, 12)}px ${clamp(Math.round(12 * modalScale), 10, 16)}px`;
+    select.style.border = '2px solid var(--CG-deep-gold)';
+    select.style.borderRadius = '6px';
+    select.style.fontSize = clamp(Math.round(18 * modalScale), 14, 18) + 'px';
+    select.style.fontWeight = '600';
+    select.style.background = 'var(--CG-white)';
+    select.style.color = 'var(--CG-black)';
+    select.style.textAlign = 'center';
+    select.style.cursor = 'pointer';
+    select.disabled = true;
+
+    const statusEl = document.createElement('div');
+    statusEl.style.minHeight = clamp(Math.round(18 * modalScale), 14, 18) + 'px';
+    statusEl.style.fontSize = clamp(Math.round(14 * modalScale), 12, 14) + 'px';
+    statusEl.style.fontWeight = '600';
+    statusEl.style.color = 'var(--CG-light-gold)';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
+    buttons.style.justifyContent = 'center';
+
+    const cancelBtn = createButton({
+      label: 'Cancel',
+      variant: 'danger',
+      position: 'relative'
+    });
+    cancelBtn.style.flex = '1';
+    cancelBtn.style.minWidth = '0';
+    cancelBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
+    cancelBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    cancelBtn.style.setProperty('--cg-button-font-weight', '700');
+
+    const goBtn = createButton({
+      label: 'Go',
+      variant: 'primary',
+      position: 'relative'
+    });
+    goBtn.style.flex = '1';
+    goBtn.style.minWidth = '0';
+    goBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
+    goBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    goBtn.style.setProperty('--cg-button-font-weight', '700');
+
+    function setStatus(message, tone = 'info') {
+      statusEl.textContent = message || '';
+      if (!message) return;
+      if (tone === 'error') {
+        statusEl.style.color = 'var(--CG-scarlet, #ff6b6b)';
+      } else {
+        statusEl.style.color = 'var(--CG-light-gold)';
+      }
+    }
+
+    function getFallbackBotCatalogItems() {
+      return [
+        { id: 'easy', label: 'Easy', playable: true },
+        { id: 'medium', label: 'Medium', playable: true },
+        { id: 'hard', label: 'Hard', playable: false, unavailableMessage: 'Hard bot still under construction.' },
+      ];
+    }
+
+    function fillBotOptions(items = []) {
+      const normalized = Array.isArray(items) && items.length ? items : getFallbackBotCatalogItems();
+      prompt.botItems = normalized
+        .map((item) => ({
+          id: String(item?.id || ''),
+          label: String(item?.label || item?.id || 'Bot'),
+          playable: item?.playable !== false,
+          unavailableMessage: item?.unavailableMessage || null,
+        }))
+        .filter((item) => item.id);
+      select.innerHTML = '';
+      prompt.botItems.forEach((item) => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.label;
+        select.appendChild(option);
+      });
+      if (prompt.botItems.length) {
+        select.value = prompt.botItems[0].id;
+      }
+    }
+
+    let catalogLoading = true;
+    let matchStarting = false;
+    prompt.botItems = [];
+
+    function syncButtonState() {
+      const hasItems = Array.isArray(prompt.botItems) && prompt.botItems.length > 0;
+      select.disabled = catalogLoading || !hasItems;
+      goBtn.disabled = catalogLoading || matchStarting || !hasItems;
+      cancelBtn.disabled = matchStarting;
+      if (matchStarting) {
+        goBtn.textContent = 'Startingâ€¦';
+      } else if (catalogLoading) {
+        goBtn.textContent = 'Loadingâ€¦';
+      } else {
+        goBtn.textContent = 'Go';
+      }
+    }
+
+    function getSelectedBotItem() {
+      const selectedId = select.value || '';
+      return (prompt.botItems || []).find((item) => item.id === selectedId) || prompt.botItems[0] || null;
+    }
+
+    async function handleStart() {
+      const selectedBot = getSelectedBotItem();
+      if (!selectedBot) {
+        setStatus('No bot options are available right now.', 'error');
+        return;
+      }
+      if (selectedBot.playable === false) {
+        window.alert(selectedBot.unavailableMessage || `${selectedBot.label} bot is not available yet.`);
+        return;
+      }
+
+      setStatus(`Starting match vs ${selectedBot.label}...`);
+      matchStarting = true;
+      syncButtonState();
+      try {
+        await startBotMatchById(selectedBot.id, {
+          close: () => closePrompt({ restoreFocus: true }),
+          setStatus,
+        });
+      } catch (err) {
+        const message = (err && err.data && err.data.message) || err?.message || 'Failed to start bot match.';
+        setStatus(message, 'error');
+        matchStarting = false;
+        syncButtonState();
+        return;
+      }
+    }
+
+    cancelBtn.addEventListener('click', () => closePrompt({ restoreFocus: true }));
+    goBtn.addEventListener('click', () => { handleStart(); });
+    select.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        handleStart();
+      }
+    });
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(goBtn);
+
+    card.appendChild(title);
+    card.appendChild(description);
+    card.appendChild(select);
+    card.appendChild(statusEl);
+    card.appendChild(buttons);
+    content.innerHTML = '';
+    content.appendChild(card);
+
+    prompt.overlay = overlay;
+    prompt.close = closePrompt;
+    prompt.setStatus = setStatus;
+    prompt.select = select;
+
+    overlay.show({ initialFocus: select });
+    syncButtonState();
+    setStatus('Loading bot list...');
+
+    (async () => {
+      let items = [];
+      let usedFallback = false;
+      try {
+        const payload = await apiGetBotCatalog();
+        if (Array.isArray(payload?.items) && payload.items.length) {
+          items = payload.items;
+        } else {
+          items = getFallbackBotCatalogItems();
+          usedFallback = true;
+        }
+      } catch (err) {
+        console.warn('Failed to load bot catalog, falling back to built-in bots', err);
+        items = getFallbackBotCatalogItems();
+        usedFallback = true;
+      }
+
+      if (botMatchPrompt !== prompt) return;
+
+      fillBotOptions(items);
+      catalogLoading = false;
+      syncButtonState();
+      setStatus(usedFallback ? 'Showing the built-in bot list.' : '');
+      try {
+        select.focus();
+      } catch (_) {}
+    })();
+  }
+
+  async function startBotMatchById(botId, promptHandle) {
+    try {
+      const result = await apiEnterBotQueue({ botId });
       if (result && (result.userId || result.username)) {
         updateSessionInfo({
           ...(result.userId ? { userId: result.userId } : {}),
@@ -4514,24 +4796,42 @@ logBootConstantsOnce();
       const cooldownUntil = Array.isArray(drawOfferCooldowns) ? drawOfferCooldowns[selfIdx] : null;
       const cooldownActive = Number.isFinite(cooldownUntil) && cooldownUntil > now;
       const hasPendingDrawOffer = Boolean(currentDrawOffer && currentDrawOffer.player !== undefined && currentDrawOffer.player !== null);
-      if (isMyTurn && lastAction) {
-        if (lastAction.type === ACTIONS.MOVE) {
-          if (lastMove && lastMove.state === MOVE_STATES.PENDING && lastMove.player !== myColor) {
-            canChallenge = true;
-            if (
-              pendingCapture &&
-              pendingCapture.piece &&
-              pendingCapture.piece.color === myColor &&
-              lastMove.declaration !== Declaration.KING
-            ) {
-              canBomb = true;
-            }
-          }
-        } else if (lastAction.type === ACTIONS.BOMB) {
-          if (lastAction.player !== myColor && lastMove && lastMove.state === MOVE_STATES.PENDING) {
-            canChallenge = true;
-            canPass = true;
-          }
+      const responseContext = latestMoveContext || getLatestMoveContext({
+        actions: actionHistory,
+        moves: moveHistory,
+      });
+      const responseActor = typeof responseContext?.action?.player === 'number'
+        ? responseContext.action.player
+        : (typeof responseContext?.actor === 'number' ? responseContext.actor : lastMove?.player);
+      const pendingResponse = Boolean(
+        (lastMove && lastMove.state === MOVE_STATES.PENDING)
+        || responseContext?.isPending
+      );
+      const responseWindowOpen = (
+        isMyTurn
+        && currentOnDeckingPlayer !== myColor
+        && pendingResponse
+        && responseActor !== myColor
+      );
+      const responseAction = (
+        responseContext?.action && (responseContext.action.type === ACTIONS.MOVE || responseContext.action.type === ACTIONS.BOMB)
+          ? responseContext.action
+          : (lastAction && (lastAction.type === ACTIONS.MOVE || lastAction.type === ACTIONS.BOMB)
+          ? lastAction
+          : lastMoveAction)
+      );
+      if (responseWindowOpen) {
+        canChallenge = true;
+        if (responseAction?.type === ACTIONS.BOMB) {
+          canPass = true;
+        } else if (
+          responseAction?.type === ACTIONS.MOVE
+          && pendingCapture
+          && pendingCapture.piece
+          && pendingCapture.piece.color === myColor
+          && lastMove.declaration !== Declaration.KING
+        ) {
+          canBomb = true;
         }
       }
 

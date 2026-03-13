@@ -55,6 +55,7 @@ const { router: lobbyMatchmaking } = require('./lobby/matchmaking');
 const lobbyEnterBot = require('./lobby/enterBot');
 
 // Bot routes
+const botsCatalog = require('./bots/catalog');
 const botsRegister = require('./bots/register');
 const debugLocalLog = require('./debug/localLog');
 
@@ -111,6 +112,7 @@ router.use('/lobby/enterBot', lobbyEnterBot);
 router.use('/lobby/matchmaking', lobbyMatchmaking);
 
 // Bot routes
+router.use('/bots/catalog', botsCatalog);
 router.use('/bots/register', botsRegister);
 
 // ML routes

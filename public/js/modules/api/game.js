@@ -110,6 +110,12 @@ export async function apiEnterBotQueue(payload = {}) {
   return sendQueueRequest('/api/v1/lobby/enterBot', payload);
 }
 
+export async function apiGetBotCatalog() {
+  const res = await authFetch('/api/v1/bots/catalog');
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
 export async function apiMove({ gameId, color, from, to, declaration }) {
   return authFetch('/api/v1/gameAction/move', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

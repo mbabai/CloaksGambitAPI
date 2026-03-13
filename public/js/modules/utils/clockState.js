@@ -131,6 +131,10 @@ export function computeGameClockState({
       return;
     }
 
+    if (action.type === ACTIONS.READY) {
+      return;
+    }
+
     if (derivedTurn === null) {
       derivedTurn = 0;
     }

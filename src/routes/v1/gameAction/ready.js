@@ -6,6 +6,12 @@ const DEBUG_GAME_ACTIONS = process.env.DEBUG_GAME_ACTIONS === 'true';
 const debugLog = (...args) => { if (DEBUG_GAME_ACTIONS) console.log(...args); };
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const { emitGameChanged, emitPlayersBothReady } = require('../../../utils/gameRouteEvents');
+const {
+  ensureStoredClockState,
+  transitionStoredClockState,
+  summarizeClockState,
+} = require('../../../utils/gameClock');
+const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
 
 router.post('/', async (req, res) => {
   try {
@@ -20,6 +26,7 @@ router.post('/', async (req, res) => {
     });
 
     const config = await getServerConfig();
+    const now = Date.now();
 
     // Atomic update: set the one playersReady index to true and push READY action
     const actionDoc = {
@@ -43,18 +50,38 @@ router.post('/', async (req, res) => {
       return res.status(404).json({ message: 'Game not found' });
     }
 
+    const startsNow = !updated.startTime && updated.playersReady[0] && updated.playersReady[1];
+    if (startsNow) {
+      updated.startTime = new Date(now);
+    }
+
+    ensureStoredClockState(updated, {
+      now,
+      setupActionType: config.actions.get('SETUP'),
+    });
+    appendLocalDebugLog('clock-route-entry', {
+      route: 'ready',
+      gameId,
+      color: normalizedColor,
+      playerTurn: updated.playerTurn,
+      setupComplete: updated.setupComplete,
+      clockState: summarizeClockState(updated.clockState),
+    });
+
     debugLog('Game saved successfully (ready):', {
       gameId: updated._id.toString(),
       playersReady: updated.playersReady
     });
 
-    // If both players are ready, start the clock once.
-    // Use direct mutation+save so this works for both Mongoose docs
-    // and the in-memory active-game model (where startTime starts as null).
-    if (!updated.startTime && updated.playersReady[0] && updated.playersReady[1]) {
-      updated.startTime = new Date();
-      await updated.save();
-    }
+    transitionStoredClockState(updated, {
+      actingColor: normalizedColor,
+      now,
+      setupActionType: config.actions.get('SETUP'),
+      applyIncrement: false,
+      reason: 'ready',
+    });
+
+    await updated.save();
 
     const finalGame = await Game.findById(updated._id).lean();
 

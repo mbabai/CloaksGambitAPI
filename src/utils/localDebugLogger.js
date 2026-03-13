@@ -35,6 +35,22 @@ function ensureDebugDir() {
   return true;
 }
 
+function normalizeRelativeDebugPath(relativePath) {
+  const value = String(relativePath || '').trim().replace(/\\/g, '/');
+  if (!value) {
+    throw new Error('A relative debug log path is required');
+  }
+  const normalized = path.posix.normalize(value).replace(/^\/+/, '');
+  if (!normalized || normalized.startsWith('..') || normalized.includes('../')) {
+    throw new Error(`Invalid debug log path: ${relativePath}`);
+  }
+  return normalized;
+}
+
+function resolveDebugLogPath(relativePath) {
+  return path.join(DEBUG_DIR, normalizeRelativeDebugPath(relativePath));
+}
+
 function sanitizeValue(value, seen = new WeakSet(), depth = 0) {
   if (value === null || value === undefined) return value;
   if (depth > 6) return '[MaxDepth]';
@@ -83,7 +99,40 @@ function appendLocalDebugLog(event, payload = {}) {
   return DEBUG_LOG_FILE;
 }
 
-function getLocalDebugLogPaths() {
+function appendNamedLocalDebugLog(relativePath, event, payload = {}) {
+  if (!ensureDebugDir()) {
+    return null;
+  }
+  const targetPath = resolveDebugLogPath(relativePath);
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const record = {
+    ts: new Date().toISOString(),
+    pid: process.pid,
+    event,
+    payload: sanitizeValue(payload),
+  };
+  fs.appendFileSync(targetPath, `${JSON.stringify(record)}\n`, 'utf8');
+  return targetPath;
+}
+
+function appendNamedLocalDebugLine(relativePath, line) {
+  if (!ensureDebugDir()) {
+    return null;
+  }
+  const targetPath = resolveDebugLogPath(relativePath);
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const normalizedLine = String(line || '').replace(/\r?\n/g, '\n');
+  fs.appendFileSync(targetPath, normalizedLine.endsWith('\n') ? normalizedLine : `${normalizedLine}\n`, 'utf8');
+  return targetPath;
+}
+
+function getLocalDebugLogPaths(relativePath = null) {
+  if (relativePath) {
+    return {
+      dir: DEBUG_DIR,
+      file: resolveDebugLogPath(relativePath),
+    };
+  }
   return {
     dir: DEBUG_DIR,
     file: DEBUG_LOG_FILE,
@@ -93,5 +142,8 @@ function getLocalDebugLogPaths() {
 module.exports = {
   isLocalDebugLoggingEnabled,
   appendLocalDebugLog,
+  appendNamedLocalDebugLine,
+  appendNamedLocalDebugLog,
   getLocalDebugLogPaths,
+  sanitizeValue,
 };

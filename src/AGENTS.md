@@ -38,6 +38,7 @@
 - The auth/session path now repairs real-user cookies in development and keeps `ensureUser()` from turning real accounts back into guests.
 - The browser no longer mirrors JWT auth into `localStorage` for fetch or socket auth. Requests and sockets now rely on server-owned cookies, while harmless UX state such as queue timers can still live in local storage.
 - Startup Mongo behavior changed in March 2026 to stop mutating Atlas URIs and instead retry with explicit `dbName` plus optional `authSource=admin`.
+- The ML workflow is now run-oriented when `ENABLE_ML_WORKFLOW` is enabled. `/ml-admin`, `src/routes/v1/ml/index.js`, `src/services/ml/runtime.js`, and the admin socket `ml:runProgress` payloads must stay aligned when changing ML behavior.
 
 ## Editing Guidance
 - If you add a new startup dependency, make sure it behaves sensibly when Mongo is unavailable locally. Production exits on startup failure; development generally logs and keeps the server alive.

@@ -5,6 +5,7 @@
 - `public/js/main.js` is a version-aware bootstrap that imports `public/js/modules/app.js`.
 - `public/js/modules/app.js` currently just hands off to the legacy `public/index.js`.
 - Most real client behavior still lives in `public/index.js`.
+- `public/ml-admin.html` is the separate admin-only ML workbench shell, and it loads `public/ml-admin.js`.
 
 ## Current Client Architecture
 - `public/index.js` is still the central live-game controller.
@@ -15,6 +16,7 @@
   - `spectate/` for spectator state and view modeling
   - `ui/` for overlay/button/icon helpers
   - `utils/` for cookies, clocks, time control, and asset preloading
+- The ML workbench uses `public/ml-admin.js` as its page controller and keeps specialized rendering helpers under `public/js/modules/mlAdmin/`.
 
 ## Session and Token Behavior
 - The browser refreshes identity through `/api/auth/session`.
@@ -42,8 +44,14 @@
 - The `clocks` payload sent by the server is the preferred source for displayed time.
 - HTML shells contain `__ASSET_VERSION__`, which the server replaces at request time. Keep that token intact if you edit the HTML templates.
 
+## ML Workbench Notes
+- `/ml-admin` is admin-only and run-oriented now: `Config`, `Runs`, `Replay`, and `Test` all hang off `public/ml-admin.js`.
+- The page consumes `GET /api/v1/ml/workbench`, `GET /api/v1/ml/live`, run detail/replay endpoints, and the `/admin` socket namespace's `ml:runProgress` events.
+- `public/js/modules/mlAdmin/replay.js` renders retained run-game replays in god view. Keep replay payload changes synchronized with the route/runtime producers.
+
 ## Editing Guidance
 - If you split more code out of `public/index.js`, keep the public behavior unchanged first and move logic second.
 - If you change auth or socket payloads, verify both the live board and the spectate flow.
 - If you change browser-side rule presentation, cross-check `rules.md` and the server routes so the UI text still matches the backend.
+- If you change `/ml-admin` payloads or DOM ids, update `public/ml-admin.js`, `public/ml-admin.html`, `public/js/modules/mlAdmin/`, and `docs/ml-admin.md` together.
 - The player history overlay uses `.player-history-sections` as the desktop scroll container. Do not bind wheel handling to individual game-square rows or turn the match list into a separate nested desktop scroll pane unless the layout is being redesigned on purpose.

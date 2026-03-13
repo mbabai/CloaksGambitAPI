@@ -9,6 +9,25 @@ export function formatDate(value) {
   return date.toLocaleString();
 }
 
+export function formatDuration(valueMs) {
+  const totalMs = Number(valueMs);
+  if (!Number.isFinite(totalMs) || totalMs < 0) return '--';
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+  }
+  if (totalSeconds > 0) {
+    return `${totalSeconds}s`;
+  }
+  return `${totalMs.toFixed(0)}ms`;
+}
+
 export function colorToText(color) {
   if (color === 0) return 'White';
   if (color === 1) return 'Black';

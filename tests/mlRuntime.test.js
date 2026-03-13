@@ -1,21 +1,171 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { MlRuntime } = require('../src/services/ml/runtime');
+const { getPythonTrainingBridge } = require('../src/services/ml/pythonTrainingBridge');
 const eventBus = require('../src/eventBus');
+const getServerConfig = require('../src/utils/getServerConfig');
+const setupRoute = require('../src/routes/v1/gameAction/setup');
+const readyRoute = require('../src/routes/v1/gameAction/ready');
 const {
   WHITE,
   BLACK,
   IDENTITIES,
+  IDENTITY_COUNTS,
+  ACTIONS,
+  MOVE_STATES,
   createInitialState,
   getLegalActions,
   applyAction,
+  actionKey,
 } = require('../src/services/ml/engine');
-const { createDefaultModelBundle } = require('../src/services/ml/modeling');
+const {
+  INFERRED_IDENTITIES,
+  createDefaultModelBundle,
+  createOptimizerState,
+  inferIdentityHypotheses,
+  applyRiskBiasToHypotheses,
+} = require('../src/services/ml/modeling');
 const { runHiddenInfoMcts } = require('../src/services/ml/mcts');
 const { BUILTIN_MEDIUM_ID, chooseBuiltinAction } = require('../src/services/ml/builtinBots');
 const SimulationModel = require('../src/models/Simulation');
 const SimulationGameModel = require('../src/models/SimulationGame');
+const GameModel = require('../src/models/Game');
 const { isMlWorkflowEnabled } = require('../src/utils/mlFeatureGate');
 
 const describeMlWorkflow = isMlWorkflowEnabled() ? describe : describe.skip;
+
+function extractPostHandler(router) {
+  const layer = router.stack.find((entry) => (
+    entry
+    && entry.route
+    && entry.route.path === '/'
+    && entry.route.methods
+    && entry.route.methods.post
+    && Array.isArray(entry.route.stack)
+    && entry.route.stack.length
+  ));
+  if (!layer) {
+    throw new Error('POST handler not found on router');
+  }
+  return layer.route.stack[0].handle;
+}
+
+async function callRoutePostHandler(handler, body = {}, session = null) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+
+    const req = {
+      method: 'POST',
+      url: '/',
+      headers: {},
+      body: JSON.parse(JSON.stringify(body)),
+      query: {},
+      params: {},
+      __resolvedSession: session,
+    };
+    const res = {
+      statusCode: 200,
+      headersSent: false,
+      cookie() {
+        return this;
+      },
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        this.headersSent = true;
+        if (this.statusCode >= 400) {
+          const err = new Error(payload?.message || `Request failed (${this.statusCode})`);
+          err.status = this.statusCode;
+          err.payload = payload;
+          finish(reject, err);
+          return this;
+        }
+        finish(resolve, payload || {});
+        return this;
+      },
+    };
+
+    const next = (err) => {
+      if (err) {
+        finish(reject, err);
+      } else {
+        finish(resolve, {});
+      }
+    };
+
+    Promise.resolve(handler(req, res, next))
+      .then(() => {
+        if (!res.headersSent) {
+          finish(resolve, {});
+        }
+      })
+      .catch((err) => {
+        finish(reject, err);
+      });
+  });
+}
+
+function createInternalSession(userId, username, options = {}) {
+  return {
+    userId: String(userId),
+    username,
+    authenticated: false,
+    isGuest: Boolean(options.isGuest),
+    email: '',
+    user: {
+      _id: String(userId),
+      username,
+      isGuest: Boolean(options.isGuest),
+      isBot: Boolean(options.isBot),
+      botDifficulty: options.botDifficulty || null,
+    },
+  };
+}
+
+async function buildDeterministicSetupFromGame(game, color) {
+  const config = typeof getServerConfig.getServerConfigSnapshotSync === 'function'
+    ? getServerConfig.getServerConfigSnapshotSync()
+    : await getServerConfig();
+  const ranks = Number(config?.boardDimensions?.RANKS) || 6;
+  const files = Number(config?.boardDimensions?.FILES) || 5;
+  const kingIdentity = config?.identities?.get
+    ? config.identities.get('KING')
+    : 1;
+  const row = color === WHITE ? 0 : (ranks - 1);
+  const stash = Array.isArray(game?.stashes?.[color]) ? game.stashes[color] : [];
+  const candidates = stash
+    .filter((piece) => Number.isFinite(piece?.identity))
+    .map((piece) => ({
+      color,
+      identity: piece.identity,
+    }));
+  const kingPiece = candidates.find((piece) => piece.identity === kingIdentity) || null;
+  const nonKingPieces = candidates.filter((piece) => piece.identity !== kingIdentity);
+  if (!kingPiece || nonKingPieces.length < files) {
+    throw new Error(`Insufficient stash pieces for test setup (color ${color})`);
+  }
+
+  return {
+    pieces: [kingPiece, ...nonKingPieces.slice(0, files - 1)].map((piece, index) => ({
+      row,
+      col: index,
+      color,
+      identity: piece.identity,
+    })),
+    onDeck: {
+      color,
+      identity: nonKingPieces[files - 1].identity,
+    },
+  };
+}
 
 describeMlWorkflow('ML runtime', () => {
   let runtime;
@@ -23,7 +173,7 @@ describeMlWorkflow('ML runtime', () => {
 
   async function waitFor(condition, timeoutMs = 10000) {
     const started = Date.now();
-    while (!condition()) {
+    while (!(await Promise.resolve(condition()))) {
       if ((Date.now() - started) > timeoutMs) {
         throw new Error('Timed out waiting for condition');
       }
@@ -36,7 +186,1456 @@ describeMlWorkflow('ML runtime', () => {
   });
 
   afterEach(() => {
+    runtime?.dispose?.();
     jest.restoreAllMocks();
+    return getPythonTrainingBridge().close().catch(() => {});
+  });
+
+  function createSmallRunConfig(overrides = {}) {
+    return {
+      label: 'test-run',
+      numSelfplayWorkers: 1,
+      parallelGameWorkers: 1,
+      replayBufferMaxPositions: 32,
+      batchSize: 4,
+      trainingStepsPerCycle: 1,
+      parallelTrainingHeadWorkers: 1,
+      trainingBackend: 'node',
+      trainingDevicePreference: 'auto',
+      checkpointInterval: 1,
+      evalGamesPerCheckpoint: 1,
+      promotionWinrateThreshold: 0,
+      prePromotionTestGames: 1,
+      prePromotionTestWinRate: 0,
+      promotionTestGames: 1,
+      promotionTestWinRate: 0,
+      promotionTestPriorGenerations: 1,
+      maxGenerations: 1,
+      maxSelfPlayGames: 3,
+      maxTrainingSteps: 6,
+      maxFailedPromotions: 6,
+      numMctsSimulationsPerMove: 4,
+      maxDepth: 4,
+      hypothesisCount: 2,
+      ...overrides,
+    };
+  }
+
+  function createPendingChallengeState(actualIdentity) {
+    const state = createInitialState({ seed: 9013, maxPlies: 60 });
+    state.board = Array.from({ length: 6 }, () => Array.from({ length: 5 }, () => null));
+    state.stashes = [[], []];
+    state.onDecks = [null, null];
+    state.captured = [[], []];
+    state.moves = [];
+    state.actions = [];
+    state.daggers = [0, 0];
+    state.onDeckingPlayer = null;
+    state.playerTurn = WHITE;
+    state.toMove = WHITE;
+    state.isActive = true;
+    state.winner = null;
+    state.winReason = null;
+    state.ply = 1;
+    state.movesSinceAction = 0;
+    state.revealedIdentities = {};
+    state.moveHistoryByPiece = Object.fromEntries(
+      Object.keys(state.pieces).map((pieceId) => [pieceId, []]),
+    );
+
+    Object.values(state.pieces).forEach((piece) => {
+      piece.alive = false;
+      piece.zone = 'captured';
+      piece.row = -1;
+      piece.col = -1;
+      piece.capturedBy = piece.color === WHITE ? BLACK : WHITE;
+    });
+
+    const whiteKing = Object.values(state.pieces).find(
+      (piece) => piece.color === WHITE && piece.identity === IDENTITIES.KING,
+    );
+    const blackMover = Object.values(state.pieces).find(
+      (piece) => piece.color === BLACK && piece.identity === IDENTITIES.ROOK,
+    );
+    const blackKing = Object.values(state.pieces).find(
+      (piece) => piece.color === BLACK && piece.identity === IDENTITIES.KING,
+    );
+
+    blackMover.identity = actualIdentity;
+    whiteKing.alive = true;
+    whiteKing.zone = 'board';
+    whiteKing.row = 2;
+    whiteKing.col = 3;
+    whiteKing.capturedBy = null;
+    state.board[2][3] = whiteKing.id;
+
+    blackMover.alive = true;
+    blackMover.zone = 'board';
+    blackMover.row = 5;
+    blackMover.col = 0;
+    blackMover.capturedBy = null;
+    state.board[5][0] = blackMover.id;
+
+    blackKing.alive = true;
+    blackKing.zone = 'board';
+    blackKing.row = 5;
+    blackKing.col = 4;
+    blackKing.capturedBy = null;
+    state.board[5][4] = blackKing.id;
+
+    state.moves = [{
+      player: BLACK,
+      pieceId: blackMover.id,
+      from: { row: 5, col: 0 },
+      to: { row: 2, col: 3 },
+      declaration: IDENTITIES.BISHOP,
+      state: MOVE_STATES.PENDING,
+      timestamp: 0,
+    }];
+    state.actions = [{
+      type: ACTIONS.MOVE,
+      player: BLACK,
+      timestamp: 0,
+      details: {
+        from: { row: 5, col: 0 },
+        to: { row: 2, col: 3 },
+        declaration: IDENTITIES.BISHOP,
+      },
+    }];
+    state.moveHistoryByPiece[blackMover.id] = [{
+      turnIndex: 0,
+      from: { row: 5, col: 0 },
+      to: { row: 2, col: 3 },
+      dr: -3,
+      dc: 3,
+      declaration: IDENTITIES.BISHOP,
+      capture: true,
+      resolvedState: MOVE_STATES.PENDING,
+    }];
+
+    return state;
+  }
+
+  function createLegacyIdentityBundle(seed = 1601) {
+    const legacyBundle = createDefaultModelBundle({ seed });
+    legacyBundle.identity.network.outputSize = 4;
+    const finalLayer = legacyBundle.identity.network.layers[legacyBundle.identity.network.layers.length - 1];
+    finalLayer.outputSize = 4;
+    finalLayer.weights = finalLayer.weights.slice(0, 4);
+    finalLayer.biases = finalLayer.biases.slice(0, 4);
+    delete legacyBundle.identity.inferredIdentities;
+    return legacyBundle;
+  }
+
+  test('continuous runs promote generations and expose replay by generation pair', async () => {
+    const started = await runtime.startRun(createSmallRunConfig());
+    expect(started.run).toBeTruthy();
+    expect(started.live).toBeTruthy();
+
+    await waitFor(() => {
+      const run = runtime.getRunById(started.run.id);
+      return Boolean(run && ['completed', 'stopped', 'error'].includes(run.status));
+    }, 30000);
+
+    const detail = await runtime.getRun(started.run.id);
+    expect(detail).toBeTruthy();
+    expect(detail.status).toBe('completed');
+    expect(detail.bestGeneration).toBeGreaterThanOrEqual(1);
+    expect(detail.generations.length).toBeGreaterThanOrEqual(2);
+    expect(Array.isArray(detail.evaluationSeries)).toBe(true);
+    detail.evaluationSeries.forEach((series) => {
+      series.points.forEach((point) => {
+        expect(point.candidateGeneration).toBeGreaterThan(series.opponentGeneration);
+      });
+    });
+    expect(detail.generationPairs.length).toBeGreaterThan(0);
+
+    const allGames = await runtime.listRunGames(detail.id);
+    expect(allGames.length).toBeGreaterThan(0);
+
+    const rawRun = runtime.getRunById(started.run.id);
+    expect(rawRun).toBeTruthy();
+    expect(rawRun.replayBuffer.policySamples).toHaveLength(0);
+    expect(rawRun.working.modelBundle).toBeNull();
+    expect(rawRun.retainedGames.length).toBeGreaterThan(0);
+    expect(rawRun.retainedGames[0].training).toBeUndefined();
+
+    const pair = detail.generationPairs.find((entry) => entry.generationA !== entry.generationB) || detail.generationPairs[0];
+    const games = await runtime.listRunGames(detail.id, pair.generationA, pair.generationB);
+    expect(games.length).toBeGreaterThan(0);
+
+    const replay = await runtime.getRunReplay(detail.id, games[0].id);
+    expect(replay).toBeTruthy();
+    expect(replay.game.id).toBe(games[0].id);
+    expect(Array.isArray(replay.game.replay)).toBe(true);
+    expect(replay.game.replay.length).toBeGreaterThan(1);
+    expect(replay.game.replay[0].decision?.trace?.actionStats?.length || 0).toBeLessThanOrEqual(8);
+  });
+
+  test('run workbench surfaces defaults, live runs, and stop requests', async () => {
+    const started = await runtime.startRun(createSmallRunConfig({
+      label: 'stoppable-run',
+      maxGenerations: 5,
+      maxSelfPlayGames: 20,
+      maxTrainingSteps: 20,
+    }));
+
+    const workbench = await runtime.getWorkbench();
+    expect(workbench.defaults).toBeTruthy();
+    expect(workbench.defaults).toMatchObject({
+      numSelfplayWorkers: 6,
+      parallelGameWorkers: expect.any(Number),
+      numMctsSimulationsPerMove: 128,
+      maxDepth: 32,
+      hypothesisCount: 4,
+      riskBias: 0,
+      exploration: 1.5,
+      replayBufferMaxPositions: 10000,
+      batchSize: 64,
+      learningRate: 0.0005,
+      weightDecay: 0.0001,
+      gradientClipNorm: 1,
+      trainingStepsPerCycle: 16,
+      parallelTrainingHeadWorkers: expect.any(Number),
+      trainingBackend: 'auto',
+      trainingDevicePreference: 'auto',
+      checkpointInterval: 100,
+      evalGamesPerCheckpoint: 50,
+      promotionWinrateThreshold: 0.55,
+      modelRefreshIntervalForWorkers: 5,
+      generationComparisonStride: 5,
+      olderGenerationSampleProbability: 0.1,
+      maxGenerations: 200,
+      maxSelfPlayGames: 10000,
+      maxTrainingSteps: 200000,
+      maxFailedPromotions: 50,
+    });
+    expect(Array.isArray(workbench.runs.items)).toBe(true);
+    expect(workbench.runs.items.some((run) => run.id === started.run.id)).toBe(true);
+    expect(workbench.live.resourceTelemetry).toBeTruthy();
+    expect(workbench.live.resourceTelemetry.sampleIntervalMs).toBe(2000);
+    expect(workbench.live.resourceTelemetry.windowMs).toBe(600000);
+    expect(workbench.live.resourceTelemetry.cpu.available).toBe(true);
+    expect(Array.isArray(workbench.live.resourceTelemetry.cpu.history)).toBe(true);
+    expect(workbench.live.resourceTelemetry.gpu).toBeTruthy();
+    expect(Array.isArray(workbench.live.runs)).toBe(true);
+    expect(workbench.live.runs.some((run) => run.runId === started.run.id)).toBe(true);
+
+    const stop = await runtime.stopRun(started.run.id);
+    expect(stop.stopped).toBe(true);
+
+    await waitFor(() => {
+      const run = runtime.getRunById(started.run.id);
+      return Boolean(run && ['stopped', 'completed', 'error'].includes(run.status));
+    }, 30000);
+
+    const detail = await runtime.getRun(started.run.id);
+    expect(['stopped', 'completed']).toContain(detail.status);
+  });
+
+  test('new runs can seed from an existing promoted generation and workbench lists it', async () => {
+    await runtime.ensureLoaded();
+
+    const sourceRun = runtime.createRunRecord({
+      id: 'run-seed-source',
+      label: 'Seed Source',
+      config: createSmallRunConfig(),
+    });
+    sourceRun.status = 'completed';
+    sourceRun.updatedAt = '2026-03-13T01:00:00.000Z';
+    sourceRun.generations.push(runtime.createRunGenerationRecord(sourceRun, {
+      generation: 1,
+      label: 'G1',
+      source: 'promoted',
+      approved: true,
+      isBest: true,
+      promotedAt: '2026-03-13T01:00:00.000Z',
+      modelBundle: createDefaultModelBundle({ seed: 404 }),
+    }));
+    sourceRun.bestGeneration = 1;
+    runtime.markRunBestGeneration(sourceRun, 1);
+    runtime.compactTerminalRunState(sourceRun);
+    runtime.state.runs.push(sourceRun);
+
+    const workbench = await runtime.getWorkbench();
+    expect(workbench.seedSources.items.slice(0, 2).map((item) => item.id)).toEqual(['bootstrap', 'random']);
+    expect(workbench.seedSources.items.map((item) => item.id)).toContain('generation:run-seed-source:1');
+
+    const sourceGeneration = runtime.getRunGeneration(sourceRun, 1);
+    const started = await runtime.startRun(createSmallRunConfig({
+      label: 'seeded-from-promoted',
+      seedMode: 'promoted_generation',
+      seedRunId: sourceRun.id,
+      seedGeneration: 1,
+      maxGenerations: 5,
+      maxSelfPlayGames: 20,
+      maxTrainingSteps: 20,
+    }));
+    expect(started.run.config).toMatchObject({
+      seedMode: 'promoted_generation',
+      seedRunId: sourceRun.id,
+      seedGeneration: 1,
+    });
+
+    const seededRun = runtime.getRunById(started.run.id);
+    expect(seededRun).toBeTruthy();
+    expect(seededRun.generations[0].source).toBe('generation:run-seed-source:1');
+    expect(seededRun.generations[0].modelBundle).toEqual(sourceGeneration.modelBundle);
+
+    await runtime.stopRun(started.run.id);
+  });
+
+  test('stopped runs can be continued in place when resumable state exists', async () => {
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      id: 'run-continue',
+      label: 'Continue Me',
+      config: createSmallRunConfig(),
+    });
+    run.status = 'stopped';
+    run.stopReason = 'manual_stop';
+    runtime.state.runs.push(run);
+
+    const pipelineSpy = jest.spyOn(runtime, 'runContinuousPipeline').mockImplementation(async () => {});
+
+    const result = await runtime.continueRun(run.id);
+    expect(result.continued).toBe(true);
+    expect(result.run.id).toBe(run.id);
+    expect(runtime.getRunById(run.id).status).toBe('running');
+    expect(runtime.getRunById(run.id).stopReason).toBeNull();
+
+    await waitFor(() => pipelineSpy.mock.calls.length === 1, 1000);
+  });
+
+  test('stopped runs can continue from their best promoted generation when working state was compacted', async () => {
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      id: 'run-continue-legacy',
+      label: 'Continue Legacy',
+      config: createSmallRunConfig(),
+    });
+    run.generations.push(runtime.createRunGenerationRecord(run, {
+      generation: 1,
+      label: 'G1',
+      source: 'promoted',
+      approved: true,
+      isBest: true,
+      promotedAt: '2026-03-13T02:00:00.000Z',
+      modelBundle: createDefaultModelBundle({ seed: 505 }),
+    }));
+    runtime.markRunBestGeneration(run, 1);
+    run.workerGeneration = 1;
+    run.status = 'stopped';
+    run.stopReason = 'manual_stop';
+    run.working.modelBundle = null;
+    run.working.optimizerState = null;
+    runtime.state.runs.push(run);
+
+    expect(runtime.canContinueRun(run)).toBe(true);
+
+    const pipelineSpy = jest.spyOn(runtime, 'runContinuousPipeline').mockImplementation(async () => {});
+
+    const result = await runtime.continueRun(run.id);
+    expect(result.continued).toBe(true);
+    expect(runtime.getRunById(run.id).status).toBe('running');
+    expect(runtime.getRunById(run.id).working.modelBundle).toEqual(run.generations[1].modelBundle);
+    expect(runtime.getRunById(run.id).working.optimizerState).toBeTruthy();
+    expect(runtime.getRunById(run.id).working.baseGeneration).toBe(1);
+    expect(runtime.getRunById(run.id).workerGeneration).toBe(1);
+
+    await waitFor(() => pipelineSpy.mock.calls.length === 1, 1000);
+  });
+
+  test('identity hypotheses include bombs and obey piece-count limits', () => {
+    const state = createInitialState({ seed: 1201, maxPlies: 80 });
+    const modelBundle = createDefaultModelBundle({ seed: 1202 });
+    const inference = inferIdentityHypotheses(modelBundle, state, WHITE, { count: 8 });
+
+    expect(inference.hiddenPieceIds.length).toBeGreaterThan(0);
+    const sampleProbabilities = inference.perPieceProbabilities[inference.hiddenPieceIds[0]];
+    expect(Object.keys(sampleProbabilities).map((identity) => Number(identity))).toContain(IDENTITIES.BOMB);
+    expect(inference.hypotheses.length).toBeGreaterThan(0);
+
+    inference.hypotheses.forEach((hypothesis) => {
+      const counts = {};
+      Object.values(hypothesis.assignment || {}).forEach((identity) => {
+        counts[identity] = (counts[identity] || 0) + 1;
+      });
+      Object.keys(counts).forEach((identity) => {
+        expect(counts[identity]).toBeLessThanOrEqual(IDENTITY_COUNTS[identity]);
+      });
+      expect(Object.values(hypothesis.assignment || {})).toContain(IDENTITIES.BOMB);
+    });
+  });
+
+  test('risk bias zero is neutral across symmetric hypothesis values', () => {
+    const risk = applyRiskBiasToHypotheses(
+      [{ probability: 0.5 }, { probability: 0.5 }],
+      [1, -1],
+      0,
+    );
+
+    expect(risk.value).toBeCloseTo(0, 8);
+    expect(risk.weights[0]).toBeCloseTo(0.5, 8);
+    expect(risk.weights[1]).toBeCloseTo(0.5, 8);
+  });
+
+  test('ensureLoaded migrates persisted legacy identity heads from 4 outputs to 5', async () => {
+    const now = new Date().toISOString();
+    const legacyBundle = createLegacyIdentityBundle(1601);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-ml-runtime-'));
+    const dataFilePath = path.join(tempDir, 'runtime.json');
+    const persistedState = {
+      version: 3,
+      counters: {
+        snapshot: 2,
+        simulation: 1,
+        game: 1,
+        training: 1,
+        run: 2,
+      },
+      snapshots: [{
+        id: 'snapshot-0001',
+        label: 'Legacy Bootstrap',
+        createdAt: now,
+        updatedAt: now,
+        generation: 0,
+        parentSnapshotId: null,
+        notes: '',
+        modelBundle: legacyBundle,
+        stats: {
+          simulations: 0,
+          games: 0,
+          whiteWins: 0,
+          blackWins: 0,
+          draws: 0,
+          trainingRuns: 0,
+        },
+        losses: [],
+      }],
+      simulations: [],
+      trainingRuns: [],
+      runs: [{
+        id: 'run-0001',
+        label: 'Legacy Run',
+        createdAt: now,
+        updatedAt: now,
+        status: 'completed',
+        stopReason: 'manual_stop',
+        config: {
+          ...createSmallRunConfig(),
+        },
+        bestGeneration: 0,
+        evaluationTargetGeneration: 0,
+        workerGeneration: 0,
+        replayBuffer: {
+          maxPositions: 32,
+          totalPositionsSeen: 0,
+          evictedPositions: 0,
+          summary: null,
+          policySamples: [],
+          valueSamples: [],
+          identitySamples: [],
+        },
+        retainedGames: [],
+        metricsHistory: [],
+        evaluationHistory: [],
+        stats: {
+          cycle: 0,
+          totalSelfPlayGames: 0,
+          totalEvaluationGames: 0,
+          totalTrainingSteps: 0,
+          totalPromotions: 0,
+          failedPromotions: 0,
+          averageGameLength: 0,
+          policyEntropy: 0,
+          moveDiversity: 0,
+        },
+        generations: [{
+          id: 'run-0001:generation:0',
+          generation: 0,
+          label: 'G0',
+          source: 'bootstrap',
+          approved: true,
+          isBest: true,
+          createdAt: now,
+          promotedAt: now,
+          stats: {},
+          latestLoss: null,
+          promotionEvaluation: null,
+          modelBundle: legacyBundle,
+        }],
+        working: {
+          modelBundle: legacyBundle,
+          optimizerState: null,
+          baseGeneration: 0,
+          checkpointIndex: 0,
+          lastLoss: null,
+        },
+      }],
+      activeJobs: {
+        simulation: null,
+        training: null,
+      },
+    };
+    fs.writeFileSync(dataFilePath, JSON.stringify(persistedState, null, 2));
+
+    const persistedRuntime = new MlRuntime({
+      dataFilePath,
+      persist: true,
+      useMongoSimulations: false,
+    });
+
+    try {
+      await persistedRuntime.ensureLoaded();
+      const snapshot = persistedRuntime.getSnapshotById('snapshot-0001');
+      const run = persistedRuntime.getRunById('run-0001');
+      expect(snapshot?.modelBundle?.identity?.network?.outputSize).toBe(INFERRED_IDENTITIES.length);
+      expect(snapshot?.modelBundle?.identity?.inferredIdentities).toEqual(INFERRED_IDENTITIES);
+      expect(run?.generations?.[0]?.modelBundle?.identity?.network?.outputSize).toBe(INFERRED_IDENTITIES.length);
+
+      const savedState = JSON.parse(fs.readFileSync(dataFilePath, 'utf8'));
+      expect(savedState.snapshots[0].modelBundle.identity.network.outputSize).toBe(INFERRED_IDENTITIES.length);
+      expect(savedState.runs[0].generations[0].modelBundle.identity.network.outputSize).toBe(INFERRED_IDENTITIES.length);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('ensureLoaded re-normalizes already-loaded in-memory runs and optimizer checkpoints', async () => {
+    await runtime.ensureLoaded();
+
+    const legacyBundle = createLegacyIdentityBundle(1701);
+    runtime.state.snapshots[0].modelBundle = legacyBundle;
+
+    const run = runtime.createRunRecord({
+      label: 'stale-live-run',
+      config: createSmallRunConfig({
+        trainingBackend: 'node',
+      }),
+    });
+    run.working.modelBundle = createLegacyIdentityBundle(1702);
+    run.working.optimizerState = createOptimizerState(createDefaultModelBundle({ seed: 1703 }));
+    const identityState = run.working.optimizerState.identity.layers[run.working.optimizerState.identity.layers.length - 1];
+    identityState.mWeights = identityState.mWeights.slice(0, 4);
+    identityState.vWeights = identityState.vWeights.slice(0, 4);
+    identityState.mBiases = identityState.mBiases.slice(0, 4);
+    identityState.vBiases = identityState.vBiases.slice(0, 4);
+    run.generations[0].modelBundle = createLegacyIdentityBundle(1704);
+    runtime.state.runs.push(run);
+
+    await runtime.ensureLoaded();
+
+    expect(runtime.state.snapshots[0].modelBundle.identity.network.outputSize).toBe(INFERRED_IDENTITIES.length);
+    expect(run.generations[0].modelBundle.identity.network.outputSize).toBe(INFERRED_IDENTITIES.length);
+    expect(run.working.modelBundle.identity.network.outputSize).toBe(INFERRED_IDENTITIES.length);
+    expect(run.working.optimizerState.identity.layers[run.working.optimizerState.identity.layers.length - 1].mWeights)
+      .toHaveLength(INFERRED_IDENTITIES.length);
+  });
+
+  test('ensureLoaded refreshes persisted state when the data file changed externally', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-ml-refresh-'));
+    const dataFilePath = path.join(tempDir, 'runtime.json');
+    const runtimeA = new MlRuntime({
+      dataFilePath,
+      persist: true,
+      useMongoSimulations: false,
+    });
+
+    try {
+      await runtimeA.ensureLoaded();
+      const run = runtimeA.createRunRecord({
+        id: 'run-refresh',
+        label: 'Refresh Run',
+        config: createSmallRunConfig(),
+      });
+      run.status = 'completed';
+      run.retainedGames = [
+        {
+          id: 'eval-a',
+          createdAt: new Date().toISOString(),
+          phase: 'evaluation',
+          whiteGeneration: 1,
+          blackGeneration: 0,
+          whiteParticipantLabel: 'G1',
+          blackParticipantLabel: 'G0',
+          winner: WHITE,
+          winReason: null,
+          plies: 20,
+        },
+      ];
+      runtimeA.state.runs.push(run);
+      await runtimeA.save();
+
+      const runtimeB = new MlRuntime({
+        dataFilePath,
+        persist: true,
+        useMongoSimulations: false,
+      });
+      await runtimeB.ensureLoaded();
+      expect((await runtimeB.listRunGames('run-refresh')).length).toBe(1);
+
+      run.retainedGames.push({
+        id: 'eval-b',
+        createdAt: new Date().toISOString(),
+        phase: 'evaluation',
+        whiteGeneration: 2,
+        blackGeneration: 1,
+        whiteParticipantLabel: 'G2',
+        blackParticipantLabel: 'G1',
+        winner: WHITE,
+        winReason: null,
+        plies: 24,
+      });
+      await runtimeA.save();
+
+      const refreshed = await runtimeB.listRunGames('run-refresh');
+      expect(refreshed.length).toBe(2);
+      runtimeB.dispose?.();
+    } finally {
+      runtimeA.dispose?.();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('run summaries expose timing stats for replay and live status', () => {
+    const run = runtime.createRunRecord({
+      label: 'timed-run',
+      config: createSmallRunConfig(),
+    });
+    run.createdAt = '2026-03-12T00:00:00.000Z';
+    run.updatedAt = '2026-03-12T00:05:00.000Z';
+    run.status = 'completed';
+    run.stats.averageSelfPlayGameDurationMs = 2400;
+    run.stats.averageEvaluationGameDurationMs = 3100;
+
+    const summary = runtime.summarizeRun(run);
+    const livePayload = runtime.buildRunProgressPayload(run, 'complete');
+
+    expect(summary.averageSelfPlayGameDurationMs).toBe(2400);
+    expect(summary.averageEvaluationGameDurationMs).toBe(3100);
+    expect(summary.elapsedMs).toBe(300000);
+    expect(livePayload.averageSelfPlayGameDurationMs).toBe(2400);
+    expect(livePayload.averageEvaluationGameDurationMs).toBe(3100);
+    expect(livePayload.elapsedMs).toBe(300000);
+  });
+
+  test('run summaries and live payloads expose lastError details', () => {
+    const run = runtime.createRunRecord({
+      label: 'errored-run',
+      config: createSmallRunConfig(),
+    });
+    run.status = 'error';
+    run.stopReason = 'requestedKey is not defined';
+    run.lastError = {
+      message: 'requestedKey is not defined',
+      stack: 'ReferenceError: requestedKey is not defined',
+    };
+
+    const summary = runtime.summarizeRun(run);
+    const livePayload = runtime.buildRunProgressPayload(run, 'error');
+
+    expect(summary.lastError).toMatchObject({
+      message: 'requestedKey is not defined',
+    });
+    expect(livePayload.lastError).toMatchObject({
+      message: 'requestedKey is not defined',
+    });
+  });
+
+  test('timing averages only use games recorded after timing instrumentation is available', () => {
+    const run = runtime.createRunRecord({
+      label: 'timing-migration-run',
+      config: createSmallRunConfig(),
+    });
+    run.stats.totalSelfPlayGames = 500;
+    run.stats.totalEvaluationGames = 600;
+
+    runtime.recordRunGameDurations(run, [
+      { durationMs: 2000 },
+      { durationMs: 4000 },
+    ], 'selfplay');
+    runtime.recordRunGameDurations(run, [
+      { durationMs: 5000 },
+    ], 'evaluation');
+
+    expect(run.stats.timedSelfPlayGames).toBe(2);
+    expect(run.stats.averageSelfPlayGameDurationMs).toBe(3000);
+    expect(run.stats.timedEvaluationGames).toBe(1);
+    expect(run.stats.averageEvaluationGameDurationMs).toBe(5000);
+  });
+
+  test('listRunGames only returns retained evaluation games for replay', async () => {
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      label: 'eval-replay-run',
+      config: createSmallRunConfig(),
+    });
+    run.retainedGames = [
+      {
+        id: 'selfplay-1',
+        createdAt: '2026-03-12T00:00:00.000Z',
+        phase: 'selfplay',
+        whiteGeneration: 1,
+        blackGeneration: 1,
+        whiteParticipantLabel: 'G1',
+        blackParticipantLabel: 'G1',
+        winner: WHITE,
+        winReason: null,
+        plies: 20,
+      },
+      {
+        id: 'eval-1',
+        createdAt: '2026-03-12T00:01:00.000Z',
+        phase: 'evaluation',
+        whiteGeneration: 2,
+        blackGeneration: 1,
+        whiteParticipantLabel: 'G2',
+        blackParticipantLabel: 'G1',
+        winner: WHITE,
+        winReason: null,
+        plies: 24,
+      },
+    ];
+    runtime.state.runs.push(run);
+
+    const games = await runtime.listRunGames(run.id);
+    const gamesViaNullFilter = await runtime.listRunGames(run.id, null, null);
+
+    expect(games).toHaveLength(1);
+    expect(games[0].id).toBe('eval-1');
+    expect(games[0].phase).toBe('evaluation');
+    expect(gamesViaNullFilter).toHaveLength(1);
+    expect(gamesViaNullFilter[0].id).toBe('eval-1');
+
+    const detail = await runtime.getRun(run.id);
+    expect(Array.isArray(detail.recentReplayGames)).toBe(true);
+    expect(detail.recentReplayGames).toHaveLength(1);
+    expect(detail.recentReplayGames[0].id).toBe('eval-1');
+  });
+
+  test('active runs use in-memory retained games for replay reads', async () => {
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      id: 'run-live-replay-read',
+      label: 'Live Replay Read',
+      config: createSmallRunConfig(),
+    });
+    run.status = 'running';
+    run.retainedGames = [
+      {
+        id: 'eval-live-1',
+        createdAt: '2026-03-12T00:02:00.000Z',
+        phase: 'evaluation',
+        whiteGeneration: 2,
+        blackGeneration: 1,
+        whiteParticipantLabel: 'G2',
+        blackParticipantLabel: 'G1',
+        winner: WHITE,
+        winReason: null,
+        plies: 24,
+        replay: [{ ply: 0, board: [] }, { ply: 1, board: [] }],
+      },
+    ];
+    runtime.state.runs.push(run);
+
+    const syncSpy = jest.spyOn(runtime, 'syncPersistedStateForRead');
+
+    const games = await runtime.listRunGames(run.id);
+    const replay = await runtime.getRunReplay(run.id, 'eval-live-1');
+
+    expect(syncSpy).not.toHaveBeenCalled();
+    expect(games).toHaveLength(1);
+    expect(games[0].id).toBe('eval-live-1');
+    expect(replay).toBeTruthy();
+    expect(replay.game.id).toBe('eval-live-1');
+    expect(replay.game.replay).toHaveLength(2);
+  });
+
+  test('completed runs already loaded in memory do not resync persisted state for replay reads', async () => {
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      id: 'run-complete-replay-read',
+      label: 'Complete Replay Read',
+      config: createSmallRunConfig(),
+    });
+    run.status = 'completed';
+    run.retainedGames = [
+      {
+        id: 'eval-complete-1',
+        createdAt: '2026-03-12T00:03:00.000Z',
+        phase: 'evaluation',
+        whiteGeneration: 3,
+        blackGeneration: 2,
+        whiteParticipantLabel: 'G3',
+        blackParticipantLabel: 'G2',
+        winner: WHITE,
+        winReason: null,
+        plies: 28,
+        replay: [{ ply: 0, board: [] }, { ply: 1, board: [] }],
+      },
+    ];
+    runtime.state.runs.push(run);
+
+    const syncSpy = jest.spyOn(runtime, 'syncPersistedStateForRead');
+
+    const detail = await runtime.getRun(run.id);
+    const games = await runtime.listRunGames(run.id);
+    const replay = await runtime.getRunReplay(run.id, 'eval-complete-1');
+
+    expect(syncSpy).not.toHaveBeenCalled();
+    expect(Array.isArray(detail.recentReplayGames)).toBe(true);
+    expect(detail.recentReplayGames).toHaveLength(1);
+    expect(detail.recentReplayGames[0].id).toBe('eval-complete-1');
+    expect(games).toHaveLength(1);
+    expect(games[0].id).toBe('eval-complete-1');
+    expect(replay).toBeTruthy();
+    expect(replay.game.id).toBe('eval-complete-1');
+    expect(replay.game.replay).toHaveLength(2);
+  });
+
+  test('startTestGame creates a live game against a chosen generation and the bot auto-readies', async () => {
+    const mongoose = require('mongoose');
+    const gameChangedEvents = [];
+    const handleGameChanged = (payload) => {
+      gameChangedEvents.push(payload);
+    };
+    eventBus.on('gameChanged', handleGameChanged);
+
+    try {
+      await runtime.ensureLoaded();
+
+      const run = runtime.createRunRecord({
+        id: 'run-test-live',
+        label: 'Live Test Run',
+        config: createSmallRunConfig(),
+      });
+      run.status = 'completed';
+      runtime.state.runs.push(run);
+
+      const humanUserId = new mongoose.Types.ObjectId().toString();
+      const launched = await runtime.startTestGame({
+        runId: run.id,
+        generation: 0,
+        userId: humanUserId,
+        username: 'Admin',
+        sidePreference: 'black',
+      });
+
+      expect(launched.runId).toBe(run.id);
+      expect(launched.generation).toBe(0);
+      expect(launched.userColor).toBe(BLACK);
+
+      let latestGame = null;
+      await waitFor(async () => {
+        latestGame = await GameModel.findById(launched.gameId).lean();
+        return Boolean(
+          latestGame
+          && latestGame.setupComplete?.[WHITE]
+          && latestGame.playersReady?.[WHITE]
+        );
+      }, 10000);
+
+      expect(latestGame).toBeTruthy();
+      expect(runtime.liveTestGameConfigs.get(launched.gameId)?.runId).toBe(run.id);
+      expect(runtime.liveTestGameConfigs.get(launched.gameId)?.generation).toBe(0);
+      expect(Array.isArray(latestGame.players)).toBe(true);
+      expect(latestGame.players).toHaveLength(2);
+
+      const relevantEvents = gameChangedEvents.filter((payload) => {
+        const id = payload?.game?._id?.toString?.() || payload?.gameId || null;
+        return id === launched.gameId;
+      });
+      expect(relevantEvents.some((payload) => payload?.game?.setupComplete?.[WHITE])).toBe(true);
+      expect(relevantEvents.some((payload) => payload?.game?.playersReady?.[WHITE])).toBe(true);
+    } finally {
+      eventBus.off('gameChanged', handleGameChanged);
+    }
+  });
+
+  test('scheduleMlTestGame logs loop failures without rejecting the background task', async () => {
+    const loopError = new Error("Not this player's turn");
+    loopError.status = 400;
+    const loopSpy = jest.spyOn(runtime, 'runMlTestGameLoop').mockRejectedValue(loopError);
+    const logSpy = jest.spyOn(runtime, 'logMlEvent').mockImplementation(() => {});
+
+    await expect(runtime.scheduleMlTestGame('game-loop-error')).resolves.toBe(false);
+
+    expect(loopSpy).toHaveBeenCalledWith('game-loop-error');
+    expect(logSpy).toHaveBeenCalledWith('test_game_loop_error', expect.objectContaining({
+      gameId: 'game-loop-error',
+      error: expect.objectContaining({
+        message: "Not this player's turn",
+        statusCode: 400,
+      }),
+    }));
+    expect(runtime.liveTestGameTasks.has('game-loop-error')).toBe(false);
+  });
+
+  test('runMlTestGameStep continues after a transient live turn rejection', async () => {
+    const mongoose = require('mongoose');
+    const setupHandler = extractPostHandler(setupRoute);
+    const readyHandler = extractPostHandler(readyRoute);
+    await runtime.ensureLoaded();
+
+    jest.spyOn(runtime, 'scheduleMlTestGame').mockResolvedValue(false);
+
+    const run = runtime.createRunRecord({
+      id: 'run-live-turn-retry',
+      label: 'Live Retry Run',
+      config: createSmallRunConfig(),
+    });
+    run.status = 'completed';
+    runtime.state.runs.push(run);
+
+    const humanUserId = new mongoose.Types.ObjectId().toString();
+    const launched = await runtime.startTestGame({
+      runId: run.id,
+      generation: 0,
+      userId: humanUserId,
+      username: 'Admin',
+      sidePreference: 'black',
+    });
+
+    const mlTestConfig = runtime.liveTestGameConfigs.get(launched.gameId);
+    expect(mlTestConfig).toBeTruthy();
+
+    await expect(runtime.runMlTestGameStep(launched.gameId)).resolves.toBe(true);
+
+    let liveGame = await GameModel.findById(launched.gameId).lean();
+    expect(liveGame.setupComplete?.[WHITE]).toBe(true);
+
+    const humanSetup = await buildDeterministicSetupFromGame(liveGame, BLACK);
+    const humanSession = createInternalSession(humanUserId, 'Admin', {
+      isGuest: false,
+      isBot: false,
+    });
+    await callRoutePostHandler(setupHandler, {
+      gameId: launched.gameId,
+      color: BLACK,
+      pieces: humanSetup.pieces,
+      onDeck: humanSetup.onDeck,
+    }, humanSession);
+
+    await expect(runtime.runMlTestGameStep(launched.gameId)).resolves.toBe(true);
+
+    await callRoutePostHandler(readyHandler, {
+      gameId: launched.gameId,
+      color: BLACK,
+    }, humanSession);
+
+    liveGame = await GameModel.findById(launched.gameId).lean();
+    expect(liveGame.playersReady?.[WHITE]).toBe(true);
+    expect(liveGame.playersReady?.[BLACK]).toBe(true);
+
+    const originalFindById = GameModel.findById.bind(GameModel);
+    const chooseSpy = jest.spyOn(runtime, 'chooseActionForParticipant');
+    let targetedFindCall = 0;
+    jest.spyOn(GameModel, 'findById').mockImplementation((id, ...args) => {
+      if (String(id) !== launched.gameId) {
+        return originalFindById(id, ...args);
+      }
+      targetedFindCall += 1;
+      const result = originalFindById(id, ...args);
+      if (targetedFindCall === 2) {
+        return Promise.resolve(result).then((doc) => {
+          if (doc) {
+            const copy = typeof doc.toObject === 'function'
+              ? doc.toObject()
+              : JSON.parse(JSON.stringify(doc));
+            copy.playerTurn = BLACK;
+            return copy;
+          }
+          return doc;
+        });
+      }
+      return result;
+    });
+
+    await expect(runtime.runMlTestGameStep(launched.gameId)).resolves.toBe(true);
+
+    liveGame = await GameModel.findById(launched.gameId).lean();
+    expect(chooseSpy).toHaveBeenCalledTimes(1);
+    expect(targetedFindCall).toBeGreaterThanOrEqual(4);
+    expect(liveGame.moves.length).toBeGreaterThan(0);
+    expect(liveGame.playerTurn).toBe(BLACK);
+    expect(liveGame.isActive).toBe(true);
+  });
+
+  test('promoted bot catalog can enable a generation for the normal bot flow', async () => {
+    const mongoose = require('mongoose');
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      id: 'run-bot-catalog',
+      label: 'Catalog Run',
+      config: createSmallRunConfig(),
+    });
+    run.status = 'completed';
+    runtime.state.runs.push(run);
+
+    const initialCatalog = await runtime.getPromotedBotCatalog();
+    expect(initialCatalog.items.map((item) => item.id)).toContain('generation:run-bot-catalog:0');
+    expect(initialCatalog.enabledCount).toBe(0);
+
+    const updatedCatalog = await runtime.updatePromotedBotCatalog(['generation:run-bot-catalog:0']);
+    expect(updatedCatalog.enabledIds).toEqual(['generation:run-bot-catalog:0']);
+
+    const publicCatalog = await runtime.listEnabledPromotedBotCatalog();
+    expect(publicCatalog).toHaveLength(1);
+    expect(publicCatalog[0]).toMatchObject({
+      id: 'generation:run-bot-catalog:0',
+      label: 'Catalog Run G0',
+      playable: true,
+    });
+
+    const humanUserId = new mongoose.Types.ObjectId().toString();
+    const launched = await runtime.startPromotedBotGame({
+      botId: 'generation:run-bot-catalog:0',
+      userId: humanUserId,
+      username: 'GuestOne',
+    });
+
+    expect(launched.status).toBe('matched');
+    expect(launched.botId).toBe('generation:run-bot-catalog:0');
+    const latestGame = await GameModel.findById(launched.gameId).lean();
+    expect(latestGame).toBeTruthy();
+    expect(runtime.liveTestGameConfigs.get(launched.gameId)?.botId).toBe('generation:run-bot-catalog:0');
+  });
+
+  test('terminal runs can be deleted while active runs are protected', async () => {
+    const started = await runtime.startRun(createSmallRunConfig({
+      label: 'deletable-run',
+      maxGenerations: 5,
+      maxSelfPlayGames: 20,
+      maxTrainingSteps: 20,
+    }));
+
+    const activeDelete = await runtime.deleteRun(started.run.id);
+    expect(activeDelete).toMatchObject({
+      deleted: false,
+      reason: 'run_active',
+    });
+
+    const stop = await runtime.stopRun(started.run.id);
+    expect(stop.stopped).toBe(true);
+
+    await waitFor(() => {
+      const run = runtime.getRunById(started.run.id);
+      return Boolean(run && ['stopped', 'completed', 'error'].includes(run.status));
+    }, 30000);
+
+    const deleted = await runtime.deleteRun(started.run.id);
+    expect(deleted).toEqual({
+      deleted: true,
+      id: started.run.id,
+    });
+    expect(runtime.getRunById(started.run.id)).toBeNull();
+  });
+
+  test('only one active continuous run is allowed at a time', async () => {
+    const first = await runtime.startRun(createSmallRunConfig({
+      label: 'first-run',
+      maxGenerations: 5,
+      maxSelfPlayGames: 20,
+      maxTrainingSteps: 20,
+    }));
+    expect(first.run).toBeTruthy();
+
+    await expect(runtime.startRun(createSmallRunConfig({
+      label: 'second-run',
+      maxGenerations: 5,
+      maxSelfPlayGames: 20,
+      maxTrainingSteps: 20,
+    }))).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'active_run_conflict',
+    });
+
+    const forced = await runtime.startRun(createSmallRunConfig({
+      label: 'second-run',
+      forceStopOtherRuns: true,
+      maxGenerations: 1,
+      maxSelfPlayGames: 3,
+      maxTrainingSteps: 6,
+    }));
+    expect(forced.run).toBeTruthy();
+    expect(forced.run.id).not.toBe(first.run.id);
+    expect(runtime.getRunById(forced.run.id)).toBeTruthy();
+  });
+
+  test('evaluation uses staged promotion gates against prior promoted generations', async () => {
+    const run = runtime.createRunRecord({
+      label: 'gate-run',
+      config: createSmallRunConfig({
+        prePromotionTestGames: 10,
+        prePromotionTestWinRate: 0.55,
+        promotionTestGames: 20,
+        promotionTestWinRate: 0.55,
+        promotionTestPriorGenerations: 3,
+      }),
+    });
+    for (let generation = 1; generation <= 5; generation += 1) {
+      run.generations.push(runtime.createRunGenerationRecord(run, {
+        generation,
+        label: `G${generation}`,
+        source: generation === 5 ? 'promoted' : 'selfplay',
+        approved: true,
+        isBest: generation === 5,
+        modelBundle: createDefaultModelBundle({ seed: 100 + generation }),
+      }));
+    }
+    run.bestGeneration = 5;
+    run.workerGeneration = 5;
+    run.evaluationTargetGeneration = 0;
+
+    const candidateGeneration = runtime.createRunGenerationRecord(run, {
+      generation: 6,
+      label: 'G6',
+      source: 'candidate',
+      approved: false,
+      modelBundle: createDefaultModelBundle({ seed: 123 }),
+    });
+
+    const playSpy = jest.spyOn(runtime, 'playRunGenerationGames').mockImplementation(async (_run, options) => {
+      expect(options.whiteGeneration).toBe(6);
+      if (options.blackGeneration === 0) {
+        expect(options.gameCount).toBe(50);
+        return Array.from({ length: 50 }, (_, index) => ({
+          id: `gen0-info-${index}`,
+          winner: index < 35 ? WHITE : BLACK,
+          whiteGeneration: 6,
+          blackGeneration: 0,
+        }));
+      }
+      if (options.blackGeneration === 5) {
+        if (options.gameCount === 10) {
+          return [
+            ...Array.from({ length: 6 }, (_, index) => ({
+              id: `pre-promo-win-${index}`,
+              winner: WHITE,
+              whiteGeneration: 6,
+              blackGeneration: 5,
+            })),
+            ...Array.from({ length: 4 }, (_, index) => ({
+              id: `pre-promo-loss-${index}`,
+              winner: BLACK,
+              whiteGeneration: 6,
+              blackGeneration: 5,
+            })),
+          ];
+        }
+        expect(options.gameCount).toBe(20);
+        return [
+          ...Array.from({ length: 12 }, (_, index) => ({
+            id: `promo-best-win-${index}`,
+            winner: WHITE,
+            whiteGeneration: 6,
+            blackGeneration: 5,
+          })),
+          ...Array.from({ length: 8 }, (_, index) => ({
+            id: `promo-best-loss-${index}`,
+            winner: BLACK,
+            whiteGeneration: 6,
+            blackGeneration: 5,
+          })),
+        ];
+      }
+      expect(options.gameCount).toBe(20);
+      return [
+        ...Array.from({ length: 12 }, (_, index) => ({
+          id: `promo-${options.blackGeneration}-win-${index}`,
+          winner: WHITE,
+          whiteGeneration: 6,
+          blackGeneration: options.blackGeneration,
+        })),
+        ...Array.from({ length: 8 }, (_, index) => ({
+          id: `promo-${options.blackGeneration}-loss-${index}`,
+          winner: BLACK,
+          whiteGeneration: 6,
+          blackGeneration: options.blackGeneration,
+        })),
+      ];
+    });
+    jest.spyOn(runtime, 'retainRunGames').mockImplementation(() => {});
+
+    const evaluation = await runtime.evaluateRunGeneration(run, candidateGeneration, { cancelRequested: false });
+
+    expect(playSpy).toHaveBeenCalledTimes(5);
+    expect(evaluation.gen0Info.generation).toBe(0);
+    expect(evaluation.gen0Info.games).toBe(50);
+    expect(evaluation.gen0Info.winRate).toBe(0.7);
+    expect(evaluation.targetGeneration).toBe(0);
+    expect(evaluation.targetAdvanced).toBe(false);
+    expect(evaluation.prePromotionTest.generation).toBe(5);
+    expect(evaluation.prePromotionTest.games).toBe(10);
+    expect(evaluation.prePromotionTest.winRate).toBe(0.6);
+    expect(evaluation.prePromotionPassed).toBe(true);
+    expect(evaluation.promotionTests).toHaveLength(3);
+    expect(evaluation.promotionTests.map((entry) => entry.generation)).toEqual([5, 4, 3]);
+    expect(evaluation.promotionTests.every((entry) => entry.games === 20)).toBe(true);
+    expect(evaluation.promotionTests.every((entry) => entry.winRate === 0.6)).toBe(true);
+    expect(evaluation.promotionTests.every((entry) => entry.passed)).toBe(true);
+    expect(evaluation.promoted).toBe(true);
+    expect(Array.isArray(evaluation.tooltipSections)).toBe(true);
+    expect(evaluation.tooltipSections).toHaveLength(5);
+  });
+
+  test('baseline target advances after three consecutive perfect sweeps and is reused on the next evaluation', async () => {
+    const run = runtime.createRunRecord({
+      label: 'baseline-advance',
+      config: createSmallRunConfig({
+        promotionTestPriorGenerations: 1,
+      }),
+    });
+    for (let generation = 1; generation <= 3; generation += 1) {
+      run.generations.push(runtime.createRunGenerationRecord(run, {
+        generation,
+        label: `G${generation}`,
+        source: 'promoted',
+        approved: true,
+        isBest: generation === 3,
+        modelBundle: createDefaultModelBundle({ seed: 200 + generation }),
+      }));
+    }
+    run.bestGeneration = 3;
+    run.workerGeneration = 3;
+    run.evaluationTargetGeneration = 0;
+    run.evaluationHistory.push(
+      {
+        targetGeneration: 0,
+        baselineInfo: {
+          generation: 0,
+          games: 50,
+          wins: 50,
+          losses: 0,
+          draws: 0,
+          winRate: 1,
+        },
+        againstTarget: {
+          generation: 0,
+          games: 50,
+          wins: 50,
+          losses: 0,
+          draws: 0,
+          winRate: 1,
+        },
+      },
+      {
+        targetGeneration: 0,
+        baselineInfo: {
+          generation: 0,
+          games: 50,
+          wins: 50,
+          losses: 0,
+          draws: 0,
+          winRate: 1,
+        },
+        againstTarget: {
+          generation: 0,
+          games: 50,
+          wins: 50,
+          losses: 0,
+          draws: 0,
+          winRate: 1,
+        },
+      },
+    );
+
+    const playSpy = jest.spyOn(runtime, 'playRunGenerationGames').mockImplementation(async (_run, options) => {
+      if (options.whiteGeneration === 4 && options.blackGeneration === 0) {
+        expect(options.gameCount).toBe(50);
+        return Array.from({ length: 50 }, (_, index) => ({
+          id: `baseline-g4-${index}`,
+          winner: WHITE,
+          whiteGeneration: 4,
+          blackGeneration: 0,
+        }));
+      }
+      if (options.whiteGeneration === 5 && options.blackGeneration === 1) {
+        expect(options.gameCount).toBe(50);
+        return Array.from({ length: 50 }, (_, index) => ({
+          id: `baseline-g5-${index}`,
+          winner: WHITE,
+          whiteGeneration: 5,
+          blackGeneration: 1,
+        }));
+      }
+      return [{
+        id: `eval-${options.whiteGeneration}-${options.blackGeneration}`,
+        winner: WHITE,
+        whiteGeneration: options.whiteGeneration,
+        blackGeneration: options.blackGeneration,
+      }];
+    });
+    jest.spyOn(runtime, 'retainRunGames').mockImplementation(() => {});
+
+    const candidateGeneration4 = runtime.createRunGenerationRecord(run, {
+      generation: 4,
+      label: 'G4',
+      source: 'candidate',
+      approved: false,
+      modelBundle: createDefaultModelBundle({ seed: 304 }),
+    });
+    const evaluation4 = await runtime.evaluateRunGeneration(run, candidateGeneration4, { cancelRequested: false });
+    run.evaluationHistory.push(evaluation4);
+
+    expect(evaluation4.gen0Info.generation).toBe(0);
+    expect(evaluation4.gen0Info.games).toBe(50);
+    expect(evaluation4.gen0Info.winRate).toBe(1);
+    expect(evaluation4.targetGeneration).toBe(0);
+    expect(evaluation4.targetPerfectSweepStreak).toBe(3);
+    expect(evaluation4.targetAdvanced).toBe(true);
+    expect(evaluation4.targetAdvancedToGeneration).toBe(1);
+    expect(run.evaluationTargetGeneration).toBe(1);
+
+    const candidateGeneration5 = runtime.createRunGenerationRecord(run, {
+      generation: 5,
+      label: 'G5',
+      source: 'candidate',
+      approved: false,
+      modelBundle: createDefaultModelBundle({ seed: 305 }),
+    });
+    const evaluation5 = await runtime.evaluateRunGeneration(run, candidateGeneration5, { cancelRequested: false });
+
+    expect(evaluation5.gen0Info.generation).toBe(1);
+    expect(evaluation5.gen0Info.games).toBe(50);
+    expect(evaluation5.targetGeneration).toBe(1);
+    expect(playSpy).toHaveBeenCalledWith(run, expect.objectContaining({
+      whiteGeneration: 5,
+      blackGeneration: 1,
+      gameCount: 50,
+    }));
+  });
+
+  test('hidden-info search does not depend on unrevealed ground-truth identities', () => {
+    const truthfulState = createPendingChallengeState(IDENTITIES.BISHOP);
+    const bluffState = createPendingChallengeState(IDENTITIES.ROOK);
+    const modelBundle = createDefaultModelBundle({ seed: 1301 });
+
+    const truthfulSearch = runHiddenInfoMcts(modelBundle, truthfulState, {
+      rootPlayer: WHITE,
+      iterations: 64,
+      maxDepth: 8,
+      hypothesisCount: 4,
+      riskBias: 0,
+      exploration: 1.5,
+    });
+    const bluffSearch = runHiddenInfoMcts(modelBundle, bluffState, {
+      rootPlayer: WHITE,
+      iterations: 64,
+      maxDepth: 8,
+      hypothesisCount: 4,
+      riskBias: 0,
+      exploration: 1.5,
+    });
+
+    expect(actionKey(truthfulSearch.action)).toBe(actionKey(bluffSearch.action));
+    expect(truthfulSearch.valueEstimate).toBeCloseTo(bluffSearch.valueEstimate, 8);
+  });
+
+  test('playRunGenerationGames supports parallel game workers with unique ids', async () => {
+    const run = runtime.createRunRecord({
+      label: 'parallel-games',
+      config: createSmallRunConfig({
+        numSelfplayWorkers: 2,
+        parallelGameWorkers: 2,
+      }),
+    });
+
+    const games = await runtime.playRunGenerationGames(run, {
+      phase: 'selfplay',
+      whiteGeneration: 0,
+      blackGeneration: 0,
+      gameCount: 2,
+      checkpointIndex: 0,
+    });
+
+    expect(games).toHaveLength(2);
+    expect(new Set(games.map((game) => game.id)).size).toBe(2);
+    games.forEach((game) => {
+      expect(Array.isArray(game.replay)).toBe(true);
+      expect(game.replay.length).toBeGreaterThan(1);
+    });
+  });
+
+  test('trainRunWorkingModel supports parallel training head workers', async () => {
+    const run = runtime.createRunRecord({
+      label: 'parallel-training',
+      config: createSmallRunConfig({
+        parallelTrainingHeadWorkers: 3,
+      }),
+    });
+
+    const game = await runtime.runSingleGame({
+      whiteParticipant: runtime.createGenerationParticipant(run, 0),
+      blackParticipant: runtime.createGenerationParticipant(run, 0),
+      seed: 4242,
+      iterations: 4,
+      maxDepth: 4,
+      hypothesisCount: 2,
+      riskBias: 0,
+      exploration: 1.5,
+      maxPlies: 40,
+    });
+    runtime.appendRunReplayBuffer(run, game.training, {
+      generation: 0,
+      createdAt: game.createdAt,
+    });
+
+    const losses = await runtime.trainRunWorkingModel(run, { cancelRequested: false });
+
+    expect(losses).toHaveLength(1);
+    expect(run.stats.totalTrainingSteps).toBe(1);
+    expect(run.working.lastLoss).toMatchObject({
+      step: 1,
+    });
+  });
+
+  test('runSingleGame keeps the requested action key available for live-route fallback logging', async () => {
+    const run = runtime.createRunRecord({
+      label: 'requested-key-regression',
+      config: createSmallRunConfig(),
+    });
+    const chooseSpy = jest.spyOn(runtime, 'chooseActionForParticipant').mockImplementation((_participant, observationState) => {
+      const legalActions = getLegalActions(observationState, observationState.playerTurn);
+      const action = legalActions[0];
+      return {
+        action,
+        trace: {
+          actionStats: [{ actionKey: actionKey(action) }],
+        },
+        valueEstimate: 0,
+        trainingRecord: {
+          player: observationState.playerTurn,
+        },
+      };
+    });
+
+    const game = await runtime.runSingleGame({
+      whiteParticipant: runtime.createGenerationParticipant(run, 0),
+      blackParticipant: runtime.createGenerationParticipant(run, 0),
+      seed: 5252,
+      iterations: 2,
+      maxDepth: 3,
+      hypothesisCount: 2,
+      riskBias: 0,
+      exploration: 1.25,
+      maxPlies: 12,
+    });
+
+    const firstDecision = game.replay.find((frame) => frame?.decision?.trainingRecord);
+    expect(chooseSpy).toHaveBeenCalled();
+    expect(firstDecision?.decision?.trace?.liveRoute?.fallbackUsed).toBe(false);
+    expect(firstDecision?.decision?.trainingRecord).toMatchObject({
+      player: WHITE,
+    });
   });
 
   test('bootstraps snapshots and stores replayed simulations', async () => {
@@ -106,6 +1705,72 @@ describeMlWorkflow('ML runtime', () => {
     expect(lossHistory.length).toBeGreaterThan(0);
   });
 
+  test('python-trained snapshots still run through Node CPU inference', async () => {
+    const bridge = getPythonTrainingBridge();
+    const capabilities = await bridge.getCapabilities();
+    expect(capabilities).toBeTruthy();
+
+    const baseBundle = createDefaultModelBundle({ seed: 4244 });
+    const game = await runtime.runSingleGame({
+      whiteParticipant: {
+        id: 'snapshot:test-white',
+        type: 'snapshot',
+        label: 'Test White',
+        snapshotId: 'snapshot-test-white',
+        modelBundle: createDefaultModelBundle({ seed: 5001 }),
+      },
+      blackParticipant: {
+        id: 'snapshot:test-black',
+        type: 'snapshot',
+        label: 'Test Black',
+        snapshotId: 'snapshot-test-black',
+        modelBundle: createDefaultModelBundle({ seed: 5002 }),
+      },
+      seed: 4245,
+      iterations: 2,
+      maxDepth: 3,
+      hypothesisCount: 2,
+      riskBias: 0,
+      exploration: 1.5,
+      maxPlies: 20,
+    });
+
+    const trainingResult = await runtime.trainModelBundleBatch({
+      modelBundle: baseBundle,
+      optimizerState: null,
+      samples: {
+        policySamples: (game.training?.policySamples || []).slice(0, 4),
+        valueSamples: (game.training?.valueSamples || []).slice(0, 4),
+        identitySamples: (game.training?.identitySamples || []).slice(0, 4),
+      },
+      epochs: 1,
+      batchSize: 4,
+      learningRate: 0.01,
+      weightDecay: 0.0001,
+      gradientClipNorm: 5,
+      trainingBackend: 'python',
+      trainingDevicePreference: 'cpu',
+    });
+
+    expect(trainingResult.modelBundle).toBeTruthy();
+    expect(trainingResult.history).toHaveLength(1);
+    expect(trainingResult.backend).toBe('python');
+    expect(trainingResult.device).toBe('cpu');
+
+    const state = createInitialState({ seed: 4246, maxPlies: 60 });
+    const search = runHiddenInfoMcts(trainingResult.modelBundle, state, {
+      rootPlayer: WHITE,
+      iterations: 8,
+      maxDepth: 6,
+      hypothesisCount: 3,
+      riskBias: 0,
+      exploration: 1.5,
+    });
+
+    expect(search.action).toBeTruthy();
+    expect(getLegalActions(state, WHITE).some((action) => actionKey(action) === actionKey(search.action))).toBe(true);
+  }, 120000);
+
   test('background simulation jobs complete and expose live status', async () => {
     const snapshots = await runtime.listSnapshots();
     const baseSnapshotId = snapshots[0].id;
@@ -128,6 +1793,9 @@ describeMlWorkflow('ML runtime', () => {
     const live = await runtime.getLiveStatus();
     expect(live.simulation).toBeTruthy();
     expect(live.simulation.simulationId).toBe(started.simulation.id);
+    expect(live.resourceTelemetry).toBeTruthy();
+    expect(live.resourceTelemetry.cpu.available).toBe(true);
+    expect(Array.isArray(live.resourceTelemetry.cpu.history)).toBe(true);
 
     await waitFor(() => !runtime.state.activeJobs.simulation, 30000);
     const completed = await runtime.getSimulation(started.simulation.id);
@@ -165,6 +1833,8 @@ describeMlWorkflow('ML runtime', () => {
     const live = await runtime.getLiveStatus();
     expect(live.training).toBeTruthy();
     expect(live.training.trainingRunId).toBe(started.trainingRun.id);
+    expect(live.resourceTelemetry).toBeTruthy();
+    expect(live.resourceTelemetry.cpu.available).toBe(true);
 
     await waitFor(() => !runtime.state.activeJobs.training, 30000);
     const run = runtime.getInMemoryTrainingRun(started.trainingRun.id);

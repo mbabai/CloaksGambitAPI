@@ -17,6 +17,7 @@ const {
   findKing,
   distanceToThrone,
 } = require('./engine');
+const { ensureEncodedState } = require('./stateEncoding');
 const {
   addL2Penalty,
   applyAdamUpdate,
@@ -105,6 +106,7 @@ const INFERRED_IDENTITIES = Object.freeze([
   IDENTITIES.ROOK,
   IDENTITIES.BISHOP,
   IDENTITIES.KNIGHT,
+  IDENTITIES.BOMB,
 ]);
 
 const POLICY_HIDDEN_SIZES = Object.freeze([24]);
@@ -251,6 +253,59 @@ function convertLegacyIdentityNetwork(weightsByIdentity = {}) {
   return network;
 }
 
+function needsIdentityNetworkMigration(network) {
+  if (!network || !Array.isArray(network.layers) || !network.layers.length) {
+    return true;
+  }
+  if (Number(network.inputSize || 0) !== IDENTITY_FEATURES.length) {
+    return true;
+  }
+  if (Number(network.outputSize || 0) !== INFERRED_IDENTITIES.length) {
+    return true;
+  }
+  const finalLayer = network.layers[network.layers.length - 1] || null;
+  if (Number(finalLayer?.outputSize || 0) !== INFERRED_IDENTITIES.length) {
+    return true;
+  }
+  return false;
+}
+
+function migrateIdentityNetwork(network, seed = Date.now()) {
+  const source = cloneNetwork(network || createIdentityNetwork(seed));
+  const hiddenSizes = Array.isArray(source.hiddenSizes)
+    ? source.hiddenSizes
+      .map((size) => Math.max(1, Math.floor(size)))
+      .filter(Boolean)
+    : [];
+  const target = createMlp({
+    inputSize: IDENTITY_FEATURES.length,
+    hiddenSizes,
+    outputSize: INFERRED_IDENTITIES.length,
+    seed,
+  });
+
+  const sharedLayerCount = Math.min(source.layers.length, target.layers.length);
+  for (let layerIdx = 0; layerIdx < sharedLayerCount; layerIdx += 1) {
+    const sourceLayer = source.layers[layerIdx];
+    const targetLayer = target.layers[layerIdx];
+    const sharedOutputs = Math.min(
+      Math.max(0, Number(sourceLayer?.outputSize || 0)),
+      Math.max(0, Number(targetLayer?.outputSize || 0)),
+    );
+    const sharedInputs = Math.min(
+      Math.max(0, Number(sourceLayer?.inputSize || 0)),
+      Math.max(0, Number(targetLayer?.inputSize || 0)),
+    );
+    for (let out = 0; out < sharedOutputs; out += 1) {
+      for (let input = 0; input < sharedInputs; input += 1) {
+        targetLayer.weights[out][input] = Number(sourceLayer?.weights?.[out]?.[input] || 0);
+      }
+      targetLayer.biases[out] = Number(sourceLayer?.biases?.[out] || 0);
+    }
+  }
+  return target;
+}
+
 function ensurePolicyModel(model = {}) {
   if (model.network && Array.isArray(model.network.layers) && model.network.layers.length) {
     return model;
@@ -277,15 +332,19 @@ function ensureValueModel(model = {}) {
 }
 
 function ensureIdentityModel(model = {}) {
-  if (model.network && Array.isArray(model.network.layers) && model.network.layers.length) {
-    return model;
-  }
   model.version = 2;
   model.temperature = Number.isFinite(model.temperature) ? model.temperature : 1;
   model.beamWidth = Number.isFinite(model.beamWidth) ? model.beamWidth : 24;
-  model.network = model.weightsByIdentity
-    ? convertLegacyIdentityNetwork(model.weightsByIdentity)
-    : createIdentityNetwork(Date.now());
+  if (model.network && Array.isArray(model.network.layers) && model.network.layers.length) {
+    model.network = needsIdentityNetworkMigration(model.network)
+      ? migrateIdentityNetwork(model.network, Date.now())
+      : model.network;
+  } else {
+    model.network = model.weightsByIdentity
+      ? convertLegacyIdentityNetwork(model.weightsByIdentity)
+      : createIdentityNetwork(Date.now());
+  }
+  model.inferredIdentities = INFERRED_IDENTITIES.slice();
   delete model.weightsByIdentity;
   return model;
 }
@@ -338,6 +397,7 @@ function cloneModelBundle(modelBundle) {
       version: 2,
       temperature: normalized.identity.temperature,
       beamWidth: normalized.identity.beamWidth,
+      inferredIdentities: INFERRED_IDENTITIES.slice(),
       network: cloneNetwork(normalized.identity.network),
     },
   };
@@ -354,14 +414,34 @@ function identityForFeature(piece, perspective, guessedIdentities) {
   return IDENTITIES.UNKNOWN;
 }
 
+function getStateCache(state) {
+  if (!state || typeof state !== 'object') return {};
+  if (!Object.prototype.hasOwnProperty.call(state, '__mlCache')) {
+    Object.defineProperty(state, '__mlCache', {
+      value: {},
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    });
+  }
+  return state.__mlCache;
+}
+
+function getGuessKey(state, guessedIdentities) {
+  if (!guessedIdentities) return 'truth';
+  const encoded = ensureEncodedState(state);
+  const parts = [];
+  for (let pieceIndex = 0; pieceIndex < encoded.pieceCount; pieceIndex += 1) {
+    const pieceId = encoded.pieceIds[pieceIndex];
+    if (!Object.prototype.hasOwnProperty.call(guessedIdentities, pieceId)) continue;
+    parts.push(`${pieceIndex}:${guessedIdentities[pieceId]}`);
+  }
+  return parts.length ? parts.join('|') : 'truth';
+}
+
 function countAlivePieces(state, color) {
-  let count = 0;
-  Object.values(state.pieces || {}).forEach((piece) => {
-    if (piece && piece.alive && piece.color === color) {
-      count += 1;
-    }
-  });
-  return count;
+  const encoded = ensureEncodedState(state);
+  return encoded.aliveCountByColor[color] || 0;
 }
 
 function countStashPieces(state, color) {
@@ -369,6 +449,10 @@ function countStashPieces(state, color) {
 }
 
 function getResponsePhaseInfo(state) {
+  const cache = getStateCache(state);
+  if (cache.responsePhaseInfo) {
+    return cache.responsePhaseInfo;
+  }
   const lastAction = Array.isArray(state?.actions) && state.actions.length
     ? state.actions[state.actions.length - 1]
     : null;
@@ -381,14 +465,23 @@ function getResponsePhaseInfo(state) {
     (lastType === ACTIONS.MOVE || lastType === 'MOVE') && movePending,
   );
   const bombPhase = lastType === ACTIONS.BOMB || lastType === 'BOMB';
-  return {
+  cache.responsePhaseInfo = {
     responsePhase: responsePhase || bombPhase ? 1 : 0,
     challengeWindow: responsePhase || bombPhase ? 1 : 0,
     bombWindow: responsePhase ? 1 : 0,
   };
+  return cache.responsePhaseInfo;
 }
 
 function extractStateFeatures(state, perspective, guessedIdentities = null) {
+  const cache = getStateCache(state);
+  cache.stateFeaturesByPerspective = cache.stateFeaturesByPerspective || [{}, {}];
+  const guessKey = getGuessKey(state, guessedIdentities);
+  const cached = cache.stateFeaturesByPerspective[perspective][guessKey];
+  if (cached) {
+    return cached;
+  }
+
   const opponent = perspective === WHITE ? BLACK : WHITE;
   const ownMoves = countMoveOptionsForColor(state, perspective);
   const oppMoves = countMoveOptionsForColor(state, opponent);
@@ -411,7 +504,7 @@ function extractStateFeatures(state, perspective, guessedIdentities = null) {
   const plyProgress = Math.min(1, (state.ply || 0) / maxPlies);
   const kingPressure = ((1 - oppKingDistance) - (1 - ownKingDistance)) * 0.5;
 
-  return [
+  const features = [
     1,
     materialDiff,
     mobilityDiff,
@@ -429,6 +522,8 @@ function extractStateFeatures(state, perspective, guessedIdentities = null) {
     movesSinceAction,
     responseInfo.responsePhase,
   ];
+  cache.stateFeaturesByPerspective[perspective][guessKey] = features;
+  return features;
 }
 
 function toActionType(action) {
@@ -566,7 +661,14 @@ function extractActionFeatures(state, perspective, action, guessedIdentities = n
   ];
 }
 
-function predictPolicy(modelBundle, state, perspective, actions = null, guessedIdentities = null) {
+function predictPolicy(
+  modelBundle,
+  state,
+  perspective,
+  actions = null,
+  guessedIdentities = null,
+  precomputedStateFeatures = null,
+) {
   const normalizedBundle = normalizeModelBundle(modelBundle);
   const model = normalizedBundle.policy;
   const legalActions = Array.isArray(actions) ? actions : getLegalActions(state, perspective);
@@ -576,11 +678,15 @@ function predictPolicy(modelBundle, state, perspective, actions = null, guessedI
       scores: [],
       probabilities: [],
       features: [],
-      stateFeatures: extractStateFeatures(state, perspective, guessedIdentities),
+      stateFeatures: Array.isArray(precomputedStateFeatures)
+        ? precomputedStateFeatures
+        : extractStateFeatures(state, perspective, guessedIdentities),
     };
   }
 
-  const stateFeatures = extractStateFeatures(state, perspective, guessedIdentities);
+  const stateFeatures = Array.isArray(precomputedStateFeatures)
+    ? precomputedStateFeatures
+    : extractStateFeatures(state, perspective, guessedIdentities);
   const featureMatrix = legalActions.map((action) => (
     extractActionFeatures(state, perspective, action, guessedIdentities, stateFeatures)
   ));
@@ -598,9 +704,11 @@ function predictPolicy(modelBundle, state, perspective, actions = null, guessedI
   };
 }
 
-function predictValue(modelBundle, state, perspective, guessedIdentities = null) {
+function predictValue(modelBundle, state, perspective, guessedIdentities = null, precomputedStateFeatures = null) {
   const normalizedBundle = normalizeModelBundle(modelBundle);
-  const features = extractStateFeatures(state, perspective, guessedIdentities);
+  const features = Array.isArray(precomputedStateFeatures)
+    ? precomputedStateFeatures
+    : extractStateFeatures(state, perspective, guessedIdentities);
   const raw = forwardNetwork(normalizedBundle.value.network, features)[0] || 0;
   return {
     value: tanh(raw),
@@ -636,6 +744,11 @@ function normalizeProbabilityMap(mapLike) {
 }
 
 function buildIdentityFeaturesForPiece(state, pieceId) {
+  const cache = getStateCache(state);
+  cache.identityFeatureByPieceId = cache.identityFeatureByPieceId || {};
+  if (cache.identityFeatureByPieceId[pieceId]) {
+    return cache.identityFeatureByPieceId[pieceId];
+  }
   const entries = state.moveHistoryByPiece?.[pieceId] || [];
   const captureSeen = entries.some((entry) => entry && entry.capture) ? 1 : 0;
   const historyDepth = Math.min(1, entries.length / 6);
@@ -650,7 +763,7 @@ function buildIdentityFeaturesForPiece(state, pieceId) {
   const compatBishop = moveCompatibilityScore(entries, IDENTITIES.BISHOP);
   const compatKnight = moveCompatibilityScore(entries, IDENTITIES.KNIGHT);
 
-  return {
+  const featurePacket = {
     pieceFeatures: [
       1,
       historyDepth,
@@ -669,6 +782,8 @@ function buildIdentityFeaturesForPiece(state, pieceId) {
       [IDENTITIES.KNIGHT]: [1, compatKnight, historyDepth, captureSeen],
     },
   };
+  cache.identityFeatureByPieceId[pieceId] = featurePacket;
+  return featurePacket;
 }
 
 function legacyFeaturePacketToPieceFeatures(featureByIdentity = {}) {
@@ -715,14 +830,23 @@ function predictIdentityForPiece(modelBundle, featurePacket) {
 }
 
 function getAssignmentPenalty(assignment) {
+  const limits = arguments.length > 1 && arguments[1] && typeof arguments[1] === 'object'
+    ? arguments[1]
+    : IDENTITY_COUNTS;
+  const knownCounts = arguments.length > 2 && arguments[2] && typeof arguments[2] === 'object'
+    ? arguments[2]
+    : {};
   const counts = {};
+  Object.keys(knownCounts).forEach((identity) => {
+    counts[identity] = Number(knownCounts[identity] || 0);
+  });
   Object.keys(assignment || {}).forEach((pieceId) => {
     const identity = assignment[pieceId];
     counts[identity] = (counts[identity] || 0) + 1;
   });
   let penalty = 0;
   INFERRED_IDENTITIES.forEach((identity) => {
-    const maxCount = IDENTITY_COUNTS[identity] || Number.POSITIVE_INFINITY;
+    const maxCount = limits[identity] || Number.POSITIVE_INFINITY;
     const used = counts[identity] || 0;
     if (used > maxCount) {
       penalty += (used - maxCount) * 2.4;
@@ -743,6 +867,22 @@ function buildIdentityHypotheses(modelBundle, perPieceProbabilities, options = {
   const hypothesisCount = Number.isFinite(options.count) && options.count > 0
     ? Math.floor(options.count)
     : 8;
+  const knownIdentityCounts = Object.keys(options.knownIdentityCounts || {}).reduce((acc, identity) => {
+    acc[identity] = Math.max(0, Number(options.knownIdentityCounts[identity] || 0));
+    return acc;
+  }, {});
+
+  function canAssignIdentity(assignment, identity) {
+    const maxCount = IDENTITY_COUNTS[identity] || Number.POSITIVE_INFINITY;
+    const known = Number(knownIdentityCounts[identity] || 0);
+    let used = known;
+    Object.keys(assignment || {}).forEach((pieceId) => {
+      if (assignment[pieceId] === identity) {
+        used += 1;
+      }
+    });
+    return used < maxCount;
+  }
 
   const entropyByPiece = {};
   pieceIds.forEach((pieceId) => {
@@ -761,21 +901,36 @@ function buildIdentityHypotheses(modelBundle, perPieceProbabilities, options = {
     const probs = perPieceProbabilities[pieceId] || {};
     const candidates = [];
     beam.forEach((entry) => {
-      INFERRED_IDENTITIES.forEach((identity) => {
-        const probability = probs[identity] || 0;
-        if (probability <= 0) return;
+      const rankedIdentities = INFERRED_IDENTITIES
+        .map((identity) => ({
+          identity,
+          probability: Math.max(0, Number(probs[identity] || 0)),
+        }))
+        .sort((left, right) => right.probability - left.probability);
+      rankedIdentities.forEach(({ identity, probability }) => {
+        if (!canAssignIdentity(entry.assignment, identity)) return;
         const assignment = { ...entry.assignment, [pieceId]: identity };
         candidates.push({
           assignment,
-          logProb: entry.logProb + Math.log(probability) - getAssignmentPenalty(assignment),
+          logProb: entry.logProb + Math.log(Math.max(probability, 1e-12)) - getAssignmentPenalty(
+            assignment,
+            IDENTITY_COUNTS,
+            knownIdentityCounts,
+          ),
         });
       });
     });
     if (!candidates.length) {
-      beam = beam.map((entry) => ({
-        assignment: { ...entry.assignment, [pieceId]: IDENTITIES.ROOK },
-        logProb: entry.logProb - 3,
-      }));
+      beam = beam
+        .map((entry) => {
+          const fallbackIdentity = INFERRED_IDENTITIES.find((identity) => canAssignIdentity(entry.assignment, identity));
+          if (!fallbackIdentity) return null;
+          return {
+            assignment: { ...entry.assignment, [pieceId]: fallbackIdentity },
+            logProb: entry.logProb - 6,
+          };
+        })
+        .filter(Boolean);
       return;
     }
     candidates.sort((a, b) => b.logProb - a.logProb);
@@ -795,6 +950,7 @@ function buildIdentityHypotheses(modelBundle, perPieceProbabilities, options = {
 
 function inferIdentityHypotheses(modelBundle, state, perspective, options = {}) {
   const revealed = state?.revealedIdentities || {};
+  const opponent = perspective === WHITE ? BLACK : WHITE;
   const hiddenPieceIds = getHiddenPieceIds(state, perspective).filter((pieceId) => !Number.isFinite(revealed[pieceId]));
   if (!hiddenPieceIds.length) {
     return {
@@ -811,6 +967,15 @@ function inferIdentityHypotheses(modelBundle, state, perspective, options = {}) 
   const pieceFeatureByIdentity = {};
   const pieceFeatureVectors = {};
   const samples = [];
+  const knownIdentityCounts = {};
+
+  Object.keys(state?.pieces || {}).forEach((pieceId) => {
+    const piece = state.pieces[pieceId];
+    if (!piece || piece.color !== opponent) return;
+    const revealedIdentity = revealed[pieceId];
+    if (!Number.isFinite(revealedIdentity)) return;
+    knownIdentityCounts[revealedIdentity] = (knownIdentityCounts[revealedIdentity] || 0) + 1;
+  });
 
   hiddenPieceIds.forEach((pieceId) => {
     const featurePacket = buildIdentityFeaturesForPiece(state, pieceId);
@@ -836,19 +1001,22 @@ function inferIdentityHypotheses(modelBundle, state, perspective, options = {}) 
     perPieceProbabilities,
     pieceFeatureByIdentity,
     pieceFeatureVectors,
-    hypotheses: buildIdentityHypotheses(modelBundle, perPieceProbabilities, options),
+    hypotheses: buildIdentityHypotheses(modelBundle, perPieceProbabilities, {
+      ...options,
+      knownIdentityCounts,
+    }),
     samples,
   };
 }
 
-function applyRiskBiasToHypotheses(hypotheses, values, riskBias = 0.65) {
+function applyRiskBiasToHypotheses(hypotheses, values, riskBias = 0) {
   if (!Array.isArray(hypotheses) || !hypotheses.length || !Array.isArray(values)) {
     return {
       value: 0,
       weights: [],
     };
   }
-  const safeRisk = Number.isFinite(riskBias) ? Math.max(0, riskBias) : 0.65;
+  const safeRisk = Number.isFinite(riskBias) ? Math.max(0, riskBias) : 0;
   const weighted = hypotheses.map((hypothesis, idx) => {
     const probability = hypothesis?.probability || 0;
     const value = Number.isFinite(values[idx]) ? values[idx] : 0;

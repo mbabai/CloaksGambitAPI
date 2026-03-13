@@ -4,27 +4,68 @@ const { createAuthToken } = require('../../utils/authTokens');
 
 const BOT_DEFINITIONS = {
   easy: {
+    id: 'easy',
+    label: 'Easy',
     username: 'EasyBot',
     email: 'easy.bot@cg-bots.local',
     elo: 800,
+    playable: true,
   },
   medium: {
+    id: 'medium',
+    label: 'Medium',
     username: 'MediumBot',
     email: 'medium.bot@cg-bots.local',
     elo: 1200,
+    playable: true,
   },
   hard: {
+    id: 'hard',
+    label: 'Hard',
     username: 'HardBot',
     email: 'hard.bot@cg-bots.local',
     elo: 1600,
+    playable: false,
+    unavailableMessage: 'Hard bot still under construction.',
   },
 };
+
+const BUILTIN_BOT_ORDER = ['easy', 'medium', 'hard'];
 
 function normalizeDifficulty(input) {
   if (!input || typeof input !== 'string') return 'easy';
   const key = input.trim().toLowerCase();
   if (key === 'easy' || key === 'medium' || key === 'hard') return key;
   return 'easy';
+}
+
+function normalizeBuiltinBotId(input) {
+  if (!input || typeof input !== 'string') return '';
+  const key = input.trim().toLowerCase();
+  return BOT_DEFINITIONS[key] ? key : '';
+}
+
+function isBuiltinBotId(input) {
+  return Boolean(normalizeBuiltinBotId(input));
+}
+
+function getBuiltinBotDefinition(input) {
+  const key = normalizeBuiltinBotId(input);
+  return key ? BOT_DEFINITIONS[key] : null;
+}
+
+function listBuiltinBotCatalog() {
+  return BUILTIN_BOT_ORDER
+    .map((id) => BOT_DEFINITIONS[id])
+    .filter(Boolean)
+    .map((definition, index) => ({
+      id: definition.id,
+      type: 'builtin',
+      label: definition.label,
+      playable: definition.playable !== false,
+      order: index,
+      unavailableMessage: definition.unavailableMessage || null,
+    }));
 }
 
 async function ensureBotUser(difficulty = 'easy') {
@@ -82,5 +123,10 @@ module.exports = {
   ensureBotUser,
   ensureGuestForBotGame,
   normalizeDifficulty,
+  normalizeBuiltinBotId,
+  isBuiltinBotId,
+  getBuiltinBotDefinition,
+  listBuiltinBotCatalog,
+  BUILTIN_BOT_ORDER,
   BOT_DEFINITIONS,
 };

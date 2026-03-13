@@ -262,6 +262,10 @@ const gameSchema = new mongoose.Schema({
       message: 'Increment must match the server config INCREMENT value',
     },
   },
+  mlTestConfig: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
   board: {
     type: [[pieceSchema]],
     default() {

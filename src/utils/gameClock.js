@@ -157,6 +157,10 @@ function computeGameClockState({
       return;
     }
 
+    if (action.type === 7 || action.type === 'READY') {
+      return;
+    }
+
     if (derivedTurn === null) {
       derivedTurn = 0;
     }

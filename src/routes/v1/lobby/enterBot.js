@@ -6,7 +6,15 @@ const eventBus = require('../../../eventBus');
 const { resolveLobbySession } = require('../../../utils/lobbyAccess');
 const lobbyStore = require('../../../state/lobby');
 const getServerConfig = require('../../../utils/getServerConfig');
-const { ensureGuestForBotGame, ensureBotUser, normalizeDifficulty } = require('../../../services/bots/registry');
+const { isMlWorkflowEnabled } = require('../../../utils/mlFeatureGate');
+const { getMlRuntime } = require('../../../services/ml/runtime');
+const {
+  ensureGuestForBotGame,
+  ensureBotUser,
+  normalizeDifficulty,
+  normalizeBuiltinBotId,
+  getBuiltinBotDefinition,
+} = require('../../../services/bots/registry');
 
 async function resolveQuickplaySettings() {
   const config = await getServerConfig();
@@ -26,14 +34,12 @@ async function resolveQuickplaySettings() {
 
 router.post('/', async (req, res) => {
   try {
-    const { difficulty } = req.body || {};
-    const diffKey = normalizeDifficulty(difficulty);
-    const allowedDifficulties = new Set(['easy', 'medium']);
-    if (!allowedDifficulties.has(diffKey)) {
-      return res
-        .status(400)
-        .json({ message: 'Only easy and medium bots are currently available.' });
-    }
+    const requestedBotId = typeof req.body?.botId === 'string' && req.body.botId.trim()
+      ? req.body.botId.trim()
+      : '';
+    const selectionId = requestedBotId || normalizeDifficulty(req.body?.difficulty);
+    const builtinBotId = normalizeBuiltinBotId(selectionId);
+    const builtinBot = getBuiltinBotDefinition(selectionId);
 
     const userInfo = await resolveLobbySession(req, res);
     if (!userInfo) return;
@@ -45,9 +51,28 @@ router.post('/', async (req, res) => {
 
     console.log('[bot-match] matchmaking request', {
       requestedBy: userInfo?.userId || userId,
-      difficulty: diffKey,
+      botId: selectionId,
       username,
     });
+
+    if (!builtinBotId && isMlWorkflowEnabled()) {
+      const mlRuntime = getMlRuntime();
+      const result = await mlRuntime.startPromotedBotGame({
+        botId: selectionId,
+        userId,
+        username,
+        sidePreference: 'random',
+      });
+      return res.json(result);
+    }
+
+    if (!builtinBot) {
+      return res.status(400).json({ message: 'Selected bot is not available.' });
+    }
+
+    if (builtinBot.playable === false) {
+      return res.status(400).json({ message: builtinBot.unavailableMessage || 'Selected bot is not available.' });
+    }
 
     if (lobbyStore.isInGame(userId)) {
       return res.status(400).json({ message: 'User is already in a game' });
@@ -58,12 +83,12 @@ router.post('/', async (req, res) => {
       lobbyStore.emitQueueChanged([userId]);
     }
 
-    const { user: botUser } = await ensureBotUser(diffKey);
+    const { user: botUser } = await ensureBotUser(builtinBotId);
 
     console.log('[bot-match] using bot opponent', {
       botId: botUser?._id?.toString?.() || null,
       botUsername: botUser?.username,
-      difficulty: diffKey,
+      difficulty: builtinBotId,
     });
 
     const { timeControl, increment, type } = await resolveQuickplaySettings();
@@ -145,11 +170,12 @@ router.post('/', async (req, res) => {
       matchId: match._id.toString(),
       gameId: game._id.toString(),
       botId: botUser._id.toString(),
-      difficulty: diffKey,
+      difficulty: builtinBotId,
     });
   } catch (err) {
     console.error('[bot-match] failed to create bot match:', err);
-    return res.status(500).json({ message: err.message || 'Failed to create bot match' });
+    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
+    return res.status(statusCode).json({ message: err.message || 'Failed to create bot match' });
   }
 });
 

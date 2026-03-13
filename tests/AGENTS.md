@@ -22,13 +22,21 @@
 - Match normalization/history:
   - `tests/activeMatches.normalizeId.test.js`
   - `tests/historySummary.service.test.js`
+- ML workflow:
+  - `tests/mlFeatureGate.test.js`
+  - `tests/mlRoutes.test.js`
+  - `tests/mlRuntime.test.js`
+  - `tests/mlRuntimePersistence.test.js`
+  - `tests/mlStateEncoding.test.js`
 
 ## Practical Workflow
 - `npm test` rebuilds shared constants first.
 - The full suite can still be slowed down by `tests/mlRuntime.test.js`.
+- Some run-oriented ML tests only execute when `ENABLE_ML_WORKFLOW=true` (see `tests/mlFeatureGate.test.js` and the `describeMlWorkflow` gate in `tests/mlRuntime.test.js`).
 - When iterating on gameplay logic, use focused runs first and then decide whether the heavy ML suite needs to be rerun.
 
 ## Rules for New Tests
 - If you change auth behavior, add or update the auth/session tests.
 - If you change live game rules, add or update the route tests and any corresponding ML/runtime checks.
+- If you change ML run payloads, replay retention, training backends, or state persistence, update at least one of the ML route/runtime/persistence suites in the same edit.
 - If you launch a local server for manual testing, do not use port `3000` from the agent; prefer `3100` or another spare port.

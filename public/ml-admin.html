@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cloaks Gambit ML Workbench</title>
+    <title>Cloaks Gambit ML Run Workbench</title>
     <link rel="icon" type="image/jpeg" href="/favicon.ico?v=20260310h" />
     <link rel="shortcut icon" type="image/jpeg" href="/favicon.ico?v=20260310h" />
     <link rel="apple-touch-icon" href="/favicon.ico?v=20260310h" />
@@ -15,9 +15,7 @@
         --bg-1: #0d1f28;
         --bg-2: #163440;
         --panel: rgba(9, 22, 29, 0.9);
-        --panel-strong: rgba(8, 19, 24, 0.96);
         --line: rgba(133, 184, 175, 0.22);
-        --line-strong: rgba(240, 182, 88, 0.44);
         --text: #edf4ef;
         --muted: #93afa8;
         --accent: #f0b658;
@@ -74,12 +72,6 @@
         background: rgba(20, 44, 53, 0.94);
       }
 
-      button.danger {
-        color: #220e10;
-        background: linear-gradient(135deg, var(--danger), #ffaba1);
-        border-color: rgba(239, 135, 135, 0.45);
-      }
-
       button:disabled,
       input:disabled,
       select:disabled {
@@ -105,28 +97,6 @@
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: var(--muted);
-      }
-
-      .label-with-help {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .help-tip {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 16px;
-        height: 16px;
-        border-radius: 999px;
-        border: 1px solid rgba(133, 184, 175, 0.32);
-        background: rgba(8, 22, 28, 0.92);
-        color: var(--accent-strong);
-        font-size: 10px;
-        font-weight: 700;
-        line-height: 1;
-        cursor: help;
       }
 
       .page {
@@ -157,15 +127,7 @@
 
       .hero-actions {
         display: flex;
-        flex-wrap: wrap;
         gap: 10px;
-      }
-
-      .banner {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr);
-        gap: 14px;
-        margin-bottom: 18px;
       }
 
       .panel {
@@ -185,6 +147,12 @@
         border-bottom: 1px solid rgba(240, 182, 88, 0.16);
       }
 
+      .panel-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
       .panel-title {
         margin: 0;
         font-size: 14px;
@@ -197,20 +165,17 @@
         padding: 16px 18px 18px;
       }
 
-      .status-panel {
-        min-height: 100%;
-      }
-
       .status-text {
         min-height: 22px;
         font-size: 13px;
         color: var(--muted);
       }
 
-      .metric-grid {
+      .metrics {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 12px;
+        margin-bottom: 18px;
       }
 
       .metric-card {
@@ -233,9 +198,250 @@
         font-weight: 700;
       }
 
-      .stream-card {
+      .metric-card.telemetry {
+        display: grid;
+        gap: 8px;
+      }
+
+      .metric-card.telemetry .telemetry-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .metric-card.telemetry .v {
+        margin-top: 0;
+        font-size: 26px;
+      }
+
+      .telemetry-meta {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .telemetry-canvas {
+        width: 100%;
+        height: 68px;
+        display: block;
+        border-radius: 12px;
+        background: linear-gradient(180deg, rgba(7, 22, 28, 0.74), rgba(5, 17, 21, 0.36));
+      }
+
+      .workflow-tabs {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+
+      .workflow-tab {
+        min-width: 160px;
+      }
+
+      .workflow-tab.active {
+        background: linear-gradient(135deg, #ffd89a, #f0b658);
+        color: #0c2028;
+        border-color: rgba(255, 216, 154, 0.44);
+      }
+
+      .workflow-panel {
+        display: none;
+      }
+
+      .workflow-panel.active {
+        display: block;
+      }
+
+      .grid-2 {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 420px minmax(0, 1fr);
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .test-bot-list {
+        display: grid;
+        gap: 12px;
+        max-height: 540px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+
+      .test-bot-item {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 12px;
+        align-items: flex-start;
+        padding: 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(133, 184, 175, 0.18);
+        background: rgba(8, 20, 25, 0.72);
+      }
+
+      .test-bot-item input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        margin: 2px 0 0;
+        accent-color: var(--accent);
+      }
+
+      .test-bot-copy {
+        display: grid;
+        gap: 4px;
+      }
+
+      .test-bot-title {
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .test-bot-meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .form-grid .full {
+        grid-column: 1 / -1;
+      }
+
+      .condition-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .condition-card {
+        padding: 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(133, 184, 175, 0.18);
+        background: rgba(8, 20, 25, 0.72);
+      }
+
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .toggle-row input[type='checkbox'] {
+        width: auto;
+        margin: 0;
+      }
+
+      .subtle {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .detail-list,
+      .list {
         display: grid;
         gap: 10px;
+        max-height: 620px;
+        overflow: auto;
+      }
+
+      .replay-list-shell {
+        position: relative;
+        min-height: 260px;
+      }
+
+      .replay-list-controls {
+        display: grid;
+        gap: 8px;
+      }
+
+      .replay-list-button-row {
+        display: flex;
+        gap: 8px;
+      }
+
+      .replay-list-button-row button {
+        flex: 1 1 0;
+      }
+
+      .replay-game-list {
+        min-height: 360px;
+        max-height: min(68vh, 860px);
+        padding-right: 4px;
+        scrollbar-gutter: stable;
+      }
+
+      .loading-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        border-radius: 18px;
+        background: rgba(3, 11, 15, 0.88);
+        backdrop-filter: blur(4px);
+      }
+
+      .loading-card {
+        width: min(100%, 320px);
+        padding: 18px 16px;
+        border-radius: 16px;
+        border: 1px solid rgba(133, 184, 175, 0.22);
+        background: rgba(8, 20, 25, 0.94);
+        text-align: center;
+      }
+
+      .loading-spinner {
+        width: 28px;
+        height: 28px;
+        margin: 0 auto 10px;
+        border-radius: 999px;
+        border: 3px solid rgba(127, 210, 222, 0.2);
+        border-top-color: var(--accent);
+        animation: replay-spin 0.8s linear infinite;
+      }
+
+      @keyframes replay-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      .detail-row {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(133, 184, 175, 0.18);
+        background: rgba(6, 18, 23, 0.76);
+        cursor: pointer;
+      }
+
+      .detail-row.active {
+        border-color: rgba(240, 182, 88, 0.44);
+        box-shadow: inset 0 0 0 1px rgba(240, 182, 88, 0.16);
+      }
+
+      .detail-row-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 10px;
+      }
+
+      .detail-row strong {
+        display: block;
+      }
+
+      .detail-row-meta {
+        display: grid;
+        gap: 4px;
+        margin-top: 8px;
       }
 
       .badge {
@@ -251,168 +457,42 @@
         color: var(--accent-strong);
       }
 
-      .progress {
-        height: 12px;
-        border-radius: 999px;
-        overflow: hidden;
-        border: 1px solid rgba(133, 184, 175, 0.26);
-        background: rgba(4, 15, 20, 0.84);
+      .badge.active {
+        color: var(--teal);
       }
 
-      .progress > span {
-        display: block;
-        width: 0%;
-        height: 100%;
-        background: linear-gradient(90deg, var(--accent) 0%, #ffd28a 100%);
-        transition: width 160ms linear;
+      .badge.ok {
+        color: var(--success);
       }
 
-      .progress > span.error {
-        background: linear-gradient(90deg, var(--danger) 0%, #ffb0aa 100%);
-      }
-
-      .progress > span.active {
-        background: linear-gradient(90deg, #7fd2de 0%, #c1f0f7 100%);
-      }
-
-      .subtle {
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .main {
-        display: grid;
-        grid-template-columns: 360px minmax(0, 1fr);
-        gap: 16px;
-      }
-
-      .stack {
-        display: grid;
-        gap: 16px;
-      }
-
-      .form-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .form-grid .full {
-        grid-column: 1 / -1;
-      }
-
-      .list {
-        display: grid;
-        gap: 10px;
-        max-height: 360px;
-        overflow: auto;
-      }
-
-      .card {
-        padding: 14px;
-        border-radius: 16px;
-        border: 1px solid rgba(133, 184, 175, 0.18);
-        background: rgba(6, 18, 23, 0.76);
-      }
-
-      .card h3,
-      .card h4 {
-        margin: 0;
-      }
-
-      .card-meta {
-        margin-top: 6px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .pill-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 12px;
-      }
-
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        border-radius: 999px;
-        padding: 5px 10px;
-        font-size: 12px;
-        background: rgba(18, 43, 52, 0.82);
-        border: 1px solid rgba(133, 184, 175, 0.2);
-      }
-
-      .actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 12px;
-      }
-
-      .table {
-        display: grid;
-        gap: 10px;
-      }
-
-      .table-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 0.85fr) auto;
-        gap: 12px;
-        align-items: start;
-        padding: 14px;
-        border-radius: 16px;
-        background: rgba(5, 17, 21, 0.78);
-        border: 1px solid rgba(133, 184, 175, 0.16);
-      }
-
-      .table-row strong {
-        display: block;
-      }
-
-      .table-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: flex-end;
-      }
-
-      .source-row {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
-        gap: 12px;
-        align-items: start;
-        padding: 12px;
-        border-radius: 14px;
-        background: rgba(5, 17, 21, 0.76);
-        border: 1px solid rgba(133, 184, 175, 0.16);
-      }
-
-      .source-row.dim {
-        opacity: 0.58;
+      .badge.error {
+        color: var(--danger);
       }
 
       .canvas-shell {
         position: relative;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
         border-radius: 18px;
-        overflow: hidden;
+        overflow: visible;
         border: 1px solid rgba(133, 184, 175, 0.18);
         background: rgba(5, 17, 21, 0.9);
-        padding: 10px;
+        padding: 14px 16px 12px;
       }
 
-      #lossCanvas {
+      #generationWinCanvas {
         width: 100%;
-        height: 250px;
+        height: clamp(430px, 54vh, 620px);
         display: block;
       }
 
-      .loss-tooltip {
-        position: absolute;
-        z-index: 4;
-        min-width: 180px;
-        max-width: 280px;
+      .chart-tooltip {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        height: 168px;
+        min-height: 168px;
         padding: 9px 11px;
         border-radius: 12px;
         border: 1px solid rgba(133, 184, 175, 0.3);
@@ -420,6 +500,52 @@
         font-size: 12px;
         line-height: 1.45;
         pointer-events: none;
+        overflow: hidden;
+        overscroll-behavior: contain;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .chart-tooltip-title {
+        min-height: 20px;
+      }
+
+      .chart-tooltip-footer {
+        min-height: 18px;
+      }
+
+      .chart-tooltip.is-empty .chart-tooltip-title,
+      .chart-tooltip.is-empty .chart-tooltip-footer {
+        visibility: hidden;
+      }
+
+      .chart-tooltip.is-empty .chart-tooltip-placeholder {
+        visibility: hidden;
+      }
+
+      .chart-tooltip-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        flex: 1 1 auto;
+        height: 100%;
+        min-height: 0;
+        overflow-y: auto;
+        align-content: start;
+      }
+
+      @media (max-width: 1100px) {
+        .chart-tooltip-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 900px) {
+        .chart-tooltip-grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
       }
 
       .chip-list {
@@ -436,27 +562,98 @@
         font-size: 12px;
       }
 
-      .replay-toolbar {
+      .run-stat-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
       }
 
-      .control-row {
+      .run-stat {
+        padding: 10px 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(133, 184, 175, 0.16);
+        background: rgba(10, 27, 32, 0.88);
+      }
+
+      .run-stat .k {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .run-stat .v {
+        margin-top: 6px;
+        font-size: 20px;
+        font-weight: 700;
+      }
+
+      .table-shell {
+        overflow: auto;
+        max-height: 540px;
+      }
+
+      .config-table-shell {
+        max-height: 420px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        padding: 10px;
+        background: rgba(7, 22, 28, 0.98);
+        border-bottom: 1px solid rgba(133, 184, 175, 0.18);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        text-align: left;
+      }
+
+      tbody tr {
+        cursor: pointer;
+      }
+
+      tbody td {
+        padding: 10px;
+        border-bottom: 1px solid rgba(133, 184, 175, 0.12);
+        font-size: 12px;
+        background: rgba(6, 18, 23, 0.76);
+      }
+
+      tbody tr.active td {
+        background: rgba(29, 24, 11, 0.68);
+        box-shadow: inset 0 1px 0 rgba(240, 182, 88, 0.2), inset 0 -1px 0 rgba(240, 182, 88, 0.2);
+      }
+
+      .table-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .table-action-btn {
+        padding: 6px 10px;
+        border-radius: 10px;
+        font-size: 11px;
+      }
+
+      .control-row,
+      .range-row {
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
         align-items: center;
       }
 
-      .range-row {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-      }
-
-      input[type='range'] {
-        padding: 0;
+      .range-row input[type='range'] {
+        flex: 1 1 240px;
       }
 
       .replay-shell {
@@ -470,6 +667,25 @@
         border: 1px solid rgba(133, 184, 175, 0.2);
         background: rgba(5, 17, 21, 0.92);
         padding: 10px;
+      }
+
+      .deck-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .deck-card {
+        min-height: 76px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 10px;
+        border-radius: 16px;
+        background: rgba(7, 22, 28, 0.92);
+        border: 1px solid rgba(133, 184, 175, 0.18);
       }
 
       .replay-play-area {
@@ -509,25 +725,6 @@
         top: 0;
       }
 
-      .deck-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-        margin-bottom: 12px;
-      }
-
-      .deck-card {
-        min-height: 76px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        padding: 10px;
-        border-radius: 16px;
-        background: rgba(7, 22, 28, 0.92);
-        border: 1px solid rgba(133, 184, 175, 0.18);
-      }
-
       .log-panel {
         border-radius: 16px;
         border: 1px solid rgba(133, 184, 175, 0.16);
@@ -537,406 +734,23 @@
         overflow: auto;
       }
 
-      .move-line {
-        padding: 6px 0;
-        border-bottom: 1px dashed rgba(133, 184, 175, 0.14);
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .move-line:last-child {
-        border-bottom: none;
-      }
-
-      .decision-grid {
-        display: grid;
-        gap: 10px;
-      }
-
-      .decision-stat-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px;
-      }
-
-      .decision-stat {
-        padding: 10px;
-        border-radius: 14px;
-        border: 1px solid rgba(133, 184, 175, 0.16);
-        background: rgba(10, 27, 32, 0.88);
-      }
-
-      .decision-actions {
-        display: grid;
-        gap: 6px;
-      }
-
-      .decision-action {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto auto;
-        gap: 8px;
-        padding: 8px 10px;
-        border-radius: 12px;
-        background: rgba(9, 24, 30, 0.78);
-        border: 1px solid rgba(133, 184, 175, 0.12);
-        font-size: 12px;
-      }
-
-      .metric-bar-list {
-        display: grid;
-        gap: 8px;
-      }
-
-      .metric-bar-row {
-        display: grid;
-        grid-template-columns: 76px minmax(0, 1fr) 56px;
-        gap: 10px;
-        align-items: center;
-      }
-
-      .metric-bar-label,
-      .metric-bar-value {
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .metric-bar-value {
-        text-align: right;
-        font-variant-numeric: tabular-nums;
-      }
-
-      .metric-bar-track {
-        height: 10px;
-        overflow: hidden;
-        border-radius: 999px;
-        border: 1px solid rgba(133, 184, 175, 0.2);
-        background: rgba(4, 15, 20, 0.88);
-      }
-
-      .metric-bar-fill {
-        display: block;
-        width: 0%;
-        height: 100%;
-        transition: width 160ms linear;
-      }
-
-      .metric-bar-fill.policy {
-        background: linear-gradient(90deg, #7fd2de 0%, #c1f0f7 100%);
-      }
-
-      .metric-bar-fill.value {
-        background: linear-gradient(90deg, #f0b658 0%, #ffd89a 100%);
-      }
-
-      .metric-bar-fill.identity {
-        background: linear-gradient(90deg, #8ed18e 0%, #d5f3c5 100%);
-      }
-
-      .ok {
-        color: var(--success);
-      }
-
-      .error {
-        color: var(--danger);
-      }
-
-      .warn {
-        color: var(--accent-strong);
-      }
-
-      .workflow-tabs {
-        display: flex;
-        gap: 10px;
-        margin-bottom: 16px;
-      }
-
-      .workflow-tab {
-        min-width: 160px;
-      }
-
-      .workflow-tab.active {
-        background: linear-gradient(135deg, #ffd89a, #f0b658);
-      }
-
-      .workflow-panel {
-        display: none;
-      }
-
-      .workflow-panel.active {
-        display: block;
-      }
-
-      .workflow-grid {
-        display: grid;
-        gap: 16px;
-        grid-template-columns: 420px minmax(0, 1fr);
-      }
-
-      .simulations-layout {
-        display: grid;
-        gap: 16px;
-        grid-template-columns: 420px minmax(0, 1fr);
-        align-items: start;
-      }
-
-      .simulations-main {
-        display: grid;
-        gap: 16px;
-        min-width: 0;
-      }
-
-      .section-grid {
-        display: grid;
-        gap: 12px;
-      }
-
-      .section-heading {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-      }
-
-      .detail-list {
-        display: grid;
-        gap: 10px;
-        max-height: 420px;
-        overflow: auto;
-      }
-
-      #simulationGameList {
-        max-height: 560px;
-        overflow: auto;
-        padding-right: 6px;
-      }
-
-      .detail-row {
-        padding: 12px 14px;
-        border-radius: 16px;
-        border: 1px solid rgba(133, 184, 175, 0.18);
-        background: rgba(6, 18, 23, 0.76);
-        cursor: pointer;
-      }
-
-      .detail-row-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 10px;
-      }
-
-      .detail-row strong {
-        display: block;
-      }
-
-      .detail-row-meta {
-        display: grid;
-        gap: 4px;
-        margin-top: 8px;
-      }
-
-      .detail-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 10px;
-      }
-
-      .detail-actions button {
-        padding: 7px 10px;
-      }
-
-      .detail-row.active {
-        border-color: rgba(240, 182, 88, 0.44);
-        box-shadow: inset 0 0 0 1px rgba(240, 182, 88, 0.16);
-      }
-
-      .compact-game-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 12px;
-        align-items: center;
-        padding: 10px 12px;
-        border-radius: 14px;
-      }
-
-      .compact-game-main {
-        min-width: 0;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        white-space: nowrap;
-        overflow: hidden;
-      }
-
-      .compact-game-id {
-        flex: 0 0 auto;
-        font-weight: 700;
-        color: var(--text);
-      }
-
-      .compact-game-meta {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .game-table {
-        width: 100%;
-        border-collapse: separate;
-        border-spacing: 0;
-        table-layout: fixed;
-      }
-
-      .simulation-runs-table col.col-name {
-        width: 22%;
-      }
-
-      .simulation-runs-table col.col-player {
-        width: 8%;
-      }
-
-      .simulation-runs-table col.col-games {
-        width: 28%;
-      }
-
-      .simulation-runs-table col.col-avg {
-        width: 5%;
-      }
-
-      .simulation-runs-table col.col-timestamp {
-        width: 18%;
-      }
-
-      .simulation-runs-table col.col-actions {
-        width: 11%;
-      }
-
-      .game-table thead th {
-        position: sticky;
-        top: 0;
-        z-index: 2;
-        padding: 9px 10px;
-        background: rgba(7, 22, 28, 0.98);
-        border-bottom: 1px solid rgba(133, 184, 175, 0.18);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-        text-align: left;
-      }
-
-      .game-table tbody tr {
-        cursor: pointer;
-      }
-
-      .game-table tbody tr:hover td {
-        background: rgba(9, 24, 30, 0.88);
-      }
-
-      .game-table tbody tr.active td {
-        background: rgba(29, 24, 11, 0.68);
-        box-shadow: inset 0 1px 0 rgba(240, 182, 88, 0.2), inset 0 -1px 0 rgba(240, 182, 88, 0.2);
-      }
-
-      .game-table td {
-        padding: 10px;
-        border-bottom: 1px solid rgba(133, 184, 175, 0.12);
-        font-size: 12px;
-        color: var(--text);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        background: rgba(6, 18, 23, 0.76);
-      }
-
-      .game-table td.subtle {
-        color: var(--muted);
-      }
-
-      .game-table td.actions-cell {
-        white-space: normal;
-        overflow: visible;
-        text-overflow: clip;
-      }
-
-      .inline-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-
-      .inline-actions button {
-        padding: 6px 10px;
-      }
-
-      .simulation-games-cell {
-        min-width: 240px;
-        white-space: normal;
-        overflow: visible;
-        text-overflow: clip;
-      }
-
-      .simulation-games-stack {
-        display: grid;
-        gap: 8px;
-      }
-
-      .simulation-games-label {
-        font-size: 12px;
-        font-weight: 700;
-        color: var(--text);
-      }
-
-      .simulation-games-label.active {
-        color: var(--teal);
-      }
-
-      .simulation-games-label.warn {
-        color: var(--accent-strong);
-      }
-
-      .simulation-games-label.error {
-        color: var(--danger);
-      }
-
-      .simulation-games-meta {
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .hidden-controls {
-        display: none;
-      }
-
-      .model-detail-grid {
-        display: grid;
-        gap: 8px;
-      }
-
       @media (max-width: 1280px) {
-        .banner,
-        .main,
-        .replay-shell,
-        .simulations-layout {
+        .grid-2,
+        .replay-shell {
           grid-template-columns: minmax(0, 1fr);
         }
       }
 
       @media (max-width: 900px) {
-        .metric-grid,
+        .metrics,
         .form-grid,
-        .replay-toolbar,
-        .decision-stat-grid,
-        .table-row {
+        .condition-grid,
+        .run-stat-grid {
           grid-template-columns: minmax(0, 1fr);
         }
 
-        .table-actions {
-          justify-content: flex-start;
+        #generationWinCanvas {
+          height: 320px;
         }
       }
     </style>
@@ -945,208 +759,313 @@
     <div class="page">
       <header class="hero">
         <div class="hero-copy">
-          <h1>ML Workbench</h1>
-          <p>Run simulation batches on the live rules, train snapshot models from selected runs, inspect policy/value/identity loss, and watch replay frames with model decisions.</p>
+          <h1>ML Run Workbench</h1>
+          <p>Configure continuous AlphaZero-style runs, monitor generation-vs-generation evaluations, and replay retained games between generations.</p>
         </div>
         <div class="hero-actions">
           <button id="refreshWorkbenchBtn" class="secondary" type="button">Refresh</button>
         </div>
       </header>
 
-      <section class="banner">
-        <section class="panel status-panel">
-          <div class="panel-head">
-            <h2 class="panel-title">System State</h2>
-            <div id="statusText" class="status-text">Idle.</div>
-          </div>
-          <div class="panel-body stack">
-            <div class="metric-grid">
-              <div class="metric-card"><div class="k">Snapshots</div><div id="countSnapshots" class="v">0</div></div>
-              <div class="metric-card"><div class="k">Simulations</div><div id="countSimulations" class="v">0</div></div>
-              <div class="metric-card"><div class="k">Games</div><div id="countGames" class="v">0</div></div>
-              <div class="metric-card"><div class="k">Training Runs</div><div id="countTrainingRuns" class="v">0</div></div>
+      <section class="panel" style="margin-bottom:18px;">
+        <div class="panel-head">
+          <h2 class="panel-title">Run State</h2>
+          <div id="statusText" class="status-text">Idle.</div>
+        </div>
+        <div class="panel-body">
+          <div class="metrics">
+            <div class="metric-card"><div class="k">Runs</div><div id="countRuns" class="v">0</div></div>
+            <div class="metric-card"><div class="k">Active Runs</div><div id="countActiveRuns" class="v">0</div></div>
+            <div class="metric-card"><div class="k">Games</div><div id="countGames" class="v">0</div></div>
+            <div class="metric-card"><div class="k">Generations</div><div id="countGenerations" class="v">0</div></div>
+            <div class="metric-card telemetry">
+              <div class="k">CPU Usage</div>
+              <div class="telemetry-head">
+                <div id="cpuUsageValue" class="v">--</div>
+                <div id="cpuUsageMeta" class="telemetry-meta">Last 10m</div>
+              </div>
+              <canvas id="cpuUsageCanvas" class="telemetry-canvas" width="260" height="68"></canvas>
             </div>
-            <div class="subtle" id="latestSimulationSummary">No simulations yet.</div>
-            <div class="subtle" id="latestTrainingSummary">No training runs yet.</div>
+            <div class="metric-card telemetry">
+              <div class="k">GPU Usage</div>
+              <div class="telemetry-head">
+                <div id="gpuUsageValue" class="v">--</div>
+                <div id="gpuUsageMeta" class="telemetry-meta">Detecting...</div>
+              </div>
+              <canvas id="gpuUsageCanvas" class="telemetry-canvas" width="260" height="68"></canvas>
+            </div>
           </div>
-        </section>
+          <div id="latestRunSummary" class="subtle">No runs yet.</div>
+        </div>
       </section>
 
       <div class="workflow-tabs">
-        <button type="button" class="workflow-tab active" data-workflow-tab="simulations">Simulations</button>
-        <button type="button" class="workflow-tab secondary" data-workflow-tab="training">Training</button>
+        <button type="button" class="workflow-tab secondary active" data-workflow-tab="config">Config</button>
+        <button type="button" class="workflow-tab secondary" data-workflow-tab="runs">Runs</button>
+        <button type="button" class="workflow-tab secondary" data-workflow-tab="replay">Replay</button>
+        <button type="button" class="workflow-tab secondary" data-workflow-tab="test">Test</button>
       </div>
 
-      <section class="workflow-panel active" data-workflow-panel="simulations">
-        <div class="simulations-layout">
+      <section class="workflow-panel active" data-workflow-panel="config">
+        <div class="stack">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Start Run</h2>
+            </div>
+            <div class="panel-body stack">
+              <div class="form-grid">
+                <div class="full">
+                  <label for="runNameInput">Run Name</label>
+                  <input id="runNameInput" type="text" placeholder="Example: March self-play sweep" />
+                </div>
+                <div>
+                  <label for="seedModeSelect">Seed Model</label>
+                  <select id="seedModeSelect">
+                    <option value="bootstrap">Bootstrap Model</option>
+                    <option value="random">Random Init</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="seedInput">Seed</label>
+                  <input id="seedInput" type="number" placeholder="Optional" />
+                </div>
+                <div>
+                  <label for="numSelfplayWorkersInput">Self-Play Workers</label>
+                  <input id="numSelfplayWorkersInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="parallelGameWorkersInput">Parallel Game Workers</label>
+                  <input id="parallelGameWorkersInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="numMctsSimulationsInput">MCTS Sims / Move</label>
+                  <input id="numMctsSimulationsInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="maxDepthInput">MCTS Depth</label>
+                  <input id="maxDepthInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="hypothesisCountInput">Identity Hypotheses</label>
+                  <input id="hypothesisCountInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="riskBiasInput">Risk Bias</label>
+                  <input id="riskBiasInput" type="number" step="0.01" min="0" />
+                </div>
+                <div>
+                  <label for="explorationInput">Exploration</label>
+                  <input id="explorationInput" type="number" step="0.01" min="0" />
+                </div>
+                <div>
+                  <label for="replayBufferMaxPositionsInput">Replay Buffer Max Positions</label>
+                  <input id="replayBufferMaxPositionsInput" type="number" min="16" />
+                </div>
+                <div>
+                  <label for="batchSizeInput">Batch Size</label>
+                  <input id="batchSizeInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="learningRateInput">Learning Rate</label>
+                  <input id="learningRateInput" type="number" step="0.0001" min="0.00001" />
+                </div>
+                <div>
+                  <label for="trainingBackendSelect">Training Backend</label>
+                  <select id="trainingBackendSelect">
+                    <option value="auto">Auto</option>
+                    <option value="node">Node CPU</option>
+                    <option value="python">Python Torch</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="trainingDeviceSelect">Training Device</label>
+                  <select id="trainingDeviceSelect">
+                    <option value="auto">Auto</option>
+                    <option value="cuda">CUDA</option>
+                    <option value="cpu">CPU</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="weightDecayInput">Weight Decay</label>
+                  <input id="weightDecayInput" type="number" step="0.0001" min="0" />
+                </div>
+                <div>
+                  <label for="gradientClipNormInput">Gradient Clip</label>
+                  <input id="gradientClipNormInput" type="number" step="0.1" min="0" />
+                </div>
+                <div>
+                  <label for="trainingStepsPerCycleInput">Training Steps / Cycle</label>
+                  <input id="trainingStepsPerCycleInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="parallelTrainingHeadWorkersInput">Parallel Training Heads</label>
+                  <input id="parallelTrainingHeadWorkersInput" type="number" min="1" max="3" />
+                </div>
+                <div>
+                  <label for="checkpointIntervalInput">Checkpoint Interval</label>
+                  <input id="checkpointIntervalInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="prePromotionTestGamesInput">Pre-Promotion Test Games</label>
+                  <input id="prePromotionTestGamesInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="prePromotionTestWinRateInput">Pre-Promotion Test Win Rate</label>
+                  <input id="prePromotionTestWinRateInput" type="number" step="0.01" min="0" max="1" />
+                </div>
+                <div>
+                  <label for="promotionTestGamesInput">Promotion Test Games</label>
+                  <input id="promotionTestGamesInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="promotionTestWinRateInput">Promotion Test Win Rate</label>
+                  <input id="promotionTestWinRateInput" type="number" step="0.01" min="0" max="1" />
+                </div>
+                <div>
+                  <label for="promotionTestPriorGenerationsInput">Promotion Test Prior Generations</label>
+                  <input id="promotionTestPriorGenerationsInput" type="number" min="1" max="10" />
+                </div>
+                <div>
+                  <label for="modelRefreshIntervalInput">Worker Refresh Interval</label>
+                  <input id="modelRefreshIntervalInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="generationComparisonStrideInput">Generation Graph Stride</label>
+                  <input id="generationComparisonStrideInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="olderGenerationSampleProbabilityInput">Older Gen Mix Probability</label>
+                  <input id="olderGenerationSampleProbabilityInput" type="number" step="0.01" min="0" max="1" />
+                </div>
+
+                <div class="full">
+                  <div class="panel-title" style="margin-bottom:10px;">End Conditions</div>
+                  <div class="condition-grid">
+                    <div class="condition-card">
+                      <label class="toggle-row" for="stopOnMaxGenerationsInput">
+                        <input id="stopOnMaxGenerationsInput" type="checkbox" />
+                        <span>Use best-generation cap</span>
+                      </label>
+                      <label for="maxGenerationsInput">Best Generation Limit</label>
+                      <input id="maxGenerationsInput" type="number" min="1" />
+                    </div>
+                    <div class="condition-card">
+                      <label class="toggle-row" for="stopOnMaxSelfPlayGamesInput">
+                        <input id="stopOnMaxSelfPlayGamesInput" type="checkbox" />
+                        <span>Use self-play game cap</span>
+                      </label>
+                      <label for="maxSelfPlayGamesInput">Self-Play Game Limit</label>
+                      <input id="maxSelfPlayGamesInput" type="number" min="1" />
+                    </div>
+                    <div class="condition-card">
+                      <label class="toggle-row" for="stopOnMaxTrainingStepsInput">
+                        <input id="stopOnMaxTrainingStepsInput" type="checkbox" />
+                        <span>Use training-step cap</span>
+                      </label>
+                      <label for="maxTrainingStepsInput">Training Step Limit</label>
+                      <input id="maxTrainingStepsInput" type="number" min="1" />
+                    </div>
+                    <div class="condition-card">
+                      <label class="toggle-row" for="stopOnMaxFailedPromotionsInput">
+                        <input id="stopOnMaxFailedPromotionsInput" type="checkbox" />
+                        <span>Use failed-promotion cap</span>
+                      </label>
+                      <label for="maxFailedPromotionsInput">Failed Promotion Limit</label>
+                      <input id="maxFailedPromotionsInput" type="number" min="1" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <button id="startRunBtn" type="button">Kick Off Run</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Config Notes</h2>
+            </div>
+            <div class="panel-body stack">
+              <div class="subtle">Self-play workers are logical workers inside the server process. Each cycle generates that many fresh games before the trainer samples from the replay buffer.</div>
+              <div class="subtle">The graph stride controls which older generations remain in the evaluation graph and comparison schedule. Smaller values preserve more historical lines.</div>
+              <div class="subtle">Promotion is based on head-to-head results, not just loss. A new checkpoint only becomes the best generation if it reaches the configured win-rate threshold against the current best generation.</div>
+              <div class="subtle">Replay data is retained for recent run games so you can inspect generation matchups later without rebuilding the run.</div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="workflow-panel" data-workflow-panel="runs">
+        <div class="grid-2">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Runs</h2>
+            </div>
+            <div class="panel-body stack">
+              <div class="table-shell">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Status</th>
+                      <th>Best</th>
+                      <th>Games</th>
+                      <th>Buffer</th>
+                      <th>Updated</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="runsTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
           <div class="stack">
             <section class="panel">
               <div class="panel-head">
-                <h2 class="panel-title">New Simulation Run</h2>
-              </div>
-              <div class="panel-body stack">
-                <div class="form-grid">
-                  <div>
-                    <label for="whiteParticipantSelect" class="label-with-help">Player 1
-                      <span class="help-tip" title="The controller used for one side of the simulation batch. This can be a snapshot model or the built-in medium bot.">?</span>
-                    </label>
-                    <select id="whiteParticipantSelect"></select>
-                  </div>
-                  <div>
-                    <label for="blackParticipantSelect" class="label-with-help">Player 2
-                      <span class="help-tip" title="The controller used for the opposing side of the simulation batch. This can be a snapshot model or the built-in medium bot.">?</span>
-                    </label>
-                    <select id="blackParticipantSelect"></select>
-                  </div>
-                  <div>
-                    <label for="gameCountInput" class="label-with-help">Games
-                      <span class="help-tip" title="The number of full simulated games to run in this batch.">?</span>
-                    </label>
-                    <input id="gameCountInput" type="number" min="1" max="100000" value="20" />
-                  </div>
-                  <div>
-                    <label for="maxPliesInput" class="label-with-help">Max Plies
-                      <span class="help-tip" title="The maximum number of half-moves before a game is forcibly stopped.">?</span>
-                    </label>
-                    <input id="maxPliesInput" type="number" min="40" max="300" value="120" />
-                  </div>
-                  <div>
-                    <label for="iterationsInput" class="label-with-help">MCTS Iterations
-                      <span class="help-tip" title="The number of Monte Carlo Tree Search rollouts used for each model decision.">?</span>
-                    </label>
-                    <input id="iterationsInput" type="number" min="10" max="800" value="90" />
-                  </div>
-                  <div>
-                    <label for="maxDepthInput" class="label-with-help">MCTS Depth
-                      <span class="help-tip" title="The maximum search depth for each explored line in the tree.">?</span>
-                    </label>
-                    <input id="maxDepthInput" type="number" min="4" max="80" value="16" />
-                  </div>
-                  <div>
-                    <label for="hypothesisCountInput" class="label-with-help">Identity Hypotheses
-                      <span class="help-tip" title="The number of hidden-identity world states the search tracks at once.">?</span>
-                    </label>
-                    <input id="hypothesisCountInput" type="number" min="1" max="24" value="8" />
-                  </div>
-                  <div>
-                    <label for="riskBiasInput" class="label-with-help">Risk Bias
-                      <span class="help-tip" title="A search weighting that shifts play toward safer lines or sharper, higher-variance lines under uncertainty.">?</span>
-                    </label>
-                    <input id="riskBiasInput" type="number" min="0" max="3" step="0.05" value="0.75" />
-                  </div>
-                  <div>
-                    <label for="explorationInput" class="label-with-help">Exploration
-                      <span class="help-tip" title="The search constant that controls how much MCTS explores less-visited moves instead of exploiting its current best line.">?</span>
-                    </label>
-                    <input id="explorationInput" type="number" min="0" max="5" step="0.05" value="1.25" />
-                  </div>
-                  <div>
-                    <label for="seedInput" class="label-with-help">Seed
-                      <span class="help-tip" title="A random seed used to make the same simulation settings reproducible.">?</span>
-                    </label>
-                    <input id="seedInput" type="number" placeholder="Optional" />
-                  </div>
-                  <div class="full">
-                    <label for="simulationLabelInput" class="label-with-help">Simulation Label
-                      <span class="help-tip" title="A human-readable name for the batch so you can recognize this run later in the simulations list and training source picker.">?</span>
-                    </label>
-                    <input id="simulationLabelInput" type="text" placeholder="Optional label" />
-                  </div>
-                  <div class="full">
-                    <label for="alternateColorsInput" class="label-with-help">Side Assignment
-                      <span class="help-tip" title="Whether the two selected controllers swap white and black between games, which helps reduce first-player and color bias in the batch results.">?</span>
-                    </label>
-                    <div class="control-row">
-                      <input id="alternateColorsInput" type="checkbox" checked style="width:auto;" />
-                      <span class="subtle">Alternate white and black across games</span>
-                    </div>
-                  </div>
+                <h2 class="panel-title">Selected Run</h2>
+                <div class="panel-actions">
+                  <button id="stopRunBtn" class="secondary" type="button">Stop Run</button>
+                  <button id="continueRunBtn" class="secondary" type="button">Continue Run</button>
+                  <button id="deleteRunBtn" class="secondary" type="button">Delete Run</button>
                 </div>
-                <button id="runSimulationBtn" type="button">Run Simulation Batch</button>
-              </div>
-            </section>
-
-          </div>
-
-          <div class="simulations-main">
-            <section class="panel">
-              <div class="panel-head">
-                <h2 class="panel-title">Simulation Runs</h2>
               </div>
               <div class="panel-body stack">
-                <div id="simulationRunsMeta" class="subtle">Choose a run to inspect its games.</div>
-                <div id="simulationList" class="detail-list"></div>
+                <div>
+                  <strong id="selectedRunLabel">No run selected.</strong>
+                  <div id="selectedRunMeta" class="subtle">Select a run to inspect its generation history.</div>
+                </div>
+                <div id="selectedRunStats" class="run-stat-grid"></div>
+                <div id="selectedRunGenerations" class="chip-list"></div>
               </div>
             </section>
 
             <section class="panel">
               <div class="panel-head">
-                <h2 class="panel-title">Run Games</h2>
+                <h2 class="panel-title">Generation Win Graph</h2>
               </div>
               <div class="panel-body stack">
-                <div class="section-grid">
-                  <strong id="selectedSimulationLabel">No simulation selected.</strong>
-                  <div id="selectedSimulationMeta" class="subtle">Select a simulation run to load its game list.</div>
+                <div class="subtle">Each line shows the candidate generation win rate against one earlier generation retained at the configured stride.</div>
+                <div class="canvas-shell">
+                  <div id="generationWinTooltip" class="chart-tooltip"></div>
+                  <canvas id="generationWinCanvas" width="1200" height="560"></canvas>
                 </div>
-                <div id="simulationGameList" class="detail-list"></div>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <h2 class="panel-title">Replay Theater</h2>
-              </div>
-              <div class="panel-body stack">
-                <div class="hidden-controls">
-                  <select id="replaySimulationSelect"></select>
-                  <select id="replayGameSelect"></select>
-                </div>
-                <div class="control-row">
-                  <button id="replayPlayPauseBtn" class="secondary" type="button">Play</button>
-                  <button id="replayPrevBtn" class="secondary" type="button">Prev</button>
-                  <button id="replayNextBtn" class="secondary" type="button">Next</button>
-                  <div style="min-width:140px;">
-                    <label for="replaySpeedSelect">Playback Speed</label>
-                    <select id="replaySpeedSelect">
-                      <option value="2000">0.5x</option>
-                      <option value="1000">1x</option>
-                      <option value="600" selected>1.67x</option>
-                      <option value="350">2.86x</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="range-row">
-                  <input id="replayRange" type="range" min="0" max="0" step="1" value="0" />
-                  <span id="replayFrameLabel" class="badge">0 / 0</span>
-                </div>
-                <div id="replayMeta" class="subtle">No replay loaded.</div>
-
-                <div class="replay-shell">
-                  <div class="board-shell">
-                    <div class="deck-grid">
-                      <div id="replayWhiteDeck" class="deck-card"></div>
-                      <div id="replayBlackDeck" class="deck-card"></div>
-                    </div>
-                    <div id="replayPlayArea" class="replay-play-area">
-                      <div id="replayTopBar" class="replay-layer replay-top-bar"></div>
-                      <div id="replayBottomBar" class="replay-layer replay-bottom-bar"></div>
-                      <div id="replayBoardLayer" class="replay-board-layer"></div>
-                      <div id="replayStashLayer" class="replay-layer replay-stash-layer"></div>
-                    </div>
-                  </div>
-
-                  <div class="stack">
-                    <section class="log-panel">
-                      <div class="panel-title" style="margin-bottom:10px;">Decision Inspector</div>
-                      <div id="decisionInspector" class="decision-grid">
-                        <div class="subtle">Load a replay to inspect frame decisions.</div>
-                      </div>
-                    </section>
-                    <section class="log-panel">
-                      <div class="panel-title" style="margin-bottom:10px;">Action Log</div>
-                      <div id="replayMoveLog"></div>
-                    </section>
-                  </div>
+                <div id="generationWinLegend" class="subtle">No run selected.</div>
+                <div id="selectedRunConfigMeta" class="subtle">Select a run to inspect its saved config.</div>
+                <div class="table-shell config-table-shell">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Parameter</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody id="selectedRunConfigBody">
+                      <tr>
+                        <td colspan="2" class="subtle">No run selected.</td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </section>
@@ -1154,117 +1073,115 @@
         </div>
       </section>
 
-      <section class="workflow-panel" data-workflow-panel="training">
-        <div class="workflow-grid">
-          <div class="stack">
-            <section class="panel">
-              <div class="panel-head">
-                <h2 class="panel-title">Training Stream</h2>
-                <span id="trainingStreamBadge" class="badge">Idle</span>
-              </div>
-              <div class="panel-body stream-card">
-                <div class="progress"><span id="trainingProgressBar"></span></div>
-                <div id="trainingProgressMeta" class="subtle">No training running.</div>
-                <div class="metric-bar-list">
-                  <div class="metric-bar-row">
-                    <span class="metric-bar-label">Policy Loss</span>
-                    <div class="metric-bar-track"><span id="trainingPolicyLossBar" class="metric-bar-fill policy"></span></div>
-                    <span id="trainingPolicyLossValue" class="metric-bar-value">--</span>
-                  </div>
-                  <div class="metric-bar-row">
-                    <span class="metric-bar-label">Value Loss</span>
-                    <div class="metric-bar-track"><span id="trainingValueLossBar" class="metric-bar-fill value"></span></div>
-                    <span id="trainingValueLossValue" class="metric-bar-value">--</span>
-                  </div>
-                  <div class="metric-bar-row">
-                    <span class="metric-bar-label">Identity Loss</span>
-                    <div class="metric-bar-track"><span id="trainingIdentityLossBar" class="metric-bar-fill identity"></span></div>
-                    <span id="trainingIdentityLossValue" class="metric-bar-value">--</span>
+      <section class="workflow-panel" data-workflow-panel="replay">
+        <div class="grid-2">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Replay Selector</h2>
+            </div>
+            <div class="panel-body stack">
+              <div class="form-grid">
+                <div class="full">
+                  <label for="replayRunSelect">Run</label>
+                  <select id="replayRunSelect"></select>
+                </div>
+                <div>
+                  <label for="replayGenerationFilterSelect">Generation</label>
+                  <select id="replayGenerationFilterSelect"></select>
+                </div>
+                <div class="replay-list-controls">
+                  <label>Scroll</label>
+                  <div class="replay-list-button-row">
+                    <button id="replayListTopBtn" class="secondary" type="button">Top</button>
+                    <button id="replayListBottomBtn" class="secondary" type="button">Bottom</button>
                   </div>
                 </div>
-                <div id="trainingAccuracyMeta" class="subtle">Identity accuracy: --</div>
               </div>
-            </section>
+              <div id="replaySelectionMeta" class="subtle">Choose a run to load its retained games.</div>
+              <div id="replayGameList" class="detail-list replay-game-list"></div>
+            </div>
+          </section>
 
-            <section class="panel">
-              <div class="panel-head">
-                <h2 class="panel-title">New Training Run</h2>
-              </div>
-              <div class="panel-body stack">
-                <div class="hidden-controls">
-                  <select id="selectedSnapshotSelect"></select>
-                  <select id="lossSnapshotSelect"></select>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Replay Theater</h2>
+            </div>
+            <div class="panel-body stack">
+              <div class="control-row">
+                <button id="replayPlayPauseBtn" class="secondary" type="button">Play</button>
+                <button id="replayPrevBtn" class="secondary" type="button">Prev</button>
+                <button id="replayNextBtn" class="secondary" type="button">Next</button>
+                <div style="min-width:140px;">
+                  <label for="replaySpeedSelect">Playback Speed</label>
+                  <select id="replaySpeedSelect">
+                    <option value="2000">0.5x</option>
+                    <option value="1000">1x</option>
+                    <option value="600" selected>1.67x</option>
+                    <option value="350">2.86x</option>
+                  </select>
                 </div>
-                <div class="form-grid">
-                  <div class="full">
-                    <label for="trainSnapshotSelect">Base Snapshot</label>
-                    <select id="trainSnapshotSelect"></select>
+              </div>
+              <div class="range-row">
+                <input id="replayRange" type="range" min="0" max="0" step="1" value="0" />
+                <span id="replayFrameLabel" class="badge">0 / 0</span>
+              </div>
+              <div id="replayMeta" class="subtle">No replay loaded.</div>
+
+              <div class="replay-shell">
+                <div class="board-shell">
+                  <div class="deck-grid">
+                    <div id="replayWhiteDeck" class="deck-card"></div>
+                    <div id="replayBlackDeck" class="deck-card"></div>
                   </div>
-                  <div>
-                    <label for="epochsInput">Epochs</label>
-                    <input id="epochsInput" type="number" min="1" max="50" value="3" />
-                  </div>
-                  <div>
-                    <label for="learningRateInput">Learning Rate</label>
-                    <input id="learningRateInput" type="number" min="0.0001" max="0.5" step="0.0005" value="0.01" />
-                  </div>
-                  <div class="full">
-                    <label for="trainingLabelInput">Output Model Label</label>
-                    <input id="trainingLabelInput" type="text" placeholder="Optional label" />
+                  <div id="replayPlayArea" class="replay-play-area">
+                    <div id="replayTopBar" class="replay-layer replay-top-bar"></div>
+                    <div id="replayBottomBar" class="replay-layer replay-bottom-bar"></div>
+                    <div id="replayBoardLayer" class="replay-board-layer"></div>
+                    <div id="replayStashLayer" class="replay-layer replay-stash-layer"></div>
                   </div>
                 </div>
 
-                <div class="subtle" id="trainingSourceMeta">Choose a base snapshot to see trainable sources.</div>
-                <div class="actions">
-                  <button id="selectEligibleSourcesBtn" class="secondary" type="button">Select Eligible</button>
-                  <button id="clearTrainingSourcesBtn" class="secondary" type="button">Clear Sources</button>
+                <div class="stack">
+                  <section class="log-panel">
+                    <div class="panel-title" style="margin-bottom:10px;">Decision Inspector</div>
+                    <div id="decisionInspector" class="subtle">Load a replay to inspect frame decisions.</div>
+                  </section>
+                  <section class="log-panel">
+                    <div class="panel-title" style="margin-bottom:10px;">Action Log</div>
+                    <div id="replayMoveLog"></div>
+                  </section>
                 </div>
-                <div id="trainingSourceList" class="list"></div>
-                <button id="runTrainingBtn" type="button">Run Training</button>
               </div>
-            </section>
+            </div>
+          </section>
+        </div>
+      </section>
 
-            <section class="panel">
-              <div class="panel-head">
-                <h2 class="panel-title">Recent Training Runs</h2>
-              </div>
-              <div class="panel-body">
-                <div id="trainingRunList" class="list"></div>
-              </div>
-            </section>
-          </div>
+      <section class="workflow-panel" data-workflow-panel="test">
+        <div class="grid-2">
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Promoted Bot Catalog</h2>
+            </div>
+            <div class="panel-body stack">
+              <div class="subtle">Check the promoted models that should appear in the normal bot dropdown. The main client will append them after Easy, Medium, and Hard.</div>
+              <div id="testSelectionMeta" class="subtle">Loading promoted models...</div>
+              <div id="testPromotedBotList" class="test-bot-list"></div>
+              <button id="savePromotedBotsBtn" type="button">Save Bot Dropdown</button>
+            </div>
+          </section>
 
-          <div class="stack">
-            <section class="panel">
-              <div class="panel-head">
-                <h2 class="panel-title">Output Models</h2>
-                <button id="forkSnapshotBtn" class="secondary" type="button">Fork Selected</button>
-              </div>
-              <div class="panel-body stack">
-                <div class="model-detail-grid">
-                  <strong id="selectedModelSummary">No model selected.</strong>
-                  <div id="selectedModelMeta" class="subtle">Select an output model to inspect it.</div>
-                  <div id="selectedModelStats" class="subtle">No model stats available.</div>
-                </div>
-                <div id="snapshotList" class="detail-list"></div>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <h2 class="panel-title">Loss Graph</h2>
-              </div>
-              <div class="panel-body stack">
-                <div class="subtle">Live training updates appear here during a run. Otherwise this shows the selected model&apos;s stored loss history.</div>
-                <div class="canvas-shell">
-                  <canvas id="lossCanvas" width="1200" height="420"></canvas>
-                  <div id="lossTooltip" class="loss-tooltip" hidden></div>
-                </div>
-                <div id="lossLegend" class="subtle">No loss history loaded.</div>
-                <div id="lossRunList" class="chip-list"></div>
-              </div>
-            </section>
-          </div>
+          <section class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">How It Works</h2>
+            </div>
+            <div class="panel-body stack">
+              <div class="subtle">This tab no longer launches one-off games directly.</div>
+              <div class="subtle">Each checked model becomes a normal bot option in the main Cloak&apos;s Gambit client, using the same live routes and standard match flow as the built-in bots.</div>
+              <div class="subtle">When a player chooses one of those enabled promoted models, the ML runtime auto-setups, auto-readies, and plays the bot seat with that generation&apos;s Node inference stack.</div>
+              <div class="subtle">Uncheck a model here and save to remove it from the public bot dropdown without deleting the underlying run or generation.</div>
+            </div>
+          </section>
         </div>
       </section>
     </div>

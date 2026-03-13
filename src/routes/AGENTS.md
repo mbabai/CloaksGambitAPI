@@ -5,6 +5,7 @@
   - `/api/v1/*` from `src/routes/v1/`
   - `/api/auth/*` from `src/routes/auth/google.js`
 - `src/routes/v1/index.js` registers each route module explicitly instead of auto-loading directories. If you add a route file, you must mount it there.
+- `src/routes/v1/ml/index.js` is only mounted when `src/utils/mlFeatureGate.js` enables the ML workflow. See `src/routes/v1/ml/AGENTS.md` before changing the admin workbench API.
 
 ## Common Patterns
 - Most mutating routes follow this order:

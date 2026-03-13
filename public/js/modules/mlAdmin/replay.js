@@ -8,6 +8,7 @@ import {
   colorToText,
   formatActionRecord,
   formatDate,
+  formatDuration,
   identityToSymbol,
   normalizeActionTypeConstant,
   winReasonToText,
@@ -59,6 +60,7 @@ function buildReplayHistoryFallback(decisions = []) {
 }
 
 export function createReplayWorkbench(elements = {}) {
+  const MOVE_LOG_WINDOW = 80;
   const state = {
     replayPayload: null,
     timer: null,
@@ -134,6 +136,20 @@ export function createReplayWorkbench(elements = {}) {
     container.appendChild(text);
   }
 
+  function getReplayHistories() {
+    const replayGame = state.replayPayload?.game || {};
+    const fallbackHistory = buildReplayHistoryFallback(replayGame.decisions || []);
+    return {
+      replayGame,
+      actionHistory: Array.isArray(replayGame.actionHistory) && replayGame.actionHistory.length
+        ? replayGame.actionHistory
+        : fallbackHistory.actions,
+      moveHistory: Array.isArray(replayGame.moveHistory) && replayGame.moveHistory.length
+        ? replayGame.moveHistory
+        : fallbackHistory.moves,
+    };
+  }
+
   function renderMoveLog(actionHistory, actionCount, labels = {}) {
     if (!elements.moveLog) return;
     if (!Array.isArray(actionHistory) || !actionHistory.length) {
@@ -141,8 +157,19 @@ export function createReplayWorkbench(elements = {}) {
       return;
     }
     const safeCount = Math.max(0, Math.min(actionHistory.length, Number.parseInt(actionCount, 10) || 0));
+    const activeIndex = Math.max(0, safeCount - 1);
+    const windowStart = Math.max(0, activeIndex - Math.floor(MOVE_LOG_WINDOW * 0.6));
+    const windowEnd = Math.min(actionHistory.length, Math.max(safeCount, windowStart + MOVE_LOG_WINDOW));
+    const visibleActions = actionHistory.slice(windowStart, windowEnd);
     elements.moveLog.innerHTML = '';
-    actionHistory.forEach((action, idx) => {
+    if (windowStart > 0 || windowEnd < actionHistory.length) {
+      const summary = document.createElement('div');
+      summary.className = 'subtle';
+      summary.textContent = `Showing actions ${windowStart + 1}-${windowEnd} of ${actionHistory.length}`;
+      elements.moveLog.appendChild(summary);
+    }
+    visibleActions.forEach((action, offset) => {
+      const idx = windowStart + offset;
       const row = document.createElement('div');
       row.className = 'move-line';
       if ((idx + 1) === safeCount) {
@@ -244,14 +271,7 @@ export function createReplayWorkbench(elements = {}) {
       return;
     }
 
-    const replayGame = state.replayPayload?.game || {};
-    const fallbackHistory = buildReplayHistoryFallback(replayGame.decisions || []);
-    const actionHistory = Array.isArray(replayGame.actionHistory) && replayGame.actionHistory.length
-      ? replayGame.actionHistory
-      : fallbackHistory.actions;
-    const moveHistory = Array.isArray(replayGame.moveHistory) && replayGame.moveHistory.length
-      ? replayGame.moveHistory
-      : fallbackHistory.moves;
+    const { actionHistory, moveHistory } = getReplayHistories();
     const actionCount = Number.isFinite(frame?.actionCount) ? frame.actionCount : frame.ply;
     const moveCount = Number.isFinite(frame?.moveCount) ? frame.moveCount : moveHistory.length;
 
@@ -357,11 +377,7 @@ export function createReplayWorkbench(elements = {}) {
 
   function renderFrame(index = 0) {
     const replay = state.replayPayload?.game?.replay || [];
-    const replayGame = state.replayPayload?.game || {};
-    const fallbackHistory = buildReplayHistoryFallback(replayGame.decisions || []);
-    const actionHistory = Array.isArray(replayGame.actionHistory) && replayGame.actionHistory.length
-      ? replayGame.actionHistory
-      : fallbackHistory.actions;
+    const { replayGame, actionHistory } = getReplayHistories();
     const whiteName = replayGame.whiteParticipantLabel || state.replayPayload?.simulation?.participantALabel || 'White';
     const blackName = replayGame.blackParticipantLabel || state.replayPayload?.simulation?.participantBLabel || 'Black';
 
@@ -388,7 +404,16 @@ export function createReplayWorkbench(elements = {}) {
       const decisionText = frame?.decision
         ? ` | ${frame.decision.participantLabel || colorToText(frame.decision.player)} ${formatActionRecord(frame.decision.action)} | value ${Number(frame.decision.valueEstimate || 0).toFixed(3)}`
         : '';
-      elements.meta.textContent = `Frame ${safeIndex} | Ply ${frame.ply} | To move ${colorToText(frame.toMove)} | Winner ${frame.winner === null || frame.winner === undefined ? 'None' : colorToText(frame.winner)} | Reason ${winReasonToText(frame.winReason)}${actionText}${decisionText}`;
+      const replayGame = state.replayPayload?.game || {};
+      const replayRun = state.replayPayload?.run || {};
+      const timingText = [
+        Number.isFinite(replayGame?.durationMs) ? `Game ${formatDuration(replayGame.durationMs)}` : '',
+        Number.isFinite(replayRun?.averageSelfPlayGameDurationMs) ? `Avg sim ${formatDuration(replayRun.averageSelfPlayGameDurationMs)}` : '',
+        Number.isFinite(replayRun?.averageEvaluationGameDurationMs) ? `Avg eval ${formatDuration(replayRun.averageEvaluationGameDurationMs)}` : '',
+        Number.isFinite(replayRun?.elapsedMs) ? `Run ${formatDuration(replayRun.elapsedMs)}` : '',
+      ].filter(Boolean).join(' | ');
+      const timingSuffix = timingText ? ` | ${timingText}` : '';
+      elements.meta.textContent = `Frame ${safeIndex} | Ply ${frame.ply} | To move ${colorToText(frame.toMove)} | Winner ${frame.winner === null || frame.winner === undefined ? 'None' : colorToText(frame.winner)} | Reason ${winReasonToText(frame.winReason)}${actionText}${decisionText}${timingSuffix}`;
     }
     renderMoveLog(actionHistory, frame.actionCount || frame.ply, { white: whiteName, black: blackName });
     renderDecisionInspector(frame);

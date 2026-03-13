@@ -31,7 +31,7 @@ const userSchema = new mongoose.Schema({
   },
   botDifficulty: {
     type: String,
-    enum: ['easy', 'medium', 'hard'],
+    trim: true,
     default: null
   },
   isGuest: {

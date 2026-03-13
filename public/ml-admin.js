@@ -1,93 +1,92 @@
-import { createLossChart } from '/js/modules/mlAdmin/lossChart.js';
+import { createGenerationWinChart } from '/js/modules/mlAdmin/generationWinChart.js';
 import { createReplayWorkbench } from '/js/modules/mlAdmin/replay.js';
-import {
-  BUILTIN_MEDIUM_ID,
-  colorToText,
-  describeStorage,
-  fillSelect,
-  flattenLossHistory,
-  formatDate,
-  formatWinReasonSummary,
-  getSimulationTrainingEligibility,
-  parseNumberInput,
-  parseSnapshotIdFromParticipantRef,
-  participantLabel,
-  snapshotOptionLabel,
-  winReasonToText,
-} from '/js/modules/mlAdmin/utils.js';
+import { createResourceUsageChart } from '/js/modules/mlAdmin/resourceUsageChart.js';
 
 const workflowTabs = Array.from(document.querySelectorAll('[data-workflow-tab]'));
 const workflowPanels = Array.from(document.querySelectorAll('[data-workflow-panel]'));
-const LIVE_POLL_MS = 3000;
-const WORKBENCH_POLL_MS = 15000;
+const LIVE_POLL_MS = 2000;
+const WORKBENCH_POLL_MS = 30000;
+const UI_CLOCK_MS = 1000;
 
 const els = {
   refreshWorkbenchBtn: document.getElementById('refreshWorkbenchBtn'),
   statusText: document.getElementById('statusText'),
 
-  countSnapshots: document.getElementById('countSnapshots'),
-  countSimulations: document.getElementById('countSimulations'),
+  countRuns: document.getElementById('countRuns'),
+  countActiveRuns: document.getElementById('countActiveRuns'),
   countGames: document.getElementById('countGames'),
-  countTrainingRuns: document.getElementById('countTrainingRuns'),
-  latestSimulationSummary: document.getElementById('latestSimulationSummary'),
-  latestTrainingSummary: document.getElementById('latestTrainingSummary'),
+  countGenerations: document.getElementById('countGenerations'),
+  cpuUsageValue: document.getElementById('cpuUsageValue'),
+  cpuUsageMeta: document.getElementById('cpuUsageMeta'),
+  cpuUsageCanvas: document.getElementById('cpuUsageCanvas'),
+  gpuUsageValue: document.getElementById('gpuUsageValue'),
+  gpuUsageMeta: document.getElementById('gpuUsageMeta'),
+  gpuUsageCanvas: document.getElementById('gpuUsageCanvas'),
+  latestRunSummary: document.getElementById('latestRunSummary'),
 
-  trainingStreamBadge: document.getElementById('trainingStreamBadge'),
-  trainingProgressBar: document.getElementById('trainingProgressBar'),
-  trainingProgressMeta: document.getElementById('trainingProgressMeta'),
-  trainingPolicyLossBar: document.getElementById('trainingPolicyLossBar'),
-  trainingPolicyLossValue: document.getElementById('trainingPolicyLossValue'),
-  trainingValueLossBar: document.getElementById('trainingValueLossBar'),
-  trainingValueLossValue: document.getElementById('trainingValueLossValue'),
-  trainingIdentityLossBar: document.getElementById('trainingIdentityLossBar'),
-  trainingIdentityLossValue: document.getElementById('trainingIdentityLossValue'),
-  trainingAccuracyMeta: document.getElementById('trainingAccuracyMeta'),
-
-  selectedSnapshotSelect: document.getElementById('selectedSnapshotSelect'),
-  snapshotList: document.getElementById('snapshotList'),
-  forkSnapshotBtn: document.getElementById('forkSnapshotBtn'),
-  selectedModelSummary: document.getElementById('selectedModelSummary'),
-  selectedModelMeta: document.getElementById('selectedModelMeta'),
-  selectedModelStats: document.getElementById('selectedModelStats'),
-
-  whiteParticipantSelect: document.getElementById('whiteParticipantSelect'),
-  blackParticipantSelect: document.getElementById('blackParticipantSelect'),
-  gameCountInput: document.getElementById('gameCountInput'),
-  maxPliesInput: document.getElementById('maxPliesInput'),
-  iterationsInput: document.getElementById('iterationsInput'),
+  runNameInput: document.getElementById('runNameInput'),
+  seedModeSelect: document.getElementById('seedModeSelect'),
+  seedInput: document.getElementById('seedInput'),
+  numSelfplayWorkersInput: document.getElementById('numSelfplayWorkersInput'),
+  parallelGameWorkersInput: document.getElementById('parallelGameWorkersInput'),
+  numMctsSimulationsInput: document.getElementById('numMctsSimulationsInput'),
   maxDepthInput: document.getElementById('maxDepthInput'),
   hypothesisCountInput: document.getElementById('hypothesisCountInput'),
   riskBiasInput: document.getElementById('riskBiasInput'),
   explorationInput: document.getElementById('explorationInput'),
-  seedInput: document.getElementById('seedInput'),
-  simulationLabelInput: document.getElementById('simulationLabelInput'),
-  alternateColorsInput: document.getElementById('alternateColorsInput'),
-  runSimulationBtn: document.getElementById('runSimulationBtn'),
-  simulationRunsMeta: document.getElementById('simulationRunsMeta'),
-  simulationList: document.getElementById('simulationList'),
-  selectedSimulationLabel: document.getElementById('selectedSimulationLabel'),
-  selectedSimulationMeta: document.getElementById('selectedSimulationMeta'),
-  simulationGameList: document.getElementById('simulationGameList'),
-
-  trainSnapshotSelect: document.getElementById('trainSnapshotSelect'),
-  epochsInput: document.getElementById('epochsInput'),
+  replayBufferMaxPositionsInput: document.getElementById('replayBufferMaxPositionsInput'),
+  batchSizeInput: document.getElementById('batchSizeInput'),
   learningRateInput: document.getElementById('learningRateInput'),
-  trainingLabelInput: document.getElementById('trainingLabelInput'),
-  trainingSourceMeta: document.getElementById('trainingSourceMeta'),
-  trainingSourceList: document.getElementById('trainingSourceList'),
-  selectEligibleSourcesBtn: document.getElementById('selectEligibleSourcesBtn'),
-  clearTrainingSourcesBtn: document.getElementById('clearTrainingSourcesBtn'),
-  runTrainingBtn: document.getElementById('runTrainingBtn'),
-  trainingRunList: document.getElementById('trainingRunList'),
+  trainingBackendSelect: document.getElementById('trainingBackendSelect'),
+  trainingDeviceSelect: document.getElementById('trainingDeviceSelect'),
+  weightDecayInput: document.getElementById('weightDecayInput'),
+  gradientClipNormInput: document.getElementById('gradientClipNormInput'),
+  trainingStepsPerCycleInput: document.getElementById('trainingStepsPerCycleInput'),
+  parallelTrainingHeadWorkersInput: document.getElementById('parallelTrainingHeadWorkersInput'),
+  checkpointIntervalInput: document.getElementById('checkpointIntervalInput'),
+  prePromotionTestGamesInput: document.getElementById('prePromotionTestGamesInput'),
+  prePromotionTestWinRateInput: document.getElementById('prePromotionTestWinRateInput'),
+  promotionTestGamesInput: document.getElementById('promotionTestGamesInput'),
+  promotionTestWinRateInput: document.getElementById('promotionTestWinRateInput'),
+  promotionTestPriorGenerationsInput: document.getElementById('promotionTestPriorGenerationsInput'),
+  modelRefreshIntervalInput: document.getElementById('modelRefreshIntervalInput'),
+  generationComparisonStrideInput: document.getElementById('generationComparisonStrideInput'),
+  olderGenerationSampleProbabilityInput: document.getElementById('olderGenerationSampleProbabilityInput'),
+  stopOnMaxGenerationsInput: document.getElementById('stopOnMaxGenerationsInput'),
+  maxGenerationsInput: document.getElementById('maxGenerationsInput'),
+  stopOnMaxSelfPlayGamesInput: document.getElementById('stopOnMaxSelfPlayGamesInput'),
+  maxSelfPlayGamesInput: document.getElementById('maxSelfPlayGamesInput'),
+  stopOnMaxTrainingStepsInput: document.getElementById('stopOnMaxTrainingStepsInput'),
+  maxTrainingStepsInput: document.getElementById('maxTrainingStepsInput'),
+  stopOnMaxFailedPromotionsInput: document.getElementById('stopOnMaxFailedPromotionsInput'),
+  maxFailedPromotionsInput: document.getElementById('maxFailedPromotionsInput'),
+  startRunBtn: document.getElementById('startRunBtn'),
 
-  lossSnapshotSelect: document.getElementById('lossSnapshotSelect'),
-  lossCanvas: document.getElementById('lossCanvas'),
-  lossTooltip: document.getElementById('lossTooltip'),
-  lossLegend: document.getElementById('lossLegend'),
-  lossRunList: document.getElementById('lossRunList'),
+  runsTableBody: document.getElementById('runsTableBody'),
+  stopRunBtn: document.getElementById('stopRunBtn'),
+  continueRunBtn: document.getElementById('continueRunBtn'),
+  deleteRunBtn: document.getElementById('deleteRunBtn'),
+  selectedRunLabel: document.getElementById('selectedRunLabel'),
+  selectedRunMeta: document.getElementById('selectedRunMeta'),
+  selectedRunStats: document.getElementById('selectedRunStats'),
+  selectedRunGenerations: document.getElementById('selectedRunGenerations'),
+  selectedRunConfigMeta: document.getElementById('selectedRunConfigMeta'),
+  selectedRunConfigBody: document.getElementById('selectedRunConfigBody'),
+  generationWinCanvas: document.getElementById('generationWinCanvas'),
+  generationWinTooltip: document.getElementById('generationWinTooltip'),
+  generationWinLegend: document.getElementById('generationWinLegend'),
 
-  replaySimulationSelect: document.getElementById('replaySimulationSelect'),
-  replayGameSelect: document.getElementById('replayGameSelect'),
+  replayRunSelect: document.getElementById('replayRunSelect'),
+  replayGenerationFilterSelect: document.getElementById('replayGenerationFilterSelect'),
+  replayListTopBtn: document.getElementById('replayListTopBtn'),
+  replayListBottomBtn: document.getElementById('replayListBottomBtn'),
+  replaySelectionMeta: document.getElementById('replaySelectionMeta'),
+  replayGameList: document.getElementById('replayGameList'),
+
+  testPromotedBotList: document.getElementById('testPromotedBotList'),
+  testSelectionMeta: document.getElementById('testSelectionMeta'),
+  savePromotedBotsBtn: document.getElementById('savePromotedBotsBtn'),
+
   replayPlayPauseBtn: document.getElementById('replayPlayPauseBtn'),
   replayPrevBtn: document.getElementById('replayPrevBtn'),
   replayNextBtn: document.getElementById('replayNextBtn'),
@@ -107,36 +106,115 @@ const els = {
 };
 
 const state = {
-  summary: null,
-  snapshots: [],
-  participants: [],
-  simulations: [],
-  trainingRuns: [],
-  simulationDetailsById: new Map(),
-  trainingSelection: new Set(),
-  activeSimulationTaskId: '',
-  activeWorkflowTab: 'simulations',
-  selectedSimulationId: '',
-  selectedGameId: '',
-  selectedSnapshotId: '',
-  selectedTrainingRunId: '',
-  loadingSimulationId: '',
-  liveSimulation: null,
-  liveTraining: null,
-  liveTrainingHistory: [],
-  liveTrainingMeta: null,
-  lossChartMode: 'stored',
-  lossRequestToken: 0,
+  defaults: null,
+  runs: [],
+  resourceTelemetry: null,
+  runDetailsById: new Map(),
+  liveRunsById: new Map(),
+  activeWorkflowTab: 'config',
+  selectedRunId: '',
+  seedSourceOptions: [],
+  replayRunId: '',
+  promotedBots: [],
+  replayGenerationFilter: '',
+  replayGames: [],
+  replayGamesByRunId: new Map(),
+  selectedReplayGameId: '',
+  replayGamesRequestSeq: 0,
+  replayGameRequestSeq: 0,
+  replayRefreshHandle: null,
+  replayGamesLoad: null,
+  replayGamesLoading: false,
+  replayGamesError: '',
+  savingPromotedBots: false,
   livePollHandle: null,
   workbenchPollHandle: null,
-  isRefreshingWorkbench: false,
+  uiClockHandle: null,
 };
 
-const lossChart = createLossChart({
-  canvas: els.lossCanvas,
-  tooltip: els.lossTooltip,
-  legend: els.lossLegend,
-  runList: els.lossRunList,
+const fieldHelpTextById = {
+  runNameInput: 'Name shown in the runs table for this experiment.',
+  seedModeSelect: 'Choose whether to start from the bootstrap model, a fresh random model, or a promoted generation from an existing run.',
+  seedInput: 'Optional random seed for reproducible model initialization and self-play ordering.',
+  numSelfplayWorkersInput: 'How many fresh self-play games to generate per pipeline cycle.',
+  parallelGameWorkersInput: 'How many game worker threads to use for self-play and evaluation. This is separate from games per cycle.',
+  numMctsSimulationsInput: 'Search simulations per move. Higher is slower but should improve move quality.',
+  maxDepthInput: 'Maximum search depth used by the MCTS rollout.',
+  hypothesisCountInput: 'How many hidden-information identity hypotheses the search keeps alive.',
+  riskBiasInput: 'Bias toward safer or riskier hidden-information lines during search.',
+  explorationInput: 'Exploration constant for MCTS. Higher values spread visits across more actions.',
+  replayBufferMaxPositionsInput: 'Maximum number of recent training positions kept in the sliding replay buffer.',
+  batchSizeInput: 'Minibatch size sampled from the replay buffer for each gradient update.',
+  learningRateInput: 'Step size used by the optimizer during training.',
+  trainingBackendSelect: 'Choose whether training stays in the Node CPU trainer or uses the Python Torch bridge.',
+  trainingDeviceSelect: 'When Python Torch training is selected, prefer CUDA or CPU. Inference still runs on CPU in Node.',
+  weightDecayInput: 'L2 penalty applied during training to discourage very large weights.',
+  gradientClipNormInput: 'Maximum gradient norm before clipping is applied.',
+  trainingStepsPerCycleInput: 'How many gradient steps to run after each self-play cycle.',
+  parallelTrainingHeadWorkersInput: 'How many training heads can run in parallel. Policy, value, and identity can each use a separate worker.',
+  checkpointIntervalInput: 'Create an evaluation checkpoint every N training steps.',
+  prePromotionTestGamesInput: 'Stage 1 gate: games against the prior promoted generation before deeper promotion testing.',
+  prePromotionTestWinRateInput: 'Stage 1 gate: required win rate against the prior promoted generation.',
+  promotionTestGamesInput: 'Stage 2 gate: games per matchup against the prior promoted generations.',
+  promotionTestWinRateInput: 'Stage 2 gate: required win rate in each full promotion matchup.',
+  promotionTestPriorGenerationsInput: 'How many prior promoted generations to include in the full promotion gate.',
+  modelRefreshIntervalInput: 'How often self-play workers refresh to the latest approved generation.',
+  generationComparisonStrideInput: 'Stride used when showing generation-vs-generation gate checks in the graph.',
+  olderGenerationSampleProbabilityInput: 'Chance that self-play mixes in an older approved generation instead of mirroring the worker generation.',
+  stopOnMaxGenerationsInput: 'Enable or disable stopping after a best-generation target is reached.',
+  maxGenerationsInput: 'Stop once the best approved generation reaches this number.',
+  stopOnMaxSelfPlayGamesInput: 'Enable or disable stopping after a self-play game cap is reached.',
+  maxSelfPlayGamesInput: 'Stop once this many self-play games have been generated.',
+  stopOnMaxTrainingStepsInput: 'Enable or disable stopping after a training-step cap is reached.',
+  maxTrainingStepsInput: 'Stop once this many training steps have been executed.',
+  stopOnMaxFailedPromotionsInput: 'Enable or disable stopping after too many failed promotions.',
+  maxFailedPromotionsInput: 'Stop after this many consecutive failed promotions.',
+};
+
+const selectedRunConfigFields = [
+  { key: 'seedMode', label: 'Seed Model' },
+  { key: 'seedRunId', label: 'Seed Run' },
+  { key: 'seedGeneration', label: 'Seed Generation' },
+  { key: 'seed', label: 'Seed' },
+  { key: 'numSelfplayWorkers', label: 'Self-Play Workers' },
+  { key: 'parallelGameWorkers', label: 'Parallel Game Workers' },
+  { key: 'numMctsSimulationsPerMove', label: 'MCTS Simulations Per Move' },
+  { key: 'maxDepth', label: 'Max Depth' },
+  { key: 'hypothesisCount', label: 'Hypothesis Count' },
+  { key: 'riskBias', label: 'Risk Bias' },
+  { key: 'exploration', label: 'Exploration' },
+  { key: 'replayBufferMaxPositions', label: 'Replay Buffer Max Positions' },
+  { key: 'batchSize', label: 'Batch Size' },
+  { key: 'learningRate', label: 'Learning Rate' },
+  { key: 'trainingBackend', label: 'Training Backend' },
+  { key: 'trainingDevicePreference', label: 'Training Device Preference' },
+  { key: 'weightDecay', label: 'Weight Decay' },
+  { key: 'gradientClipNorm', label: 'Gradient Clip Norm' },
+  { key: 'trainingStepsPerCycle', label: 'Training Steps Per Cycle' },
+  { key: 'parallelTrainingHeadWorkers', label: 'Parallel Training Head Workers' },
+  { key: 'checkpointInterval', label: 'Checkpoint Interval' },
+  { key: 'prePromotionTestGames', label: 'Pre-Promotion Test Games' },
+  { key: 'prePromotionTestWinRate', label: 'Pre-Promotion Test Win Rate' },
+  { key: 'promotionTestGames', label: 'Promotion Test Games' },
+  { key: 'promotionTestWinRate', label: 'Promotion Test Win Rate' },
+  { key: 'promotionTestPriorGenerations', label: 'Promotion Test Prior Generations' },
+  { key: 'modelRefreshIntervalForWorkers', label: 'Model Refresh Interval' },
+  { key: 'generationComparisonStride', label: 'Generation Comparison Stride' },
+  { key: 'olderGenerationSampleProbability', label: 'Older Generation Sample Probability' },
+  { key: 'stopOnMaxGenerations', label: 'Stop On Max Generations' },
+  { key: 'maxGenerations', label: 'Max Generations' },
+  { key: 'stopOnMaxSelfPlayGames', label: 'Stop On Max Self-Play Games' },
+  { key: 'maxSelfPlayGames', label: 'Max Self-Play Games' },
+  { key: 'stopOnMaxTrainingSteps', label: 'Stop On Max Training Steps' },
+  { key: 'maxTrainingSteps', label: 'Max Training Steps' },
+  { key: 'stopOnMaxFailedPromotions', label: 'Stop On Max Failed Promotions' },
+  { key: 'maxFailedPromotions', label: 'Max Failed Promotions' },
+];
+
+const generationWinChart = createGenerationWinChart({
+  canvas: els.generationWinCanvas,
+  tooltip: els.generationWinTooltip,
+  legend: els.generationWinLegend,
 });
 
 const replayWorkbench = createReplayWorkbench({
@@ -155,6 +233,22 @@ const replayWorkbench = createReplayWorkbench({
   playPauseBtn: els.replayPlayPauseBtn,
 });
 
+const cpuUsageChart = createResourceUsageChart({
+  canvas: els.cpuUsageCanvas,
+  colors: {
+    fill: 'rgba(127, 210, 222, 0.18)',
+    stroke: '#7fd2de',
+  },
+});
+
+const gpuUsageChart = createResourceUsageChart({
+  canvas: els.gpuUsageCanvas,
+  colors: {
+    fill: 'rgba(240, 182, 88, 0.2)',
+    stroke: '#f0b658',
+  },
+});
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -164,206 +258,526 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function sortByNewest(items = [], getDate = (item) => item?.createdAt) {
-  return [...items].sort((left, right) => {
-    const leftTime = Date.parse(getDate(left) || '') || 0;
-    const rightTime = Date.parse(getDate(right) || '') || 0;
-    return rightTime - leftTime;
+function formatDate(value) {
+  if (!value) return 'n/a';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+function formatPercent(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(1)}%` : '--';
+}
+
+function formatUsagePercent(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${numeric.toFixed(1)}%` : '--';
+}
+
+function formatNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toLocaleString() : '0';
+}
+
+function formatDuration(valueMs) {
+  const totalMs = Number(valueMs);
+  if (!Number.isFinite(totalMs) || totalMs < 0) return '--';
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+  }
+  if (totalSeconds > 0) {
+    return `${totalSeconds}s`;
+  }
+  return `${totalMs.toFixed(0)}ms`;
+}
+
+function formatDecimal(value, maximumFractionDigits = 6) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '--';
+  return numeric.toLocaleString(undefined, {
+    maximumFractionDigits,
   });
 }
 
-function getSortedSnapshots() {
-  return sortByNewest(state.snapshots, (snapshot) => snapshot?.updatedAt || snapshot?.createdAt)
-    .sort((left, right) => {
-      const generationDiff = Number(right?.generation || 0) - Number(left?.generation || 0);
-      if (generationDiff !== 0) return generationDiff;
-      const rightTime = Date.parse(right?.updatedAt || right?.createdAt || '') || 0;
-      const leftTime = Date.parse(left?.updatedAt || left?.createdAt || '') || 0;
-      return rightTime - leftTime;
+function humanizeConfigKey(key) {
+  return String(key || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatRunConfigValue(key, value) {
+  if (value === null || value === undefined || value === '') return '--';
+  if (typeof value === 'boolean') {
+    return value ? 'Enabled' : 'Disabled';
+  }
+  if (typeof value === 'number') {
+    if (/winrate|probability/i.test(key)) {
+      return formatPercent(value);
+    }
+    if (Number.isInteger(value)) {
+      return formatNumber(value);
+    }
+    return formatDecimal(value);
+  }
+  if (Array.isArray(value)) {
+    return value.length ? value.join(', ') : '--';
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function buildSelectedRunConfigEntries(config = {}) {
+  const entries = [];
+  const usedKeys = new Set();
+  selectedRunConfigFields.forEach((field) => {
+    if (!Object.prototype.hasOwnProperty.call(config, field.key)) return;
+    usedKeys.add(field.key);
+    entries.push({
+      key: field.key,
+      label: field.label,
+      value: formatRunConfigValue(field.key, config[field.key]),
     });
+  });
+  Object.keys(config)
+    .filter((key) => !usedKeys.has(key))
+    .sort((left, right) => left.localeCompare(right))
+    .forEach((key) => {
+      entries.push({
+        key,
+        label: humanizeConfigKey(key),
+        value: formatRunConfigValue(key, config[key]),
+      });
+    });
+  return entries;
 }
 
-function getSortedSimulations() {
-  return sortByNewest(state.simulations);
+function getRunElapsedMs(run, live = null, nowMs = Date.now()) {
+  const startedAtMs = Date.parse(run?.createdAt || live?.createdAt || '');
+  if (!Number.isFinite(startedAtMs)) return 0;
+  const status = String(live?.status || run?.status || '').toLowerCase();
+  const isActive = ['running', 'stopping'].includes(status);
+  const endedAtMs = isActive
+    ? nowMs
+    : (Date.parse(live?.timestamp || run?.updatedAt || run?.createdAt || '') || startedAtMs);
+  return Math.max(0, endedAtMs - startedAtMs);
 }
 
-function getSortedTrainingRuns() {
-  return sortByNewest(state.trainingRuns);
-}
-
-function getSnapshotById(snapshotId) {
-  return state.snapshots.find((snapshot) => snapshot.id === snapshotId) || null;
-}
-
-function getTrainingRunById(trainingRunId) {
-  return state.trainingRuns.find((trainingRun) => trainingRun.id === trainingRunId) || null;
-}
-
-function getSimulationById(simulationId) {
-  return state.simulations.find((simulation) => simulation.id === simulationId) || null;
-}
-
-function getBootstrapSnapshot() {
-  return state.snapshots.find((snapshot) => Number(snapshot?.generation) === 0)
-    || state.snapshots.find((snapshot) => String(snapshot?.label || '').toLowerCase().includes('bootstrap'))
-    || null;
-}
-
-function isTrainingActive() {
-  const phase = String(state.liveTraining?.phase || '').toLowerCase();
-  return phase === 'start' || phase === 'epoch';
-}
-
-function isSimulationActive() {
-  const phase = String(state.liveSimulation?.phase || '').toLowerCase();
-  return phase === 'start' || phase === 'game';
-}
-
-function getLiveSimulationForRun(simulation) {
-  if (!simulation?.id || !state.liveSimulation?.simulationId) return null;
-  return state.liveSimulation.simulationId === simulation.id ? state.liveSimulation : null;
-}
-
-function getSimulationTaskId(simulation, livePayload = null) {
-  return livePayload?.taskId
-    || simulation?.persistence?.taskId
-    || (state.liveSimulation?.simulationId === simulation?.id ? state.activeSimulationTaskId : '')
-    || '';
-}
-
-function isSimulationInFlight(simulation, livePayload = null) {
-  const status = String(livePayload?.status || simulation?.status || '').toLowerCase();
-  const phase = String(livePayload?.phase || '').toLowerCase();
-  if (livePayload && phase) return phase === 'start' || phase === 'game';
-  return status === 'running' || status === 'stopping';
-}
-
-function getSimulationResultSummary(stats = {}) {
-  return `${Number(stats.whiteWins || 0)}W ${Number(stats.blackWins || 0)}B ${Number(stats.draws || 0)}D`;
-}
-
-function buildSimulationGamesView(simulation, livePayload = null) {
-  const status = String(livePayload?.status || simulation?.status || '').toLowerCase();
-  const phase = String(livePayload?.phase || '').toLowerCase();
-  const errorMessage = livePayload?.message || simulation?.errorMessage || '';
-  const stats = livePayload?.stats || simulation?.stats || {};
-  const completedGames = Number(
-    livePayload?.completedGames
-    ?? simulation?.config?.completedGameCount
-    ?? simulation?.gameCount
-    ?? simulation?.stats?.games
-    ?? 0
-  );
-  const totalGames = Number(
-    livePayload?.gameCount
-    || simulation?.config?.requestedGameCount
-    || completedGames
-    || 0
-  );
-  const resultSummary = getSimulationResultSummary(stats);
-  const title = errorMessage || formatWinReasonSummary(simulation?.stats?.winReasons) || describeStorage(simulation);
-
-  if (livePayload && (phase === 'start' || phase === 'game')) {
-    const progress = Number.isFinite(Number(livePayload.progress))
-      ? Math.max(0, Math.min(1, Number(livePayload.progress)))
-      : 0;
-    const isStopping = status === 'stopping';
-    return {
-      label: `${completedGames}/${totalGames || completedGames} games`,
-      labelClass: isStopping ? 'warn' : 'active',
-      meta: `${resultSummary}${isStopping ? ' | stopping' : ''}`,
-      progress,
-      progressTone: isStopping ? 'default' : 'active',
-      title,
-    };
-  }
-
-  if (errorMessage) {
-    return {
-      label: `${completedGames}${totalGames > completedGames ? `/${totalGames}` : ''} games`,
-      labelClass: 'error',
-      meta: errorMessage,
-      progress: null,
-      progressTone: 'default',
-      title,
-    };
-  }
-
+function getRunTimingSnapshot(runId) {
+  if (!runId) return null;
+  const run = getRunData(runId);
+  if (!run) return null;
+  const live = state.liveRunsById.get(runId) || null;
   return {
-    label: `${completedGames} games`,
-    labelClass: '',
-    meta: `${resultSummary}${status === 'stopped' || phase === 'cancelled' ? ' | stopped' : ''}`,
-    progress: null,
-    progressTone: 'default',
-    title,
+    run,
+    live,
+    averageSelfPlayGameDurationMs: Number(live?.averageSelfPlayGameDurationMs ?? run.averageSelfPlayGameDurationMs ?? 0),
+    averageEvaluationGameDurationMs: Number(live?.averageEvaluationGameDurationMs ?? run.averageEvaluationGameDurationMs ?? 0),
+    elapsedMs: Number(live?.elapsedMs ?? run.elapsedMs ?? getRunElapsedMs(run, live)),
   };
 }
 
-function isTrainingRunSelectable(trainingRun) {
-  if (!trainingRun) return false;
-  const status = String(trainingRun.status || '').toLowerCase();
-  return status === 'running' || status === 'completed' || status === 'error';
+function sortReplayGamesChronologically(games = []) {
+  return [...(Array.isArray(games) ? games : [])].sort((left, right) => {
+    const leftTime = Date.parse(left?.createdAt || '') || 0;
+    const rightTime = Date.parse(right?.createdAt || '') || 0;
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return String(left?.id || '').localeCompare(String(right?.id || ''));
+  });
+}
+
+function parseNumberInput(element, fallback, asFloat = false) {
+  const raw = element?.value || '';
+  const parsed = asFloat ? Number.parseFloat(raw) : Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function buildBuiltinSeedSourceOptions() {
+  return [
+    { value: 'bootstrap', label: 'Bootstrap Model' },
+    { value: 'random', label: 'Random Init' },
+  ];
+}
+
+function parseSeedSourceSelection(value) {
+  const normalized = String(value || '').trim();
+  const promotedMatch = normalized.match(/^generation:([^:]+):(\d+)$/i);
+  if (promotedMatch) {
+    return {
+      seedMode: 'promoted_generation',
+      seedRunId: promotedMatch[1],
+      seedGeneration: Number.parseInt(promotedMatch[2], 10),
+    };
+  }
+  if (normalized.toLowerCase() === 'random') {
+    return {
+      seedMode: 'random',
+      seedRunId: null,
+      seedGeneration: null,
+    };
+  }
+  return {
+    seedMode: 'bootstrap',
+    seedRunId: null,
+    seedGeneration: null,
+  };
+}
+
+function renderSeedSourceSelect(preferredValue = '') {
+  const items = Array.isArray(state.seedSourceOptions) && state.seedSourceOptions.length
+    ? state.seedSourceOptions
+    : buildBuiltinSeedSourceOptions();
+  fillSelect(els.seedModeSelect, items.map((item) => ({
+    value: item.value,
+    label: item.label,
+  })), { preferredValue });
+}
+
+function fillSelect(select, items, { includeBlank = false, blankLabel = 'Select', preferredValue = '' } = {}) {
+  if (!select) return;
+  const previous = preferredValue || select.value;
+  select.innerHTML = '';
+  if (includeBlank) {
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = blankLabel;
+    select.appendChild(blank);
+  }
+  items.forEach((item) => {
+    const option = document.createElement('option');
+    option.value = String(item.value);
+    option.textContent = item.label;
+    select.appendChild(option);
+  });
+  if (items.some((item) => String(item.value) === String(previous))) {
+    select.value = String(previous);
+  } else if (!includeBlank && items.length) {
+    select.value = String(items[0].value);
+  } else {
+    select.value = '';
+  }
+}
+
+function applyFieldTooltips() {
+  Object.entries(fieldHelpTextById).forEach(([id, helpText]) => {
+    const element = document.getElementById(id);
+    const label = document.querySelector(`label[for="${id}"]`);
+    if (element) element.title = helpText;
+    if (label) label.title = helpText;
+  });
+}
+
+function syncEndConditionInputs() {
+  if (els.maxGenerationsInput) {
+    els.maxGenerationsInput.disabled = !els.stopOnMaxGenerationsInput?.checked;
+  }
+  if (els.maxSelfPlayGamesInput) {
+    els.maxSelfPlayGamesInput.disabled = !els.stopOnMaxSelfPlayGamesInput?.checked;
+  }
+  if (els.maxTrainingStepsInput) {
+    els.maxTrainingStepsInput.disabled = !els.stopOnMaxTrainingStepsInput?.checked;
+  }
+  if (els.maxFailedPromotionsInput) {
+    els.maxFailedPromotionsInput.disabled = !els.stopOnMaxFailedPromotionsInput?.checked;
+  }
 }
 
 function setStatus(message, tone = 'muted') {
   if (!els.statusText) return;
   els.statusText.textContent = message;
   els.statusText.className = 'status-text';
-  if (tone === 'ok') els.statusText.classList.add('ok');
-  else if (tone === 'error') els.statusText.classList.add('error');
-  else if (tone === 'warn') els.statusText.classList.add('warn');
-  else els.statusText.classList.add('subtle');
+  if (tone === 'error') els.statusText.style.color = '#ef8787';
+  else if (tone === 'ok') els.statusText.style.color = '#8ed18e';
+  else if (tone === 'warn') els.statusText.style.color = '#ffd89a';
+  else els.statusText.style.color = '#93afa8';
 }
 
-function updateProgressBar(element, value, tone = 'default') {
-  if (!element) return;
-  const ratio = Math.max(0, Math.min(1, Number(value) || 0));
-  element.style.width = `${(ratio * 100).toFixed(1)}%`;
-  element.classList.remove('active', 'error');
-  if (tone === 'active') element.classList.add('active');
-  if (tone === 'error') element.classList.add('error');
+function logMlAdminError(context, error = null, details = {}) {
+  console.error(`[ml-admin] ${context}`, {
+    message: error?.message || null,
+    status: Number.isFinite(error?.status) ? error.status : null,
+    stack: error?.stack || null,
+    payload: error?.payload || null,
+    ...details,
+  });
 }
 
-function lossToProgress(loss) {
-  const numeric = Number(loss);
-  if (!Number.isFinite(numeric) || numeric < 0) return 0;
-  return Math.max(0, Math.min(1, 1 / (1 + numeric)));
+function sortRunsByRecent(runs = []) {
+  return [...runs].sort((left, right) => {
+    const leftTime = Date.parse(left?.updatedAt || left?.createdAt || '') || 0;
+    const rightTime = Date.parse(right?.updatedAt || right?.createdAt || '') || 0;
+    return rightTime - leftTime;
+  });
 }
 
-function formatLossValue(loss) {
-  const numeric = Number(loss);
-  return Number.isFinite(numeric) ? numeric.toFixed(3) : '--';
+function getRunSummary(runId) {
+  return state.runs.find((run) => run.id === runId) || null;
 }
 
-function updateLossBar(fillEl, valueEl, loss) {
-  if (fillEl) fillEl.style.width = `${(lossToProgress(loss) * 100).toFixed(1)}%`;
-  if (valueEl) valueEl.textContent = formatLossValue(loss);
+function getRunDetail(runId) {
+  return state.runDetailsById.get(runId) || null;
 }
 
-function setTrainingLossDisplay(loss = null) {
-  updateLossBar(els.trainingPolicyLossBar, els.trainingPolicyLossValue, loss?.policyLoss);
-  updateLossBar(els.trainingValueLossBar, els.trainingValueLossValue, loss?.valueLoss);
-  updateLossBar(els.trainingIdentityLossBar, els.trainingIdentityLossValue, loss?.identityLoss);
-  const accuracy = Number(loss?.identityAccuracy);
-  els.trainingAccuracyMeta.textContent = Number.isFinite(accuracy)
-    ? `Identity accuracy: ${(accuracy * 100).toFixed(1)}%`
-    : 'Identity accuracy: --';
+function getRunData(runId) {
+  if (!runId) return null;
+  const summary = getRunSummary(runId);
+  const detail = getRunDetail(runId);
+  if (!summary) return detail || null;
+  if (!detail) return summary;
+  return {
+    ...detail,
+    ...summary,
+    config: detail.config || summary.config || {},
+    generations: Array.isArray(detail.generations) ? detail.generations : (summary.generations || []),
+    evaluationSeries: Array.isArray(detail.evaluationSeries) ? detail.evaluationSeries : [],
+    metricsHistory: Array.isArray(detail.metricsHistory) ? detail.metricsHistory : [],
+    generationPairs: Array.isArray(detail.generationPairs) ? detail.generationPairs : [],
+    recentReplayGames: Array.isArray(detail.recentReplayGames) ? detail.recentReplayGames : [],
+    canContinue: Boolean(summary.canContinue || detail.canContinue),
+  };
 }
 
-function updateReplayControlsState() {
+function getSelectedRunData() {
+  return state.selectedRunId ? getRunData(state.selectedRunId) : null;
 }
 
-function getHeaders(extra = {}) {
-  return { ...extra };
+function getReplayRunData(runId = state.replayRunId) {
+  return getRunData(runId);
+}
+
+function getReplayPreviewGames(runId = state.replayRunId) {
+  const run = getReplayRunData(runId);
+  return sortReplayGamesChronologically(Array.isArray(run?.recentReplayGames) ? run.recentReplayGames : []);
+}
+
+function getReplayGamesForRun(runId = state.replayRunId) {
+  if (!runId) return [];
+  return Array.isArray(state.replayGamesByRunId.get(runId))
+    ? state.replayGamesByRunId.get(runId)
+    : [];
+}
+
+function getReplayGenerationFilterValue() {
+  const parsed = Number.parseInt(state.replayGenerationFilter, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getReplayGenerationOptions(runId = state.replayRunId) {
+  const sourceGames = getReplayGamesForRun(runId);
+  const previewGames = getReplayPreviewGames(runId);
+  return [...new Set([...sourceGames, ...previewGames]
+    .flatMap((game) => [Number(game?.whiteGeneration), Number(game?.blackGeneration)])
+    .filter((generation) => Number.isFinite(generation))
+    .sort((left, right) => left - right))];
+}
+
+function getVisibleReplayGames(runId = state.replayRunId) {
+  const games = getReplayGamesForRun(runId);
+  const generationFilter = getReplayGenerationFilterValue();
+  if (!Number.isFinite(generationFilter)) {
+    return games;
+  }
+  return games.filter((game) => (
+    Number(game?.whiteGeneration) === generationFilter
+    || Number(game?.blackGeneration) === generationFilter
+  ));
+}
+
+function normalizeReplayGenerationFilter(runId = state.replayRunId) {
+  const generationFilter = getReplayGenerationFilterValue();
+  if (!Number.isFinite(generationFilter)) {
+    state.replayGenerationFilter = '';
+    return;
+  }
+  if (!getReplayGenerationOptions(runId).includes(generationFilter)) {
+    state.replayGenerationFilter = '';
+  }
+}
+
+function renderReplayGenerationFilter(runId = state.replayRunId) {
+  if (!els.replayGenerationFilterSelect) return;
+  const options = getReplayGenerationOptions(runId).map((generation) => ({
+    value: String(generation),
+    label: `G${generation}`,
+  }));
+  fillSelect(els.replayGenerationFilterSelect, options, {
+    includeBlank: true,
+    blankLabel: 'All generations',
+    preferredValue: state.replayGenerationFilter,
+  });
+  if (state.replayGenerationFilter) {
+    els.replayGenerationFilterSelect.value = state.replayGenerationFilter;
+  }
+}
+
+function scrollReplayListTo(position = 'top') {
+  if (!els.replayGameList) return;
+  const top = position === 'bottom' ? els.replayGameList.scrollHeight : 0;
+  els.replayGameList.scrollTo({
+    top,
+    behavior: 'smooth',
+  });
+}
+
+function mergeRunSummary(nextSummary) {
+  if (!nextSummary?.id) return;
+  const existingIndex = state.runs.findIndex((run) => run.id === nextSummary.id);
+  if (existingIndex >= 0) {
+    state.runs.splice(existingIndex, 1, { ...state.runs[existingIndex], ...nextSummary });
+  } else {
+    state.runs.unshift(nextSummary);
+  }
+  state.runs = sortRunsByRecent(state.runs);
+}
+
+function clearReplaySelection() {
+  state.replayGamesRequestSeq += 1;
+  state.replayGameRequestSeq += 1;
+  state.replayGamesLoad = null;
+  state.replayGamesLoading = false;
+  if (state.replayRefreshHandle) {
+    window.clearTimeout(state.replayRefreshHandle);
+    state.replayRefreshHandle = null;
+  }
+  state.replayGamesError = '';
+  state.replayGenerationFilter = '';
+  state.replayGames = [];
+  state.selectedReplayGameId = '';
+  replayWorkbench.clear();
+  els.replayPlayPauseBtn.disabled = true;
+  els.replayPrevBtn.disabled = true;
+  els.replayNextBtn.disabled = true;
+}
+
+function setReplayLoading(message = 'Loading replay...') {
+  els.replayMeta.textContent = message;
+  els.decisionInspector.innerHTML = `<div class="subtle">${escapeHtml(message)}</div>`;
+  els.replayMoveLog.innerHTML = `<div class="subtle">${escapeHtml(message)}</div>`;
+  els.replayPlayPauseBtn.disabled = true;
+  els.replayPrevBtn.disabled = true;
+  els.replayNextBtn.disabled = true;
+}
+
+function setReplayControlsEnabled(enabled) {
+  const disabled = !enabled;
+  els.replayPlayPauseBtn.disabled = disabled;
+  els.replayPrevBtn.disabled = disabled;
+  els.replayNextBtn.disabled = disabled;
+}
+
+function getReplayLoadedGameId() {
+  return replayWorkbench.getReplayPayload()?.game?.id || '';
+}
+
+function getReplayEmptyStateMessage(runId = state.replayRunId) {
+  const run = getReplayRunData(runId);
+  const live = run?.id ? state.liveRunsById.get(run.id) || null : null;
+  const totalEvaluationGames = Number(live?.totalEvaluationGames ?? run?.totalEvaluationGames ?? 0);
+  const knownGenerationChecks = Array.isArray(run?.generationPairs) ? run.generationPairs.length : 0;
+  if (totalEvaluationGames > 0 || knownGenerationChecks > 0) {
+    return 'No eval replay rows were returned for this run.';
+  }
+  return 'No eval games for this run yet.';
+}
+
+function scheduleReplayGamesRefresh(runId = state.replayRunId, delayMs = 900) {
+  if (!runId || state.replayRunId !== runId) return;
+  if (state.replayRefreshHandle) {
+    window.clearTimeout(state.replayRefreshHandle);
+  }
+  state.replayRefreshHandle = window.setTimeout(() => {
+    state.replayRefreshHandle = null;
+    if (state.activeWorkflowTab !== 'replay' || state.replayRunId !== runId) {
+      return;
+    }
+    loadReplayGames({ autoLoadLatest: true, force: true }).catch((err) => setStatus(err.message, 'error'));
+  }, delayMs);
+}
+
+function removeRunFromState(runId) {
+  if (!runId) return;
+  state.runs = state.runs.filter((run) => run.id !== runId);
+  state.runDetailsById.delete(runId);
+  state.liveRunsById.delete(runId);
+  state.replayGamesByRunId.delete(runId);
+  if (state.selectedRunId === runId) {
+    state.selectedRunId = '';
+  }
+  if (state.replayRunId === runId) {
+    state.replayRunId = '';
+    clearReplaySelection();
+  }
+}
+
+function applyLiveRunPayload(payload = {}, { render = true } = {}) {
+  if (!payload?.runId) return;
+  state.liveRunsById.set(payload.runId, payload);
+  mergeRunSummary({
+    id: payload.runId,
+    label: payload.label || payload.runId,
+    status: payload.status || 'running',
+    bestGeneration: Number(payload.bestGeneration || 0),
+    workerGeneration: Number(payload.workerGeneration || 0),
+    totalSelfPlayGames: Number(payload.totalSelfPlayGames || 0),
+    totalEvaluationGames: Number(payload.totalEvaluationGames || 0),
+    averageSelfPlayGameDurationMs: Number(payload.averageSelfPlayGameDurationMs || 0),
+    averageEvaluationGameDurationMs: Number(payload.averageEvaluationGameDurationMs || 0),
+    elapsedMs: Number(payload.elapsedMs || 0),
+    totalTrainingSteps: Number(payload.totalTrainingSteps || 0),
+    replayBuffer: payload.replayBuffer || {},
+    latestLoss: payload.latestLoss || null,
+    latestEvaluation: payload.latestEvaluation || null,
+    createdAt: payload.createdAt || getRunSummary(payload.runId)?.createdAt || null,
+    updatedAt: payload.timestamp || new Date().toISOString(),
+    stopReason: payload.stopReason || null,
+  });
+  if (render) {
+    renderWorkbenchSummary();
+    renderRunsTable();
+    renderSelectedRun();
+    renderReplaySelectionMeta();
+  }
+}
+
+function applyResourceTelemetry(resourceTelemetry, { render = true } = {}) {
+  if (!resourceTelemetry || typeof resourceTelemetry !== 'object') return;
+  state.resourceTelemetry = resourceTelemetry;
+  if (render) {
+    renderResourceTelemetry();
+  }
 }
 
 async function apiFetch(path, options = {}) {
   const init = { credentials: 'include', ...options };
-  init.headers = getHeaders(init.headers || {});
+  init.headers = { ...(init.headers || {}) };
+  if (!init.cache) {
+    init.cache = 'no-store';
+  }
   if (init.body && !init.headers['Content-Type']) {
     init.headers['Content-Type'] = 'application/json';
   }
-  const response = await fetch(path, init);
+  let response;
+  try {
+    response = await fetch(path, init);
+  } catch (error) {
+    logMlAdminError('API request failed before response', error, {
+      path,
+      method: init.method || 'GET',
+    });
+    throw error;
+  }
   let payload = null;
   try {
     payload = await response.json();
@@ -373,1384 +787,1094 @@ async function apiFetch(path, options = {}) {
   if (!response.ok) {
     const error = new Error(payload?.message || `Request failed (${response.status})`);
     error.status = response.status;
-    error.code = payload?.code || null;
+    error.payload = payload;
+    logMlAdminError('API request failed', error, {
+      path,
+      method: init.method || 'GET',
+    });
     throw error;
   }
   return payload;
 }
 
-function normalizeWorkbenchPayload(payload = {}) {
-  const summary = payload?.summary && typeof payload.summary === 'object' ? payload.summary : { counts: {} };
-  const snapshots = Array.isArray(payload?.snapshots?.items)
-    ? payload.snapshots.items
-    : (Array.isArray(payload?.snapshots)
-      ? payload.snapshots
-      : (Array.isArray(summary?.snapshots) ? summary.snapshots : []));
-  const participants = Array.isArray(payload?.participants?.items)
-    ? payload.participants.items
-    : (Array.isArray(payload?.participants) ? payload.participants : []);
-  const simulations = Array.isArray(payload?.simulations?.items)
-    ? payload.simulations.items
-    : (Array.isArray(payload?.simulations) ? payload.simulations : []);
-  const trainingRuns = Array.isArray(payload?.trainingRuns?.items)
-    ? payload.trainingRuns.items
-    : (Array.isArray(payload?.trainingRuns) ? payload.trainingRuns : []);
-  const live = payload?.live && typeof payload.live === 'object' ? payload.live : null;
-  return { summary, snapshots, participants, simulations, trainingRuns, live };
-}
-
-async function loadWorkbenchFromLegacyEndpoints() {
-  const responses = await Promise.allSettled([
-    apiFetch('/api/v1/ml/summary'),
-    apiFetch('/api/v1/ml/snapshots'),
-    apiFetch('/api/v1/ml/participants'),
-    apiFetch('/api/v1/ml/simulations?limit=500'),
-    apiFetch('/api/v1/ml/training/runs?limit=50'),
-    apiFetch('/api/v1/ml/live'),
-  ]);
-  const [summaryResponse, snapshotsResponse, participantsResponse, simulationsResponse, trainingRunsResponse, liveResponse] = responses;
-  const summary = summaryResponse.status === 'fulfilled' ? summaryResponse.value : {};
-  const snapshotsPayload = snapshotsResponse.status === 'fulfilled' ? snapshotsResponse.value : {};
-  const participantsPayload = participantsResponse.status === 'fulfilled' ? participantsResponse.value : {};
-  const simulationsPayload = simulationsResponse.status === 'fulfilled' ? simulationsResponse.value : {};
-  const trainingRunsPayload = trainingRunsResponse.status === 'fulfilled' ? trainingRunsResponse.value : {};
-  const livePayload = liveResponse.status === 'fulfilled' ? liveResponse.value : null;
-  return {
-    summary: {
-      ...(summary || {}),
-      snapshots: Array.isArray(summary?.snapshots)
-        ? summary.snapshots
-        : (Array.isArray(snapshotsPayload?.items) ? snapshotsPayload.items : []),
-    },
-    snapshots: Array.isArray(snapshotsPayload?.items) ? snapshotsPayload.items : [],
-    participants: Array.isArray(participantsPayload?.items)
-      ? participantsPayload.items
-      : (Array.isArray(participantsPayload) ? participantsPayload : []),
-    simulations: { items: Array.isArray(simulationsPayload?.items) ? simulationsPayload.items : [] },
-    trainingRuns: { items: Array.isArray(trainingRunsPayload?.items) ? trainingRunsPayload.items : [] },
-    live: livePayload,
-  };
-}
-
-async function loadWorkbench() {
-  let payload = null;
-  try {
-    payload = await apiFetch('/api/v1/ml/workbench?limit=500&trainingLimit=50');
-  } catch (err) {
-    if (err?.status !== 404) throw err;
-    console.warn('ML workbench endpoint unavailable; falling back to legacy ML endpoints.', err);
-    payload = await loadWorkbenchFromLegacyEndpoints();
-  }
-  const normalized = normalizeWorkbenchPayload(payload);
-  state.summary = normalized.summary;
-  state.snapshots = normalized.snapshots;
-  state.participants = normalized.participants;
-  state.simulations = normalized.simulations;
-  state.trainingRuns = normalized.trainingRuns;
-  const knownSimulationIds = new Set(state.simulations.map((simulation) => simulation.id));
-  state.trainingSelection = new Set(
-    Array.from(state.trainingSelection).filter((simulationId) => knownSimulationIds.has(simulationId)),
-  );
-  return normalized.live;
-}
-
-function buildParticipantOptions() {
-  const catalog = state.participants.length
-    ? state.participants
-    : [
-        ...state.snapshots.map((snapshot) => ({
-          id: `snapshot:${snapshot.id}`,
-          type: 'snapshot',
-          snapshotId: snapshot.id,
-          label: snapshot.label,
-          generation: snapshot.generation,
-        })),
-        { id: BUILTIN_MEDIUM_ID, type: 'builtin', label: 'Medium Bot' },
-      ];
-  const seen = new Set();
-  const options = catalog.filter((participant) => {
-    if (!participant?.id || seen.has(participant.id)) return false;
-    seen.add(participant.id);
-    return true;
-  });
-  const bootstrapSnapshot = getBootstrapSnapshot();
-  const bootstrapParticipantId = bootstrapSnapshot ? `snapshot:${bootstrapSnapshot.id}` : '';
-  options.sort((left, right) => {
-    const rank = (participant) => {
-      if (participant.id === bootstrapParticipantId) return 0;
-      if (participant.id === BUILTIN_MEDIUM_ID) return 1;
-      if (participant.type === 'snapshot') return 10 - Number(participant.generation || 0);
-      return 20;
-    };
-    const rankDiff = rank(left) - rank(right);
-    if (rankDiff !== 0) return rankDiff;
-    return participantLabel(left).localeCompare(participantLabel(right));
-  });
-  return options.map((participant) => ({ value: participant.id, label: participantLabel(participant) }));
-}
-
-function getDefaultParticipantSelections(options) {
-  const bootstrapSnapshot = getBootstrapSnapshot();
-  const bootstrapId = bootstrapSnapshot ? `snapshot:${bootstrapSnapshot.id}` : '';
-  const values = new Set(options.map((option) => option.value));
-  const whiteDefault = values.has(bootstrapId)
-    ? bootstrapId
-    : values.has(BUILTIN_MEDIUM_ID)
-      ? BUILTIN_MEDIUM_ID
-      : (options[0]?.value || '');
-  const blackDefault = values.has(BUILTIN_MEDIUM_ID)
-    ? BUILTIN_MEDIUM_ID
-    : values.has(bootstrapId)
-      ? bootstrapId
-      : (options.find((option) => option.value !== whiteDefault)?.value || options[0]?.value || '');
-  return { whiteDefault, blackDefault };
-}
-
-function pruneTrainingSelection(snapshotId) {
-  state.trainingSelection = new Set(
-    Array.from(state.trainingSelection).filter((simulationId) => (
-      getSimulationTrainingEligibility(getSimulationById(simulationId), snapshotId).eligible
-    )),
-  );
-}
-
-function syncSelections(options = {}) {
-  const snapshotIds = new Set(state.snapshots.map((snapshot) => snapshot.id));
-  const simulationIds = new Set(state.simulations.map((simulation) => simulation.id));
-  const trainingRunIds = new Set(state.trainingRuns.map((trainingRun) => trainingRun.id));
-  if (options.preferSnapshotId && snapshotIds.has(options.preferSnapshotId)) {
-    state.selectedSnapshotId = options.preferSnapshotId;
-    state.selectedTrainingRunId = '';
-  } else if (!snapshotIds.has(state.selectedSnapshotId)) {
-    state.selectedSnapshotId = getSortedSnapshots()[0]?.id || '';
-  }
-  if (options.preferTrainingRunId && trainingRunIds.has(options.preferTrainingRunId)) {
-    state.selectedTrainingRunId = options.preferTrainingRunId;
-  } else if (state.selectedTrainingRunId && !trainingRunIds.has(state.selectedTrainingRunId)) {
-    state.selectedTrainingRunId = '';
-  }
-  if (options.preferSimulationId && simulationIds.has(options.preferSimulationId)) {
-    state.selectedSimulationId = options.preferSimulationId;
-  } else if (!simulationIds.has(state.selectedSimulationId)) {
-    state.selectedSimulationId = getSortedSimulations()[0]?.id || '';
-  }
-  const trainSnapshotId = snapshotIds.has(els.trainSnapshotSelect?.value || '')
-    ? els.trainSnapshotSelect.value
-    : state.selectedSnapshotId;
-  pruneTrainingSelection(trainSnapshotId);
-  if (options.workflowTab) state.activeWorkflowTab = options.workflowTab;
-}
-
-function setActiveWorkflowTab(nextTab) {
-  const activeTab = nextTab === 'training' ? 'training' : 'simulations';
-  state.activeWorkflowTab = activeTab;
-  workflowTabs.forEach((button) => {
-    const isActive = button.dataset.workflowTab === activeTab;
-    button.classList.toggle('active', isActive);
-    button.classList.toggle('secondary', !isActive);
-  });
-  workflowPanels.forEach((panel) => {
-    panel.classList.toggle('active', panel.dataset.workflowPanel === activeTab);
-  });
-}
-
-function updateSummaryPanel() {
-  const counts = state.summary?.counts || {};
-  els.countSnapshots.textContent = counts.snapshots || 0;
-  els.countSimulations.textContent = counts.simulations || 0;
-  els.countGames.textContent = counts.games || 0;
-  els.countTrainingRuns.textContent = counts.trainingRuns || 0;
-  const latestSimulation = state.summary?.latestSimulation || null;
-  const latestTraining = state.summary?.latestTraining || null;
-  els.latestSimulationSummary.textContent = latestSimulation
-    ? `Latest simulation: ${latestSimulation.label} | ${latestSimulation.gameCount} games | ${formatWinReasonSummary(latestSimulation?.stats?.winReasons)}`
-    : 'No simulations yet.';
-  els.latestTrainingSummary.textContent = latestTraining
-    ? `Latest training: ${latestTraining.newSnapshotId} from ${latestTraining.sourceGames} games at ${formatDate(latestTraining.createdAt)}`
-    : 'No training runs yet.';
-}
-
-function renderSnapshotSelects() {
-  const options = getSortedSnapshots().map((snapshot) => ({
-    value: snapshot.id,
-    label: snapshotOptionLabel(snapshot),
-  }));
-  fillSelect(els.selectedSnapshotSelect, options, { preferredValue: state.selectedSnapshotId || '' });
-  fillSelect(els.trainSnapshotSelect, options, {
-    preferredValue: els.trainSnapshotSelect?.value || state.selectedSnapshotId || '',
-  });
-  fillSelect(els.lossSnapshotSelect, options, { preferredValue: state.selectedSnapshotId || '' });
-  state.selectedSnapshotId = els.selectedSnapshotSelect?.value || '';
-}
-
-function renderParticipantSelects() {
-  const options = buildParticipantOptions();
-  const defaults = getDefaultParticipantSelections(options);
-  fillSelect(els.whiteParticipantSelect, options, {
-    preferredValue: els.whiteParticipantSelect?.value || defaults.whiteDefault,
-  });
-  fillSelect(els.blackParticipantSelect, options, {
-    preferredValue: els.blackParticipantSelect?.value || defaults.blackDefault,
-  });
-}
-
-function updateTrainingSourceMeta() {
-  const snapshotId = els.trainSnapshotSelect?.value || '';
-  if (!snapshotId) {
-    els.trainingSourceMeta.textContent = 'Choose a base snapshot to see trainable simulation runs.';
-    els.selectEligibleSourcesBtn.disabled = true;
-    els.clearTrainingSourcesBtn.disabled = state.trainingSelection.size <= 0;
-    return;
-  }
-  let eligibleCount = 0;
-  let selectedEligibleCount = 0;
-  state.simulations.forEach((simulation) => {
-    const eligibility = getSimulationTrainingEligibility(simulation, snapshotId);
-    if (eligibility.eligible) {
-      eligibleCount += 1;
-      if (state.trainingSelection.has(simulation.id)) selectedEligibleCount += 1;
+function setActiveWorkflowTab(tab) {
+  state.activeWorkflowTab = tab;
+  workflowTabs.forEach((button) => button.classList.toggle('active', button.dataset.workflowTab === tab));
+  workflowPanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.workflowPanel === tab));
+  window.requestAnimationFrame(() => {
+    if (tab === 'runs') {
+      generationWinChart.redraw();
+      return;
+    }
+    if (tab === 'replay' && replayWorkbench.getReplayPayload()?.game?.replay?.length) {
+      replayWorkbench.renderFrame(Number.parseInt(els.replayRange?.value || '0', 10) || 0);
     }
   });
-  els.trainingSourceMeta.textContent = `${selectedEligibleCount} selected | ${eligibleCount} eligible | ${state.simulations.length} total runs`;
-  els.selectEligibleSourcesBtn.disabled = eligibleCount <= 0;
-  els.clearTrainingSourcesBtn.disabled = state.trainingSelection.size <= 0;
+  hydrateActiveWorkflowTab().catch((err) => setStatus(err.message, 'error'));
 }
 
-function renderSnapshotList() {
-  els.snapshotList.innerHTML = '';
-  const selectedTrainingRun = getTrainingRunById(state.selectedTrainingRunId);
-  if (selectedTrainingRun && !selectedTrainingRun.newSnapshotId) {
-    const latestLoss = selectedTrainingRun.finalLoss || null;
-    const row = document.createElement('article');
-    row.className = 'detail-row active';
-    row.dataset.trainingRunId = selectedTrainingRun.id;
-    row.innerHTML = `
-      <div class="detail-row-head">
-        <div>
-          <strong>${escapeHtml(selectedTrainingRun.label || selectedTrainingRun.id)}</strong>
-          <div class="card-meta">${escapeHtml(selectedTrainingRun.id)} | output pending</div>
-        </div>
-        <span class="pill">${escapeHtml(String(selectedTrainingRun.status || 'running'))}</span>
-      </div>
-      <div class="detail-row-meta">
-        <div class="subtle">${selectedTrainingRun.sourceGames || 0} games | ${selectedTrainingRun.epochs || 0} epoch(s) | LR ${Number(selectedTrainingRun.learningRate || 0).toFixed(4)}</div>
-        <div class="subtle">${escapeHtml(latestLoss
-          ? `Policy ${formatLossValue(latestLoss.policyLoss)} | Value ${formatLossValue(latestLoss.valueLoss)} | Identity ${formatLossValue(latestLoss.identityLoss)}`
-          : 'Waiting for the first live loss update.')}</div>
-      </div>
-    `;
-    els.snapshotList.appendChild(row);
+function applyDefaults(defaults = {}) {
+  if (!defaults || state.defaults) return;
+  state.defaults = defaults;
+  renderSeedSourceSelect(defaults.seedMode || 'bootstrap');
+  els.numSelfplayWorkersInput.value = String(defaults.numSelfplayWorkers || 6);
+  els.parallelGameWorkersInput.value = String(defaults.parallelGameWorkers || 1);
+  els.numMctsSimulationsInput.value = String(defaults.numMctsSimulationsPerMove || 128);
+  els.maxDepthInput.value = String(defaults.maxDepth || 32);
+  els.hypothesisCountInput.value = String(defaults.hypothesisCount || 4);
+  els.riskBiasInput.value = String(defaults.riskBias ?? 0);
+  els.explorationInput.value = String(defaults.exploration || 1.5);
+  els.replayBufferMaxPositionsInput.value = String(defaults.replayBufferMaxPositions || 10000);
+  els.batchSizeInput.value = String(defaults.batchSize || 64);
+  els.learningRateInput.value = String(defaults.learningRate || 0.0005);
+  els.trainingBackendSelect.value = defaults.trainingBackend || 'auto';
+  els.trainingDeviceSelect.value = defaults.trainingDevicePreference || 'auto';
+  els.weightDecayInput.value = String(defaults.weightDecay || 0.0001);
+  els.gradientClipNormInput.value = String(defaults.gradientClipNorm || 1);
+  els.trainingStepsPerCycleInput.value = String(defaults.trainingStepsPerCycle || 16);
+  els.parallelTrainingHeadWorkersInput.value = String(defaults.parallelTrainingHeadWorkers || 1);
+  els.checkpointIntervalInput.value = String(defaults.checkpointInterval || 100);
+  els.prePromotionTestGamesInput.value = String(defaults.prePromotionTestGames || defaults.evalGamesPerCheckpoint || 50);
+  els.prePromotionTestWinRateInput.value = String(defaults.prePromotionTestWinRate ?? defaults.promotionWinrateThreshold ?? 0.55);
+  els.promotionTestGamesInput.value = String(defaults.promotionTestGames || defaults.evalGamesPerCheckpoint || 100);
+  els.promotionTestWinRateInput.value = String(defaults.promotionTestWinRate ?? defaults.promotionWinrateThreshold ?? 0.55);
+  els.promotionTestPriorGenerationsInput.value = String(defaults.promotionTestPriorGenerations || 3);
+  els.modelRefreshIntervalInput.value = String(defaults.modelRefreshIntervalForWorkers || 5);
+  els.generationComparisonStrideInput.value = String(defaults.generationComparisonStride || 5);
+  els.olderGenerationSampleProbabilityInput.value = String(defaults.olderGenerationSampleProbability || 0.10);
+  els.stopOnMaxGenerationsInput.checked = defaults.stopOnMaxGenerations !== false;
+  els.maxGenerationsInput.value = String(defaults.maxGenerations || 200);
+  els.stopOnMaxSelfPlayGamesInput.checked = defaults.stopOnMaxSelfPlayGames !== false;
+  els.maxSelfPlayGamesInput.value = String(defaults.maxSelfPlayGames || 10000);
+  els.stopOnMaxTrainingStepsInput.checked = defaults.stopOnMaxTrainingSteps !== false;
+  els.maxTrainingStepsInput.value = String(defaults.maxTrainingSteps || 200000);
+  els.stopOnMaxFailedPromotionsInput.checked = defaults.stopOnMaxFailedPromotions !== false;
+  els.maxFailedPromotionsInput.value = String(defaults.maxFailedPromotions || 50);
+  syncEndConditionInputs();
+}
+
+function renderWorkbenchSummary() {
+  const runs = sortRunsByRecent(state.runs);
+  const activeRuns = runs.filter((run) => ['running', 'stopping'].includes(String(run?.status || '').toLowerCase()));
+  const totalGames = runs.reduce((sum, run) => (
+    sum + Number(run?.totalSelfPlayGames || 0) + Number(run?.totalEvaluationGames || 0)
+  ), 0);
+  const totalGenerations = runs.reduce((sum, run) => sum + Number(run?.generationCount || 0), 0);
+  els.countRuns.textContent = formatNumber(runs.length);
+  els.countActiveRuns.textContent = formatNumber(activeRuns.length);
+  els.countGames.textContent = formatNumber(totalGames);
+  els.countGenerations.textContent = formatNumber(totalGenerations);
+  const latest = runs[0];
+  els.latestRunSummary.textContent = latest
+    ? `${latest.label} | ${latest.status} | best G${latest.bestGeneration || 0} | buffer ${latest.replayBuffer?.positions || 0}/${latest.replayBuffer?.maxPositions || 0} | updated ${formatDate(latest.updatedAt || latest.createdAt)}`
+    : 'No runs yet.';
+  renderResourceTelemetry();
+}
+
+function renderResourceTelemetry() {
+  const telemetry = state.resourceTelemetry || null;
+  const cpu = telemetry?.cpu || null;
+  const gpu = telemetry?.gpu || null;
+
+  if (els.cpuUsageValue) {
+    els.cpuUsageValue.textContent = formatUsagePercent(cpu?.currentPercent);
   }
-  const snapshots = getSortedSnapshots();
-  if (!snapshots.length) {
-    if (!selectedTrainingRun) {
-      els.snapshotList.innerHTML = '<div class="subtle">No output models available.</div>';
+  if (els.cpuUsageMeta) {
+    els.cpuUsageMeta.textContent = cpu?.updatedAt
+      ? `2s samples · updated ${new Date(cpu.updatedAt).toLocaleTimeString()}`
+      : '2s samples · waiting';
+  }
+  cpuUsageChart.setHistory(Array.isArray(cpu?.history) ? cpu.history : []);
+
+  if (els.gpuUsageValue) {
+    els.gpuUsageValue.textContent = gpu?.available === false
+      ? 'n/a'
+      : formatUsagePercent(gpu?.currentPercent);
+  }
+  if (els.gpuUsageMeta) {
+    if (gpu?.available === false) {
+      els.gpuUsageMeta.textContent = 'nvidia-smi unavailable';
+    } else if (gpu?.updatedAt) {
+      const label = gpu?.label || 'GPU';
+      els.gpuUsageMeta.textContent = `${label} · updated ${new Date(gpu.updatedAt).toLocaleTimeString()}`;
+    } else {
+      els.gpuUsageMeta.textContent = 'Detecting...';
     }
+  }
+  gpuUsageChart.setHistory(Array.isArray(gpu?.history) ? gpu.history : []);
+}
+
+function runStatusBadge(run) {
+  const status = String(run?.status || 'unknown').toLowerCase();
+  const tone = status === 'running' ? 'active' : (status === 'completed' || status === 'stopped' ? 'ok' : (status === 'error' ? 'error' : ''));
+  return `<span class="badge ${tone}">${escapeHtml(status)}</span>`;
+}
+
+function renderRunsTable() {
+  const rows = sortRunsByRecent(state.runs).map((run) => {
+    const isActive = run.id === state.selectedRunId ? ' class="active"' : '';
+    const status = String(run.status || '').toLowerCase();
+    const actions = [];
+    if (['running', 'stopping'].includes(status)) {
+      actions.push({
+        action: 'cancel',
+        label: status === 'stopping' ? 'Stop Pending' : 'Stop Run',
+      });
+    }
+    if (status === 'stopped' && run.canContinue) {
+      actions.push({
+        action: 'continue',
+        label: 'Continue',
+      });
+    }
+    if (!['running', 'stopping'].includes(status)) {
+      actions.push({
+        action: 'delete',
+        label: 'Delete',
+      });
+    }
+    return `
+      <tr data-run-id="${escapeHtml(run.id)}"${isActive}>
+        <td><strong>${escapeHtml(run.label || run.id)}</strong></td>
+        <td>${runStatusBadge(run)}</td>
+        <td>G${Number(run.bestGeneration || 0)}</td>
+        <td>${formatNumber(Number(run.totalSelfPlayGames || 0) + Number(run.totalEvaluationGames || 0))}</td>
+        <td>${formatNumber(run.replayBuffer?.positions || 0)}</td>
+        <td>${escapeHtml(formatDate(run.updatedAt || run.createdAt))}</td>
+        <td>
+          <div class="table-actions">
+            ${actions.map((entry) => `
+              <button
+                type="button"
+                class="secondary table-action-btn"
+                data-run-action="${escapeHtml(entry.action)}"
+                data-run-id="${escapeHtml(run.id)}"
+              >${escapeHtml(entry.label)}</button>
+            `).join('')}
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  els.runsTableBody.innerHTML = rows || '<tr><td colspan="7" class="subtle">No runs yet.</td></tr>';
+}
+
+function renderSelectedRun() {
+  const run = getSelectedRunData();
+  if (!run) {
+    els.selectedRunLabel.textContent = 'No run selected.';
+    els.selectedRunMeta.textContent = 'Select a run to inspect its generation history.';
+    els.selectedRunStats.innerHTML = '';
+    els.selectedRunGenerations.innerHTML = '';
+    els.selectedRunConfigMeta.textContent = 'Select a run to inspect its saved config.';
+    els.selectedRunConfigBody.innerHTML = '<tr><td colspan="2" class="subtle">No run selected.</td></tr>';
+    els.stopRunBtn.textContent = 'Stop Run';
+    els.stopRunBtn.disabled = true;
+    els.continueRunBtn.disabled = true;
+    els.deleteRunBtn.disabled = true;
+    generationWinChart.clear();
     return;
   }
-  snapshots.forEach((snapshot) => {
-    const latestLoss = snapshot.latestLoss || null;
-    const row = document.createElement('article');
-    row.className = `detail-row ${!state.selectedTrainingRunId && snapshot.id === state.selectedSnapshotId ? 'active' : ''}`;
-    row.dataset.snapshotId = snapshot.id;
-    row.innerHTML = `
+  const live = state.liveRunsById.get(run.id) || null;
+  const latestLoss = live?.latestLoss || run.latestLoss || null;
+  const latestEval = live?.latestEvaluation || run.latestEvaluation || null;
+  const status = String(run.status || '').toLowerCase();
+  const primaryEval = latestEval?.prePromotionTest || latestEval?.againstBest || latestEval?.againstTarget || null;
+  const primaryEvalGeneration = Number.isFinite(primaryEval?.generation)
+    ? Number(primaryEval.generation)
+    : Number(live?.bestGeneration ?? run.bestGeneration ?? 0);
+  const primaryEvalLabel = latestEval?.prePromotionTest
+    ? `Pre-Promo G${primaryEvalGeneration}`
+    : `Vs Best G${primaryEvalGeneration}`;
+  const timing = getRunTimingSnapshot(run.id);
+  els.selectedRunLabel.textContent = run.label || run.id;
+  els.selectedRunMeta.textContent = [
+    `${run.status || 'unknown'} | best G${Number(live?.bestGeneration ?? run.bestGeneration ?? 0)} | worker G${Number(live?.workerGeneration ?? run.workerGeneration ?? 0)}`,
+    run.stopReason ? `stop ${run.stopReason}` : '',
+    `updated ${formatDate(live?.timestamp || run.updatedAt || run.createdAt)}`,
+  ].filter(Boolean).join(' | ');
+  els.stopRunBtn.textContent = status === 'stopping' ? 'Stop Pending' : 'Stop Run';
+  els.stopRunBtn.disabled = !['running', 'stopping'].includes(status);
+  const canContinue = status === 'stopped' && run.canContinue;
+  els.continueRunBtn.disabled = !canContinue;
+  els.continueRunBtn.title = canContinue
+    ? 'Resume this stopped run.'
+    : (status === 'stopped' ? 'This run was saved without resumable state, so it cannot be continued.' : 'Stop the run before continuing it.');
+  els.deleteRunBtn.disabled = ['running', 'stopping'].includes(status);
+  const stats = [
+    { label: 'Self-Play Games', value: formatNumber(live?.totalSelfPlayGames ?? run.totalSelfPlayGames ?? 0) },
+    { label: 'Eval Games', value: formatNumber(live?.totalEvaluationGames ?? run.totalEvaluationGames ?? 0) },
+    { label: 'Training Steps', value: formatNumber(live?.totalTrainingSteps ?? run.totalTrainingSteps ?? 0) },
+    { label: 'Avg Sim Time', value: formatDuration(timing?.averageSelfPlayGameDurationMs ?? 0) },
+    { label: 'Avg Eval Time', value: formatDuration(timing?.averageEvaluationGameDurationMs ?? 0) },
+    { label: 'Run Time', value: formatDuration(getRunElapsedMs(run, live)) },
+    { label: 'Replay Buffer', value: `${formatNumber(live?.replayBuffer?.positions ?? run.replayBuffer?.positions ?? 0)} / ${formatNumber(live?.replayBuffer?.maxPositions ?? run.replayBuffer?.maxPositions ?? 0)}` },
+    { label: 'Latest Loss', value: latestLoss ? `P ${Number(latestLoss.policyLoss || 0).toFixed(3)} | V ${Number(latestLoss.valueLoss || 0).toFixed(3)}` : '--' },
+    { label: primaryEvalLabel, value: primaryEval ? formatPercent(primaryEval.winRate) : '--' },
+  ];
+  els.selectedRunStats.innerHTML = stats.map((entry) => `
+    <div class="run-stat">
+      <div class="k">${escapeHtml(entry.label)}</div>
+      <div class="v">${escapeHtml(entry.value)}</div>
+    </div>
+  `).join('');
+  const generations = Array.isArray(run.generations) ? run.generations : [];
+  const currentGeneration = generations.length
+    ? Math.max(...generations.map((generation) => Number(generation?.generation || 0)))
+    : Number(run.bestGeneration || 0);
+  const promotedGenerations = [...new Set(generations
+    .filter((generation) => generation && generation.approved !== false)
+    .map((generation) => Number(generation.generation))
+    .filter((generation) => Number.isFinite(generation))
+    .sort((left, right) => left - right))];
+  els.selectedRunGenerations.innerHTML = `
+    <div class="detail-row"><strong>Current Generation:</strong> ${escapeHtml(`G${currentGeneration}`)}</div>
+    <div class="detail-row"><strong>Current Best:</strong> ${escapeHtml(`G${Number(run.bestGeneration || 0)}`)}</div>
+    <div class="detail-row"><strong>Promoted generations:</strong> ${escapeHtml(promotedGenerations.length ? promotedGenerations.map((generation) => `G${generation}`).join(', ') : '--')}</div>
+  `;
+  generationWinChart.setData({
+    title: `${run.label} generation checks`,
+    series: Array.isArray(run.evaluationSeries) ? run.evaluationSeries : [],
+  });
+  const configEntries = buildSelectedRunConfigEntries(run.config || {});
+  els.selectedRunConfigMeta.textContent = configEntries.length
+    ? `Saved config snapshot for this run (${configEntries.length} parameter${configEntries.length === 1 ? '' : 's'}).`
+    : 'This run does not expose a saved config snapshot.';
+  els.selectedRunConfigBody.innerHTML = configEntries.length
+    ? configEntries.map((entry) => `
+      <tr>
+        <td>${escapeHtml(entry.label)}</td>
+        <td>${escapeHtml(entry.value)}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="2" class="subtle">No saved config found for this run.</td></tr>';
+}
+
+function renderReplaySelectors() {
+  const runs = sortRunsByRecent(state.runs);
+  fillSelect(els.replayRunSelect, runs.map((run) => ({
+    value: run.id,
+    label: `${run.label} (${run.status})`,
+  })), { includeBlank: true, blankLabel: 'Choose run', preferredValue: state.replayRunId });
+  renderReplayGenerationFilter();
+  renderReplaySelectionMeta();
+}
+
+function renderReplaySelectionMeta() {
+  if (!els.replaySelectionMeta) return;
+  if (!state.replayRunId) {
+    els.replaySelectionMeta.textContent = 'Choose a run to load its retained games.';
+    return;
+  }
+  const timing = getRunTimingSnapshot(state.replayRunId);
+  if (!timing?.run) {
+    els.replaySelectionMeta.textContent = 'Loading retained games...';
+    return;
+  }
+  const live = state.liveRunsById.get(state.replayRunId) || null;
+  const totalEvaluationGames = Number(live?.totalEvaluationGames ?? timing.run.totalEvaluationGames ?? 0);
+  const knownGenerationChecks = Array.isArray(timing.run.generationPairs) ? timing.run.generationPairs.length : 0;
+  const loadedGameCount = getReplayGamesForRun(state.replayRunId).length;
+  const visibleGameCount = getVisibleReplayGames(state.replayRunId).length;
+  const generationFilter = getReplayGenerationFilterValue();
+  const filterLabel = Number.isFinite(generationFilter) ? `Filter G${generationFilter}` : 'All generations';
+  let gameCountLabel = `${loadedGameCount} eval game(s) loaded`;
+  if (state.replayGamesLoading && !loadedGameCount) {
+    gameCountLabel = 'Loading eval games';
+  } else if (state.replayGamesError && !loadedGameCount) {
+    gameCountLabel = state.replayGamesError;
+  } else if (!loadedGameCount && (totalEvaluationGames > 0 || knownGenerationChecks > 0)) {
+    gameCountLabel = 'No eval games loaded yet';
+  } else if (!loadedGameCount) {
+    gameCountLabel = 'No eval games yet';
+  }
+  els.replaySelectionMeta.textContent = [
+    `${gameCountLabel} for ${timing.run.label || timing.run.id}.`,
+    `Showing ${visibleGameCount}`,
+    filterLabel,
+    `Avg sim ${formatDuration(timing.averageSelfPlayGameDurationMs)}`,
+    `Avg eval ${formatDuration(timing.averageEvaluationGameDurationMs)}`,
+    `Run time ${formatDuration(getRunElapsedMs(timing.run, timing.live))}`,
+  ].join(' | ');
+}
+
+function renderReplayGameList({ scrollToBottom = false } = {}) {
+  const loadedGames = getReplayGamesForRun(state.replayRunId);
+  state.replayGames = loadedGames;
+  const visibleGames = getVisibleReplayGames(state.replayRunId);
+  if (els.replayListTopBtn) {
+    els.replayListTopBtn.disabled = !visibleGames.length;
+  }
+  if (els.replayListBottomBtn) {
+    els.replayListBottomBtn.disabled = !visibleGames.length;
+  }
+  if (!state.replayRunId) {
+    els.replayGameList.innerHTML = '<div class="detail-row"><div class="subtle">Choose a run to see eval games.</div></div>';
+    return;
+  }
+  if (state.replayGamesLoading && !loadedGames.length) {
+    els.replayGameList.innerHTML = '<div class="detail-row"><div class="subtle">Loading eval games...</div></div>';
+    return;
+  }
+  if (state.replayGamesError && !loadedGames.length) {
+    els.replayGameList.innerHTML = `<div class="detail-row"><div class="subtle">${escapeHtml(state.replayGamesError)}</div></div>`;
+    return;
+  }
+  if (!loadedGames.length) {
+    els.replayGameList.innerHTML = `<div class="detail-row"><div class="subtle">${escapeHtml(getReplayEmptyStateMessage())}</div></div>`;
+    return;
+  }
+  if (!visibleGames.length) {
+    const generationFilter = getReplayGenerationFilterValue();
+    els.replayGameList.innerHTML = `<div class="detail-row"><div class="subtle">${escapeHtml(`No eval games match ${Number.isFinite(generationFilter) ? `G${generationFilter}` : 'the current filter'}.`)}</div></div>`;
+    return;
+  }
+  els.replayGameList.innerHTML = visibleGames.map((game) => `
+    <div class="detail-row ${game.id === state.selectedReplayGameId ? 'active' : ''}" data-game-id="${escapeHtml(game.id)}">
       <div class="detail-row-head">
-        <div>
-          <strong>${escapeHtml(snapshot.label || snapshot.id)}</strong>
-          <div class="card-meta">${escapeHtml(snapshot.id)} | generation ${Number(snapshot.generation || 0)}</div>
-        </div>
-        <span class="pill">${escapeHtml(formatDate(snapshot.updatedAt || snapshot.createdAt))}</span>
+        <strong>${escapeHtml(`${game.whiteParticipantLabel || `G${game.whiteGeneration}`} vs ${game.blackParticipantLabel || `G${game.blackGeneration}`}`)}</strong>
+        <span class="badge">${escapeHtml(game.id || 'eval')}</span>
       </div>
       <div class="detail-row-meta">
-        <div class="subtle">Loss entries ${snapshot.lossCount || 0} | Training runs ${snapshot?.stats?.trainingRuns || 0}</div>
-        <div class="subtle">${escapeHtml(latestLoss
-          ? `Policy ${formatLossValue(latestLoss.policyLoss)} | Value ${formatLossValue(latestLoss.valueLoss)} | Identity ${formatLossValue(latestLoss.identityLoss)}`
-          : 'No stored loss history yet.')}</div>
+        <div class="subtle">Eval | Winner ${escapeHtml(game.winnerLabel || 'Draw')} | ${escapeHtml(formatDuration(game.durationMs || 0))}</div>
+        <div class="subtle">${escapeHtml(formatDate(game.createdAt))}</div>
       </div>
-      <div class="detail-actions">
-        <button type="button" class="secondary" data-action="use-base" data-snapshot-id="${escapeHtml(snapshot.id)}">Use As Base</button>
-        <button type="button" class="danger" data-action="delete" data-snapshot-id="${escapeHtml(snapshot.id)}">Delete Model</button>
-      </div>
-    `;
-    els.snapshotList.appendChild(row);
-  });
+    </div>
+  `).join('');
+  if (scrollToBottom) {
+    window.requestAnimationFrame(() => {
+      if (!els.replayGameList) return;
+      els.replayGameList.scrollTop = els.replayGameList.scrollHeight;
+    });
+  }
 }
 
-function renderSelectedModelDetails() {
-  const selectedTrainingRun = getTrainingRunById(state.selectedTrainingRunId);
-  if (selectedTrainingRun && !selectedTrainingRun.newSnapshotId) {
-    const latestLoss = selectedTrainingRun.finalLoss || null;
-    const completedEpochs = Number(
-      selectedTrainingRun?.checkpoint?.completedEpochs
-      || selectedTrainingRun?.history?.length
-      || 0
-    );
-    const totalEpochs = Number(selectedTrainingRun?.checkpoint?.totalEpochs || selectedTrainingRun?.epochs || 0);
-    els.selectedModelSummary.textContent = `${selectedTrainingRun.label || selectedTrainingRun.id} (training)`;
-    els.selectedModelMeta.textContent = `${selectedTrainingRun.id} | ${formatDate(selectedTrainingRun.updatedAt || selectedTrainingRun.createdAt)} | Base ${selectedTrainingRun.baseSnapshotId || 'none'}`;
-    els.selectedModelStats.textContent = latestLoss
-      ? `Live loss: policy ${formatLossValue(latestLoss.policyLoss)}, value ${formatLossValue(latestLoss.valueLoss)}, identity ${formatLossValue(latestLoss.identityLoss)}, identity accuracy ${(Number(latestLoss.identityAccuracy || 0) * 100).toFixed(1)}%. Epoch ${completedEpochs}/${totalEpochs || selectedTrainingRun.epochs || 0}.`
-      : `Training run is live. ${selectedTrainingRun.sourceGames || 0} source games across ${selectedTrainingRun.sourceSimulations || 0} run(s). Waiting for the first epoch update.`;
-    els.forkSnapshotBtn.disabled = true;
-    return;
+async function loadMostRecentAvailableReplay(preferredGameId = state.selectedReplayGameId) {
+  const candidateIds = [];
+  if (preferredGameId) {
+    candidateIds.push(preferredGameId);
   }
-  const snapshot = getSnapshotById(state.selectedSnapshotId);
-  if (!snapshot) {
-    els.selectedModelSummary.textContent = 'No model selected.';
-    els.selectedModelMeta.textContent = 'Select an output model to inspect it.';
-    els.selectedModelStats.textContent = 'No model stats available.';
-    els.forkSnapshotBtn.disabled = true;
-    return;
+  [...getReplayGamesForRun(state.replayRunId)].reverse().forEach((game) => {
+    if (game?.id && !candidateIds.includes(game.id)) {
+      candidateIds.push(game.id);
+    }
+  });
+
+  let lastNotFoundError = null;
+  for (const gameId of candidateIds.slice(0, 8)) {
+    try {
+      await loadReplayGame(gameId);
+      return true;
+    } catch (err) {
+      if (err?.status !== 404) {
+        throw err;
+      }
+      lastNotFoundError = err;
+    }
   }
-  const parent = snapshot.parentSnapshotId ? getSnapshotById(snapshot.parentSnapshotId) : null;
-  const latestLoss = snapshot.latestLoss || null;
-  els.selectedModelSummary.textContent = `${snapshot.label || snapshot.id} (g${Number(snapshot.generation || 0)})`;
-  els.selectedModelMeta.textContent = `${snapshot.id} | ${formatDate(snapshot.updatedAt || snapshot.createdAt)} | Parent ${parent?.label || snapshot.parentSnapshotId || 'none'}`;
-  els.selectedModelStats.textContent = latestLoss
-    ? `Latest loss: policy ${formatLossValue(latestLoss.policyLoss)}, value ${formatLossValue(latestLoss.valueLoss)}, identity ${formatLossValue(latestLoss.identityLoss)}, identity accuracy ${(Number(latestLoss.identityAccuracy || 0) * 100).toFixed(1)}%.`
-    : `Notes: ${snapshot.notes || 'No notes.'} | Loss entries ${snapshot.lossCount || 0} | Training runs ${snapshot?.stats?.trainingRuns || 0}.`;
-  els.forkSnapshotBtn.disabled = false;
+
+  if (lastNotFoundError) {
+    replayWorkbench.clear();
+    setReplayControlsEnabled(false);
+    els.replayMeta.textContent = 'Replay payloads are still syncing for the newest retained games.';
+  }
+  return false;
 }
 
-function renderTrainingRunList() {
-  els.trainingRunList.innerHTML = '';
-  const runs = getSortedTrainingRuns();
-  if (!runs.length) {
-    els.trainingRunList.innerHTML = '<div class="subtle">No training runs recorded.</div>';
+function renderTestSelectors() {
+  if (!els.testPromotedBotList) return;
+  const items = Array.isArray(state.promotedBots) ? state.promotedBots : [];
+  els.testPromotedBotList.innerHTML = '';
+  if (!items.length) {
+    els.testPromotedBotList.innerHTML = '<div class="subtle">No promoted models are available yet.</div>';
+    if (els.savePromotedBotsBtn) {
+      els.savePromotedBotsBtn.disabled = true;
+    }
+    renderTestSelectionMeta();
     return;
   }
-  runs.forEach((run) => {
-    const finalLoss = run?.finalLoss || {};
-    const status = String(run?.status || 'completed').toLowerCase();
-    const isCompleted = status === 'completed';
-    const row = document.createElement('article');
-    row.className = `detail-row ${run.id === state.selectedTrainingRunId || (!state.selectedTrainingRunId && run.newSnapshotId === state.selectedSnapshotId) ? 'active' : ''}`;
-    row.dataset.outputSnapshotId = run.newSnapshotId || '';
-    row.dataset.trainingRunId = run.id;
-    row.innerHTML = `
-      <div class="detail-row-head">
-        <div>
-          <strong>${escapeHtml(run.newSnapshotId || run.label || run.id || 'Training run')}</strong>
-          <div class="card-meta">${escapeHtml(formatDate(run.createdAt))} | from ${escapeHtml(run.baseSnapshotId || 'n/a')}</div>
-        </div>
-        <button type="button" class="secondary" data-action="open-model" data-snapshot-id="${escapeHtml(run.newSnapshotId || '')}" ${isCompleted && run.newSnapshotId ? '' : 'disabled'}>Open Model</button>
-      </div>
-      <div class="detail-row-meta">
-        <div class="subtle">${run.sourceGames} games | ${run.sourceSimulations} run(s) | ${run.epochs} epoch(s) | LR ${Number(run.learningRate || 0).toFixed(4)} | ${escapeHtml(status)}</div>
-      </div>
-      <div class="metric-bar-list" style="margin-top:12px;">
-        <div class="metric-bar-row">
-          <span class="metric-bar-label">Policy</span>
-          <div class="metric-bar-track"><span class="metric-bar-fill policy" style="width:${(lossToProgress(finalLoss.policyLoss) * 100).toFixed(1)}%;"></span></div>
-          <span class="metric-bar-value">${formatLossValue(finalLoss.policyLoss)}</span>
-        </div>
-        <div class="metric-bar-row">
-          <span class="metric-bar-label">Value</span>
-          <div class="metric-bar-track"><span class="metric-bar-fill value" style="width:${(lossToProgress(finalLoss.valueLoss) * 100).toFixed(1)}%;"></span></div>
-          <span class="metric-bar-value">${formatLossValue(finalLoss.valueLoss)}</span>
-        </div>
-        <div class="metric-bar-row">
-          <span class="metric-bar-label">Identity</span>
-          <div class="metric-bar-track"><span class="metric-bar-fill identity" style="width:${(lossToProgress(finalLoss.identityLoss) * 100).toFixed(1)}%;"></span></div>
-          <span class="metric-bar-value">${formatLossValue(finalLoss.identityLoss)}</span>
-        </div>
-      </div>
-      <div class="subtle" style="margin-top:8px;">Identity accuracy: ${(Number(finalLoss.identityAccuracy || 0) * 100).toFixed(1)}%</div>
-    `;
-    els.trainingRunList.appendChild(row);
-  });
-}
 
-function renderTrainingSourceList() {
-  els.trainingSourceList.innerHTML = '';
-  const snapshotId = els.trainSnapshotSelect?.value || '';
-  if (!snapshotId) {
-    updateTrainingSourceMeta();
-    return;
-  }
-  const simulations = getSortedSimulations().sort((left, right) => {
-    const leftEligible = getSimulationTrainingEligibility(left, snapshotId).eligible;
-    const rightEligible = getSimulationTrainingEligibility(right, snapshotId).eligible;
-    if (leftEligible !== rightEligible) return leftEligible ? -1 : 1;
-    const leftSelected = state.trainingSelection.has(left.id);
-    const rightSelected = state.trainingSelection.has(right.id);
-    if (leftSelected !== rightSelected) return leftSelected ? -1 : 1;
-    return 0;
-  });
-  if (!simulations.length) {
-    els.trainingSourceList.innerHTML = '<div class="subtle">Run simulations first to create training sources.</div>';
-    updateTrainingSourceMeta();
-    return;
-  }
-  simulations.forEach((simulation) => {
-    const eligibility = getSimulationTrainingEligibility(simulation, snapshotId);
+  items.forEach((item) => {
     const row = document.createElement('label');
-    row.className = `source-row ${eligibility.eligible ? '' : 'dim'}`;
+    row.className = 'test-bot-item';
+
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
-    checkbox.value = simulation.id;
-    checkbox.style.width = '16px';
-    checkbox.style.marginTop = '4px';
-    checkbox.checked = eligibility.eligible && state.trainingSelection.has(simulation.id);
-    checkbox.disabled = !eligibility.eligible;
-    checkbox.addEventListener('change', () => {
-      if (checkbox.checked) state.trainingSelection.add(simulation.id);
-      else state.trainingSelection.delete(simulation.id);
-      renderTrainingSourceList();
-    });
-    const body = document.createElement('div');
-    body.innerHTML = `
-      <strong>${escapeHtml(simulation.label || simulation.id)}</strong>
-      <div class="card-meta">${escapeHtml(simulation.id)} | ${simulation.gameCount} games | ${escapeHtml(formatDate(simulation.createdAt))}</div>
-      <div class="card-meta">${escapeHtml(simulation.participantALabel || simulation.participantAId || 'Player 1')} vs ${escapeHtml(simulation.participantBLabel || simulation.participantBId || 'Player 2')}</div>
-      <div class="${eligibility.eligible ? 'ok' : 'warn'}" style="font-size:12px;margin-top:6px;">
-        ${escapeHtml(eligibility.eligible ? 'Trainable for the selected base snapshot.' : eligibility.reasons.join(' | '))}
-      </div>
-    `;
+    checkbox.checked = item?.enabled === true;
+    checkbox.dataset.promotedBotId = String(item?.id || '');
+
+    const copy = document.createElement('div');
+    copy.className = 'test-bot-copy';
+
+    const title = document.createElement('div');
+    title.className = 'test-bot-title';
+    title.textContent = item?.label || item?.id || 'Promoted model';
+
+    const meta = document.createElement('div');
+    meta.className = 'test-bot-meta';
+    meta.textContent = [
+      item?.runLabel ? `${item.runLabel}` : '',
+      Number.isFinite(Number(item?.generation)) ? `G${Number(item.generation)}` : '',
+      item?.isBest ? 'best generation' : '',
+      item?.promotedAt ? `promoted ${formatDate(item.promotedAt)}` : '',
+    ].filter(Boolean).join(' | ');
+
+    copy.appendChild(title);
+    if (meta.textContent) {
+      copy.appendChild(meta);
+    }
     row.appendChild(checkbox);
-    row.appendChild(body);
-    els.trainingSourceList.appendChild(row);
+    row.appendChild(copy);
+    els.testPromotedBotList.appendChild(row);
   });
-  updateTrainingSourceMeta();
+
+  if (els.savePromotedBotsBtn) {
+    els.savePromotedBotsBtn.disabled = state.savingPromotedBots;
+  }
+  renderTestSelectionMeta();
 }
 
-function renderSimulationList() {
-  els.simulationList.innerHTML = '';
-  const simulations = getSortedSimulations();
-  if (!simulations.length) {
-    els.simulationRunsMeta.textContent = 'No simulation runs yet.';
-    els.simulationList.innerHTML = '<div class="subtle">Run a simulation batch to populate this list.</div>';
+function renderTestSelectionMeta() {
+  if (!els.testSelectionMeta) return;
+  const total = Array.isArray(state.promotedBots) ? state.promotedBots.length : 0;
+  if (!total) {
+    els.testSelectionMeta.textContent = 'No promoted models are available yet.';
     return;
   }
-  els.simulationRunsMeta.textContent = `${simulations.length} run(s) recorded. Use Select to inspect games.`;
-  els.simulationList.innerHTML = `
-    <table class="game-table simulation-runs-table">
-      <colgroup>
-        <col class="col-name" />
-        <col class="col-player" />
-        <col class="col-player" />
-        <col class="col-games" />
-        <col class="col-avg" />
-        <col class="col-timestamp" />
-        <col class="col-actions" />
-      </colgroup>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>White Player</th>
-          <th>Black Player</th>
-          <th>Games</th>
-          <th>Avg Plies</th>
-          <th>Timestamp</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  `;
-  const tableBody = els.simulationList.querySelector('.game-table tbody');
-  simulations.forEach((simulation) => {
-    const row = document.createElement('tr');
-    row.className = simulation.id === state.selectedSimulationId ? 'active' : '';
-    row.dataset.simulationId = simulation.id;
-    const livePayload = getLiveSimulationForRun(simulation);
-    const whitePlayer = simulation.participantALabel || simulation.participantAId || 'Player 1';
-    const blackPlayer = simulation.participantBLabel || simulation.participantBId || 'Player 2';
-    const gamesView = buildSimulationGamesView(simulation, livePayload);
-    const inFlight = isSimulationInFlight(simulation, livePayload);
-    const isStopping = String(livePayload?.status || simulation?.status || '').toLowerCase() === 'stopping';
-    const taskId = getSimulationTaskId(simulation, livePayload);
-    row.innerHTML = `
-      <td>${escapeHtml(simulation.label || simulation.id)}</td>
-      <td>${escapeHtml(whitePlayer)}</td>
-      <td>${escapeHtml(blackPlayer)}</td>
-      <td class="simulation-games-cell" title="${escapeHtml(gamesView.title)}">
-        <div class="simulation-games-stack">
-          <div class="simulation-games-label ${escapeHtml(gamesView.labelClass)}">${escapeHtml(gamesView.label)}</div>
-          ${gamesView.progress !== null ? `<div class="progress"><span class="${escapeHtml(gamesView.progressTone)}" style="width:${Math.max(0, Math.min(100, gamesView.progress * 100)).toFixed(1)}%"></span></div>` : ''}
-          ${gamesView.meta ? `<div class="simulation-games-meta">${escapeHtml(gamesView.meta)}</div>` : ''}
-        </div>
-      </td>
-      <td class="subtle">${escapeHtml(Number(simulation?.stats?.averagePlies || 0).toFixed(1))}</td>
-      <td class="subtle">${escapeHtml(formatDate(simulation.createdAt))}</td>
-      <td class="actions-cell">
-        <div class="inline-actions">
-          <button type="button" class="secondary" data-action="select-run" data-simulation-id="${escapeHtml(simulation.id)}">Select</button>
-          ${inFlight
-            ? `<button type="button" class="danger" data-action="stop-run" data-simulation-id="${escapeHtml(simulation.id)}" data-task-id="${escapeHtml(taskId)}" ${isStopping || !taskId ? 'disabled' : ''}>${isStopping ? 'Stopping...' : 'Stop run'}</button>`
-            : `<button type="button" class="danger" data-action="delete" data-simulation-id="${escapeHtml(simulation.id)}">Delete</button>`}
-        </div>
-      </td>
-    `;
-    tableBody.appendChild(row);
-  });
+  const inputs = Array.from(els.testPromotedBotList?.querySelectorAll('input[data-promoted-bot-id]') || []);
+  const enabledCount = inputs.length
+    ? inputs.filter((input) => input.checked).length
+    : state.promotedBots.filter((item) => item?.enabled).length;
+  els.testSelectionMeta.textContent = `${enabledCount} of ${total} promoted models will appear in the public bot dropdown.`;
 }
 
-function formatGameWinner(game) {
-  if (game?.winner === 0 || game?.winner === 1) return colorToText(game.winner);
-  if (String(game?.winReason || '').toLowerCase() === 'draw') return 'Draw';
-  return 'No winner';
-}
-
-function syncReplaySimulationSelect() {
-  const options = getSortedSimulations().map((simulation) => ({
-    value: simulation.id,
-    label: `${simulation.label} | ${simulation.gameCount} games`,
-  }));
-  fillSelect(els.replaySimulationSelect, options, {
-    includeBlank: true,
-    blankLabel: 'Select simulation',
-    preferredValue: state.selectedSimulationId || '',
-  });
-  if (!state.selectedSimulationId) els.replaySimulationSelect.value = '';
-}
-
-function syncReplayGameSelect(games = [], preferredGameId = '') {
-  const options = games.map((game) => ({
-    value: game.id,
-    label: `${game.id} | ${game.plies} plies | ${formatDate(game.createdAt)}`,
-  }));
-  fillSelect(els.replayGameSelect, options, {
-    includeBlank: true,
-    blankLabel: 'Select game',
-    preferredValue: preferredGameId || '',
-  });
-  if (!preferredGameId) els.replayGameSelect.value = '';
-}
-
-function renderSelectedSimulation() {
-  const simulation = getSimulationById(state.selectedSimulationId);
-  if (!simulation) {
-    els.selectedSimulationLabel.textContent = 'No simulation selected.';
-    els.selectedSimulationMeta.textContent = 'Select a simulation run to load its game list.';
-    els.simulationGameList.innerHTML = '<div class="subtle">No games loaded.</div>';
-    state.selectedGameId = '';
-    syncReplayGameSelect([]);
-    replayWorkbench.clear();
-    updateReplayControlsState();
-    return;
+async function ensureRunDetail(runId, { force = false } = {}) {
+  if (!runId) return null;
+  if (!force && state.runDetailsById.has(runId)) {
+    return state.runDetailsById.get(runId);
   }
-  const detail = state.simulationDetailsById.get(simulation.id) || null;
-  const participantResults = Array.isArray(simulation?.stats?.participantResults)
-    ? simulation.stats.participantResults
-    : [];
-  const resultSummary = participantResults
-    .map((entry) => `${entry.label}: ${Number(entry.winPct || 0).toFixed(1)}%`)
-    .join(' | ');
-  els.selectedSimulationLabel.textContent = simulation.label || simulation.id;
-  els.selectedSimulationMeta.textContent = simulation.errorMessage
-    ? `${simulation.id} | ${simulation.gameCount} games | ${formatDate(simulation.createdAt)} | ${resultSummary || describeStorage(simulation)} | Error: ${simulation.errorMessage}`
-    : `${simulation.id} | ${simulation.gameCount} games | ${formatDate(simulation.createdAt)} | ${resultSummary || describeStorage(simulation)}`;
-  if (state.loadingSimulationId === simulation.id && !detail) {
-    els.simulationGameList.innerHTML = '<div class="subtle">Loading games for this run...</div>';
-    updateReplayControlsState();
-    return;
-  }
-  const games = Array.isArray(detail?.games) ? detail.games : [];
-  if (!games.length) {
-    els.simulationGameList.innerHTML = '<div class="subtle">This run has no stored games yet.</div>';
-    updateReplayControlsState();
-    return;
-  }
-  const previousScrollTop = els.simulationGameList.scrollTop || 0;
-  els.simulationGameList.innerHTML = `
-    <table class="game-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>White Player</th>
-          <th>Black Player</th>
-          <th>Plies</th>
-          <th>Decisions</th>
-          <th>Timestamp</th>
-          <th>Win Reason</th>
-          <th>Win Color</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  `;
-  const tableBody = els.simulationGameList.querySelector('.game-table tbody');
-  games.forEach((game) => {
-    const row = document.createElement('tr');
-    row.className = game.id === state.selectedGameId ? 'active' : '';
-    row.dataset.gameId = game.id;
-    const whitePlayer = game.whiteParticipantLabel || simulation.participantALabel || 'White';
-    const blackPlayer = game.blackParticipantLabel || simulation.participantBLabel || 'Black';
-    row.innerHTML = `
-      <td>${escapeHtml(game.id)}</td>
-      <td>${escapeHtml(whitePlayer)}</td>
-      <td>${escapeHtml(blackPlayer)}</td>
-      <td class="subtle">${escapeHtml(String(game.plies ?? 0))}</td>
-      <td class="subtle">${escapeHtml(String(game.decisionCount || 0))}</td>
-      <td class="subtle">${escapeHtml(formatDate(game.createdAt))}</td>
-      <td class="subtle">${escapeHtml(winReasonToText(game.winReason))}</td>
-      <td>${escapeHtml(formatGameWinner(game))}</td>
-      <td class="actions-cell">
-        <div class="inline-actions">
-          <button type="button" class="secondary" data-action="load-game" data-game-id="${escapeHtml(game.id)}">Load Game</button>
-        </div>
-      </td>
-    `;
-    tableBody.appendChild(row);
-  });
-  els.simulationGameList.scrollTop = previousScrollTop;
-  updateReplayControlsState();
-}
-
-function renderWorkbench() {
-  setActiveWorkflowTab(state.activeWorkflowTab);
-  updateSummaryPanel();
-  renderSnapshotSelects();
-  renderParticipantSelects();
-  syncReplaySimulationSelect();
-  renderSimulationList();
-  renderSelectedSimulation();
-  renderTrainingSourceList();
-  renderTrainingRunList();
-  renderSnapshotList();
-  renderSelectedModelDetails();
-  updateReplayControlsState();
-}
-
-function renderLiveLossChart() {
-  if (!state.liveTrainingHistory.length) {
-    lossChart.clear();
-    return;
-  }
-  lossChart.setData(flattenLossHistory([{
-    timestamp: state.liveTrainingMeta?.startedAt || new Date().toISOString(),
-    epochs: state.liveTrainingMeta?.epochs || state.liveTrainingHistory.length,
-    learningRate: Number(state.liveTrainingMeta?.learningRate || 0),
-    sourceGames: Number(state.liveTrainingMeta?.sourceGames || 0),
-    sourceSimulations: Number(state.liveTrainingMeta?.sourceSimulations || 0),
-    history: state.liveTrainingHistory,
-  }]));
-}
-
-function selectTrainingRun(trainingRunId, options = {}) {
-  const trainingRun = getTrainingRunById(trainingRunId);
-  if (!trainingRun || !isTrainingRunSelectable(trainingRun)) return;
-  state.selectedTrainingRunId = trainingRun.id;
-  if (trainingRun.newSnapshotId && getSnapshotById(trainingRun.newSnapshotId)) {
-    state.selectedSnapshotId = trainingRun.newSnapshotId;
-    if (els.selectedSnapshotSelect) els.selectedSnapshotSelect.value = trainingRun.newSnapshotId;
-    if (els.lossSnapshotSelect) els.lossSnapshotSelect.value = trainingRun.newSnapshotId;
-  }
-  if (options.preferLive === true) {
-    state.lossChartMode = 'live';
-  }
-  renderTrainingRunList();
-  renderSnapshotList();
-  renderSelectedModelDetails();
-  if (state.lossChartMode === 'live') {
-    renderLiveLossChart();
-  } else if (trainingRun.newSnapshotId) {
-    loadLossHistory(trainingRun.newSnapshotId).catch((err) => setStatus(err.message, 'error'));
-  }
-}
-
-async function loadLossHistory(snapshotId) {
-  const token = ++state.lossRequestToken;
-  if (!snapshotId) {
-    lossChart.clear();
-    return;
-  }
-  const payload = await apiFetch(`/api/v1/ml/loss?snapshotId=${encodeURIComponent(snapshotId)}`);
-  if (token !== state.lossRequestToken || state.lossChartMode === 'live') return;
-  lossChart.setData(flattenLossHistory(Array.isArray(payload?.history) ? payload.history : []));
-}
-
-async function ensureSimulationDetail(simulationId) {
-  if (!simulationId) return null;
-  if (state.simulationDetailsById.has(simulationId)) return state.simulationDetailsById.get(simulationId);
-  const detail = await apiFetch(`/api/v1/ml/simulations/${encodeURIComponent(simulationId)}`);
-  state.simulationDetailsById.set(simulationId, detail);
+  const detail = await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(runId)}`);
+  state.runDetailsById.set(runId, detail);
+  mergeRunSummary(detail);
   return detail;
 }
 
-async function loadSelectedSimulationDetail(options = {}) {
-  const simulationId = state.selectedSimulationId;
-  if (!simulationId) {
-    syncReplayGameSelect([]);
-    renderSelectedSimulation();
-    return null;
+async function loadReplayGames({ autoLoadLatest = true, force = false } = {}) {
+  const runId = state.replayRunId || '';
+  const hasCachedList = state.replayGamesByRunId.has(runId);
+  if (!runId) {
+    state.replayGamesLoad = null;
+    state.replayGames = [];
+    state.selectedReplayGameId = '';
+    state.replayGamesError = '';
+    renderReplaySelectors();
+    renderReplaySelectionMeta();
+    renderReplayGameList();
+    return [];
   }
-  state.loadingSimulationId = simulationId;
-  renderSelectedSimulation();
-  const detail = await ensureSimulationDetail(simulationId);
-  if (state.selectedSimulationId !== simulationId) return detail;
-  state.loadingSimulationId = '';
-  const games = Array.isArray(detail?.games) ? detail.games : [];
-  if (!games.some((game) => game.id === state.selectedGameId)) {
-    state.selectedGameId = options.autoSelectFirstGame ? (games[0]?.id || '') : '';
+
+  if (hasCachedList && !force) {
+    state.replayGames = getReplayGamesForRun(runId);
+    state.replayGamesError = '';
+    state.replayGamesLoading = false;
+    normalizeReplayGenerationFilter(runId);
+    renderReplaySelectors();
+    renderReplaySelectionMeta();
+    renderReplayGameList();
+    if (autoLoadLatest) {
+      const targetGameId = state.selectedReplayGameId && state.replayGames.some((game) => game.id === state.selectedReplayGameId)
+        ? state.selectedReplayGameId
+        : (state.replayGames[state.replayGames.length - 1]?.id || '');
+      if (targetGameId && getReplayLoadedGameId() !== targetGameId) {
+        loadMostRecentAvailableReplay(targetGameId).catch((err) => setStatus(err.message, 'error'));
+      }
+    }
+    return state.replayGames;
   }
-  syncReplayGameSelect(games, state.selectedGameId);
-  renderSelectedSimulation();
-  if (options.autoLoadReplay && state.selectedGameId) await loadReplay();
-  return detail;
+
+  if (
+    state.replayGamesLoad
+    && state.replayGamesLoad.runId === runId
+  ) {
+    state.replayGamesLoad.autoLoadLatest = state.replayGamesLoad.autoLoadLatest || autoLoadLatest;
+    return state.replayGamesLoad.promise;
+  }
+
+  const requestSeq = state.replayGamesRequestSeq + 1;
+  state.replayGamesRequestSeq = requestSeq;
+  state.replayGamesLoading = true;
+  state.replayGamesError = '';
+  renderReplaySelectionMeta();
+  renderReplayGameList();
+  const loadState = {
+    runId,
+    requestSeq,
+    autoLoadLatest,
+    promise: null,
+  };
+  loadState.promise = (async () => {
+    let shouldAutoLoadLatest = false;
+    let targetGameId = '';
+    let fetchedGames = [];
+    try {
+      const items = await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(runId)}/games`);
+      shouldAutoLoadLatest = Boolean(loadState.autoLoadLatest);
+      if (requestSeq !== state.replayGamesRequestSeq || runId !== state.replayRunId) {
+        return [];
+      }
+      fetchedGames = sortReplayGamesChronologically(
+        (Array.isArray(items?.items) ? items.items : [])
+          .filter((game) => String(game?.phase || '').toLowerCase() === 'evaluation'),
+      );
+      state.replayGamesByRunId.set(runId, fetchedGames);
+      state.replayGames = fetchedGames;
+      state.replayGamesError = '';
+      normalizeReplayGenerationFilter(runId);
+      if (state.selectedReplayGameId && !state.replayGames.some((game) => game.id === state.selectedReplayGameId)) {
+        state.selectedReplayGameId = '';
+      }
+      renderReplayGenerationFilter(runId);
+      renderReplaySelectors();
+      renderReplaySelectionMeta();
+      if (state.replayGames.length && !state.selectedReplayGameId) {
+        state.selectedReplayGameId = state.replayGames[state.replayGames.length - 1].id;
+      }
+      renderReplayGameList({ scrollToBottom: true });
+      if (!state.replayGames.length) {
+        replayWorkbench.clear();
+        setReplayControlsEnabled(false);
+        els.replayMeta.textContent = getReplayEmptyStateMessage(runId);
+        return fetchedGames;
+      }
+      targetGameId = state.selectedReplayGameId || state.replayGames[state.replayGames.length - 1]?.id || '';
+    } catch (err) {
+      if (requestSeq === state.replayGamesRequestSeq && runId === state.replayRunId) {
+        state.replayGamesError = err.message || 'Failed to load eval games.';
+      }
+      throw err;
+    } finally {
+      if (requestSeq === state.replayGamesRequestSeq && runId === state.replayRunId) {
+        state.replayGamesLoading = false;
+        renderReplaySelectionMeta();
+        renderReplayGameList();
+      }
+      if (state.replayGamesLoad === loadState) {
+        state.replayGamesLoad = null;
+      }
+    }
+
+    if (!shouldAutoLoadLatest || !targetGameId) {
+      return;
+    }
+    if (getReplayLoadedGameId() === targetGameId) {
+      return fetchedGames;
+    }
+    loadMostRecentAvailableReplay(targetGameId).catch((err) => setStatus(err.message, 'error'));
+    return fetchedGames;
+  })();
+  state.replayGamesLoad = loadState;
+  return loadState.promise;
 }
 
-async function selectSimulation(simulationId, options = {}) {
-  state.selectedSimulationId = simulationId || '';
-  if (!options.preserveGame) state.selectedGameId = '';
-  syncReplaySimulationSelect();
-  if (els.replaySimulationSelect) els.replaySimulationSelect.value = state.selectedSimulationId || '';
-  renderSimulationList();
-  renderSelectedSimulation();
-  if (!state.selectedSimulationId) {
-    syncReplayGameSelect([]);
-    replayWorkbench.clear();
-    updateReplayControlsState();
+async function loadReplayGame(gameId = state.selectedReplayGameId) {
+  const runId = state.replayRunId || '';
+  if (!runId || !gameId) return;
+  state.selectedReplayGameId = gameId;
+  renderReplayGameList();
+  const requestSeq = state.replayGameRequestSeq + 1;
+  state.replayGameRequestSeq = requestSeq;
+  setReplayLoading('Loading replay...');
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  const payload = await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(runId)}/replay/${encodeURIComponent(gameId)}`);
+  if (
+    requestSeq !== state.replayGameRequestSeq
+    || runId !== state.replayRunId
+    || state.selectedReplayGameId !== gameId
+  ) {
     return;
   }
-  await loadSelectedSimulationDetail({
-    autoSelectFirstGame: Boolean(options.autoSelectFirstGame),
-    autoLoadReplay: Boolean(options.autoLoadReplay),
+  els.replayMeta.textContent = 'Rendering replay...';
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  replayWorkbench.setReplayPayload({
+    ...payload,
+    simulation: {
+      participantALabel: payload?.game?.whiteParticipantLabel || `G${payload?.game?.whiteGeneration ?? '?'}`,
+      participantBLabel: payload?.game?.blackParticipantLabel || `G${payload?.game?.blackGeneration ?? '?'}`,
+    },
   });
+  setReplayControlsEnabled(Boolean(payload?.game?.replay?.length));
+  renderReplayGameList();
 }
 
-async function selectReplayGame(gameId, options = {}) {
-  state.selectedGameId = gameId || '';
-  if (els.replayGameSelect) els.replayGameSelect.value = state.selectedGameId || '';
-  renderSelectedSimulation();
-  if (options.autoLoadReplay && state.selectedGameId) await loadReplay();
-}
-
-async function loadReplay() {
-  replayWorkbench.stopPlayback();
-  const simulationId = state.selectedSimulationId || els.replaySimulationSelect?.value || '';
-  const gameId = state.selectedGameId || els.replayGameSelect?.value || '';
-  if (!simulationId || !gameId) {
-    setStatus('Select a simulation run and game before loading replay.', 'warn');
-    return;
+async function selectRun(runId, { syncReplay = false, forceDetail = false } = {}) {
+  state.selectedRunId = runId || '';
+  if (state.selectedRunId && (forceDetail || state.activeWorkflowTab === 'runs')) {
+    await ensureRunDetail(state.selectedRunId, { force: forceDetail });
   }
-  if (els.replaySimulationSelect) els.replaySimulationSelect.value = simulationId;
-  if (els.replayGameSelect) els.replayGameSelect.value = gameId;
-  setStatus(`Loading replay ${gameId}...`);
-  const payload = await apiFetch(`/api/v1/ml/replay/${encodeURIComponent(simulationId)}/${encodeURIComponent(gameId)}`);
-  replayWorkbench.setReplayPayload(payload);
-  setStatus(`Replay loaded: ${gameId}.`, 'ok');
+  if (syncReplay) {
+    state.replayRunId = state.selectedRunId;
+    clearReplaySelection();
+    if (state.activeWorkflowTab === 'replay' && state.replayRunId) {
+      await loadReplayGames();
+    }
+  }
+  renderRunsTable();
+  renderSelectedRun();
+  renderReplaySelectors();
 }
 
-async function openReplayForSimulation(simulationId) {
-  if (!simulationId) return;
-  setActiveWorkflowTab('simulations');
-  await selectSimulation(simulationId, { autoSelectFirstGame: true, autoLoadReplay: true });
+async function refreshWorkbench({ silent = false, forceSelectedDetail = false } = {}) {
+  if (!silent) setStatus('Refreshing ML run workbench...');
+  const payload = await apiFetch('/api/v1/ml/workbench');
+  applyDefaults(payload.defaults || {});
+  state.seedSourceOptions = Array.isArray(payload?.seedSources?.items) && payload.seedSources.items.length
+    ? payload.seedSources.items
+    : buildBuiltinSeedSourceOptions();
+  renderSeedSourceSelect();
+  state.runs = sortRunsByRecent(Array.isArray(payload?.runs?.items) ? payload.runs.items : []);
+  state.promotedBots = Array.isArray(payload?.promotedBots?.items) ? payload.promotedBots.items : [];
+  applyResourceTelemetry(payload?.live?.resourceTelemetry || null, { render: false });
+  state.liveRunsById.clear();
+  (payload?.live?.runs || []).forEach((runPayload) => applyLiveRunPayload(runPayload, { render: false }));
+
+  if (!state.selectedRunId && state.runs.length) {
+    state.selectedRunId = state.runs[0].id;
+  }
+  if (
+    state.selectedRunId
+    && state.runs.some((run) => run.id === state.selectedRunId)
+    && state.activeWorkflowTab === 'runs'
+  ) {
+    await ensureRunDetail(state.selectedRunId, { force: forceSelectedDetail });
+  } else if (state.selectedRunId) {
+    if (!state.runs.some((run) => run.id === state.selectedRunId)) {
+      state.selectedRunId = '';
+    }
+  }
+
+  if (!state.replayRunId && state.runs.length) {
+    state.replayRunId = state.runs[0].id;
+  }
+  if (state.replayRunId && !state.runs.some((run) => run.id === state.replayRunId)) {
+    state.replayRunId = '';
+    clearReplaySelection();
+  }
+  if (state.activeWorkflowTab === 'replay' && state.replayRunId) {
+    await loadReplayGames({ autoLoadLatest: true });
+  }
+
+  renderWorkbenchSummary();
+  renderRunsTable();
+  renderSelectedRun();
+  renderReplaySelectors();
+  renderTestSelectors();
+  if (!silent) setStatus('ML run workbench ready.', 'ok');
 }
 
-async function refreshWorkbench(options = {}) {
-  if (!options.silent) setStatus('Refreshing ML workbench...');
-  state.isRefreshingWorkbench = true;
+function readRunConfigForm() {
+  const seedSelection = parseSeedSourceSelection(els.seedModeSelect.value || 'bootstrap');
+  return {
+    label: (els.runNameInput.value || '').trim() || null,
+    seedMode: seedSelection.seedMode,
+    seedRunId: seedSelection.seedRunId,
+    seedGeneration: seedSelection.seedGeneration,
+    seed: parseNumberInput(els.seedInput, Number.NaN),
+    numSelfplayWorkers: parseNumberInput(els.numSelfplayWorkersInput, 6),
+    parallelGameWorkers: parseNumberInput(els.parallelGameWorkersInput, 1),
+    numMctsSimulationsPerMove: parseNumberInput(els.numMctsSimulationsInput, 128),
+    maxDepth: parseNumberInput(els.maxDepthInput, 32),
+    hypothesisCount: parseNumberInput(els.hypothesisCountInput, 4),
+    riskBias: parseNumberInput(els.riskBiasInput, 0, true),
+    exploration: parseNumberInput(els.explorationInput, 1.5, true),
+    replayBufferMaxPositions: parseNumberInput(els.replayBufferMaxPositionsInput, 10000),
+    batchSize: parseNumberInput(els.batchSizeInput, 64),
+    learningRate: parseNumberInput(els.learningRateInput, 0.0005, true),
+    trainingBackend: els.trainingBackendSelect.value || 'auto',
+    trainingDevicePreference: els.trainingDeviceSelect.value || 'auto',
+    weightDecay: parseNumberInput(els.weightDecayInput, 0.0001, true),
+    gradientClipNorm: parseNumberInput(els.gradientClipNormInput, 1, true),
+    trainingStepsPerCycle: parseNumberInput(els.trainingStepsPerCycleInput, 16),
+    parallelTrainingHeadWorkers: parseNumberInput(els.parallelTrainingHeadWorkersInput, 1),
+    checkpointInterval: parseNumberInput(els.checkpointIntervalInput, 100),
+    prePromotionTestGames: parseNumberInput(els.prePromotionTestGamesInput, 50),
+    prePromotionTestWinRate: parseNumberInput(els.prePromotionTestWinRateInput, 0.55, true),
+    promotionTestGames: parseNumberInput(els.promotionTestGamesInput, 100),
+    promotionTestWinRate: parseNumberInput(els.promotionTestWinRateInput, 0.55, true),
+    promotionTestPriorGenerations: parseNumberInput(els.promotionTestPriorGenerationsInput, 3),
+    modelRefreshIntervalForWorkers: parseNumberInput(els.modelRefreshIntervalInput, 5),
+    generationComparisonStride: parseNumberInput(els.generationComparisonStrideInput, 5),
+    olderGenerationSampleProbability: parseNumberInput(els.olderGenerationSampleProbabilityInput, 0.10, true),
+    stopOnMaxGenerations: Boolean(els.stopOnMaxGenerationsInput.checked),
+    maxGenerations: parseNumberInput(els.maxGenerationsInput, 200),
+    stopOnMaxSelfPlayGames: Boolean(els.stopOnMaxSelfPlayGamesInput.checked),
+    maxSelfPlayGames: parseNumberInput(els.maxSelfPlayGamesInput, 10000),
+    stopOnMaxTrainingSteps: Boolean(els.stopOnMaxTrainingStepsInput.checked),
+    maxTrainingSteps: parseNumberInput(els.maxTrainingStepsInput, 200000),
+    stopOnMaxFailedPromotions: Boolean(els.stopOnMaxFailedPromotionsInput.checked),
+    maxFailedPromotions: parseNumberInput(els.maxFailedPromotionsInput, 50),
+  };
+}
+
+async function startRun() {
+  els.startRunBtn.disabled = true;
+  setActiveWorkflowTab('runs');
+  setStatus('Starting ML run...');
+  let payload = null;
   try {
-    const live = await loadWorkbench();
-    state.loadingSimulationId = '';
-    syncSelections(options);
-    if (state.selectedSimulationId && !state.simulationDetailsById.has(state.selectedSimulationId)) {
-      state.loadingSimulationId = state.selectedSimulationId;
+    payload = readRunConfigForm();
+    if (!Number.isFinite(payload.seed)) delete payload.seed;
+    let result;
+    try {
+      result = await apiFetch('/api/v1/ml/runs', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      if (err?.status === 409 && err?.message && /already active|did not stop in time/i.test(err.message)) {
+        const shouldPauseOthers = window.confirm('Another run is active. Pause other runs before starting this one?');
+        if (!shouldPauseOthers) {
+          setStatus('Start cancelled.', 'warn');
+          return;
+        }
+        result = await apiFetch('/api/v1/ml/runs', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...payload,
+            forceStopOtherRuns: true,
+          }),
+        });
+      } else {
+        throw err;
+      }
     }
-    renderWorkbench();
-    const followUps = [];
-    if (state.selectedSimulationId && !state.simulationDetailsById.has(state.selectedSimulationId)) {
-      followUps.push(loadSelectedSimulationDetail({
-        autoSelectFirstGame: Boolean(options.autoSelectFirstGame),
-        autoLoadReplay: Boolean(options.autoLoadReplay),
-      }));
+    if (result?.live) applyLiveRunPayload(result.live);
+    await refreshWorkbench({ silent: true, forceSelectedDetail: true });
+    if (result?.run?.id) {
+      await selectRun(result.run.id, { syncReplay: true, forceDetail: true });
     }
-    if (state.lossChartMode === 'live') renderLiveLossChart();
-    else if (state.selectedSnapshotId) followUps.push(loadLossHistory(state.selectedSnapshotId));
-    else lossChart.clear();
-    await Promise.allSettled(followUps);
-    if (live) applyLiveStatusPayload(live);
-    if (!options.silent) setStatus('Workbench refreshed.', 'ok');
+    setStatus(`Run started: ${result?.run?.label || result?.run?.id || 'accepted'}.`, 'ok');
+  } catch (error) {
+    logMlAdminError('Failed to start run', error, {
+      requestPayload: payload,
+    });
+    setStatus(error?.message || 'Failed to start ML run.', 'error');
+    throw error;
   } finally {
-    state.isRefreshingWorkbench = false;
+    els.startRunBtn.disabled = false;
   }
 }
 
-function setMasterSnapshot(snapshotId) {
-  if (!snapshotId) return;
-  state.selectedTrainingRunId = '';
-  state.selectedSnapshotId = snapshotId;
-  if (els.selectedSnapshotSelect) els.selectedSnapshotSelect.value = snapshotId;
-  if (els.trainSnapshotSelect) els.trainSnapshotSelect.value = snapshotId;
-  if (els.lossSnapshotSelect) els.lossSnapshotSelect.value = snapshotId;
-  pruneTrainingSelection(snapshotId);
-  renderSnapshotList();
-  renderSelectedModelDetails();
-  renderTrainingSourceList();
-  renderTrainingRunList();
-  if (state.lossChartMode !== 'live') {
-    loadLossHistory(snapshotId).catch((err) => setStatus(err.message, 'error'));
-  }
+async function stopSelectedRun() {
+  if (!state.selectedRunId) return;
+  return stopRunById(state.selectedRunId);
 }
 
-async function deleteSnapshot(snapshotId) {
-  if (!window.confirm(`Delete model ${snapshotId}? This cannot be undone.`)) return;
-  await apiFetch(`/api/v1/ml/snapshots/${encodeURIComponent(snapshotId)}`, { method: 'DELETE' });
-  await refreshWorkbench({ workflowTab: 'training' });
+async function stopRunById(runId) {
+  if (!runId) return;
+  await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(runId)}/stop`, {
+    method: 'POST',
+  });
+  setStatus(`Stop requested for ${runId}.`, 'ok');
+  await refreshWorkbench({ silent: true, forceSelectedDetail: true });
 }
 
-async function forkSelectedSnapshot() {
-  const snapshotId = state.selectedSnapshotId || '';
-  if (!snapshotId) {
-    setStatus('Choose a model to fork.', 'warn');
+async function continueSelectedRun() {
+  if (!state.selectedRunId) return;
+  return continueRunById(state.selectedRunId);
+}
+
+async function continueRunById(runId) {
+  if (!runId) return;
+  const run = getRunData(runId);
+  if (!run?.canContinue) {
+    setStatus('This run does not have resumable state saved, so it cannot be continued.', 'warn');
     return;
   }
-  const nextLabel = (window.prompt('Fork label (optional):', '') || '').trim();
-  const result = await apiFetch('/api/v1/ml/snapshots/create', {
-    method: 'POST',
-    body: JSON.stringify({ fromSnapshotId: snapshotId, label: nextLabel || null }),
-  });
-  await refreshWorkbench({
-    workflowTab: 'training',
-    preferSnapshotId: result?.snapshot?.id || snapshotId,
-  });
-}
-
-async function deleteSimulation(simulationId) {
-  if (!window.confirm(`Delete simulation run ${simulationId}?`)) return;
-  await apiFetch(`/api/v1/ml/simulations/${encodeURIComponent(simulationId)}`, { method: 'DELETE' });
-  await refreshWorkbench({ workflowTab: 'simulations' });
-}
-
-function selectEligibleSources() {
-  const snapshotId = els.trainSnapshotSelect?.value || '';
-  state.simulations.forEach((simulation) => {
-    if (getSimulationTrainingEligibility(simulation, snapshotId).eligible) {
-      state.trainingSelection.add(simulation.id);
+  let result;
+  try {
+    result = await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(runId)}/continue`, {
+      method: 'POST',
+    });
+  } catch (err) {
+    if (err?.status === 409 && err?.message && /already active|did not stop in time/i.test(err.message)) {
+      const shouldPauseOthers = window.confirm('Another run is active. Pause other runs before continuing this one?');
+      if (!shouldPauseOthers) {
+        setStatus('Continue cancelled.', 'warn');
+        return;
+      }
+      result = await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(runId)}/continue`, {
+        method: 'POST',
+        body: JSON.stringify({ forceStopOtherRuns: true }),
+      });
+    } else {
+      throw err;
     }
+  }
+  if (result?.live) applyLiveRunPayload(result.live);
+  await refreshWorkbench({ silent: true, forceSelectedDetail: true });
+  await selectRun(runId, { syncReplay: false, forceDetail: true });
+  setStatus(`Run continued: ${result?.run?.label || result?.run?.id || runId}.`, 'ok');
+}
+
+async function deleteSelectedRun() {
+  const run = getSelectedRunData();
+  return deleteRunById(run?.id || '');
+}
+
+async function deleteRunById(runId) {
+  const run = runId ? getRunData(runId) : null;
+  if (!run?.id) return;
+  const status = String(run.status || '').toLowerCase();
+  if (['running', 'stopping'].includes(status)) {
+    setStatus('Cancel the run before deleting it.', 'warn');
+    return;
+  }
+  const label = run.label || run.id;
+  if (!window.confirm(`Delete run "${label}"?`)) {
+    return;
+  }
+  await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(run.id)}`, {
+    method: 'DELETE',
   });
-  renderTrainingSourceList();
+  removeRunFromState(run.id);
+  await refreshWorkbench({ silent: true, forceSelectedDetail: false });
+  if (!state.replayRunId) {
+    clearReplaySelection();
+    renderReplayGameList();
+  }
+  setStatus(`Deleted run: ${label}.`, 'ok');
 }
 
-function clearTrainingSources() {
-  state.trainingSelection.clear();
-  renderTrainingSourceList();
-}
+async function savePromotedBots() {
+  const enabledIds = Array.from(els.testPromotedBotList?.querySelectorAll('input[data-promoted-bot-id]:checked') || [])
+    .map((input) => String(input.dataset.promotedBotId || ''))
+    .filter(Boolean);
 
-function pushLiveTrainingLoss(epochLoss, epochNumber) {
-  const nextEntry = {
-    epoch: epochNumber,
-    policyLoss: Number(epochLoss?.policyLoss || 0),
-    valueLoss: Number(epochLoss?.valueLoss || 0),
-    identityLoss: Number(epochLoss?.identityLoss || 0),
-    identityAccuracy: Number(epochLoss?.identityAccuracy || 0),
-    policySamples: Number(epochLoss?.policySamples || 0),
-    valueSamples: Number(epochLoss?.valueSamples || 0),
-    identitySamples: Number(epochLoss?.identitySamples || 0),
-  };
-  const existingIndex = state.liveTrainingHistory.findIndex((entry) => entry.epoch === epochNumber);
-  if (existingIndex >= 0) state.liveTrainingHistory.splice(existingIndex, 1, nextEntry);
-  else {
-    state.liveTrainingHistory.push(nextEntry);
-    state.liveTrainingHistory.sort((left, right) => Number(left.epoch || 0) - Number(right.epoch || 0));
+  state.savingPromotedBots = true;
+  if (els.savePromotedBotsBtn) {
+    els.savePromotedBotsBtn.disabled = true;
+  }
+  setStatus('Saving promoted bot dropdown...');
+  try {
+    const result = await apiFetch('/api/v1/ml/promoted-bots', {
+      method: 'PUT',
+      body: JSON.stringify({ enabledIds }),
+    });
+    state.promotedBots = Array.isArray(result?.items) ? result.items : [];
+    renderTestSelectors();
+    setStatus(`Updated bot dropdown: ${enabledIds.length} promoted model${enabledIds.length === 1 ? '' : 's'} enabled.`, 'ok');
+  } finally {
+    state.savingPromotedBots = false;
+    if (els.savePromotedBotsBtn) {
+      els.savePromotedBotsBtn.disabled = false;
+    }
   }
 }
 
-function replaceLiveTrainingHistory(history = []) {
-  state.liveTrainingHistory = Array.isArray(history)
-    ? history
-      .map((entry) => ({
-        epoch: Number(entry?.epoch || 0),
-        policyLoss: Number(entry?.policyLoss || 0),
-        valueLoss: Number(entry?.valueLoss || 0),
-        identityLoss: Number(entry?.identityLoss || 0),
-        identityAccuracy: Number(entry?.identityAccuracy || 0),
-        policySamples: Number(entry?.policySamples || 0),
-        valueSamples: Number(entry?.valueSamples || 0),
-        identitySamples: Number(entry?.identitySamples || 0),
-      }))
-      .sort((left, right) => Number(left.epoch || 0) - Number(right.epoch || 0))
-    : [];
-}
-
-function upsertLiveSimulationSummary(payload = {}) {
-  const simulationId = payload.simulationId || '';
-  if (!simulationId) return;
-  const index = state.simulations.findIndex((simulation) => simulation.id === simulationId);
-  const summary = {
-    ...(index >= 0 ? state.simulations[index] : {}),
-    id: simulationId,
-    label: payload.label || state.simulations[index]?.label || simulationId,
-    status: payload.status || (String(payload.phase || '').toLowerCase() === 'cancelled' ? 'stopped' : 'running'),
-    participantAId: payload.participantAId || state.simulations[index]?.participantAId || null,
-    participantBId: payload.participantBId || state.simulations[index]?.participantBId || null,
-    participantALabel: payload.participantALabel || state.simulations[index]?.participantALabel || null,
-    participantBLabel: payload.participantBLabel || state.simulations[index]?.participantBLabel || null,
-    gameCount: Number(payload.completedGames || state.simulations[index]?.gameCount || 0),
-    stats: payload.stats || state.simulations[index]?.stats || {},
-    config: {
-      ...(state.simulations[index]?.config || {}),
-      requestedGameCount: Number(payload.gameCount || state.simulations[index]?.config?.requestedGameCount || 0),
-      completedGameCount: Number(payload.completedGames || state.simulations[index]?.config?.completedGameCount || 0),
-      alternateColors: Boolean(payload.alternateColors ?? state.simulations[index]?.config?.alternateColors),
-    },
-  };
-  if (index >= 0) state.simulations.splice(index, 1, summary);
-  else state.simulations.unshift(summary);
-}
-
-function upsertLiveTrainingRunSummary(payload = {}) {
-  const trainingRunId = payload.trainingRunId || '';
-  if (!trainingRunId) return;
-  const index = state.trainingRuns.findIndex((run) => run.id === trainingRunId);
-  const existing = index >= 0 ? state.trainingRuns[index] : {};
-  const next = {
-    ...existing,
-    id: trainingRunId,
-    createdAt: existing.createdAt || new Date().toISOString(),
-    updatedAt: payload.timestamp || new Date().toISOString(),
-    status: payload.status || (String(payload.phase || '').toLowerCase() === 'complete' ? 'completed' : 'running'),
-    baseSnapshotId: payload.baseSnapshotId || existing.baseSnapshotId || null,
-    newSnapshotId: payload.newSnapshotId || existing.newSnapshotId || null,
-    epochs: Number(payload.totalEpochs || payload.epochs || existing.epochs || 0),
-    learningRate: Number(payload.learningRate || existing.learningRate || 0),
-    sourceSimulationIds: Array.isArray(payload.sourceSimulationIds)
-      ? payload.sourceSimulationIds.slice()
-      : (Array.isArray(existing.sourceSimulationIds) ? existing.sourceSimulationIds : []),
-    sourceGames: Number(payload.sourceGames || existing.sourceGames || 0),
-    sourceSimulations: Number(payload.sourceSimulations || existing.sourceSimulations || 0),
-    sampleCounts: payload.sampleCounts || existing.sampleCounts || {},
-    history: Array.isArray(payload.history) ? payload.history.slice() : (existing.history || []),
-    finalLoss: payload.loss || existing.finalLoss || null,
-    checkpoint: {
-      completedEpochs: Number(payload.epoch || existing.checkpoint?.completedEpochs || 0),
-      totalEpochs: Number(payload.totalEpochs || payload.epochs || existing.checkpoint?.totalEpochs || 0),
-      checkpointedAt: payload.timestamp || existing.checkpoint?.checkpointedAt || null,
-    },
-  };
-  if (index >= 0) state.trainingRuns.splice(index, 1, next);
-  else state.trainingRuns.unshift(next);
+async function refreshSelectedRunDetailIfActive() {
+  if (state.activeWorkflowTab !== 'runs') return;
+  const run = getRunSummary(state.selectedRunId);
+  if (!run || !['running', 'stopping'].includes(String(run.status || '').toLowerCase())) return;
+  await ensureRunDetail(state.selectedRunId, { force: true });
+  renderSelectedRun();
+  if (state.replayRunId === state.selectedRunId) {
+    renderReplaySelectors();
+  }
 }
 
 async function loadLiveStatus() {
-  try {
-    return await apiFetch('/api/v1/ml/live');
-  } catch (err) {
-    if (err?.status === 404) return null;
-    throw err;
-  }
-}
-
-function applyLiveStatusPayload(live = null) {
-  const hadSimulation = isSimulationActive();
-  const hadTraining = isTrainingActive();
-  if (live?.simulation) {
-    const sameSimulationEvent = state.liveSimulation
-      && state.liveSimulation.phase === live.simulation.phase
-      && state.liveSimulation.timestamp === live.simulation.timestamp
-      && state.liveSimulation.simulationId === live.simulation.simulationId;
-    if (!sameSimulationEvent) {
-      handleSimulationProgress(live.simulation);
-    }
-  } else if (hadSimulation) {
-    state.liveSimulation = null;
-    state.activeSimulationTaskId = '';
-    refreshWorkbench({ workflowTab: 'simulations', silent: true }).catch(() => {});
-  }
-
-  if (live?.training) {
-    const sameTrainingEvent = state.liveTraining
-      && state.liveTraining.phase === live.training.phase
-      && state.liveTraining.timestamp === live.training.timestamp
-      && state.liveTraining.trainingRunId === live.training.trainingRunId;
-    if (!sameTrainingEvent) {
-      handleTrainingProgress(live.training);
-    }
-  } else if (hadTraining) {
-    state.liveTraining = null;
-    state.lossChartMode = 'stored';
-    refreshWorkbench({ workflowTab: 'training', silent: true }).catch(() => {});
-  }
-}
-
-function startServerPolling() {
-  if (!state.livePollHandle) {
-    state.livePollHandle = window.setInterval(() => {
-      loadLiveStatus()
-        .then((live) => {
-          if (live) applyLiveStatusPayload(live);
-        })
-        .catch(() => {});
-    }, LIVE_POLL_MS);
-  }
-
-  if (!state.workbenchPollHandle) {
-    state.workbenchPollHandle = window.setInterval(() => {
-      if (document.visibilityState === 'hidden' || state.isRefreshingWorkbench) return;
-      if (isTrainingActive() || isSimulationActive()) return;
-      refreshWorkbench({ workflowTab: state.activeWorkflowTab, silent: true }).catch(() => {});
-    }, WORKBENCH_POLL_MS);
-  }
-}
-
-async function runSimulation() {
-  const whiteParticipantId = els.whiteParticipantSelect?.value || '';
-  const blackParticipantId = els.blackParticipantSelect?.value || '';
-  if (!whiteParticipantId || !blackParticipantId) {
-    setStatus('Choose both controllers before running simulations.', 'warn');
-    return;
-  }
-  const payload = {
-    whiteParticipantId,
-    blackParticipantId,
-    gameCount: parseNumberInput(els.gameCountInput, 20),
-    maxPlies: parseNumberInput(els.maxPliesInput, 120),
-    iterations: parseNumberInput(els.iterationsInput, 90),
-    maxDepth: parseNumberInput(els.maxDepthInput, 16),
-    hypothesisCount: parseNumberInput(els.hypothesisCountInput, 8),
-    riskBias: parseNumberInput(els.riskBiasInput, 0.75, true),
-    exploration: parseNumberInput(els.explorationInput, 1.25, true),
-    alternateColors: Boolean(els.alternateColorsInput?.checked),
-    label: (els.simulationLabelInput?.value || '').trim() || null,
-  };
-  const whiteSnapshotId = parseSnapshotIdFromParticipantRef(whiteParticipantId);
-  const blackSnapshotId = parseSnapshotIdFromParticipantRef(blackParticipantId);
-  if (whiteSnapshotId) payload.whiteSnapshotId = whiteSnapshotId;
-  if (blackSnapshotId) payload.blackSnapshotId = blackSnapshotId;
-  const seed = parseNumberInput(els.seedInput, Number.NaN);
-  if (Number.isFinite(seed)) payload.seed = seed;
-
-  els.runSimulationBtn.disabled = true;
-  setActiveWorkflowTab('simulations');
-  setStatus('Starting simulation batch...');
-  try {
-    const result = await apiFetch('/api/v1/ml/simulations/start', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    await refreshWorkbench({
-      workflowTab: 'simulations',
-      preferSimulationId: result?.simulation?.id || '',
-      silent: true,
-    });
-    if (result?.live) handleSimulationProgress(result.live);
-    setStatus(`Simulation started: ${result?.simulation?.label || result?.simulation?.id || 'run accepted'}.`, 'ok');
-  } finally {
-    els.runSimulationBtn.disabled = false;
-  }
-}
-
-async function runTraining() {
-  const snapshotId = els.trainSnapshotSelect?.value || '';
-  if (!snapshotId) {
-    setStatus('Choose a base snapshot before training.', 'warn');
-    return;
-  }
-  pruneTrainingSelection(snapshotId);
-  const selectedSimulationIds = Array.from(state.trainingSelection).filter((simulationId) => (
-    getSimulationTrainingEligibility(getSimulationById(simulationId), snapshotId).eligible
-  ));
-  if (!selectedSimulationIds.length) {
-    setStatus('Select at least one eligible simulation run.', 'warn');
-    return;
-  }
-
-  els.runTrainingBtn.disabled = true;
-  setActiveWorkflowTab('training');
-  updateProgressBar(els.trainingProgressBar, 0, 'active');
-  els.trainingStreamBadge.textContent = 'Submitting';
-  els.trainingProgressMeta.textContent = `Submitting training job on ${selectedSimulationIds.length} simulation source(s)...`;
-  setStatus(`Starting training for ${snapshotId}...`);
-  try {
-    const result = await apiFetch('/api/v1/ml/training/start', {
-      method: 'POST',
-      body: JSON.stringify({
-        snapshotId,
-        simulationIds: selectedSimulationIds,
-        epochs: parseNumberInput(els.epochsInput, 3),
-        learningRate: parseNumberInput(els.learningRateInput, 0.01, true),
-        label: (els.trainingLabelInput?.value || '').trim() || null,
-      }),
-    });
-    if (result?.live) handleTrainingProgress(result.live);
-    if (result?.trainingRun?.id) {
-      upsertLiveTrainingRunSummary({
-        ...(result.live || {}),
-        trainingRunId: result.trainingRun.id,
-        baseSnapshotId: snapshotId,
-        sourceSimulationIds: selectedSimulationIds,
-        sourceSimulations: selectedSimulationIds.length,
-        epochs: parseNumberInput(els.epochsInput, 3),
-        learningRate: parseNumberInput(els.learningRateInput, 0.01, true),
-        history: [],
-      });
-      selectTrainingRun(result.trainingRun.id, { preferLive: true });
-    }
-    setStatus(`Training started from ${snapshotId}.`, 'ok');
-  } finally {
-    els.runTrainingBtn.disabled = false;
-  }
-}
-
-async function stopSimulationRun(taskId = '', simulationId = '') {
-  const resolvedTaskId = taskId || state.activeSimulationTaskId || '';
-  const resolvedSimulationId = simulationId || state.liveSimulation?.simulationId || '';
-  const simulation = resolvedSimulationId ? getSimulationById(resolvedSimulationId) : null;
-  const label = simulation?.label || resolvedSimulationId || 'the active simulation run';
-  if (!resolvedTaskId) {
-    setStatus('No active simulation task to stop.', 'warn');
-    return;
-  }
-  await apiFetch('/api/v1/ml/simulations/stop', {
-    method: 'POST',
-    body: JSON.stringify({ taskId: resolvedTaskId }),
-  });
-  if (resolvedSimulationId) {
-    const simulationIndex = state.simulations.findIndex((entry) => entry.id === resolvedSimulationId);
-    if (simulationIndex >= 0) {
-      state.simulations.splice(simulationIndex, 1, {
-        ...state.simulations[simulationIndex],
-        status: 'stopping',
-      });
-    }
-    if (state.liveSimulation?.simulationId === resolvedSimulationId) {
-      state.liveSimulation = {
-        ...state.liveSimulation,
-        status: 'stopping',
-      };
-    }
-    renderSimulationList();
-  }
-  setStatus(`Stop requested for ${label}.`, 'ok');
-}
-
-function handleTrainingProgress(payload = {}) {
-  state.liveTraining = payload;
-  const phase = String(payload.phase || '').toLowerCase();
-  const totalEpochs = Number(payload.totalEpochs || payload.epochs || 0);
-  const currentEpoch = Number(payload.epoch || 0);
-  if (Array.isArray(payload.history)) {
-    replaceLiveTrainingHistory(payload.history);
-  }
-  upsertLiveTrainingRunSummary(payload);
-  if (payload.trainingRunId && (!state.selectedTrainingRunId || state.selectedTrainingRunId === payload.trainingRunId || phase === 'start')) {
-    state.selectedTrainingRunId = payload.trainingRunId;
-  }
-  renderTrainingRunList();
-  renderSnapshotList();
-  renderSelectedModelDetails();
-  if (phase === 'start') {
-    state.lossChartMode = 'live';
-    if (!Array.isArray(payload.history) || !payload.history.length) {
-      state.liveTrainingHistory = [];
-    }
-    state.liveTrainingMeta = {
-      startedAt: new Date().toISOString(),
-      epochs: totalEpochs,
-      learningRate: Number(payload.learningRate || 0),
-      sourceGames: Number(payload.sourceGames || 0),
-      sourceSimulations: Number(payload.sourceSimulationIds?.length || payload.sourceSimulations || 0),
-    };
-    els.trainingStreamBadge.textContent = `Training ${payload.baseSnapshotId || ''}`;
-    els.trainingProgressMeta.textContent = `${payload.sourceSimulationIds?.length || payload.sourceSimulations || 0} simulation source(s) | ${payload.sourceGames || 0} games`;
-    updateProgressBar(els.trainingProgressBar, 0, 'active');
-    setTrainingLossDisplay(null);
-    renderLiveLossChart();
-    return;
-  }
-  if (phase === 'epoch') {
-    const ratio = totalEpochs > 0 ? (currentEpoch / totalEpochs) : 0;
-    const loss = payload.loss || {};
-    state.lossChartMode = 'live';
-    if (!Array.isArray(payload.history)) {
-      pushLiveTrainingLoss(loss, currentEpoch);
-    }
-    els.trainingStreamBadge.textContent = `Epoch ${currentEpoch}/${totalEpochs || 0}`;
-    els.trainingProgressMeta.textContent = `P ${Number(loss.policyLoss || 0).toFixed(3)} | V ${Number(loss.valueLoss || 0).toFixed(3)} | I ${Number(loss.identityLoss || 0).toFixed(3)} | Acc ${(Number(loss.identityAccuracy || 0) * 100).toFixed(1)}%`;
-    updateProgressBar(els.trainingProgressBar, ratio, 'active');
-    setTrainingLossDisplay(loss);
-    renderLiveLossChart();
-    return;
-  }
-  if (phase === 'complete') {
-    els.trainingStreamBadge.textContent = `Complete ${payload.newSnapshotId || ''}`;
-    els.trainingProgressMeta.textContent = `Training complete. New model ${payload.newSnapshotId || 'created'}.`;
-    updateProgressBar(els.trainingProgressBar, 1, 'default');
-    setTrainingLossDisplay(payload.loss || null);
-    state.lossChartMode = 'stored';
-    if (payload.newSnapshotId) {
-      state.selectedTrainingRunId = '';
-      state.selectedSnapshotId = payload.newSnapshotId;
-    }
-    refreshWorkbench({ workflowTab: 'training', preferSnapshotId: payload.newSnapshotId || state.selectedSnapshotId }).catch(() => {});
-    return;
-  }
-  if (phase === 'error') {
-    els.trainingStreamBadge.textContent = 'Training Error';
-    els.trainingProgressMeta.textContent = payload.message || 'Training failed.';
-    updateProgressBar(els.trainingProgressBar, 1, 'error');
-    setTrainingLossDisplay(payload.loss || null);
-  }
-}
-
-function handleSimulationProgress(payload = {}) {
-  state.liveSimulation = payload;
-  if (payload.taskId) state.activeSimulationTaskId = payload.taskId;
-  const phase = String(payload.phase || '').toLowerCase();
-  upsertLiveSimulationSummary(payload);
-  renderSimulationList();
-  if (phase === 'start' || phase === 'game') {
-    return;
-  }
-  if (phase === 'complete' || phase === 'cancelled') {
-    state.activeSimulationTaskId = '';
-    refreshWorkbench({ workflowTab: 'simulations', preferSimulationId: payload.simulationId || state.selectedSimulationId }).catch(() => {});
-    return;
-  }
-  if (phase === 'error') {
-    state.activeSimulationTaskId = '';
-    refreshWorkbench({
-      workflowTab: 'simulations',
-      preferSimulationId: payload.simulationId || state.selectedSimulationId,
-      silent: true,
-    }).catch(() => {});
-  }
+  const live = await apiFetch('/api/v1/ml/live');
+  applyResourceTelemetry(live?.resourceTelemetry || null, { render: false });
+  (live?.runs || []).forEach((payload) => applyLiveRunPayload(payload));
+  renderResourceTelemetry();
 }
 
 function connectAdminSocket() {
   if (typeof io !== 'function') return;
   const socket = io(`${window.location.origin.replace(/\/$/, '')}/admin`, { withCredentials: true });
-  socket.on('connect', () => {
-    if (!isTrainingActive()) {
-      els.trainingStreamBadge.textContent = 'Connected';
-      els.trainingProgressMeta.textContent = 'No training running.';
-      if (!state.liveTrainingHistory.length) setTrainingLossDisplay(null);
+  socket.on('ml:runProgress', (payload) => {
+    applyLiveRunPayload(payload);
+    const phase = String(payload?.phase || '').toLowerCase();
+    if (phase === 'error') {
+      logMlAdminError('Run progress reported an error', null, {
+        runId: payload?.runId || null,
+        label: payload?.label || null,
+        phase,
+        status: payload?.status || null,
+        stopReason: payload?.stopReason || null,
+        lastError: payload?.lastError || null,
+      });
+      setStatus(`Run failed: ${payload?.message || payload?.stopReason || payload?.runId || 'unknown error'}.`, 'error');
+    }
+    if (payload?.runId && (phase === 'evaluation' || phase === 'promotion' || phase === 'complete' || phase === 'error')) {
+      if (state.replayRunId === payload.runId) {
+        scheduleReplayGamesRefresh(payload.runId, phase === 'evaluation' ? 450 : 900);
+      }
+      ensureRunDetail(payload.runId, { force: true })
+        .then(() => {
+          renderSelectedRun();
+          if (state.replayRunId === payload.runId) {
+            renderReplaySelectors();
+          }
+        })
+        .catch(() => {});
     }
   });
-  socket.on('disconnect', () => {
-    els.trainingStreamBadge.textContent = 'Disconnected';
-  });
-  socket.on('ml:trainingProgress', handleTrainingProgress);
-  socket.on('ml:simulationProgress', handleSimulationProgress);
+}
+
+function startPolling() {
+  if (!state.livePollHandle) {
+    state.livePollHandle = window.setInterval(() => {
+      loadLiveStatus()
+        .then(() => refreshSelectedRunDetailIfActive())
+        .catch(() => {});
+    }, LIVE_POLL_MS);
+  }
+  if (!state.workbenchPollHandle) {
+    state.workbenchPollHandle = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      refreshWorkbench({ silent: true }).catch(() => {});
+    }, WORKBENCH_POLL_MS);
+  }
+  if (!state.uiClockHandle) {
+    state.uiClockHandle = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      if (state.selectedRunId) renderSelectedRun();
+      if (state.replayRunId) renderReplaySelectionMeta();
+    }, UI_CLOCK_MS);
+  }
+}
+
+async function hydrateActiveWorkflowTab() {
+  if (state.activeWorkflowTab === 'runs') {
+    if (!state.selectedRunId && state.runs.length) {
+      state.selectedRunId = state.runs[0].id;
+    }
+    if (state.selectedRunId) {
+      await ensureRunDetail(state.selectedRunId, { force: false });
+    }
+    renderRunsTable();
+    renderSelectedRun();
+    return;
+  }
+  if (state.activeWorkflowTab === 'replay') {
+    if (!state.replayRunId && state.runs.length) {
+      state.replayRunId = state.runs[0].id;
+    }
+    if (state.replayRunId) {
+      await ensureRunDetail(state.replayRunId, { force: false });
+    }
+    renderReplaySelectors();
+    await loadReplayGames({ autoLoadLatest: true });
+    return;
+  }
+  if (state.activeWorkflowTab === 'test') {
+    renderTestSelectors();
+  }
 }
 
 function bindEvents() {
   workflowTabs.forEach((button) => {
-    button.addEventListener('click', () => setActiveWorkflowTab(button.dataset.workflowTab || 'simulations'));
+    button.addEventListener('click', () => setActiveWorkflowTab(button.dataset.workflowTab || 'config'));
   });
-  els.refreshWorkbenchBtn?.addEventListener('click', () => refreshWorkbench({ workflowTab: state.activeWorkflowTab }).catch((err) => setStatus(err.message, 'error')));
-  els.trainSnapshotSelect?.addEventListener('change', () => {
-    const snapshotId = els.trainSnapshotSelect.value || '';
-    pruneTrainingSelection(snapshotId);
-    setMasterSnapshot(snapshotId);
+  els.refreshWorkbenchBtn?.addEventListener('click', () => refreshWorkbench().catch((err) => setStatus(err.message, 'error')));
+  els.startRunBtn?.addEventListener('click', () => startRun().catch((err) => setStatus(err.message, 'error')));
+  els.stopRunBtn?.addEventListener('click', () => stopSelectedRun().catch((err) => setStatus(err.message, 'error')));
+  els.continueRunBtn?.addEventListener('click', () => continueSelectedRun().catch((err) => setStatus(err.message, 'error')));
+  els.deleteRunBtn?.addEventListener('click', () => deleteSelectedRun().catch((err) => setStatus(err.message, 'error')));
+
+  els.runsTableBody?.addEventListener('click', (event) => {
+    const actionButton = event.target.closest('[data-run-action]');
+    if (actionButton) {
+      event.stopPropagation();
+      const runId = actionButton.dataset.runId || '';
+      if (actionButton.dataset.runAction === 'cancel') {
+        stopRunById(runId).catch((err) => setStatus(err.message, 'error'));
+      } else if (actionButton.dataset.runAction === 'continue') {
+        continueRunById(runId).catch((err) => setStatus(err.message, 'error'));
+      } else if (actionButton.dataset.runAction === 'delete') {
+        deleteRunById(runId).catch((err) => setStatus(err.message, 'error'));
+      }
+      return;
+    }
+    const row = event.target.closest('[data-run-id]');
+    if (!row) return;
+    selectRun(row.dataset.runId || '', { syncReplay: false }).catch((err) => setStatus(err.message, 'error'));
   });
-  els.forkSnapshotBtn?.addEventListener('click', () => forkSelectedSnapshot().catch((err) => setStatus(err.message, 'error')));
-  els.snapshotList?.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-action]');
-    if (button) {
-      const snapshotId = button.dataset.snapshotId || '';
-      if (button.dataset.action === 'use-base') setMasterSnapshot(snapshotId);
-      if (button.dataset.action === 'delete') deleteSnapshot(snapshotId).catch((err) => setStatus(err.message, 'error'));
-      return;
-    }
-    const row = event.target.closest('[data-snapshot-id]');
-    if (row) setMasterSnapshot(row.dataset.snapshotId || '');
-    const trainingRow = event.target.closest('[data-training-run-id]');
-    if (trainingRow?.dataset.trainingRunId) {
-      selectTrainingRun(trainingRow.dataset.trainingRunId, { preferLive: true });
-    }
+
+  els.replayRunSelect?.addEventListener('change', async () => {
+    state.replayRunId = els.replayRunSelect.value || '';
+    clearReplaySelection();
+    loadReplayGames({ autoLoadLatest: true }).catch((err) => setStatus(err.message, 'error'));
   });
-  els.trainingRunList?.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-action="open-model"]');
-    if (button?.dataset.snapshotId) {
-      setMasterSnapshot(button.dataset.snapshotId);
-      return;
-    }
-    const runRow = event.target.closest('[data-training-run-id]');
-    if (runRow?.dataset.trainingRunId) {
-      selectTrainingRun(runRow.dataset.trainingRunId, { preferLive: true });
-      return;
-    }
-    const row = event.target.closest('[data-output-snapshot-id]');
-    if (row?.dataset.outputSnapshotId) setMasterSnapshot(row.dataset.outputSnapshotId);
+  els.replayGenerationFilterSelect?.addEventListener('change', () => {
+    state.replayGenerationFilter = els.replayGenerationFilterSelect.value || '';
+    renderReplaySelectionMeta();
+    renderReplayGameList();
   });
-  els.selectEligibleSourcesBtn?.addEventListener('click', selectEligibleSources);
-  els.clearTrainingSourcesBtn?.addEventListener('click', clearTrainingSources);
-  els.runTrainingBtn?.addEventListener('click', () => runTraining().catch((err) => setStatus(err.message, 'error')));
-  els.runSimulationBtn?.addEventListener('click', () => runSimulation().catch((err) => setStatus(err.message, 'error')));
-  els.simulationList?.addEventListener('click', (event) => {
-    const selectButton = event.target.closest('button[data-action="select-run"]');
-    if (selectButton) {
-      selectSimulation(selectButton.dataset.simulationId || '').catch((err) => setStatus(err.message, 'error'));
-      return;
-    }
-    const stopButton = event.target.closest('button[data-action="stop-run"]');
-    if (stopButton) {
-      stopSimulationRun(
-        stopButton.dataset.taskId || '',
-        stopButton.dataset.simulationId || '',
-      ).catch((err) => setStatus(err.message, 'error'));
-      return;
-    }
-    const button = event.target.closest('button[data-action="delete"]');
-    if (button) {
-      deleteSimulation(button.dataset.simulationId || '').catch((err) => setStatus(err.message, 'error'));
-      return;
-    }
-    const row = event.target.closest('[data-simulation-id]');
-    if (row) selectSimulation(row.dataset.simulationId || '').catch((err) => setStatus(err.message, 'error'));
+  els.replayListTopBtn?.addEventListener('click', () => scrollReplayListTo('top'));
+  els.replayListBottomBtn?.addEventListener('click', () => scrollReplayListTo('bottom'));
+
+  els.testPromotedBotList?.addEventListener('change', () => {
+    renderTestSelectionMeta();
   });
-  els.simulationGameList?.addEventListener('click', (event) => {
-    const loadButton = event.target.closest('button[data-action="load-game"]');
-    if (loadButton) {
-      selectReplayGame(loadButton.dataset.gameId || '', { autoLoadReplay: true }).catch((err) => setStatus(err.message, 'error'));
-      return;
-    }
+  els.savePromotedBotsBtn?.addEventListener('click', () => {
+    savePromotedBots().catch((err) => setStatus(err.message, 'error'));
+  });
+
+  [
+    els.stopOnMaxGenerationsInput,
+    els.stopOnMaxSelfPlayGamesInput,
+    els.stopOnMaxTrainingStepsInput,
+    els.stopOnMaxFailedPromotionsInput,
+  ].forEach((input) => {
+    input?.addEventListener('change', () => syncEndConditionInputs());
+  });
+
+  els.replayGameList?.addEventListener('click', (event) => {
     const row = event.target.closest('[data-game-id]');
-    if (row) {
-      state.selectedGameId = row.dataset.gameId || '';
-      renderSelectedSimulation();
-    }
-  });
-  els.replaySimulationSelect?.addEventListener('change', () => selectSimulation(els.replaySimulationSelect.value || '').catch((err) => setStatus(err.message, 'error')));
-  els.replayGameSelect?.addEventListener('change', () => {
-    state.selectedGameId = els.replayGameSelect.value || '';
-    renderSelectedSimulation();
+    if (!row) return;
+    loadReplayGame(row.dataset.gameId || '').catch((err) => setStatus(err.message, 'error'));
   });
   els.replayPlayPauseBtn?.addEventListener('click', () => replayWorkbench.togglePlayback());
-  els.replayPrevBtn?.addEventListener('click', () => { replayWorkbench.stopPlayback(); replayWorkbench.step(-1); });
-  els.replayNextBtn?.addEventListener('click', () => { replayWorkbench.stopPlayback(); replayWorkbench.step(1); });
+  els.replayPrevBtn?.addEventListener('click', () => {
+    replayWorkbench.stopPlayback();
+    replayWorkbench.step(-1);
+  });
+  els.replayNextBtn?.addEventListener('click', () => {
+    replayWorkbench.stopPlayback();
+    replayWorkbench.step(1);
+  });
   els.replaySpeedSelect?.addEventListener('change', () => replayWorkbench.setSpeed(Number.parseInt(els.replaySpeedSelect.value, 10) || 600));
   els.replayRange?.addEventListener('input', () => {
     replayWorkbench.stopPlayback();
     replayWorkbench.renderFrame(Number.parseInt(els.replayRange.value, 10) || 0);
   });
+
   window.addEventListener('resize', () => {
+    generationWinChart.redraw();
+    cpuUsageChart.redraw();
+    gpuUsageChart.redraw();
     if (replayWorkbench.getReplayPayload()?.game?.replay?.length) {
       replayWorkbench.renderFrame(Number.parseInt(els.replayRange?.value || '0', 10) || 0);
     }
-    lossChart.redraw();
   });
+
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    loadLiveStatus()
-      .then((live) => {
-        if (live) applyLiveStatusPayload(live);
-      })
-      .catch(() => {});
-    if (!isTrainingActive() && !isSimulationActive()) {
-      refreshWorkbench({ workflowTab: state.activeWorkflowTab, silent: true }).catch(() => {});
-    }
+    loadLiveStatus().catch(() => {});
+    refreshWorkbench({ silent: true }).catch(() => {});
   });
 }
 
 async function boot() {
-  try {
-    localStorage.removeItem('ADMIN_SECRET');
-  } catch (_) {
-    // Ignore storage failures; the workbench now relies on cookie-based admin auth.
-  }
   connectAdminSocket();
   bindEvents();
+  applyFieldTooltips();
+  await refreshWorkbench({ silent: false, forceSelectedDetail: false });
   setActiveWorkflowTab(state.activeWorkflowTab);
-  updateProgressBar(els.trainingProgressBar, 0, 'default');
-  setTrainingLossDisplay(null);
-  updateReplayControlsState();
-  await refreshWorkbench({ workflowTab: 'simulations' });
-  startServerPolling();
+  syncEndConditionInputs();
+  startPolling();
 }
 
-boot().catch((err) => setStatus(err.message || 'Failed to initialize workbench.', 'error'));
+boot().catch((err) => setStatus(err.message || 'Failed to initialize ML run workbench.', 'error'));

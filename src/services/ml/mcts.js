@@ -4,6 +4,7 @@ const {
   actionKey,
   computeStateHash,
   IDENTITIES,
+  cloneState,
 } = require('./engine');
 const {
   predictPolicy,
@@ -42,71 +43,74 @@ function ensureHypotheses(identityInference) {
   return [{ assignment: {}, probability: 1 }];
 }
 
-function evaluateState(modelBundle, state, currentPlayer, rootPlayer, options = {}) {
+function applyIdentityAssignmentToState(state, assignment = {}) {
+  const nextState = cloneState(state);
+  Object.keys(assignment || {}).forEach((pieceId) => {
+    if (!nextState?.pieces?.[pieceId]) return;
+    nextState.pieces[pieceId] = {
+      ...nextState.pieces[pieceId],
+      identity: assignment[pieceId],
+    };
+  });
+  return nextState;
+}
+
+function evaluateDeterminizedState(modelBundle, state, currentPlayer, rootPlayer, options = {}) {
+  const evaluationCache = options.searchCache?.evaluationsByHash || null;
+  const stateHash = computeStateHash(state);
+  if (evaluationCache && evaluationCache.has(stateHash)) {
+    options.searchCache.stats.evaluationCacheHits += 1;
+    return evaluationCache.get(stateHash);
+  }
+
   const legalActions = getLegalActions(state, currentPlayer);
   if (!legalActions.length) {
-    const value = currentPlayer === rootPlayer ? -1 : 1;
-    return {
+    const evaluation = {
       legalActions,
       priors: [],
-      valueRoot: value,
+      valueRoot: currentPlayer === rootPlayer ? -1 : 1,
       policyFeatures: [],
       policyStateFeatures: [],
       identitySamples: [],
       hypothesisSummary: [],
     };
+    if (evaluationCache) {
+      evaluationCache.set(stateHash, evaluation);
+      options.searchCache.stats.evaluationCount += 1;
+    }
+    return evaluation;
   }
 
-  const identityInference = inferIdentityHypotheses(
+  const policy = predictPolicy(
     modelBundle,
     state,
     currentPlayer,
-    { count: options.hypothesisCount },
-  );
-  const hypotheses = ensureHypotheses(identityInference);
-  const weightedPriors = Array.from({ length: legalActions.length }, () => 0);
-  const valuesCurrent = [];
-  const hypothesisSummary = [];
-  let representativeFeatures = null;
-  let representativeStateFeatures = null;
-
-  hypotheses.forEach((hypothesis, idx) => {
-    const assignment = hypothesis.assignment || {};
-    const policy = predictPolicy(modelBundle, state, currentPlayer, legalActions, assignment);
-    const value = predictValue(modelBundle, state, currentPlayer, assignment);
-
-    const probability = Number.isFinite(hypothesis.probability) ? hypothesis.probability : 0;
-    policy.probabilities.forEach((p, actionIdx) => {
-      weightedPriors[actionIdx] += (p || 0) * probability;
-    });
-    valuesCurrent.push(value.value);
-
-    if (!representativeFeatures || idx === 0) {
-      representativeFeatures = policy.features;
-      representativeStateFeatures = policy.stateFeatures;
-    }
-
-    hypothesisSummary.push({
-      probability,
-      valueCurrent: value.value,
-      assignment,
-    });
-  });
-
-  const priors = normalizeArray(weightedPriors);
-  const risk = applyRiskBiasToHypotheses(hypotheses, valuesCurrent, options.riskBias);
-  const valueCurrent = risk.value;
-  const valueRoot = currentPlayer === rootPlayer ? valueCurrent : -valueCurrent;
-
-  return {
     legalActions,
-    priors,
-    valueRoot,
-    policyFeatures: representativeFeatures || [],
-    policyStateFeatures: representativeStateFeatures || [],
-    identitySamples: identityInference.samples || [],
-    hypothesisSummary,
+    null,
+    null,
+  );
+  const value = predictValue(
+    modelBundle,
+    state,
+    currentPlayer,
+    null,
+    policy.stateFeatures,
+  );
+
+  const evaluation = {
+    legalActions,
+    priors: normalizeArray(policy.probabilities),
+    valueRoot: currentPlayer === rootPlayer ? value.value : -value.value,
+    policyFeatures: policy.features || [],
+    policyStateFeatures: policy.stateFeatures || [],
+    identitySamples: [],
+    hypothesisSummary: [],
   };
+  if (evaluationCache) {
+    evaluationCache.set(stateHash, evaluation);
+    options.searchCache.stats.evaluationCount += 1;
+  }
+  return evaluation;
 }
 
 function createNode(state, parent = null, actionFromParent = null, depth = 0) {
@@ -128,6 +132,36 @@ function createNode(state, parent = null, actionFromParent = null, depth = 0) {
     identitySamples: [],
     hypothesisSummary: [],
   };
+}
+
+function createSearchCache() {
+  return {
+    nodesByHash: new Map(),
+    evaluationsByHash: new Map(),
+    stats: {
+      transpositionHits: 0,
+      evaluationCacheHits: 0,
+      evaluationCount: 0,
+      nodeCount: 0,
+    },
+  };
+}
+
+function getOrCreateNode(searchCache, state, parent = null, actionFromParent = null, depth = 0) {
+  const hash = computeStateHash(state);
+  if (searchCache.nodesByHash.has(hash)) {
+    searchCache.stats.transpositionHits += 1;
+    const existing = searchCache.nodesByHash.get(hash);
+    if (!existing.parent && parent) {
+      existing.parent = parent;
+      existing.actionFromParent = actionFromParent;
+    }
+    return existing;
+  }
+  const node = createNode(state, parent, actionFromParent, depth);
+  searchCache.nodesByHash.set(hash, node);
+  searchCache.stats.nodeCount += 1;
+  return node;
 }
 
 function selectChild(node, rootPlayer, exploration = 1.25) {
@@ -158,7 +192,7 @@ function expandNode(node, modelBundle, rootPlayer, options = {}) {
     return node;
   }
 
-  const evaluation = evaluateState(
+  const evaluation = evaluateDeterminizedState(
     modelBundle,
     node.state,
     node.state.toMove,
@@ -190,7 +224,13 @@ function maybeExpandChild(node, key) {
   const action = node.actionByKey[key];
   if (!action) return null;
   const nextState = applyAction(node.state, action);
-  const child = createNode(nextState, node, action, node.depth + 1);
+  const child = getOrCreateNode(
+    node.searchCache,
+    nextState,
+    node,
+    action,
+    node.depth + 1,
+  );
   node.childrenByActionKey[key] = child;
   return child;
 }
@@ -231,14 +271,19 @@ function isCatastrophicKingBluff(state, action) {
     && action.declaration !== IDENTITIES.KING;
 }
 
-function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
+function runDeterminizedMcts(modelBundle, rootState, options = {}) {
   const rootPlayer = Number.isFinite(options.rootPlayer) ? options.rootPlayer : rootState.toMove;
   const iterations = Number.isFinite(options.iterations) ? Math.max(1, Math.floor(options.iterations)) : 80;
   const maxDepth = Number.isFinite(options.maxDepth) ? Math.max(1, Math.floor(options.maxDepth)) : 16;
   const exploration = Number.isFinite(options.exploration) ? Math.max(0, options.exploration) : 1.25;
 
-  const root = createNode(rootState);
-  expandNode(root, modelBundle, rootPlayer, options);
+  const searchCache = createSearchCache();
+  const root = getOrCreateNode(searchCache, rootState);
+  root.searchCache = searchCache;
+  expandNode(root, modelBundle, rootPlayer, {
+    ...options,
+    searchCache,
+  });
 
   if (!root.legalActions.length) {
     return buildSearchResult({
@@ -249,6 +294,10 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
       trace: {
         iterations: 0,
         rootVisits: 0,
+        transpositionHits: searchCache.stats.transpositionHits,
+        evaluationCacheHits: searchCache.stats.evaluationCacheHits,
+        evaluationCount: searchCache.stats.evaluationCount,
+        nodeCount: searchCache.stats.nodeCount,
       },
       trainingRecord: null,
     });
@@ -265,13 +314,20 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
         break;
       }
 
-      if (node.depth >= maxDepth) {
-        expandNode(node, modelBundle, rootPlayer, options);
+      if ((path.length - 1) >= maxDepth) {
+        expandNode(node, modelBundle, rootPlayer, {
+          ...options,
+          searchCache,
+        });
         backpropagate(path, node.valueEstimate || 0);
         break;
       }
 
-      expandNode(node, modelBundle, rootPlayer, options);
+      node.searchCache = searchCache;
+      expandNode(node, modelBundle, rootPlayer, {
+        ...options,
+        searchCache,
+      });
       const unexpandedKey = chooseUnexpandedActionKey(node);
       if (unexpandedKey) {
         const child = maybeExpandChild(node, unexpandedKey);
@@ -284,7 +340,11 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
           backpropagate(path, terminalValueForRoot(child.state, rootPlayer));
           break;
         }
-        expandNode(child, modelBundle, rootPlayer, options);
+        child.searchCache = searchCache;
+        expandNode(child, modelBundle, rootPlayer, {
+          ...options,
+          searchCache,
+        });
         backpropagate(path, child.valueEstimate || 0);
         break;
       }
@@ -309,6 +369,10 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
       trace: {
         iterations,
         rootVisits: root.visits,
+        transpositionHits: searchCache.stats.transpositionHits,
+        evaluationCacheHits: searchCache.stats.evaluationCacheHits,
+        evaluationCount: searchCache.stats.evaluationCount,
+        nodeCount: searchCache.stats.nodeCount,
       },
       trainingRecord: null,
     });
@@ -361,8 +425,8 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
       features: root.policyStateFeatures || [],
       target: 0,
     },
-    identitySamples: root.identitySamples || [],
-    hypothesisSummary: root.hypothesisSummary || [],
+    identitySamples: [],
+    hypothesisSummary: [],
   };
 
   return buildSearchResult({
@@ -376,6 +440,214 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
       actionStats,
       moveStats: actionStats,
       kingBluffGuardApplied: Boolean(nonCatastrophic && selectedEntry && selectedEntry.key !== ranked[0]?.key),
+      transpositionHits: searchCache.stats.transpositionHits,
+      evaluationCacheHits: searchCache.stats.evaluationCacheHits,
+      evaluationCount: searchCache.stats.evaluationCount,
+      nodeCount: searchCache.stats.nodeCount,
+    },
+    trainingRecord,
+  });
+}
+
+function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
+  const rootPlayer = Number.isFinite(options.rootPlayer) ? options.rootPlayer : rootState.toMove;
+  const rootLegalActions = getLegalActions(rootState, rootPlayer);
+  if (!rootLegalActions.length) {
+    return buildSearchResult({
+      action: null,
+      root: {
+        state: rootState,
+        visits: 0,
+        legalActions: [],
+        childrenByActionKey: {},
+      },
+      policyTarget: [],
+      valueEstimate: terminalValueForRoot(rootState, rootPlayer),
+      trace: {
+        iterations: 0,
+        rootVisits: 0,
+        hypothesisCount: 0,
+        transpositionHits: 0,
+        evaluationCacheHits: 0,
+        evaluationCount: 0,
+        nodeCount: 0,
+      },
+      trainingRecord: null,
+    });
+  }
+
+  const observationPolicy = predictPolicy(
+    modelBundle,
+    rootState,
+    rootPlayer,
+    rootLegalActions,
+    null,
+    null,
+  );
+  const observationStateFeatures = observationPolicy.stateFeatures || [];
+  const identityInference = inferIdentityHypotheses(
+    modelBundle,
+    rootState,
+    rootPlayer,
+    { count: options.hypothesisCount },
+  );
+  const hypotheses = ensureHypotheses(identityInference);
+  const hypothesisSearches = hypotheses.map((hypothesis) => {
+    const assignment = hypothesis?.assignment || {};
+    const determinizedState = applyIdentityAssignmentToState(rootState, assignment);
+    const search = runDeterminizedMcts(modelBundle, determinizedState, {
+      ...options,
+      rootPlayer,
+    });
+    return {
+      hypothesis,
+      search,
+    };
+  });
+
+  const valuesRoot = hypothesisSearches.map(({ search }) => Number(search?.valueEstimate || 0));
+  const riskAggregation = applyRiskBiasToHypotheses(hypotheses, valuesRoot, options.riskBias);
+  const hypothesisWeights = riskAggregation.weights.length === hypothesisSearches.length
+    ? riskAggregation.weights
+    : normalizeArray(hypotheses.map((hypothesis) => Number(hypothesis?.probability || 0)));
+  const actionKeys = rootLegalActions.map((action) => actionKey(action));
+  const actionByKey = {};
+  const policyFeaturesByActionKey = {};
+  rootLegalActions.forEach((action, idx) => {
+    const key = actionKeys[idx];
+    actionByKey[key] = action;
+    policyFeaturesByActionKey[key] = observationPolicy.features?.[idx] || [];
+  });
+
+  let legalActionMismatchCount = 0;
+  const statsByActionKeyByHypothesis = hypothesisSearches.map(({ search }) => {
+    const statsByActionKey = {};
+    const searchActionKeys = new Set();
+    (search?.trace?.actionStats || []).forEach((entry) => {
+      const key = entry?.actionKey || entry?.moveKey || '';
+      if (!key) return;
+      statsByActionKey[key] = entry;
+      searchActionKeys.add(key);
+    });
+    if (searchActionKeys.size !== actionKeys.length || actionKeys.some((key) => !searchActionKeys.has(key))) {
+      legalActionMismatchCount += 1;
+    }
+    return statsByActionKey;
+  });
+
+  const aggregatedVisits = actionKeys.map((key) => (
+    hypothesisSearches.reduce((sum, _, hypothesisIndex) => (
+      sum + (Number(statsByActionKeyByHypothesis[hypothesisIndex]?.[key]?.visits || 0) * (hypothesisWeights[hypothesisIndex] || 0))
+    ), 0)
+  ));
+  const policyTarget = normalizeTargetProbabilities(aggregatedVisits);
+  const ranked = actionKeys
+    .map((key, idx) => ({
+      key,
+      visits: aggregatedVisits[idx],
+    }))
+    .sort((a, b) => b.visits - a.visits);
+  const nonCatastrophic = ranked.find((entry) => !isCatastrophicKingBluff(rootState, actionByKey[entry.key]));
+  const selectedEntry = nonCatastrophic || ranked[0];
+  const selectedKey = selectedEntry?.key || actionKeys[0];
+  const selectedAction = actionByKey[selectedKey] || rootLegalActions[0] || null;
+  const actionStats = actionKeys.map((key, idx) => ({
+    actionKey: key,
+    moveKey: key,
+    visits: aggregatedVisits[idx],
+    prior: observationPolicy.probabilities?.[idx] || 0,
+    q: hypothesisSearches.reduce((sum, _, hypothesisIndex) => (
+      sum + (Number(statsByActionKeyByHypothesis[hypothesisIndex]?.[key]?.q || 0) * (hypothesisWeights[hypothesisIndex] || 0))
+    ), 0),
+  }));
+
+  const totalRootVisits = hypothesisSearches.reduce((sum, { search }) => sum + Number(search?.trace?.rootVisits || 0), 0);
+  const hypothesisSummary = hypothesisSearches.map(({ hypothesis, search }, index) => ({
+    probability: Number(hypothesis?.probability || 0),
+    searchWeight: Number(hypothesisWeights[index] || 0),
+    valueRoot: Number(search?.valueEstimate || 0),
+    selectedActionKey: search?.action ? actionKey(search.action) : null,
+    assignment: hypothesis?.assignment || {},
+  }));
+
+  const root = {
+    hash: computeStateHash(rootState),
+    state: rootState,
+    visits: totalRootVisits,
+    valueSum: Number(riskAggregation.value || 0) * totalRootVisits,
+    expanded: true,
+    legalActions: rootLegalActions,
+    priorsByActionKey: actionKeys.reduce((acc, key, idx) => {
+      acc[key] = observationPolicy.probabilities?.[idx] || 0;
+      return acc;
+    }, {}),
+    actionByKey,
+    childrenByActionKey: actionKeys.reduce((acc, key, idx) => {
+      acc[key] = {
+        visits: aggregatedVisits[idx],
+        valueSum: (actionStats[idx]?.q || 0) * aggregatedVisits[idx],
+      };
+      return acc;
+    }, {}),
+    policyFeaturesByActionKey,
+    policyStateFeatures: observationStateFeatures,
+    identitySamples: identityInference.samples || [],
+    hypothesisSummary,
+  };
+
+  const trainingRecord = {
+    player: rootState.toMove,
+    stateFeatures: observationStateFeatures,
+    policy: {
+      actionKeys,
+      moveKeys: actionKeys.slice(),
+      features: observationPolicy.features?.map((vector) => vector.slice()) || [],
+      target: policyTarget,
+      selectedActionKey: selectedKey,
+      selectedMoveKey: selectedKey,
+    },
+    value: {
+      features: observationStateFeatures.slice(),
+      target: 0,
+    },
+    identitySamples: identityInference.samples || [],
+    hypothesisSummary,
+  };
+
+  const aggregateTrace = hypothesisSearches.reduce((acc, { search }) => {
+    acc.iterations += Number(search?.trace?.iterations || 0);
+    acc.transpositionHits += Number(search?.trace?.transpositionHits || 0);
+    acc.evaluationCacheHits += Number(search?.trace?.evaluationCacheHits || 0);
+    acc.evaluationCount += Number(search?.trace?.evaluationCount || 0);
+    acc.nodeCount += Number(search?.trace?.nodeCount || 0);
+    return acc;
+  }, {
+    iterations: 0,
+    transpositionHits: 0,
+    evaluationCacheHits: 0,
+    evaluationCount: 0,
+    nodeCount: 0,
+  });
+
+  return buildSearchResult({
+    action: selectedAction,
+    root,
+    policyTarget,
+    valueEstimate: Number(riskAggregation.value || 0),
+    trace: {
+      iterations: aggregateTrace.iterations,
+      iterationsPerHypothesis: hypothesisSearches.length ? Number(hypothesisSearches[0]?.trace?.iterations || 0) : 0,
+      hypothesisCount: hypothesisSearches.length,
+      rootVisits: totalRootVisits,
+      actionStats,
+      moveStats: actionStats,
+      hypothesisSummary,
+      legalActionMismatchCount,
+      kingBluffGuardApplied: Boolean(nonCatastrophic && selectedEntry && selectedEntry.key !== ranked[0]?.key),
+      transpositionHits: aggregateTrace.transpositionHits,
+      evaluationCacheHits: aggregateTrace.evaluationCacheHits,
+      evaluationCount: aggregateTrace.evaluationCount,
+      nodeCount: aggregateTrace.nodeCount,
     },
     trainingRecord,
   });

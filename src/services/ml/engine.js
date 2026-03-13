@@ -1,4 +1,12 @@
 const gameConstants = require('../../../shared/constants/game.json');
+const {
+  NO_PIECE,
+  ensureEncodedState,
+  computeEncodedStateHash,
+  getMoveTemplatesForSquare,
+  squareToIndex,
+  indexToSquare,
+} = require('./stateEncoding');
 
 const COLORS = gameConstants.colors;
 const IDENTITIES = gameConstants.identities;
@@ -234,6 +242,19 @@ function cloneState(state) {
   };
 }
 
+function getStateCache(state) {
+  if (!state || typeof state !== 'object') return {};
+  if (!Object.prototype.hasOwnProperty.call(state, '__mlCache')) {
+    Object.defineProperty(state, '__mlCache', {
+      value: {},
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    });
+  }
+  return state.__mlCache;
+}
+
 function getPieceAt(state, row, col) {
   if (!isInside(row, col)) return null;
   const pieceId = state.board[row][col];
@@ -416,47 +437,89 @@ function declarationLegalByGeometry(state, from, to, declaration) {
 
 function getDeclaredMoveActionsForColor(state, color) {
   if (!state || !state.isActive) return [];
-  const actions = [];
-  for (let row = 0; row < RANKS; row += 1) {
-    for (let col = 0; col < FILES; col += 1) {
-      const pieceId = state.board[row][col];
-      if (!pieceId) continue;
-      const piece = state.pieces[pieceId];
-      if (!piece || !piece.alive || piece.color !== color) continue;
-
-      DECLARABLE_IDENTITIES.forEach((declaration) => {
-        for (let toRow = 0; toRow < RANKS; toRow += 1) {
-          for (let toCol = 0; toCol < FILES; toCol += 1) {
-            if (toRow === row && toCol === col) continue;
-            const targetPiece = getPieceAt(state, toRow, toCol);
-            if (targetPiece && targetPiece.color === color) continue;
-            if (!declarationLegalByGeometry(
-              state,
-              { row, col },
-              { row: toRow, col: toCol },
-              declaration,
-            )) {
-              continue;
-            }
-            actions.push({
-              type: 'MOVE',
-              player: color,
-              pieceId,
-              from: { row, col },
-              to: { row: toRow, col: toCol },
-              declaration,
-              capturePieceId: targetPiece ? targetPiece.id : null,
-            });
-          }
-        }
-      });
-    }
+  const cache = getStateCache(state);
+  if (cache.declaredMoveActionsByColor?.[color]) {
+    return cache.declaredMoveActionsByColor[color];
   }
+
+  const encoded = ensureEncodedState(state);
+  const actions = [];
+  const boardMask = encoded.boardMaskByColor[color] >>> 0;
+
+  for (let squareIndex = 0; squareIndex < boardPieceIndicesLength(encoded); squareIndex += 1) {
+    if ((boardMask & (1 << squareIndex)) === 0) continue;
+    const pieceIndex = encoded.boardPieceIndices[squareIndex];
+    if (pieceIndex === NO_PIECE) continue;
+    const pieceId = encoded.pieceIds[pieceIndex];
+    const from = indexToSquare(squareIndex);
+
+    DECLARABLE_IDENTITIES.forEach((declaration) => {
+      const templates = getMoveTemplatesForSquare(squareIndex, declaration);
+      templates.forEach((template) => {
+        if ((encoded.occupancyMask & template.blockersMask) !== 0) {
+          return;
+        }
+        const targetPieceIndex = encoded.boardPieceIndices[template.toIndex];
+        if (targetPieceIndex !== NO_PIECE && encoded.pieceColor[targetPieceIndex] === color) {
+          return;
+        }
+        const capturePieceId = targetPieceIndex !== NO_PIECE
+          ? encoded.pieceIds[targetPieceIndex]
+          : null;
+        actions.push({
+          type: 'MOVE',
+          player: color,
+          pieceId,
+          from,
+          to: { row: template.toRow, col: template.toCol },
+          declaration,
+          capturePieceId,
+          _key: `M:${pieceId}:${squareIndex}:${template.toIndex}:${declaration}`,
+        });
+      });
+    });
+  }
+
+  cache.declaredMoveActionsByColor = cache.declaredMoveActionsByColor || [null, null];
+  cache.declaredMoveActionsByColor[color] = actions;
   return actions;
 }
 
+function countDeclaredMoveOptionsForColorEncoded(state, color) {
+  const encoded = ensureEncodedState(state);
+  const boardMask = encoded.boardMaskByColor[color] >>> 0;
+  let count = 0;
+
+  for (let squareIndex = 0; squareIndex < boardPieceIndicesLength(encoded); squareIndex += 1) {
+    if ((boardMask & (1 << squareIndex)) === 0) continue;
+
+    DECLARABLE_IDENTITIES.forEach((declaration) => {
+      const templates = getMoveTemplatesForSquare(squareIndex, declaration);
+      templates.forEach((template) => {
+        if ((encoded.occupancyMask & template.blockersMask) !== 0) {
+          return;
+        }
+        const targetPieceIndex = encoded.boardPieceIndices[template.toIndex];
+        if (targetPieceIndex !== NO_PIECE && encoded.pieceColor[targetPieceIndex] === color) {
+          return;
+        }
+        count += 1;
+      });
+    });
+  }
+
+  return count;
+}
+
 function countMoveOptionsForColor(state, color) {
-  return getDeclaredMoveActionsForColor(state, color).length;
+  const cache = getStateCache(state);
+  cache.moveOptionCountsByColor = cache.moveOptionCountsByColor || [null, null];
+  if (Number.isFinite(cache.moveOptionCountsByColor[color])) {
+    return cache.moveOptionCountsByColor[color];
+  }
+  const count = countDeclaredMoveOptionsForColorEncoded(state, color);
+  cache.moveOptionCountsByColor[color] = count;
+  return count;
 }
 
 function canChallenge(state, color) {
@@ -504,9 +567,15 @@ function getLegalActions(state, color = state.playerTurn) {
   if (!state || !state.isActive) return [];
   if (color !== state.playerTurn) return [];
 
+  const cache = getStateCache(state);
+  cache.legalActionsByColor = cache.legalActionsByColor || [null, null];
+  if (cache.legalActionsByColor[color]) {
+    return cache.legalActionsByColor[color];
+  }
+
   if (state.onDeckingPlayer === color) {
     const stash = state.stashes[color] || [];
-    return stash
+    const actions = stash
       .map((pieceId) => {
         const piece = state.pieces[pieceId];
         if (!piece || !piece.alive) return null;
@@ -515,9 +584,12 @@ function getLegalActions(state, color = state.playerTurn) {
           player: color,
           pieceId,
           identity: piece.identity,
+          _key: `O:${pieceId || piece.identity || 'x'}`,
         };
       })
       .filter(Boolean);
+    cache.legalActionsByColor[color] = actions;
+    return actions;
   }
 
   const actions = [];
@@ -532,6 +604,7 @@ function getLegalActions(state, color = state.playerTurn) {
   if (canChallenge(state, color)) actions.push({ type: 'CHALLENGE', player: color });
   if (canBomb(state, color)) actions.push({ type: 'BOMB', player: color });
   actions.push(...getDeclaredMoveActionsForColor(state, color));
+  cache.legalActionsByColor[color] = actions;
   return actions;
 }
 
@@ -1019,8 +1092,11 @@ function applyAction(state, rawAction) {
 
 function actionKey(action) {
   if (!action || !action.type) return '';
+  if (action._key) return action._key;
   if (action.type === 'MOVE') {
-    return `M:${action.pieceId}:${action.from.row},${action.from.col}->${action.to.row},${action.to.col}:${action.declaration}`;
+    const fromIndex = squareToIndex(action?.from?.row, action?.from?.col);
+    const toIndex = squareToIndex(action?.to?.row, action?.to?.col);
+    return `M:${action.pieceId}:${fromIndex}:${toIndex}:${action.declaration}`;
   }
   if (action.type === 'ON_DECK') {
     return `O:${action.pieceId || action.identity || 'x'}`;
@@ -1038,13 +1114,13 @@ function hasAliveKing(state, color) {
 }
 
 function getAlivePieceIdsForColor(state, color) {
-  return Object.values(state.pieces || {})
-    .filter((piece) => piece && piece.alive && piece.color === color)
-    .map((piece) => piece.id);
+  const encoded = ensureEncodedState(state);
+  return encoded.alivePieceIdsByColor[color].slice();
 }
 
 function getHiddenPieceIds(state, perspective) {
-  return getAlivePieceIdsForColor(state, otherColor(perspective));
+  const encoded = ensureEncodedState(state);
+  return encoded.hiddenPieceIdsByPerspective[perspective].slice();
 }
 
 function getVisibleIdentity(state, piece, perspective, guessedIdentities = null) {
@@ -1099,24 +1175,38 @@ function serializePieceList(state, list, perspective = null, guessedIdentities =
 }
 
 function summarizeMaterial(state, perspective, guessedIdentities = null) {
+  const cache = getStateCache(state);
+  const guessKey = getGuessKey(state, guessedIdentities);
+  cache.materialSummaryByPerspective = cache.materialSummaryByPerspective || [{}, {}];
+  if (cache.materialSummaryByPerspective[perspective][guessKey]) {
+    return cache.materialSummaryByPerspective[perspective][guessKey];
+  }
+
+  const encoded = ensureEncodedState(state);
   let own = 0;
   let enemy = 0;
-  Object.values(state.pieces || {}).forEach((piece) => {
-    if (!piece || !piece.alive) return;
+  for (let pieceIndex = 0; pieceIndex < encoded.pieceCount; pieceIndex += 1) {
+    if (!encoded.pieceAlive[pieceIndex]) continue;
+    const piece = state.pieces[encoded.pieceIds[pieceIndex]];
+    if (!piece) continue;
     const identity = piece.color === perspective
       ? piece.identity
       : getVisibleIdentity(state, piece, perspective, guessedIdentities);
     const value = PIECE_VALUES[identity] || 0;
     if (piece.color === perspective) own += value;
     else enemy += value;
-  });
-  return { own, enemy };
+  }
+
+  const result = { own, enemy };
+  cache.materialSummaryByPerspective[perspective][guessKey] = result;
+  return result;
 }
 
 function findKing(state, color) {
-  return Object.values(state.pieces || {}).find((piece) => (
-    piece && piece.alive && piece.color === color && piece.identity === IDENTITIES.KING
-  )) || null;
+  const encoded = ensureEncodedState(state);
+  const kingIndex = encoded.kingIndexByColor[color];
+  if (kingIndex < 0) return null;
+  return state.pieces[encoded.pieceIds[kingIndex]] || null;
 }
 
 function distanceToThrone(piece) {
@@ -1143,35 +1233,23 @@ function moveCompatibilityScore(historyEntries, identity) {
 }
 
 function computeStateHash(state) {
-  const boardPart = state.board
-    .map((row) => row.map((pieceId) => pieceId || '..').join(','))
-    .join('/');
-  const onDeckPart = state.onDecks.map((pieceId) => pieceId || '--').join(',');
-  const stashPart = state.stashes.map((stash) => stash.join('.') || '--').join('|');
-  const daggerPart = state.daggers.join(',');
-  const lastMove = getLastMove(state);
-  const lastAction = getLastAction(state);
-  const movePart = lastMove
-    ? `${lastMove.player}:${lastMove.from.row},${lastMove.from.col}->${lastMove.to.row},${lastMove.to.col}:${lastMove.declaration}:${lastMove.state}`
-    : 'none';
-  const actionPart = lastAction ? `${lastAction.type}:${lastAction.player}` : 'none';
-  const revealPart = Object.entries(state.revealedIdentities || {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, identity]) => `${id}:${identity}`)
-    .join(',');
-  return [
-    boardPart,
-    onDeckPart,
-    stashPart,
-    daggerPart,
-    `pt${state.playerTurn}`,
-    `odp${state.onDeckingPlayer === null ? 'n' : state.onDeckingPlayer}`,
-    `msa${state.movesSinceAction}`,
-    `ply${state.ply}`,
-    `mv${movePart}`,
-    `ac${actionPart}`,
-    `rv${revealPart}`,
-  ].join('#');
+  return computeEncodedStateHash(state);
+}
+
+function boardPieceIndicesLength(encoded) {
+  return encoded?.boardPieceIndices?.length || 0;
+}
+
+function getGuessKey(state, guessedIdentities) {
+  if (!guessedIdentities) return 'truth';
+  const encoded = ensureEncodedState(state);
+  const parts = [];
+  for (let pieceIndex = 0; pieceIndex < encoded.pieceCount; pieceIndex += 1) {
+    const pieceId = encoded.pieceIds[pieceIndex];
+    if (!Object.prototype.hasOwnProperty.call(guessedIdentities, pieceId)) continue;
+    parts.push(`${pieceIndex}:${guessedIdentities[pieceId]}`);
+  }
+  return parts.length ? parts.join('|') : 'truth';
 }
 
 function toReplayFrame(state, metadata = {}) {

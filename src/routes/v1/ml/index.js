@@ -10,6 +10,7 @@ router.use(async (req, res, next) => {
   if (!adminSession) {
     return;
   }
+  req.__adminSession = adminSession;
   next();
 });
 
@@ -24,22 +25,160 @@ router.get('/summary', async (req, res) => {
 
 router.get('/workbench', async (req, res) => {
   try {
-    const [summary, participants, simulations, trainingRuns, live] = await Promise.all([
-      mlRuntime.getSummary(),
-      mlRuntime.listParticipants(),
-      mlRuntime.listSimulations({ limit: req.query.limit || 500 }),
-      mlRuntime.listTrainingRuns({ limit: req.query.trainingLimit || 50 }),
-      mlRuntime.getLiveStatus(),
-    ]);
-    res.json({
-      summary,
-      participants,
-      simulations: { items: simulations },
-      trainingRuns: { items: trainingRuns },
-      live,
+    const workbench = await mlRuntime.getWorkbench({
+      limit: req.query.limit || 100,
     });
+    res.json(workbench);
   } catch (err) {
     res.status(500).json({ message: err.message || 'Failed to load ML workbench' });
+  }
+});
+
+router.get('/promoted-bots', async (req, res) => {
+  try {
+    const catalog = await mlRuntime.getPromotedBotCatalog();
+    res.json(catalog);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to load promoted bot catalog' });
+  }
+});
+
+router.put('/promoted-bots', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const catalog = await mlRuntime.updatePromotedBotCatalog(payload.enabledIds || []);
+    res.json(catalog);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to update promoted bot catalog' });
+  }
+});
+
+router.get('/runs', async (req, res) => {
+  try {
+    const items = await mlRuntime.listRuns({ limit: req.query.limit || 100 });
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to load ML runs' });
+  }
+});
+
+router.get('/runs/:runId', async (req, res) => {
+  try {
+    const run = await mlRuntime.getRun(req.params.runId);
+    if (!run) {
+      return res.status(404).json({ message: 'Run not found' });
+    }
+    res.json(run);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to load ML run' });
+  }
+});
+
+router.post('/runs', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const result = await mlRuntime.startRun(payload);
+    res.json(result);
+  } catch (err) {
+    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
+    const body = { message: err.message || 'Failed to start ML run' };
+    if (err?.code) body.code = err.code;
+    if (Array.isArray(err?.activeRuns)) body.activeRuns = err.activeRuns;
+    res.status(statusCode).json(body);
+  }
+});
+
+router.post('/runs/:runId/stop', async (req, res) => {
+  try {
+    const result = await mlRuntime.stopRun(req.params.runId);
+    if (!result?.stopped) {
+      return res.status(404).json({ message: 'Run not found' });
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to stop ML run' });
+  }
+});
+
+router.post('/runs/:runId/continue', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const result = await mlRuntime.continueRun(req.params.runId, payload);
+    if (!result?.continued) {
+      return res.status(404).json({ message: 'Run not found' });
+    }
+    res.json(result);
+  } catch (err) {
+    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
+    const body = { message: err.message || 'Failed to continue ML run' };
+    if (err?.code) body.code = err.code;
+    if (Array.isArray(err?.activeRuns)) body.activeRuns = err.activeRuns;
+    res.status(statusCode).json(body);
+  }
+});
+
+router.post('/test-games', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const adminSession = req.__adminSession || null;
+    const result = await mlRuntime.startTestGame({
+      runId: payload.runId || '',
+      generation: payload.generation,
+      sidePreference: payload.sidePreference || 'random',
+      userId: adminSession?.userId || '',
+      username: adminSession?.username || adminSession?.user?.username || '',
+    });
+    res.json(result);
+  } catch (err) {
+    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
+    res.status(statusCode).json({ message: err.message || 'Failed to start ML test game' });
+  }
+});
+
+router.delete('/runs/:runId', async (req, res) => {
+  try {
+    const result = await mlRuntime.deleteRun(req.params.runId);
+    if (!result?.deleted) {
+      if (result?.reason === 'not_found') {
+        return res.status(404).json({ message: 'Run not found' });
+      }
+      if (result?.reason === 'run_active') {
+        return res.status(409).json({ message: 'Cancel the run before deleting it' });
+      }
+      return res.status(400).json({ message: 'Run could not be deleted' });
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to delete ML run' });
+  }
+});
+
+router.get('/runs/:runId/games', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const hasGenerationFilters = req.query.generationA !== undefined || req.query.generationB !== undefined;
+    const generationA = hasGenerationFilters ? Number.parseInt(req.query.generationA, 10) : null;
+    const generationB = hasGenerationFilters ? Number.parseInt(req.query.generationB, 10) : null;
+    if (hasGenerationFilters && (!Number.isFinite(generationA) || !Number.isFinite(generationB))) {
+      return res.status(400).json({ message: 'generationA and generationB must both be integers when provided' });
+    }
+    const items = await mlRuntime.listRunGames(req.params.runId, generationA, generationB);
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to load run games' });
+  }
+});
+
+router.get('/runs/:runId/replay/:gameId', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const replay = await mlRuntime.getRunReplay(req.params.runId, req.params.gameId);
+    if (!replay) {
+      return res.status(404).json({ message: 'Replay not found' });
+    }
+    res.json(replay);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to load run replay' });
   }
 });
 
@@ -284,6 +423,8 @@ router.post('/training/run', async (req, res) => {
       simulationIds,
       epochs: payload.epochs,
       learningRate: payload.learningRate,
+      trainingBackend: payload.trainingBackend,
+      trainingDevicePreference: payload.trainingDevicePreference,
       label: payload.label || null,
       notes: payload.notes || '',
     });
@@ -308,6 +449,8 @@ router.post('/training/start', async (req, res) => {
       simulationIds,
       epochs: payload.epochs,
       learningRate: payload.learningRate,
+      trainingBackend: payload.trainingBackend,
+      trainingDevicePreference: payload.trainingDevicePreference,
       label: payload.label || null,
       notes: payload.notes || '',
     });
