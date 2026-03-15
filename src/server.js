@@ -192,6 +192,7 @@ const { startInternalBots } = require('./services/bots/internalBots');
 const { startGuestCleanupTask } = require('./services/guestCleanup');
 const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
 const { ensureAdminRequest } = require('./utils/adminAccess');
+const { getMlRuntime } = require('./services/ml/runtime');
 
 const mlWorkflowEnabled = isMlWorkflowEnabled();
 
@@ -337,6 +338,43 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 
 initSocket(server);
+let shutdownPromise = null;
+
+async function shutdownServer(signal = 'shutdown') {
+  if (shutdownPromise) {
+    return shutdownPromise;
+  }
+  shutdownPromise = (async () => {
+    console.log(`Received ${signal}; flushing ML runtime state before exit...`);
+    server.close((err) => {
+      if (err) {
+        console.error('Error while closing HTTP server during shutdown:', err);
+      }
+    });
+    try {
+      await getMlRuntime().flushForShutdown();
+      console.log('ML runtime flushed successfully.');
+    } catch (err) {
+      console.error('Failed to flush ML runtime during shutdown:', err);
+    }
+    try {
+      await mongoose.disconnect();
+    } catch (err) {
+      console.error('Failed to disconnect MongoDB during shutdown:', err);
+    }
+    process.exit(0);
+  })();
+  return shutdownPromise;
+}
+
+['SIGINT', 'SIGTERM', 'SIGBREAK'].forEach((signal) => {
+  process.on(signal, () => {
+    shutdownServer(signal).catch((err) => {
+      console.error(`Fatal shutdown error after ${signal}:`, err);
+      process.exit(1);
+    });
+  });
+});
 
 async function startServer() {
   const connected = await connectToDatabase();

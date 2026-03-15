@@ -88,6 +88,26 @@ router.post('/runs', async (req, res) => {
   }
 });
 
+router.patch('/runs/:runId/generations/:generation', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const generation = Number.parseInt(req.params.generation, 10);
+    if (!Number.isFinite(generation)) {
+      return res.status(400).json({ message: 'Generation must be an integer' });
+    }
+    const updated = await mlRuntime.renameRunGeneration(req.params.runId, generation, payload.label);
+    if (!updated) {
+      return res.status(404).json({ message: 'Run generation not found' });
+    }
+    res.json({ generation: updated });
+  } catch (err) {
+    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
+    const body = { message: err.message || 'Failed to rename run generation' };
+    if (err?.code) body.code = err.code;
+    res.status(statusCode).json(body);
+  }
+});
+
 router.post('/runs/:runId/stop', async (req, res) => {
   try {
     const result = await mlRuntime.stopRun(req.params.runId);
@@ -97,6 +117,18 @@ router.post('/runs/:runId/stop', async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message || 'Failed to stop ML run' });
+  }
+});
+
+router.post('/runs/:runId/kill', async (req, res) => {
+  try {
+    const result = await mlRuntime.killRun(req.params.runId);
+    if (!result?.killed) {
+      return res.status(404).json({ message: 'Run not found' });
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: err.message || 'Failed to kill ML run' });
   }
 });
 
@@ -422,10 +454,10 @@ router.post('/training/run', async (req, res) => {
       snapshotId: payload.snapshotId || null,
       simulationIds,
       epochs: payload.epochs,
+      batchSize: payload.batchSize,
       learningRate: payload.learningRate,
       trainingBackend: payload.trainingBackend,
       trainingDevicePreference: payload.trainingDevicePreference,
-      label: payload.label || null,
       notes: payload.notes || '',
     });
     res.json(result);
@@ -448,10 +480,10 @@ router.post('/training/start', async (req, res) => {
       snapshotId: payload.snapshotId || null,
       simulationIds,
       epochs: payload.epochs,
+      batchSize: payload.batchSize,
       learningRate: payload.learningRate,
       trainingBackend: payload.trainingBackend,
       trainingDevicePreference: payload.trainingDevicePreference,
-      label: payload.label || null,
       notes: payload.notes || '',
     });
     res.json(result);

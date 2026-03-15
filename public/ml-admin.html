@@ -273,7 +273,7 @@
 
       .test-bot-item {
         display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-columns: auto minmax(0, 1fr) auto;
         gap: 12px;
         align-items: flex-start;
         padding: 12px;
@@ -312,6 +312,20 @@
 
       .form-grid .full {
         grid-column: 1 / -1;
+      }
+
+      .config-section-heading {
+        margin-top: 8px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(133, 184, 175, 0.12);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--accent-strong);
+      }
+
+      .config-section-note {
+        margin-top: -4px;
       }
 
       .condition-grid {
@@ -483,7 +497,7 @@
 
       #generationWinCanvas {
         width: 100%;
-        height: clamp(430px, 54vh, 620px);
+        height: clamp(400px, 50vh, 620px);
         display: block;
       }
 
@@ -491,7 +505,6 @@
         position: relative;
         z-index: 1;
         width: 100%;
-        height: 168px;
         min-height: 168px;
         padding: 9px 11px;
         border-radius: 12px;
@@ -527,18 +540,16 @@
 
       .chart-tooltip-grid {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
         gap: 8px;
         flex: 1 1 auto;
-        height: 100%;
         min-height: 0;
-        overflow-y: auto;
         align-content: start;
       }
 
       @media (max-width: 1100px) {
         .chart-tooltip-grid {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
         }
       }
 
@@ -632,15 +643,67 @@
         box-shadow: inset 0 1px 0 rgba(240, 182, 88, 0.2), inset 0 -1px 0 rgba(240, 182, 88, 0.2);
       }
 
+      .runs-table {
+        border-collapse: collapse;
+      }
+
+      .runs-table thead th {
+        padding: 10px 8px;
+      }
+
+      .runs-table tbody td {
+        padding: 8px 8px;
+        border-bottom: 1px solid rgba(133, 184, 175, 0.12);
+        background: rgba(6, 18, 23, 0.76);
+      }
+
+      .run-title-row,
+      .run-detail-row {
+        cursor: pointer;
+      }
+
+      .run-title-row td {
+        border-top: 3px solid rgba(240, 182, 88, 0.3);
+      }
+
+      .run-title-row:first-child td {
+        border-top-width: 1px;
+      }
+
+      .run-title-cell {
+        padding-top: 12px;
+        padding-bottom: 10px;
+        font-size: 17px;
+        line-height: 1.15;
+        font-weight: 700;
+        color: var(--ink);
+      }
+
+      .run-detail-cell {
+        padding-top: 0;
+        padding-bottom: 12px;
+      }
+
+      .run-title-row.active td,
+      .run-detail-row.active td {
+        background: rgba(29, 24, 11, 0.68);
+      }
+
+      .run-detail-v {
+        font-size: 12px;
+        color: var(--ink);
+        line-height: 1.25;
+        word-break: break-word;
+      }
+
       .table-actions {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
+        display: grid;
+        gap: 6px;
       }
 
       .table-action-btn {
-        padding: 6px 10px;
-        border-radius: 10px;
+        padding: 5px 8px;
+        border-radius: 9px;
         font-size: 11px;
       }
 
@@ -813,16 +876,14 @@
               <h2 class="panel-title">Start Run</h2>
             </div>
             <div class="panel-body stack">
+              <div class="subtle">Search uses shared-tree ISMCTS. Each move samples hidden worlds consistent with the public history, and those samples share one search tree instead of building separate trees per identity hypothesis.</div>
               <div class="form-grid">
-                <div class="full">
-                  <label for="runNameInput">Run Name</label>
-                  <input id="runNameInput" type="text" placeholder="Example: March self-play sweep" />
-                </div>
+                <div class="full subtle config-section-note">Run names are assigned automatically from the selected seed model.</div>
                 <div>
                   <label for="seedModeSelect">Seed Model</label>
                   <select id="seedModeSelect">
-                    <option value="bootstrap">Bootstrap Model</option>
-                    <option value="random">Random Init</option>
+                    <option value="bootstrap">Bootstrap Shared-Encoder MLP (1.6M params)</option>
+                    <option value="random">Random Shared-Encoder MLP (1.6M params)</option>
                   </select>
                 </div>
                 <div>
@@ -830,33 +891,28 @@
                   <input id="seedInput" type="number" placeholder="Optional" />
                 </div>
                 <div>
-                  <label for="numSelfplayWorkersInput">Self-Play Workers</label>
+                  <label for="numSelfplayWorkersInput">Self-Play Games / Cycle</label>
                   <input id="numSelfplayWorkersInput" type="number" min="1" />
                 </div>
-                <div>
-                  <label for="parallelGameWorkersInput">Parallel Game Workers</label>
-                  <input id="parallelGameWorkersInput" type="number" min="1" />
-                </div>
+                <div class="full config-section-heading">Search</div>
                 <div>
                   <label for="numMctsSimulationsInput">MCTS Sims / Move</label>
                   <input id="numMctsSimulationsInput" type="number" min="1" />
                 </div>
                 <div>
-                  <label for="maxDepthInput">MCTS Depth</label>
+                  <label for="maxDepthInput">Search Depth</label>
                   <input id="maxDepthInput" type="number" min="1" />
                 </div>
                 <div>
-                  <label for="hypothesisCountInput">Identity Hypotheses</label>
+                  <label for="hypothesisCountInput">Belief Samples / Move</label>
                   <input id="hypothesisCountInput" type="number" min="1" />
-                </div>
-                <div>
-                  <label for="riskBiasInput">Risk Bias</label>
-                  <input id="riskBiasInput" type="number" step="0.01" min="0" />
                 </div>
                 <div>
                   <label for="explorationInput">Exploration</label>
                   <input id="explorationInput" type="number" step="0.01" min="0" />
                 </div>
+                <div class="full subtle config-section-note">Game worker concurrency and search risk tuning are auto-managed now.</div>
+                <div class="full config-section-heading">Training</div>
                 <div>
                   <label for="replayBufferMaxPositionsInput">Replay Buffer Max Positions</label>
                   <input id="replayBufferMaxPositionsInput" type="number" min="16" />
@@ -868,22 +924,6 @@
                 <div>
                   <label for="learningRateInput">Learning Rate</label>
                   <input id="learningRateInput" type="number" step="0.0001" min="0.00001" />
-                </div>
-                <div>
-                  <label for="trainingBackendSelect">Training Backend</label>
-                  <select id="trainingBackendSelect">
-                    <option value="auto">Auto</option>
-                    <option value="node">Node CPU</option>
-                    <option value="python">Python Torch</option>
-                  </select>
-                </div>
-                <div>
-                  <label for="trainingDeviceSelect">Training Device</label>
-                  <select id="trainingDeviceSelect">
-                    <option value="auto">Auto</option>
-                    <option value="cuda">CUDA</option>
-                    <option value="cpu">CPU</option>
-                  </select>
                 </div>
                 <div>
                   <label for="weightDecayInput">Weight Decay</label>
@@ -905,6 +945,8 @@
                   <label for="checkpointIntervalInput">Checkpoint Interval</label>
                   <input id="checkpointIntervalInput" type="number" min="1" />
                 </div>
+                <div class="full subtle config-section-note">Training backend and device selection are chosen automatically from the available runtime.</div>
+                <div class="full config-section-heading">Promotion</div>
                 <div>
                   <label for="prePromotionTestGamesInput">Pre-Promotion Test Games</label>
                   <input id="prePromotionTestGamesInput" type="number" min="1" />
@@ -926,55 +968,15 @@
                   <input id="promotionTestPriorGenerationsInput" type="number" min="1" max="10" />
                 </div>
                 <div>
-                  <label for="modelRefreshIntervalInput">Worker Refresh Interval</label>
-                  <input id="modelRefreshIntervalInput" type="number" min="1" />
-                </div>
-                <div>
-                  <label for="generationComparisonStrideInput">Generation Graph Stride</label>
-                  <input id="generationComparisonStrideInput" type="number" min="1" />
-                </div>
-                <div>
                   <label for="olderGenerationSampleProbabilityInput">Older Gen Mix Probability</label>
                   <input id="olderGenerationSampleProbabilityInput" type="number" step="0.01" min="0" max="1" />
                 </div>
-
-                <div class="full">
-                  <div class="panel-title" style="margin-bottom:10px;">End Conditions</div>
-                  <div class="condition-grid">
-                    <div class="condition-card">
-                      <label class="toggle-row" for="stopOnMaxGenerationsInput">
-                        <input id="stopOnMaxGenerationsInput" type="checkbox" />
-                        <span>Use best-generation cap</span>
-                      </label>
-                      <label for="maxGenerationsInput">Best Generation Limit</label>
-                      <input id="maxGenerationsInput" type="number" min="1" />
-                    </div>
-                    <div class="condition-card">
-                      <label class="toggle-row" for="stopOnMaxSelfPlayGamesInput">
-                        <input id="stopOnMaxSelfPlayGamesInput" type="checkbox" />
-                        <span>Use self-play game cap</span>
-                      </label>
-                      <label for="maxSelfPlayGamesInput">Self-Play Game Limit</label>
-                      <input id="maxSelfPlayGamesInput" type="number" min="1" />
-                    </div>
-                    <div class="condition-card">
-                      <label class="toggle-row" for="stopOnMaxTrainingStepsInput">
-                        <input id="stopOnMaxTrainingStepsInput" type="checkbox" />
-                        <span>Use training-step cap</span>
-                      </label>
-                      <label for="maxTrainingStepsInput">Training Step Limit</label>
-                      <input id="maxTrainingStepsInput" type="number" min="1" />
-                    </div>
-                    <div class="condition-card">
-                      <label class="toggle-row" for="stopOnMaxFailedPromotionsInput">
-                        <input id="stopOnMaxFailedPromotionsInput" type="checkbox" />
-                        <span>Use failed-promotion cap</span>
-                      </label>
-                      <label for="maxFailedPromotionsInput">Failed Promotion Limit</label>
-                      <input id="maxFailedPromotionsInput" type="number" min="1" />
-                    </div>
-                  </div>
+                <div class="full config-section-heading">Stop Condition</div>
+                <div>
+                  <label for="maxFailedPromotionsInput">Failed Promotion Cap</label>
+                  <input id="maxFailedPromotionsInput" type="number" min="1" />
                 </div>
+                <div class="full subtle config-section-note">Runs now stop only when the failed-promotion cap is reached.</div>
               </div>
               <button id="startRunBtn" type="button">Kick Off Run</button>
             </div>
@@ -985,9 +987,11 @@
               <h2 class="panel-title">Config Notes</h2>
             </div>
             <div class="panel-body stack">
-              <div class="subtle">Self-play workers are logical workers inside the server process. Each cycle generates that many fresh games before the trainer samples from the replay buffer.</div>
-              <div class="subtle">The graph stride controls which older generations remain in the evaluation graph and comparison schedule. Smaller values preserve more historical lines.</div>
-              <div class="subtle">Promotion is based on head-to-head results, not just loss. A new checkpoint only becomes the best generation if it reaches the configured win-rate threshold against the current best generation.</div>
+              <div class="subtle">Self-play games per cycle controls how many fresh games are generated before the trainer samples from the replay buffer.</div>
+              <div class="subtle">Belief samples per move controls how broadly shared-tree ISMCTS samples hidden worlds that fit the public history. It no longer spins up a separate MCTS tree per identity hypothesis.</div>
+              <div class="subtle">Backend selection, device preference, game worker concurrency, worker refresh cadence, graph stride, and risk bias are auto-managed.</div>
+              <div class="subtle">Promotion is based on head-to-head results, not just loss. A new checkpoint only becomes the best generation if it reaches the configured win-rate threshold against the current best generation and the earlier promoted generations you include.</div>
+              <div class="subtle">Runs stop when they hit the failed-promotion cap, which is the plateau guard for longer sweeps.</div>
               <div class="subtle">Replay data is retained for recent run games so you can inspect generation matchups later without rebuilding the run.</div>
             </div>
           </section>
@@ -1002,16 +1006,18 @@
             </div>
             <div class="panel-body stack">
               <div class="table-shell">
-                <table>
+                <table class="runs-table">
+                  <colgroup>
+                    <col span="6" />
+                  </colgroup>
                   <thead>
                     <tr>
-                      <th>Name</th>
+                      <th>Run</th>
                       <th>Status</th>
                       <th>Best</th>
                       <th>Games</th>
                       <th>Buffer</th>
                       <th>Updated</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody id="runsTableBody"></tbody>
@@ -1026,6 +1032,7 @@
                 <h2 class="panel-title">Selected Run</h2>
                 <div class="panel-actions">
                   <button id="stopRunBtn" class="secondary" type="button">Stop Run</button>
+                  <button id="killRunBtn" class="secondary" type="button">Kill Run</button>
                   <button id="continueRunBtn" class="secondary" type="button">Continue Run</button>
                   <button id="deleteRunBtn" class="secondary" type="button">Delete Run</button>
                 </div>
@@ -1045,7 +1052,7 @@
                 <h2 class="panel-title">Generation Win Graph</h2>
               </div>
               <div class="panel-body stack">
-                <div class="subtle">Each line shows the candidate generation win rate against one earlier generation retained at the configured stride.</div>
+                <div class="subtle">Each line shows the candidate generation win rate against earlier promoted generations kept by the auto-managed comparison schedule.</div>
                 <div class="canvas-shell">
                   <div id="generationWinTooltip" class="chart-tooltip"></div>
                   <canvas id="generationWinCanvas" width="1200" height="560"></canvas>
@@ -1165,6 +1172,7 @@
             </div>
             <div class="panel-body stack">
               <div class="subtle">Check the promoted models that should appear in the normal bot dropdown. The main client will append them after Easy, Medium, and Hard.</div>
+              <div class="subtle">Use Rename to give a promoted model a stable display name. That name is also used when auto-naming new runs seeded from that model.</div>
               <div id="testSelectionMeta" class="subtle">Loading promoted models...</div>
               <div id="testPromotedBotList" class="test-bot-list"></div>
               <button id="savePromotedBotsBtn" type="button">Save Bot Dropdown</button>

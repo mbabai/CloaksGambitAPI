@@ -24,21 +24,16 @@ const els = {
   gpuUsageCanvas: document.getElementById('gpuUsageCanvas'),
   latestRunSummary: document.getElementById('latestRunSummary'),
 
-  runNameInput: document.getElementById('runNameInput'),
   seedModeSelect: document.getElementById('seedModeSelect'),
   seedInput: document.getElementById('seedInput'),
   numSelfplayWorkersInput: document.getElementById('numSelfplayWorkersInput'),
-  parallelGameWorkersInput: document.getElementById('parallelGameWorkersInput'),
   numMctsSimulationsInput: document.getElementById('numMctsSimulationsInput'),
   maxDepthInput: document.getElementById('maxDepthInput'),
   hypothesisCountInput: document.getElementById('hypothesisCountInput'),
-  riskBiasInput: document.getElementById('riskBiasInput'),
   explorationInput: document.getElementById('explorationInput'),
   replayBufferMaxPositionsInput: document.getElementById('replayBufferMaxPositionsInput'),
   batchSizeInput: document.getElementById('batchSizeInput'),
   learningRateInput: document.getElementById('learningRateInput'),
-  trainingBackendSelect: document.getElementById('trainingBackendSelect'),
-  trainingDeviceSelect: document.getElementById('trainingDeviceSelect'),
   weightDecayInput: document.getElementById('weightDecayInput'),
   gradientClipNormInput: document.getElementById('gradientClipNormInput'),
   trainingStepsPerCycleInput: document.getElementById('trainingStepsPerCycleInput'),
@@ -49,21 +44,13 @@ const els = {
   promotionTestGamesInput: document.getElementById('promotionTestGamesInput'),
   promotionTestWinRateInput: document.getElementById('promotionTestWinRateInput'),
   promotionTestPriorGenerationsInput: document.getElementById('promotionTestPriorGenerationsInput'),
-  modelRefreshIntervalInput: document.getElementById('modelRefreshIntervalInput'),
-  generationComparisonStrideInput: document.getElementById('generationComparisonStrideInput'),
   olderGenerationSampleProbabilityInput: document.getElementById('olderGenerationSampleProbabilityInput'),
-  stopOnMaxGenerationsInput: document.getElementById('stopOnMaxGenerationsInput'),
-  maxGenerationsInput: document.getElementById('maxGenerationsInput'),
-  stopOnMaxSelfPlayGamesInput: document.getElementById('stopOnMaxSelfPlayGamesInput'),
-  maxSelfPlayGamesInput: document.getElementById('maxSelfPlayGamesInput'),
-  stopOnMaxTrainingStepsInput: document.getElementById('stopOnMaxTrainingStepsInput'),
-  maxTrainingStepsInput: document.getElementById('maxTrainingStepsInput'),
-  stopOnMaxFailedPromotionsInput: document.getElementById('stopOnMaxFailedPromotionsInput'),
   maxFailedPromotionsInput: document.getElementById('maxFailedPromotionsInput'),
   startRunBtn: document.getElementById('startRunBtn'),
 
   runsTableBody: document.getElementById('runsTableBody'),
   stopRunBtn: document.getElementById('stopRunBtn'),
+  killRunBtn: document.getElementById('killRunBtn'),
   continueRunBtn: document.getElementById('continueRunBtn'),
   deleteRunBtn: document.getElementById('deleteRunBtn'),
   selectedRunLabel: document.getElementById('selectedRunLabel'),
@@ -127,47 +114,35 @@ const state = {
   replayGamesLoading: false,
   replayGamesError: '',
   savingPromotedBots: false,
+  adminSocket: null,
+  adminSocketDisabled: false,
   livePollHandle: null,
   workbenchPollHandle: null,
   uiClockHandle: null,
 };
 
 const fieldHelpTextById = {
-  runNameInput: 'Name shown in the runs table for this experiment.',
-  seedModeSelect: 'Choose whether to start from the bootstrap model, a fresh random model, or a promoted generation from an existing run.',
+  seedModeSelect: 'Choose whether to start from the preferred larger bootstrap baseline, a fresh random model, or a promoted generation from an existing run.',
   seedInput: 'Optional random seed for reproducible model initialization and self-play ordering.',
-  numSelfplayWorkersInput: 'How many fresh self-play games to generate per pipeline cycle.',
-  parallelGameWorkersInput: 'How many game worker threads to use for self-play and evaluation. This is separate from games per cycle.',
+  numSelfplayWorkersInput: 'How many fresh self-play games to generate per training cycle. Keep this at or above the CPU worker count to avoid starving the worker pool.',
   numMctsSimulationsInput: 'Search simulations per move. Higher is slower but should improve move quality.',
-  maxDepthInput: 'Maximum search depth used by the MCTS rollout.',
-  hypothesisCountInput: 'How many hidden-information identity hypotheses the search keeps alive.',
-  riskBiasInput: 'Bias toward safer or riskier hidden-information lines during search.',
+  maxDepthInput: 'Maximum search depth used by the shared-tree ISMCTS rollout.',
+  hypothesisCountInput: 'How many hidden-world belief samples the shared-tree ISMCTS search explores per move.',
   explorationInput: 'Exploration constant for MCTS. Higher values spread visits across more actions.',
-  replayBufferMaxPositionsInput: 'Maximum number of recent training positions kept in the sliding replay buffer.',
-  batchSizeInput: 'Minibatch size sampled from the replay buffer for each gradient update.',
+  replayBufferMaxPositionsInput: 'Maximum number of recent training positions kept in the sliding replay buffer. Larger buffers support larger batches and slower-moving baselines.',
+  batchSizeInput: 'Minibatch size sampled from the replay buffer for each gradient update. The default is auto-tuned from the available Python CPU/CUDA hardware, but you can still override it here.',
   learningRateInput: 'Step size used by the optimizer during training.',
-  trainingBackendSelect: 'Choose whether training stays in the Node CPU trainer or uses the Python Torch bridge.',
-  trainingDeviceSelect: 'When Python Torch training is selected, prefer CUDA or CPU. Inference still runs on CPU in Node.',
   weightDecayInput: 'L2 penalty applied during training to discourage very large weights.',
   gradientClipNormInput: 'Maximum gradient norm before clipping is applied.',
-  trainingStepsPerCycleInput: 'How many gradient steps to run after each self-play cycle.',
+  trainingStepsPerCycleInput: 'How many gradient steps to run after each self-play cycle. The default is stretched automatically on CUDA-capable systems so training runs stay dense without starving self-play.',
   parallelTrainingHeadWorkersInput: 'How many training heads can run in parallel. Policy, value, and identity can each use a separate worker.',
-  checkpointIntervalInput: 'Create an evaluation checkpoint every N training steps.',
+  checkpointIntervalInput: 'Create an evaluation checkpoint every N training steps. Higher values reduce evaluation interruptions.',
   prePromotionTestGamesInput: 'Stage 1 gate: games against the prior promoted generation before deeper promotion testing.',
   prePromotionTestWinRateInput: 'Stage 1 gate: required win rate against the prior promoted generation.',
   promotionTestGamesInput: 'Stage 2 gate: games per matchup against the prior promoted generations.',
   promotionTestWinRateInput: 'Stage 2 gate: required win rate in each full promotion matchup.',
   promotionTestPriorGenerationsInput: 'How many prior promoted generations to include in the full promotion gate.',
-  modelRefreshIntervalInput: 'How often self-play workers refresh to the latest approved generation.',
-  generationComparisonStrideInput: 'Stride used when showing generation-vs-generation gate checks in the graph.',
   olderGenerationSampleProbabilityInput: 'Chance that self-play mixes in an older approved generation instead of mirroring the worker generation.',
-  stopOnMaxGenerationsInput: 'Enable or disable stopping after a best-generation target is reached.',
-  maxGenerationsInput: 'Stop once the best approved generation reaches this number.',
-  stopOnMaxSelfPlayGamesInput: 'Enable or disable stopping after a self-play game cap is reached.',
-  maxSelfPlayGamesInput: 'Stop once this many self-play games have been generated.',
-  stopOnMaxTrainingStepsInput: 'Enable or disable stopping after a training-step cap is reached.',
-  maxTrainingStepsInput: 'Stop once this many training steps have been executed.',
-  stopOnMaxFailedPromotionsInput: 'Enable or disable stopping after too many failed promotions.',
   maxFailedPromotionsInput: 'Stop after this many consecutive failed promotions.',
 };
 
@@ -176,18 +151,14 @@ const selectedRunConfigFields = [
   { key: 'seedRunId', label: 'Seed Run' },
   { key: 'seedGeneration', label: 'Seed Generation' },
   { key: 'seed', label: 'Seed' },
-  { key: 'numSelfplayWorkers', label: 'Self-Play Workers' },
-  { key: 'parallelGameWorkers', label: 'Parallel Game Workers' },
-  { key: 'numMctsSimulationsPerMove', label: 'MCTS Simulations Per Move' },
-  { key: 'maxDepth', label: 'Max Depth' },
-  { key: 'hypothesisCount', label: 'Hypothesis Count' },
-  { key: 'riskBias', label: 'Risk Bias' },
+  { key: 'numSelfplayWorkers', label: 'Self-Play Games / Cycle' },
+  { key: 'numMctsSimulationsPerMove', label: 'MCTS Sims / Move' },
+  { key: 'maxDepth', label: 'Search Depth' },
+  { key: 'hypothesisCount', label: 'Belief Samples / Move' },
   { key: 'exploration', label: 'Exploration' },
   { key: 'replayBufferMaxPositions', label: 'Replay Buffer Max Positions' },
   { key: 'batchSize', label: 'Batch Size' },
   { key: 'learningRate', label: 'Learning Rate' },
-  { key: 'trainingBackend', label: 'Training Backend' },
-  { key: 'trainingDevicePreference', label: 'Training Device Preference' },
   { key: 'weightDecay', label: 'Weight Decay' },
   { key: 'gradientClipNorm', label: 'Gradient Clip Norm' },
   { key: 'trainingStepsPerCycle', label: 'Training Steps Per Cycle' },
@@ -198,18 +169,28 @@ const selectedRunConfigFields = [
   { key: 'promotionTestGames', label: 'Promotion Test Games' },
   { key: 'promotionTestWinRate', label: 'Promotion Test Win Rate' },
   { key: 'promotionTestPriorGenerations', label: 'Promotion Test Prior Generations' },
-  { key: 'modelRefreshIntervalForWorkers', label: 'Model Refresh Interval' },
-  { key: 'generationComparisonStride', label: 'Generation Comparison Stride' },
-  { key: 'olderGenerationSampleProbability', label: 'Older Generation Sample Probability' },
-  { key: 'stopOnMaxGenerations', label: 'Stop On Max Generations' },
-  { key: 'maxGenerations', label: 'Max Generations' },
-  { key: 'stopOnMaxSelfPlayGames', label: 'Stop On Max Self-Play Games' },
-  { key: 'maxSelfPlayGames', label: 'Max Self-Play Games' },
-  { key: 'stopOnMaxTrainingSteps', label: 'Stop On Max Training Steps' },
-  { key: 'maxTrainingSteps', label: 'Max Training Steps' },
-  { key: 'stopOnMaxFailedPromotions', label: 'Stop On Max Failed Promotions' },
-  { key: 'maxFailedPromotions', label: 'Max Failed Promotions' },
+  { key: 'olderGenerationSampleProbability', label: 'Older Gen Mix Probability' },
+  { key: 'maxFailedPromotions', label: 'Failed Promotion Cap' },
 ];
+
+const hiddenSelectedRunConfigKeys = new Set([
+  'parallelGameWorkers',
+  'riskBias',
+  'trainingBackend',
+  'trainingDevicePreference',
+  'modelRefreshIntervalForWorkers',
+  'generationComparisonStride',
+  'evalGamesPerCheckpoint',
+  'promotionWinrateThreshold',
+  'stopOnMaxGenerations',
+  'maxGenerations',
+  'stopOnMaxSelfPlayGames',
+  'maxSelfPlayGames',
+  'stopOnMaxTrainingSteps',
+  'maxTrainingSteps',
+  'stopOnMaxFailedPromotions',
+  'retainedReplayGames',
+]);
 
 const generationWinChart = createGenerationWinChart({
   canvas: els.generationWinCanvas,
@@ -343,6 +324,7 @@ function buildSelectedRunConfigEntries(config = {}) {
   const entries = [];
   const usedKeys = new Set();
   selectedRunConfigFields.forEach((field) => {
+    if (hiddenSelectedRunConfigKeys.has(field.key)) return;
     if (!Object.prototype.hasOwnProperty.call(config, field.key)) return;
     usedKeys.add(field.key);
     entries.push({
@@ -352,7 +334,7 @@ function buildSelectedRunConfigEntries(config = {}) {
     });
   });
   Object.keys(config)
-    .filter((key) => !usedKeys.has(key))
+    .filter((key) => !usedKeys.has(key) && !hiddenSelectedRunConfigKeys.has(key))
     .sort((left, right) => left.localeCompare(right))
     .forEach((key) => {
       entries.push({
@@ -365,10 +347,17 @@ function buildSelectedRunConfigEntries(config = {}) {
 }
 
 function getRunElapsedMs(run, live = null, nowMs = Date.now()) {
-  const startedAtMs = Date.parse(run?.createdAt || live?.createdAt || '');
-  if (!Number.isFinite(startedAtMs)) return 0;
   const status = String(live?.status || run?.status || '').toLowerCase();
   const isActive = ['running', 'stopping'].includes(status);
+  const reportedElapsedMs = Number(live?.elapsedMs ?? run?.elapsedMs);
+  if (Number.isFinite(reportedElapsedMs) && reportedElapsedMs >= 0) {
+    if (!isActive) return reportedElapsedMs;
+    const snapshotAtMs = Date.parse(live?.timestamp || run?.updatedAt || run?.createdAt || '');
+    if (!Number.isFinite(snapshotAtMs)) return reportedElapsedMs;
+    return Math.max(0, reportedElapsedMs + (nowMs - snapshotAtMs));
+  }
+  const startedAtMs = Date.parse(run?.createdAt || live?.createdAt || '');
+  if (!Number.isFinite(startedAtMs)) return 0;
   const endedAtMs = isActive
     ? nowMs
     : (Date.parse(live?.timestamp || run?.updatedAt || run?.createdAt || '') || startedAtMs);
@@ -389,6 +378,36 @@ function getRunTimingSnapshot(runId) {
   };
 }
 
+function formatEvaluationProgressLabel(progress) {
+  if (!progress || progress.active === false) return '';
+  const stageLabel = progress.stageLabel || humanizeConfigKey(progress.stage || 'evaluation');
+  const opponentLabel = progress.opponentLabel || (Number.isFinite(progress.opponentGeneration) ? `G${progress.opponentGeneration}` : '');
+  const completedGames = Number(progress.completedGames || 0);
+  const targetGames = Number(progress.targetGames || 0);
+  const parts = [
+    `eval ${stageLabel.toLowerCase()}`,
+    opponentLabel ? `vs ${opponentLabel}` : '',
+    targetGames > 0 ? `${formatNumber(completedGames)}/${formatNumber(targetGames)}` : '',
+    completedGames > 0 ? formatPercent(progress.winRate || 0) : '',
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+function formatSelfPlayProgressLabel(progress) {
+  if (!progress || progress.active === false) return '';
+  const workerLabel = Number.isFinite(progress.workerGeneration) ? `G${progress.workerGeneration}` : 'worker';
+  const opponentLabel = Number.isFinite(progress.opponentGeneration) ? `vs G${progress.opponentGeneration}` : '';
+  const completedGames = Number(progress.completedGames || 0);
+  const targetGames = Number(progress.targetGames || 0);
+  const parts = [
+    'self-play',
+    workerLabel,
+    opponentLabel,
+    targetGames > 0 ? `${formatNumber(completedGames)}/${formatNumber(targetGames)}` : '',
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
 function sortReplayGamesChronologically(games = []) {
   return [...(Array.isArray(games) ? games : [])].sort((left, right) => {
     const leftTime = Date.parse(left?.createdAt || '') || 0;
@@ -406,8 +425,8 @@ function parseNumberInput(element, fallback, asFloat = false) {
 
 function buildBuiltinSeedSourceOptions() {
   return [
-    { value: 'bootstrap', label: 'Bootstrap Model' },
-    { value: 'random', label: 'Random Init' },
+    { value: 'bootstrap', label: 'Bootstrap Shared-Encoder MLP (1.6M params)' },
+    { value: 'random', label: 'Random Shared-Encoder MLP (1.6M params)' },
   ];
 }
 
@@ -477,21 +496,6 @@ function applyFieldTooltips() {
     if (element) element.title = helpText;
     if (label) label.title = helpText;
   });
-}
-
-function syncEndConditionInputs() {
-  if (els.maxGenerationsInput) {
-    els.maxGenerationsInput.disabled = !els.stopOnMaxGenerationsInput?.checked;
-  }
-  if (els.maxSelfPlayGamesInput) {
-    els.maxSelfPlayGamesInput.disabled = !els.stopOnMaxSelfPlayGamesInput?.checked;
-  }
-  if (els.maxTrainingStepsInput) {
-    els.maxTrainingStepsInput.disabled = !els.stopOnMaxTrainingStepsInput?.checked;
-  }
-  if (els.maxFailedPromotionsInput) {
-    els.maxFailedPromotionsInput.disabled = !els.stopOnMaxFailedPromotionsInput?.checked;
-  }
 }
 
 function setStatus(message, tone = 'muted') {
@@ -817,40 +821,26 @@ function applyDefaults(defaults = {}) {
   if (!defaults || state.defaults) return;
   state.defaults = defaults;
   renderSeedSourceSelect(defaults.seedMode || 'bootstrap');
-  els.numSelfplayWorkersInput.value = String(defaults.numSelfplayWorkers || 6);
-  els.parallelGameWorkersInput.value = String(defaults.parallelGameWorkers || 1);
-  els.numMctsSimulationsInput.value = String(defaults.numMctsSimulationsPerMove || 128);
-  els.maxDepthInput.value = String(defaults.maxDepth || 32);
+  els.numSelfplayWorkersInput.value = String(defaults.numSelfplayWorkers || 32);
+  els.numMctsSimulationsInput.value = String(defaults.numMctsSimulationsPerMove || 512);
+  els.maxDepthInput.value = String(defaults.maxDepth || 64);
   els.hypothesisCountInput.value = String(defaults.hypothesisCount || 4);
-  els.riskBiasInput.value = String(defaults.riskBias ?? 0);
   els.explorationInput.value = String(defaults.exploration || 1.5);
-  els.replayBufferMaxPositionsInput.value = String(defaults.replayBufferMaxPositions || 10000);
-  els.batchSizeInput.value = String(defaults.batchSize || 64);
+  els.replayBufferMaxPositionsInput.value = String(defaults.replayBufferMaxPositions || 100000);
+  els.batchSizeInput.value = String(defaults.batchSize || 256);
   els.learningRateInput.value = String(defaults.learningRate || 0.0005);
-  els.trainingBackendSelect.value = defaults.trainingBackend || 'auto';
-  els.trainingDeviceSelect.value = defaults.trainingDevicePreference || 'auto';
   els.weightDecayInput.value = String(defaults.weightDecay || 0.0001);
   els.gradientClipNormInput.value = String(defaults.gradientClipNorm || 1);
-  els.trainingStepsPerCycleInput.value = String(defaults.trainingStepsPerCycle || 16);
-  els.parallelTrainingHeadWorkersInput.value = String(defaults.parallelTrainingHeadWorkers || 1);
-  els.checkpointIntervalInput.value = String(defaults.checkpointInterval || 100);
-  els.prePromotionTestGamesInput.value = String(defaults.prePromotionTestGames || defaults.evalGamesPerCheckpoint || 50);
-  els.prePromotionTestWinRateInput.value = String(defaults.prePromotionTestWinRate ?? defaults.promotionWinrateThreshold ?? 0.55);
+  els.trainingStepsPerCycleInput.value = String(defaults.trainingStepsPerCycle || 32);
+  els.parallelTrainingHeadWorkersInput.value = String(defaults.parallelTrainingHeadWorkers || 3);
+  els.checkpointIntervalInput.value = String(defaults.checkpointInterval || 200);
+  els.prePromotionTestGamesInput.value = String(defaults.prePromotionTestGames || defaults.evalGamesPerCheckpoint || 40);
+  els.prePromotionTestWinRateInput.value = String(defaults.prePromotionTestWinRate ?? defaults.promotionWinrateThreshold ?? 0.6);
   els.promotionTestGamesInput.value = String(defaults.promotionTestGames || defaults.evalGamesPerCheckpoint || 100);
   els.promotionTestWinRateInput.value = String(defaults.promotionTestWinRate ?? defaults.promotionWinrateThreshold ?? 0.55);
   els.promotionTestPriorGenerationsInput.value = String(defaults.promotionTestPriorGenerations || 3);
-  els.modelRefreshIntervalInput.value = String(defaults.modelRefreshIntervalForWorkers || 5);
-  els.generationComparisonStrideInput.value = String(defaults.generationComparisonStride || 5);
   els.olderGenerationSampleProbabilityInput.value = String(defaults.olderGenerationSampleProbability || 0.10);
-  els.stopOnMaxGenerationsInput.checked = defaults.stopOnMaxGenerations !== false;
-  els.maxGenerationsInput.value = String(defaults.maxGenerations || 200);
-  els.stopOnMaxSelfPlayGamesInput.checked = defaults.stopOnMaxSelfPlayGames !== false;
-  els.maxSelfPlayGamesInput.value = String(defaults.maxSelfPlayGames || 10000);
-  els.stopOnMaxTrainingStepsInput.checked = defaults.stopOnMaxTrainingSteps !== false;
-  els.maxTrainingStepsInput.value = String(defaults.maxTrainingSteps || 200000);
-  els.stopOnMaxFailedPromotionsInput.checked = defaults.stopOnMaxFailedPromotions !== false;
   els.maxFailedPromotionsInput.value = String(defaults.maxFailedPromotions || 50);
-  syncEndConditionInputs();
 }
 
 function renderWorkbenchSummary() {
@@ -912,51 +902,36 @@ function runStatusBadge(run) {
 
 function renderRunsTable() {
   const rows = sortRunsByRecent(state.runs).map((run) => {
-    const isActive = run.id === state.selectedRunId ? ' class="active"' : '';
-    const status = String(run.status || '').toLowerCase();
-    const actions = [];
-    if (['running', 'stopping'].includes(status)) {
-      actions.push({
-        action: 'cancel',
-        label: status === 'stopping' ? 'Stop Pending' : 'Stop Run',
-      });
-    }
-    if (status === 'stopped' && run.canContinue) {
-      actions.push({
-        action: 'continue',
-        label: 'Continue',
-      });
-    }
-    if (!['running', 'stopping'].includes(status)) {
-      actions.push({
-        action: 'delete',
-        label: 'Delete',
-      });
-    }
+    const isActive = run.id === state.selectedRunId ? ' active' : '';
     return `
-      <tr data-run-id="${escapeHtml(run.id)}"${isActive}>
-        <td><strong>${escapeHtml(run.label || run.id)}</strong></td>
-        <td>${runStatusBadge(run)}</td>
-        <td>G${Number(run.bestGeneration || 0)}</td>
-        <td>${formatNumber(Number(run.totalSelfPlayGames || 0) + Number(run.totalEvaluationGames || 0))}</td>
-        <td>${formatNumber(run.replayBuffer?.positions || 0)}</td>
-        <td>${escapeHtml(formatDate(run.updatedAt || run.createdAt))}</td>
-        <td>
-          <div class="table-actions">
-            ${actions.map((entry) => `
-              <button
-                type="button"
-                class="secondary table-action-btn"
-                data-run-action="${escapeHtml(entry.action)}"
-                data-run-id="${escapeHtml(run.id)}"
-              >${escapeHtml(entry.label)}</button>
-            `).join('')}
-          </div>
+      <tr class="run-title-row${isActive}" data-run-id="${escapeHtml(run.id)}">
+        <td class="run-title-cell" colspan="6">
+          ${escapeHtml(run.label || run.id)}
+        </td>
+      </tr>
+      <tr class="run-detail-row${isActive}" data-run-id="${escapeHtml(run.id)}">
+        <td class="run-detail-cell">
+          &nbsp;
+        </td>
+        <td class="run-detail-cell">
+          ${runStatusBadge(run)}
+        </td>
+        <td class="run-detail-cell">
+          <div class="run-detail-v">G${Number(run.bestGeneration || 0)}</div>
+        </td>
+        <td class="run-detail-cell">
+          <div class="run-detail-v">${formatNumber(Number(run.totalSelfPlayGames || 0) + Number(run.totalEvaluationGames || 0))}</div>
+        </td>
+        <td class="run-detail-cell">
+          <div class="run-detail-v">${formatNumber(run.replayBuffer?.positions || 0)}</div>
+        </td>
+        <td class="run-detail-cell">
+          <div class="run-detail-v">${escapeHtml(formatDate(run.updatedAt || run.createdAt))}</div>
         </td>
       </tr>
     `;
   }).join('');
-  els.runsTableBody.innerHTML = rows || '<tr><td colspan="7" class="subtle">No runs yet.</td></tr>';
+  els.runsTableBody.innerHTML = rows || '<tr><td colspan="6" class="subtle">No runs yet.</td></tr>';
 }
 
 function renderSelectedRun() {
@@ -970,6 +945,7 @@ function renderSelectedRun() {
     els.selectedRunConfigBody.innerHTML = '<tr><td colspan="2" class="subtle">No run selected.</td></tr>';
     els.stopRunBtn.textContent = 'Stop Run';
     els.stopRunBtn.disabled = true;
+    els.killRunBtn.disabled = true;
     els.continueRunBtn.disabled = true;
     els.deleteRunBtn.disabled = true;
     generationWinChart.clear();
@@ -978,6 +954,8 @@ function renderSelectedRun() {
   const live = state.liveRunsById.get(run.id) || null;
   const latestLoss = live?.latestLoss || run.latestLoss || null;
   const latestEval = live?.latestEvaluation || run.latestEvaluation || null;
+  const selfPlayProgress = live?.selfPlayProgress || null;
+  const evaluationProgress = live?.evaluationProgress || null;
   const status = String(run.status || '').toLowerCase();
   const primaryEval = latestEval?.prePromotionTest || latestEval?.againstBest || latestEval?.againstTarget || null;
   const primaryEvalGeneration = Number.isFinite(primaryEval?.generation)
@@ -990,11 +968,17 @@ function renderSelectedRun() {
   els.selectedRunLabel.textContent = run.label || run.id;
   els.selectedRunMeta.textContent = [
     `${run.status || 'unknown'} | best G${Number(live?.bestGeneration ?? run.bestGeneration ?? 0)} | worker G${Number(live?.workerGeneration ?? run.workerGeneration ?? 0)}`,
+    formatSelfPlayProgressLabel(selfPlayProgress),
+    formatEvaluationProgressLabel(evaluationProgress),
     run.stopReason ? `stop ${run.stopReason}` : '',
     `updated ${formatDate(live?.timestamp || run.updatedAt || run.createdAt)}`,
   ].filter(Boolean).join(' | ');
   els.stopRunBtn.textContent = status === 'stopping' ? 'Stop Pending' : 'Stop Run';
   els.stopRunBtn.disabled = !['running', 'stopping'].includes(status);
+  els.killRunBtn.disabled = !['running', 'stopping'].includes(status);
+  els.killRunBtn.title = ['running', 'stopping'].includes(status)
+    ? 'Force this run to stop immediately. The latest unsaved in-flight work may be discarded.'
+    : 'Only active runs can be killed.';
   const canContinue = status === 'stopped' && run.canContinue;
   els.continueRunBtn.disabled = !canContinue;
   els.continueRunBtn.title = canContinue
@@ -1038,7 +1022,7 @@ function renderSelectedRun() {
   });
   const configEntries = buildSelectedRunConfigEntries(run.config || {});
   els.selectedRunConfigMeta.textContent = configEntries.length
-    ? `Saved config snapshot for this run (${configEntries.length} parameter${configEntries.length === 1 ? '' : 's'}).`
+    ? `Saved config snapshot for this run (${configEntries.length} setting${configEntries.length === 1 ? '' : 's'} shown; auto-managed internals hidden).`
     : 'This run does not expose a saved config snapshot.';
   els.selectedRunConfigBody.innerHTML = configEntries.length
     ? configEntries.map((entry) => `
@@ -1223,8 +1207,17 @@ function renderTestSelectors() {
     if (meta.textContent) {
       copy.appendChild(meta);
     }
+    const renameButton = document.createElement('button');
+    renameButton.type = 'button';
+    renameButton.className = 'secondary';
+    renameButton.textContent = 'Rename';
+    renameButton.dataset.renameModel = 'true';
+    renameButton.dataset.runId = String(item?.runId || '');
+    renameButton.dataset.generation = String(item?.generation ?? '');
+    renameButton.dataset.currentLabel = String(item?.label || '');
     row.appendChild(checkbox);
     row.appendChild(copy);
+    row.appendChild(renameButton);
     els.testPromotedBotList.appendChild(row);
   });
 
@@ -1473,46 +1466,50 @@ async function refreshWorkbench({ silent = false, forceSelectedDetail = false } 
 
 function readRunConfigForm() {
   const seedSelection = parseSeedSourceSelection(els.seedModeSelect.value || 'bootstrap');
+  const defaults = state.defaults || {};
   return {
-    label: (els.runNameInput.value || '').trim() || null,
     seedMode: seedSelection.seedMode,
     seedRunId: seedSelection.seedRunId,
     seedGeneration: seedSelection.seedGeneration,
     seed: parseNumberInput(els.seedInput, Number.NaN),
-    numSelfplayWorkers: parseNumberInput(els.numSelfplayWorkersInput, 6),
-    parallelGameWorkers: parseNumberInput(els.parallelGameWorkersInput, 1),
-    numMctsSimulationsPerMove: parseNumberInput(els.numMctsSimulationsInput, 128),
-    maxDepth: parseNumberInput(els.maxDepthInput, 32),
+    numSelfplayWorkers: parseNumberInput(els.numSelfplayWorkersInput, defaults.numSelfplayWorkers || 32),
+    numMctsSimulationsPerMove: parseNumberInput(els.numMctsSimulationsInput, 512),
+    maxDepth: parseNumberInput(els.maxDepthInput, 64),
     hypothesisCount: parseNumberInput(els.hypothesisCountInput, 4),
-    riskBias: parseNumberInput(els.riskBiasInput, 0, true),
     exploration: parseNumberInput(els.explorationInput, 1.5, true),
-    replayBufferMaxPositions: parseNumberInput(els.replayBufferMaxPositionsInput, 10000),
-    batchSize: parseNumberInput(els.batchSizeInput, 64),
+    replayBufferMaxPositions: parseNumberInput(els.replayBufferMaxPositionsInput, defaults.replayBufferMaxPositions || 100000),
+    batchSize: parseNumberInput(els.batchSizeInput, defaults.batchSize || 256),
     learningRate: parseNumberInput(els.learningRateInput, 0.0005, true),
-    trainingBackend: els.trainingBackendSelect.value || 'auto',
-    trainingDevicePreference: els.trainingDeviceSelect.value || 'auto',
     weightDecay: parseNumberInput(els.weightDecayInput, 0.0001, true),
     gradientClipNorm: parseNumberInput(els.gradientClipNormInput, 1, true),
-    trainingStepsPerCycle: parseNumberInput(els.trainingStepsPerCycleInput, 16),
-    parallelTrainingHeadWorkers: parseNumberInput(els.parallelTrainingHeadWorkersInput, 1),
-    checkpointInterval: parseNumberInput(els.checkpointIntervalInput, 100),
-    prePromotionTestGames: parseNumberInput(els.prePromotionTestGamesInput, 50),
-    prePromotionTestWinRate: parseNumberInput(els.prePromotionTestWinRateInput, 0.55, true),
+    trainingStepsPerCycle: parseNumberInput(els.trainingStepsPerCycleInput, defaults.trainingStepsPerCycle || 32),
+    parallelTrainingHeadWorkers: parseNumberInput(els.parallelTrainingHeadWorkersInput, 3),
+    checkpointInterval: parseNumberInput(els.checkpointIntervalInput, defaults.checkpointInterval || 200),
+    prePromotionTestGames: parseNumberInput(els.prePromotionTestGamesInput, 40),
+    prePromotionTestWinRate: parseNumberInput(els.prePromotionTestWinRateInput, 0.6, true),
     promotionTestGames: parseNumberInput(els.promotionTestGamesInput, 100),
     promotionTestWinRate: parseNumberInput(els.promotionTestWinRateInput, 0.55, true),
     promotionTestPriorGenerations: parseNumberInput(els.promotionTestPriorGenerationsInput, 3),
-    modelRefreshIntervalForWorkers: parseNumberInput(els.modelRefreshIntervalInput, 5),
-    generationComparisonStride: parseNumberInput(els.generationComparisonStrideInput, 5),
     olderGenerationSampleProbability: parseNumberInput(els.olderGenerationSampleProbabilityInput, 0.10, true),
-    stopOnMaxGenerations: Boolean(els.stopOnMaxGenerationsInput.checked),
-    maxGenerations: parseNumberInput(els.maxGenerationsInput, 200),
-    stopOnMaxSelfPlayGames: Boolean(els.stopOnMaxSelfPlayGamesInput.checked),
-    maxSelfPlayGames: parseNumberInput(els.maxSelfPlayGamesInput, 10000),
-    stopOnMaxTrainingSteps: Boolean(els.stopOnMaxTrainingStepsInput.checked),
-    maxTrainingSteps: parseNumberInput(els.maxTrainingStepsInput, 200000),
-    stopOnMaxFailedPromotions: Boolean(els.stopOnMaxFailedPromotionsInput.checked),
     maxFailedPromotions: parseNumberInput(els.maxFailedPromotionsInput, 50),
   };
+}
+
+async function renamePromotedModel(runId, generation, currentLabel = '') {
+  if (!runId || !Number.isFinite(Number(generation))) return;
+  const nextLabel = window.prompt('Rename promoted model', currentLabel || '');
+  if (nextLabel === null) return;
+  const trimmed = nextLabel.trim();
+  if (!trimmed) {
+    setStatus('Model name cannot be empty.', 'warn');
+    return;
+  }
+  await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(generation)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ label: trimmed }),
+  });
+  await refreshWorkbench({ silent: true, forceSelectedDetail: true });
+  setStatus(`Renamed promoted model to ${trimmed}.`, 'ok');
 }
 
 async function startRun() {
@@ -1581,6 +1578,26 @@ async function stopRunById(runId) {
 async function continueSelectedRun() {
   if (!state.selectedRunId) return;
   return continueRunById(state.selectedRunId);
+}
+
+async function killSelectedRun() {
+  if (!state.selectedRunId) return;
+  return killRunById(state.selectedRunId);
+}
+
+async function killRunById(runId) {
+  if (!runId) return;
+  const run = getRunData(runId);
+  const label = run?.label || runId;
+  const shouldKill = window.confirm(`Kill run "${label}" immediately? The latest unsaved in-flight work may be discarded.`);
+  if (!shouldKill) {
+    return;
+  }
+  await apiFetch(`/api/v1/ml/runs/${encodeURIComponent(runId)}/kill`, {
+    method: 'POST',
+  });
+  setStatus(`Run killed: ${label}.`, 'ok');
+  await refreshWorkbench({ silent: true, forceSelectedDetail: true });
 }
 
 async function continueRunById(runId) {
@@ -1690,11 +1707,59 @@ async function loadLiveStatus() {
 }
 
 function connectAdminSocket() {
-  if (typeof io !== 'function') return;
-  const socket = io(`${window.location.origin.replace(/\/$/, '')}/admin`, { withCredentials: true });
+  if (typeof io !== 'function' || state.adminSocketDisabled) return;
+  if (state.adminSocket) return state.adminSocket;
+  const socket = io(`${window.location.origin.replace(/\/$/, '')}/admin`, {
+    withCredentials: true,
+    timeout: 5000,
+    reconnection: true,
+    reconnectionAttempts: 2,
+    reconnectionDelay: 1500,
+    reconnectionDelayMax: 5000,
+  });
+  state.adminSocket = socket;
+
+  const disableSocket = () => {
+    state.adminSocketDisabled = true;
+    if (state.adminSocket) {
+      state.adminSocket.removeAllListeners();
+      state.adminSocket.close();
+      state.adminSocket = null;
+    }
+  };
+
+  socket.on('connect', () => {
+    setStatus('Live updates connected.', 'ok');
+  });
+
+  socket.on('connect_error', (err) => {
+    const statusCode = Number(
+      err?.description?.status
+      || err?.context?.status
+      || err?.data?.status
+      || 0
+    );
+    const message = String(err?.message || '').toLowerCase();
+    const shouldDisable = statusCode === 400
+      || statusCode === 401
+      || statusCode === 403
+      || /xhr poll error|unauthorized|forbidden|invalid namespace/.test(message);
+    if (!shouldDisable) {
+      return;
+    }
+    disableSocket();
+  });
+
+  socket.on('disconnect', (reason) => {
+    if (reason === 'io server disconnect') {
+      disableSocket();
+    }
+  });
+
   socket.on('ml:runProgress', (payload) => {
     applyLiveRunPayload(payload);
     const phase = String(payload?.phase || '').toLowerCase();
+    const isPartialEvaluationUpdate = phase === 'evaluation' && payload?.evaluationProgress?.active;
     if (phase === 'error') {
       logMlAdminError('Run progress reported an error', null, {
         runId: payload?.runId || null,
@@ -1710,6 +1775,9 @@ function connectAdminSocket() {
       if (state.replayRunId === payload.runId) {
         scheduleReplayGamesRefresh(payload.runId, phase === 'evaluation' ? 450 : 900);
       }
+      if (isPartialEvaluationUpdate) {
+        return;
+      }
       ensureRunDetail(payload.runId, { force: true })
         .then(() => {
           renderSelectedRun();
@@ -1720,6 +1788,7 @@ function connectAdminSocket() {
         .catch(() => {});
     }
   });
+  return socket;
 }
 
 function startPolling() {
@@ -1780,6 +1849,7 @@ function bindEvents() {
   els.refreshWorkbenchBtn?.addEventListener('click', () => refreshWorkbench().catch((err) => setStatus(err.message, 'error')));
   els.startRunBtn?.addEventListener('click', () => startRun().catch((err) => setStatus(err.message, 'error')));
   els.stopRunBtn?.addEventListener('click', () => stopSelectedRun().catch((err) => setStatus(err.message, 'error')));
+  els.killRunBtn?.addEventListener('click', () => killSelectedRun().catch((err) => setStatus(err.message, 'error')));
   els.continueRunBtn?.addEventListener('click', () => continueSelectedRun().catch((err) => setStatus(err.message, 'error')));
   els.deleteRunBtn?.addEventListener('click', () => deleteSelectedRun().catch((err) => setStatus(err.message, 'error')));
 
@@ -1818,17 +1888,18 @@ function bindEvents() {
   els.testPromotedBotList?.addEventListener('change', () => {
     renderTestSelectionMeta();
   });
+  els.testPromotedBotList?.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-rename-model]');
+    if (!button) return;
+    event.preventDefault();
+    renamePromotedModel(
+      button.dataset.runId || '',
+      Number.parseInt(button.dataset.generation || '', 10),
+      button.dataset.currentLabel || '',
+    ).catch((err) => setStatus(err.message, 'error'));
+  });
   els.savePromotedBotsBtn?.addEventListener('click', () => {
     savePromotedBots().catch((err) => setStatus(err.message, 'error'));
-  });
-
-  [
-    els.stopOnMaxGenerationsInput,
-    els.stopOnMaxSelfPlayGamesInput,
-    els.stopOnMaxTrainingStepsInput,
-    els.stopOnMaxFailedPromotionsInput,
-  ].forEach((input) => {
-    input?.addEventListener('change', () => syncEndConditionInputs());
   });
 
   els.replayGameList?.addEventListener('click', (event) => {
@@ -1873,7 +1944,6 @@ async function boot() {
   applyFieldTooltips();
   await refreshWorkbench({ silent: false, forceSelectedDetail: false });
   setActiveWorkflowTab(state.activeWorkflowTab);
-  syncEndConditionInputs();
   startPolling();
 }
 

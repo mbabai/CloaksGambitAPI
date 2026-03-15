@@ -14,6 +14,8 @@ After this change, Cloak's Gambit training can run through a Python Torch backen
 - [x] (2026-03-12 13:34 -07:00) Fixed the remaining runtime cleanup issues, aligned the workbench defaults with `trainingBackend: auto`, and added focused route/runtime coverage for backend-device forwarding and Node CPU inference compatibility.
 - [x] (2026-03-12 13:42 -07:00) Upgraded `ml_backend\\venv` from `torch 2.8.0+cpu` to `torch 2.8.0+cu128` and verified CUDA availability through both Python and the Node bridge handshake.
 - [x] (2026-03-12 13:50 -07:00) Ran a focused runtime-level proof that trained a small batch with `trainingBackend: 'python'`, `trainingDevicePreference: 'cuda'`, then executed Node-side MCTS inference on the returned model bundle.
+- [x] (2026-03-14 20:18 -07:00) Followed up after the shared-encoder migration by making `trainingBackend: auto` prefer the Python bridge whenever it is available, not just when CUDA is available.
+- [x] (2026-03-14 20:36 -07:00) Added Python-bridge request timeouts/restarts, removed the four-thread Torch CPU cap, and surfaced hardware details like `cudaTotalMemoryMb`, `cpuCount`, and Torch thread counts back to Node.
 
 ## Surprises & Discoveries
 
@@ -29,6 +31,9 @@ After this change, Cloak's Gambit training can run through a Python Torch backen
 - Observation: a full `trainSnapshot()` test through CPU-only PyTorch was too slow for a focused Jest slice, but the lower-level bridge path was fast enough for a reliable compatibility test.
   Evidence: the original explicit Python-path test timed out at 120 seconds, while a reduced `trainModelBundleBatch()` compatibility test completed in about 11 seconds and still proved Node CPU inference on a Python-trained bundle.
 
+- Observation: once the shared family became the default, `auto` falling back to Node on CPU-only bridge installs was leaving a real throughput gap.
+  Evidence: the shared-family Node trainer is single-process JavaScript, while the Python path can use Torch CPU threading; on review, `resolveEffectiveTrainingBackend()` only chose Python from `auto` when `cudaAvailable` was true.
+
 ## Decision Log
 
 - Decision: keep training and inference split across runtimes.
@@ -40,14 +45,18 @@ After this change, Cloak's Gambit training can run through a Python Torch backen
   Date/Author: 2026-03-12 / Codex
 
 - Decision: default continuous runs to `trainingBackend: auto`.
-  Rationale: when CUDA is available, the runtime should prefer GPU-capable training automatically, but `auto` can still fall back to the Node CPU trainer when Python/CUDA is unavailable.
+  Rationale: the runtime should prefer the Python trainer whenever it is available, using CUDA when possible and Python CPU otherwise, while still falling back to Node when the bridge itself is unavailable.
   Date/Author: 2026-03-12 / Codex
+
+- Decision: add explicit bridge request timeouts and restart the child on timeout.
+  Rationale: a dead child process should fail into the existing error path rather than leaving a continuous run or training job blocked forever.
+  Date/Author: 2026-03-14 / Codex
 
 ## Outcomes & Retrospective
 
-The runtime now supports GPU-capable training through a persistent Python Torch bridge while preserving the existing Node CPU inference path for self-play, simulations, and deployment. Continuous runs default to `trainingBackend: auto`, so they will prefer the Python Torch backend when CUDA is available and fall back to the Node trainer otherwise. The ML workbench, training routes, and runtime summaries all expose backend/device selection explicitly.
+The runtime now supports GPU-capable training through a persistent Python Torch bridge while preserving the existing Node CPU inference path for self-play, simulations, and deployment. Continuous runs default to `trainingBackend: auto`, and the follow-up shared-family pass now makes `auto` prefer the Python Torch backend whenever the bridge is available, using CUDA when possible and Python CPU otherwise. The ML workbench, training routes, and runtime summaries all expose backend/device selection explicitly.
 
-On this machine, `ml_backend\\venv` now reports `torch 2.8.0+cu128` with `cudaAvailable: true` and device name `NVIDIA GeForce RTX 2080`. A focused end-to-end runtime probe successfully trained a small batch on `device: 'cuda'` and immediately ran Node-side MCTS inference on the returned checkpoint, confirming that the JSON weight format remains CPU-inference compatible.
+On this machine, `ml_backend\\venv` now reports `torch 2.8.0+cu128` with `cudaAvailable: true` and device name `NVIDIA GeForce RTX 2080`. The bridge handshake now also reports `cudaTotalMemoryMb: 8191`, `cpuCount: 16`, `torchNumThreads: 16`, and `torchNumInteropThreads: 4`, and a focused end-to-end runtime probe still trained a small batch on `device: 'cuda'` and immediately ran Node-side MCTS inference on the returned checkpoint, confirming that the JSON weight format remains CPU-inference compatible.
 
 ## Context and Orientation
 
@@ -106,10 +115,12 @@ Validation evidence captured on 2026-03-12:
 
 ## Idempotence and Recovery
 
-The bridge is additive. If the Python environment is missing or still CPU-only, `trainingBackend: auto` can fall back to the Node trainer and `trainingBackend: python` can still run on CPU. If the CUDA install fails, keep the bridge code and tests intact and report the environment blocker rather than reverting the migration.
+The bridge is additive. If the Python environment is missing, `trainingBackend: auto` can still fall back to the Node trainer; if Python is present but CUDA is not, `trainingBackend: auto` and `trainingBackend: python` will use Python CPU training. If the CUDA install fails, keep the bridge code and tests intact and report the environment blocker rather than reverting the migration.
 
 ## Interfaces and Dependencies
 
 `src/services/ml/runtime.js` must continue exposing the existing `MlRuntime` interface and its run/training methods. The Python bridge must continue accepting and returning plain JSON so it can be driven from the Node process without changing checkpoint storage. The saved model bundle format must remain compatible with the existing Node inference code.
 
 Revision note (2026-03-12 / Codex): completed the GPU-training migration by repairing the runtime parse break, aligning the workbench defaults with `auto`, adding focused Jest coverage for route forwarding and Python-trained CPU inference, upgrading the local venv to `torch 2.8.0+cu128`, and validating both the bridge handshake and a small CUDA training plus Node inference probe.
+
+Revision note (2026-03-14 / Codex): updated after the shared-encoder follow-up to record the new `auto` backend preference for Python CPU/CUDA, the bridge timeout/restart behavior, and the expanded hardware details surfaced by the handshake.

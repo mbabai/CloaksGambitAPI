@@ -37,6 +37,7 @@ import {
 import { renderActiveMatchesList, createActiveMatchesStore, fetchActiveMatchesList } from '/js/modules/spectate/activeMatches.js';
 import { createSpectateController } from '/js/modules/spectate/controller.js';
 import { getLatestMoveContext } from '/js/shared/latestMoveContext.js';
+import { getResponseWindowState } from '/js/shared/responseWindow.js';
 import { logBootConstantsOnce, logGameSnapshot } from '/js/shared/debugLog.js';
 
 preloadAssets();
@@ -4800,26 +4801,19 @@ logBootConstantsOnce();
         actions: actionHistory,
         moves: moveHistory,
       });
-      const responseActor = typeof responseContext?.action?.player === 'number'
-        ? responseContext.action.player
-        : (typeof responseContext?.actor === 'number' ? responseContext.actor : lastMove?.player);
-      const pendingResponse = Boolean(
-        (lastMove && lastMove.state === MOVE_STATES.PENDING)
-        || responseContext?.isPending
-      );
-      const responseWindowOpen = (
-        isMyTurn
-        && currentOnDeckingPlayer !== myColor
-        && pendingResponse
-        && responseActor !== myColor
-      );
-      const responseAction = (
-        responseContext?.action && (responseContext.action.type === ACTIONS.MOVE || responseContext.action.type === ACTIONS.BOMB)
-          ? responseContext.action
-          : (lastAction && (lastAction.type === ACTIONS.MOVE || lastAction.type === ACTIONS.BOMB)
-          ? lastAction
-          : lastMoveAction)
-      );
+      const {
+        responseAction,
+        responseWindowOpen,
+      } = getResponseWindowState({
+        isMyTurn,
+        isInSetup,
+        currentOnDeckingPlayer,
+        myColor,
+        lastMove,
+        lastAction,
+        lastMoveAction,
+        latestMoveContext: responseContext,
+      });
       if (responseWindowOpen) {
         canChallenge = true;
         if (responseAction?.type === ACTIONS.BOMB) {

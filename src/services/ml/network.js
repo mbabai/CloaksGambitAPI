@@ -105,7 +105,168 @@ function prepareInputVector(vector, inputSize) {
   return result;
 }
 
+function setHiddenValue(target, key, value) {
+  if (!target || typeof target !== 'object') return;
+  if (Object.prototype.hasOwnProperty.call(target, key)) {
+    target[key] = value;
+    return;
+  }
+  Object.defineProperty(target, key, {
+    value,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+}
+
+function buildCompiledLayer(layer) {
+  const inputSize = Math.max(1, Math.floor(layer?.inputSize || 1));
+  const outputSize = Math.max(1, Math.floor(layer?.outputSize || 1));
+  const weights = new Float64Array(inputSize * outputSize);
+  const biases = new Float64Array(outputSize);
+  for (let out = 0; out < outputSize; out += 1) {
+    biases[out] = clampFinite(layer?.biases?.[out], 0);
+    const row = layer?.weights?.[out] || [];
+    const rowOffset = out * inputSize;
+    for (let inIdx = 0; inIdx < inputSize; inIdx += 1) {
+      weights[rowOffset + inIdx] = clampFinite(row[inIdx], 0);
+    }
+  }
+  return {
+    inputSize,
+    outputSize,
+    weights,
+    biases,
+  };
+}
+
+function getCompiledNetwork(network) {
+  if (!network || !Array.isArray(network.layers) || !network.layers.length) {
+    return null;
+  }
+  const version = Number(network.__compiledVersion || 0);
+  if (network.__compiledCache && network.__compiledCache.version === version) {
+    return network.__compiledCache.compiled;
+  }
+  const compiled = {
+    inputSize: Math.max(1, Math.floor(network.inputSize || 1)),
+    layers: network.layers.map((layer) => buildCompiledLayer(layer)),
+  };
+  setHiddenValue(network, '__compiledCache', { version, compiled });
+  return compiled;
+}
+
+function invalidateCompiledNetwork(network) {
+  if (!network || typeof network !== 'object') return;
+  setHiddenValue(network, '__compiledVersion', Number(network.__compiledVersion || 0) + 1);
+  setHiddenValue(network, '__compiledCache', null);
+}
+
+function readVectorValue(vector, index) {
+  if (!vector || typeof vector.length !== 'number') return 0;
+  return clampFinite(vector[index], 0);
+}
+
+function forwardCompiledNetwork(compiledNetwork, input) {
+  let current = input && typeof input.length === 'number' ? input : [];
+  const layers = Array.isArray(compiledNetwork?.layers) ? compiledNetwork.layers : [];
+
+  for (let layerIdx = 0; layerIdx < layers.length; layerIdx += 1) {
+    const layer = layers[layerIdx];
+    const isOutputLayer = layerIdx === layers.length - 1;
+    const next = new Array(layer.outputSize);
+    for (let out = 0; out < layer.outputSize; out += 1) {
+      let total = layer.biases[out];
+      const rowOffset = out * layer.inputSize;
+      for (let inIdx = 0; inIdx < layer.inputSize; inIdx += 1) {
+        total += layer.weights[rowOffset + inIdx] * readVectorValue(current, inIdx);
+      }
+      next[out] = isOutputLayer ? total : relu(total);
+    }
+    current = next;
+  }
+
+  return Array.isArray(current) ? current : Array.from(current || []);
+}
+
+function forwardCompiledNetworkBatch(compiledNetwork, inputs = []) {
+  const inputBatch = Array.isArray(inputs) ? inputs : [];
+  if (!inputBatch.length) return [];
+  let currentBatch = inputBatch;
+  const layers = Array.isArray(compiledNetwork?.layers) ? compiledNetwork.layers : [];
+
+  for (let layerIdx = 0; layerIdx < layers.length; layerIdx += 1) {
+    const layer = layers[layerIdx];
+    const isOutputLayer = layerIdx === layers.length - 1;
+    const nextBatch = new Array(currentBatch.length);
+    for (let batchIdx = 0; batchIdx < currentBatch.length; batchIdx += 1) {
+      const current = currentBatch[batchIdx];
+      const next = new Array(layer.outputSize);
+      for (let out = 0; out < layer.outputSize; out += 1) {
+        let total = layer.biases[out];
+        const rowOffset = out * layer.inputSize;
+        for (let inIdx = 0; inIdx < layer.inputSize; inIdx += 1) {
+          total += layer.weights[rowOffset + inIdx] * readVectorValue(current, inIdx);
+        }
+        next[out] = isOutputLayer ? total : relu(total);
+      }
+      nextBatch[batchIdx] = next;
+    }
+    currentBatch = nextBatch;
+  }
+
+  return currentBatch;
+}
+
+function forwardCompiledNetworkScalarBatch(compiledNetwork, inputs = []) {
+  const inputBatch = Array.isArray(inputs) ? inputs : [];
+  if (!inputBatch.length) return [];
+  const layers = Array.isArray(compiledNetwork?.layers) ? compiledNetwork.layers : [];
+  if (!layers.length) return inputBatch.map(() => 0);
+  const outputLayer = layers[layers.length - 1];
+  if (outputLayer.outputSize !== 1) {
+    return forwardCompiledNetworkBatch(compiledNetwork, inputBatch).map((output) => clampFinite(output?.[0], 0));
+  }
+
+  let currentBatch = inputBatch;
+  for (let layerIdx = 0; layerIdx < layers.length - 1; layerIdx += 1) {
+    const layer = layers[layerIdx];
+    const nextBatch = new Array(currentBatch.length);
+    for (let batchIdx = 0; batchIdx < currentBatch.length; batchIdx += 1) {
+      const current = currentBatch[batchIdx];
+      const next = new Array(layer.outputSize);
+      for (let out = 0; out < layer.outputSize; out += 1) {
+        let total = layer.biases[out];
+        const rowOffset = out * layer.inputSize;
+        for (let inIdx = 0; inIdx < layer.inputSize; inIdx += 1) {
+          total += layer.weights[rowOffset + inIdx] * readVectorValue(current, inIdx);
+        }
+        next[out] = relu(total);
+      }
+      nextBatch[batchIdx] = next;
+    }
+    currentBatch = nextBatch;
+  }
+
+  const outputs = new Array(currentBatch.length);
+  for (let batchIdx = 0; batchIdx < currentBatch.length; batchIdx += 1) {
+    const current = currentBatch[batchIdx];
+    let total = outputLayer.biases[0];
+    for (let inIdx = 0; inIdx < outputLayer.inputSize; inIdx += 1) {
+      total += outputLayer.weights[inIdx] * readVectorValue(current, inIdx);
+    }
+    outputs[batchIdx] = total;
+  }
+  return outputs;
+}
+
 function forwardNetwork(network, input, options = {}) {
+  if (!options.keepCache) {
+    const compiled = getCompiledNetwork(network);
+    if (compiled) {
+      return forwardCompiledNetwork(compiled, input);
+    }
+  }
   const preparedInput = prepareInputVector(input, network?.inputSize);
   const activations = [preparedInput];
   const preActivations = [];
@@ -140,6 +301,87 @@ function forwardNetwork(network, input, options = {}) {
       preActivations,
     },
   };
+}
+
+function forwardNetworkBatch(network, inputs = []) {
+  const compiled = getCompiledNetwork(network);
+  if (compiled) {
+    return forwardCompiledNetworkBatch(compiled, inputs);
+  }
+  const preparedBatch = (Array.isArray(inputs) ? inputs : [])
+    .map((input) => prepareInputVector(input, network?.inputSize));
+  if (!preparedBatch.length) return [];
+
+  let currentBatch = preparedBatch;
+  const layers = Array.isArray(network?.layers) ? network.layers : [];
+
+  for (let layerIdx = 0; layerIdx < layers.length; layerIdx += 1) {
+    const layer = layers[layerIdx];
+    const isOutputLayer = layerIdx === layers.length - 1;
+    const nextBatch = new Array(currentBatch.length);
+    for (let batchIdx = 0; batchIdx < currentBatch.length; batchIdx += 1) {
+      const current = currentBatch[batchIdx];
+      const sums = createVector(layer.outputSize, 0);
+      for (let out = 0; out < layer.outputSize; out += 1) {
+        let total = clampFinite(layer.biases?.[out], 0);
+        for (let inIdx = 0; inIdx < layer.inputSize; inIdx += 1) {
+          total += clampFinite(layer.weights?.[out]?.[inIdx], 0) * clampFinite(current[inIdx], 0);
+        }
+        sums[out] = total;
+      }
+      nextBatch[batchIdx] = isOutputLayer ? sums : sums.map(relu);
+    }
+    currentBatch = nextBatch;
+  }
+
+  return currentBatch;
+}
+
+function forwardNetworkScalarBatch(network, inputs = []) {
+  const compiled = getCompiledNetwork(network);
+  if (compiled) {
+    return forwardCompiledNetworkScalarBatch(compiled, inputs);
+  }
+  const preparedBatch = (Array.isArray(inputs) ? inputs : [])
+    .map((input) => prepareInputVector(input, network?.inputSize));
+  if (!preparedBatch.length) return [];
+
+  const layers = Array.isArray(network?.layers) ? network.layers : [];
+  if (!layers.length) return preparedBatch.map(() => 0);
+  const outputLayer = layers[layers.length - 1];
+  if (outputLayer.outputSize !== 1) {
+    return forwardNetworkBatch(network, preparedBatch).map((output) => clampFinite(output?.[0], 0));
+  }
+
+  let currentBatch = preparedBatch;
+  for (let layerIdx = 0; layerIdx < layers.length - 1; layerIdx += 1) {
+    const layer = layers[layerIdx];
+    const nextBatch = new Array(currentBatch.length);
+    for (let batchIdx = 0; batchIdx < currentBatch.length; batchIdx += 1) {
+      const current = currentBatch[batchIdx];
+      const next = createVector(layer.outputSize, 0);
+      for (let out = 0; out < layer.outputSize; out += 1) {
+        let total = clampFinite(layer.biases?.[out], 0);
+        for (let inIdx = 0; inIdx < layer.inputSize; inIdx += 1) {
+          total += clampFinite(layer.weights?.[out]?.[inIdx], 0) * clampFinite(current[inIdx], 0);
+        }
+        next[out] = relu(total);
+      }
+      nextBatch[batchIdx] = next;
+    }
+    currentBatch = nextBatch;
+  }
+
+  const outputs = new Array(currentBatch.length);
+  for (let batchIdx = 0; batchIdx < currentBatch.length; batchIdx += 1) {
+    const current = currentBatch[batchIdx];
+    let total = clampFinite(outputLayer.biases?.[0], 0);
+    for (let inIdx = 0; inIdx < outputLayer.inputSize; inIdx += 1) {
+      total += clampFinite(outputLayer.weights?.[0]?.[inIdx], 0) * clampFinite(current[inIdx], 0);
+    }
+    outputs[batchIdx] = total;
+  }
+  return outputs;
 }
 
 function createGradientBundle(network) {
@@ -218,9 +460,9 @@ function clipGradientBundle(gradients, maxNorm = 0) {
 }
 
 function backpropagateInto(network, cache, outputGradient, gradients) {
-  if (!network || !cache || !gradients) return;
+  if (!network || !cache || !gradients) return [];
   const layers = Array.isArray(network.layers) ? network.layers : [];
-  if (!layers.length) return;
+  if (!layers.length) return [];
 
   let downstream = cloneVector(outputGradient);
   for (let layerIdx = layers.length - 1; layerIdx >= 0; layerIdx -= 1) {
@@ -249,6 +491,8 @@ function backpropagateInto(network, cache, outputGradient, gradients) {
 
     downstream = previous;
   }
+
+  return downstream;
 }
 
 function createAdamState(network) {
@@ -302,6 +546,7 @@ function applyAdamUpdate(network, gradients, optimizerState, options = {}) {
     }
   });
 
+  invalidateCompiledNetwork(network);
   return state;
 }
 
@@ -316,6 +561,8 @@ module.exports = {
   createGradientBundle,
   createMlp,
   forwardNetwork,
+  forwardNetworkBatch,
+  forwardNetworkScalarBatch,
   prepareInputVector,
   scaleGradientBundle,
   zeroGradientBundle,

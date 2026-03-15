@@ -8,7 +8,9 @@ const mockRuntime = {
   listRuns: jest.fn(),
   getRun: jest.fn(),
   startRun: jest.fn(),
+  renameRunGeneration: jest.fn(),
   stopRun: jest.fn(),
+  killRun: jest.fn(),
   continueRun: jest.fn(),
   deleteRun: jest.fn(),
   listRunGames: jest.fn(),
@@ -52,9 +54,9 @@ describe('ml routes', () => {
         },
       },
       defaults: {
-        numSelfplayWorkers: 4,
-        parallelGameWorkers: 2,
-        batchSize: 32,
+        numSelfplayWorkers: 32,
+        parallelGameWorkers: 16,
+        batchSize: 256,
         parallelTrainingHeadWorkers: 3,
         trainingBackend: 'auto',
         trainingDevicePreference: 'auto',
@@ -116,6 +118,17 @@ describe('ml routes', () => {
     mockRuntime.stopRun.mockResolvedValue({
       stopped: true,
       run: { id: 'run-1', label: 'Run 1', status: 'stopping' },
+    });
+    mockRuntime.killRun.mockResolvedValue({
+      killed: true,
+      run: { id: 'run-1', label: 'Run 1', status: 'stopped', stopReason: 'manual_kill' },
+    });
+    mockRuntime.renameRunGeneration.mockResolvedValue({
+      id: 'run-1:g1',
+      runId: 'run-1',
+      generation: 1,
+      label: 'Aggro Seed',
+      updatedAt: '2026-03-13T06:05:00.000Z',
     });
     mockRuntime.continueRun.mockResolvedValue({
       continued: true,
@@ -185,9 +198,9 @@ describe('ml routes', () => {
         },
       },
       defaults: {
-        numSelfplayWorkers: 4,
-        parallelGameWorkers: 2,
-        batchSize: 32,
+        numSelfplayWorkers: 32,
+        parallelGameWorkers: 16,
+        batchSize: 256,
         parallelTrainingHeadWorkers: 3,
         trainingBackend: 'auto',
         trainingDevicePreference: 'auto',
@@ -267,6 +280,24 @@ describe('ml routes', () => {
     });
   });
 
+  test('PATCH /runs/:runId/generations/:generation renames a promoted generation', async () => {
+    const response = await request(createApp())
+      .patch('/api/v1/ml/runs/run-1/generations/1')
+      .send({ label: 'Aggro Seed' });
+
+    expect(response.status).toBe(200);
+    expect(mockRuntime.renameRunGeneration).toHaveBeenCalledWith('run-1', 1, 'Aggro Seed');
+    expect(response.body).toEqual({
+      generation: {
+        id: 'run-1:g1',
+        runId: 'run-1',
+        generation: 1,
+        label: 'Aggro Seed',
+        updatedAt: '2026-03-13T06:05:00.000Z',
+      },
+    });
+  });
+
   test('GET /runs/:runId and replay endpoints return run-specific data', async () => {
     const detail = await request(createApp()).get('/api/v1/ml/runs/run-1');
     expect(detail.status).toBe(200);
@@ -325,6 +356,17 @@ describe('ml routes', () => {
     });
   });
 
+  test('POST /runs/:runId/kill force-stops a run immediately', async () => {
+    const response = await request(createApp()).post('/api/v1/ml/runs/run-1/kill');
+
+    expect(response.status).toBe(200);
+    expect(mockRuntime.killRun).toHaveBeenCalledWith('run-1');
+    expect(response.body).toEqual({
+      killed: true,
+      run: { id: 'run-1', label: 'Run 1', status: 'stopped', stopReason: 'manual_kill' },
+    });
+  });
+
   test('DELETE /runs/:runId removes terminal runs and blocks active ones', async () => {
     const deletedResponse = await request(createApp()).delete('/api/v1/ml/runs/run-1');
     expect(deletedResponse.status).toBe(200);
@@ -354,10 +396,10 @@ describe('ml routes', () => {
         snapshotId: 'snapshot-1',
         simulationIds: ['sim-1', '', null, 'sim-2'],
         epochs: 2,
+        batchSize: 96,
         learningRate: 0.005,
         trainingBackend: 'python',
         trainingDevicePreference: 'cpu',
-        label: 'CPU Torch fine-tune',
       });
 
     expect(runResponse.status).toBe(200);
@@ -365,10 +407,10 @@ describe('ml routes', () => {
       snapshotId: 'snapshot-1',
       simulationIds: ['sim-1', 'sim-2'],
       epochs: 2,
+      batchSize: 96,
       learningRate: 0.005,
       trainingBackend: 'python',
       trainingDevicePreference: 'cpu',
-      label: 'CPU Torch fine-tune',
       notes: '',
     });
 
@@ -378,10 +420,10 @@ describe('ml routes', () => {
         snapshotId: 'snapshot-1',
         simulationIds: ['sim-3'],
         epochs: 3,
+        batchSize: 192,
         learningRate: 0.002,
         trainingBackend: 'python',
         trainingDevicePreference: 'cuda',
-        label: 'GPU Torch run',
       });
 
     expect(startResponse.status).toBe(200);
@@ -389,10 +431,10 @@ describe('ml routes', () => {
       snapshotId: 'snapshot-1',
       simulationIds: ['sim-3'],
       epochs: 3,
+      batchSize: 192,
       learningRate: 0.002,
       trainingBackend: 'python',
       trainingDevicePreference: 'cuda',
-      label: 'GPU Torch run',
       notes: '',
     });
     expect(startResponse.body.live.trainingBackend).toBe('python');

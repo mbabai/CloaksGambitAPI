@@ -9,6 +9,13 @@ const {
 
 const DEFAULT_BRIDGE_SCRIPT = path.join(process.cwd(), 'ml_backend', 'torch_training_bridge.py');
 const DEFAULT_VENV_PYTHON = path.join(process.cwd(), 'ml_backend', 'venv', 'Scripts', 'python.exe');
+const BRIDGE_START_RETRY_BACKOFF_MS = 30000;
+const BRIDGE_HANDSHAKE_TIMEOUT_MS = 15000;
+const BRIDGE_DEFAULT_REQUEST_TIMEOUT_MS = 60000;
+const BRIDGE_TRAIN_BATCH_BASE_TIMEOUT_MS = 120000;
+const BRIDGE_TRAIN_BATCH_PER_EPOCH_TIMEOUT_MS = 45000;
+const BRIDGE_TRAIN_BATCH_PER_SAMPLE_TIMEOUT_MS = 10;
+const BRIDGE_MAX_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
 
 function isFilesystemPath(value) {
   return typeof value === 'string' && /[\\/]/.test(value);
@@ -61,6 +68,8 @@ function summarizeTrainBatchPayload(payload = {}) {
       identity: Array.isArray(samples.identitySamples) ? samples.identitySamples.length : 0,
     },
     model: {
+      family: modelBundle?.family || 'legacy',
+      encoderInputSize: Number(modelBundle?.interface?.stateInputSize || modelBundle?.encoder?.network?.inputSize || 0),
       policyInputSize: Number(modelBundle?.policy?.network?.inputSize || 0),
       valueInputSize: Number(modelBundle?.value?.network?.inputSize || 0),
       identityInputSize: Number(modelBundle?.identity?.network?.inputSize || 0),
@@ -81,6 +90,33 @@ function summarizePayload(payload = {}) {
   };
 }
 
+function countTrainBatchSamples(payload = {}) {
+  return (
+    (Array.isArray(payload?.samples?.policySamples) ? payload.samples.policySamples.length : 0)
+    + (Array.isArray(payload?.samples?.valueSamples) ? payload.samples.valueSamples.length : 0)
+    + (Array.isArray(payload?.samples?.identitySamples) ? payload.samples.identitySamples.length : 0)
+  );
+}
+
+function resolvePayloadTimeoutMs(payload = {}, options = {}) {
+  if (Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0) {
+    return Math.max(1, Math.min(BRIDGE_MAX_REQUEST_TIMEOUT_MS, Math.floor(Number(options.timeoutMs))));
+  }
+  const command = String(payload.command || '').trim().toLowerCase();
+  if (command === 'handshake') {
+    return BRIDGE_HANDSHAKE_TIMEOUT_MS;
+  }
+  if (command === 'train_batch') {
+    const epochs = Math.max(1, Math.floor(Number(payload.epochs || 1)));
+    const sampleCount = countTrainBatchSamples(payload);
+    const estimatedMs = BRIDGE_TRAIN_BATCH_BASE_TIMEOUT_MS
+      + (epochs * BRIDGE_TRAIN_BATCH_PER_EPOCH_TIMEOUT_MS)
+      + (sampleCount * BRIDGE_TRAIN_BATCH_PER_SAMPLE_TIMEOUT_MS);
+    return Math.max(BRIDGE_DEFAULT_REQUEST_TIMEOUT_MS, Math.min(BRIDGE_MAX_REQUEST_TIMEOUT_MS, estimatedMs));
+  }
+  return BRIDGE_DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
 class PythonTrainingBridge {
   constructor(options = {}) {
     this.pythonExecutable = resolvePythonExecutable(options.pythonExecutable);
@@ -92,13 +128,32 @@ class PythonTrainingBridge {
     this.startPromise = null;
     this.capabilities = null;
     this.stderrLines = [];
+    this.lastStartFailure = null;
+    this.lastStartFailureAtMs = 0;
   }
 
   async ensureStarted() {
     if (this.startPromise) {
       return this.startPromise;
     }
-    this.startPromise = this.start();
+    if (
+      this.lastStartFailure
+      && (Date.now() - this.lastStartFailureAtMs) < BRIDGE_START_RETRY_BACKOFF_MS
+    ) {
+      throw this.lastStartFailure;
+    }
+    this.startPromise = this.start()
+      .then((capabilities) => {
+        this.lastStartFailure = null;
+        this.lastStartFailureAtMs = 0;
+        return capabilities;
+      })
+      .catch((err) => {
+        this.startPromise = null;
+        this.lastStartFailure = err instanceof Error ? err : new Error(String(err || 'Python training bridge failed to start'));
+        this.lastStartFailureAtMs = Date.now();
+        throw this.lastStartFailure;
+      });
     return this.startPromise;
   }
 
@@ -114,6 +169,7 @@ class PythonTrainingBridge {
       pythonExecutable: this.pythonExecutable,
       scriptPath: this.scriptPath,
     });
+    this.stderrLines = [];
     this.child = spawn(this.pythonExecutable, ['-u', this.scriptPath], {
       cwd: process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -195,6 +251,9 @@ class PythonTrainingBridge {
     const pending = this.pending.get(requestId);
     if (!pending) return;
     this.pending.delete(requestId);
+    if (pending.timeoutHandle) {
+      clearTimeout(pending.timeoutHandle);
+    }
     if (message.ok === true) {
       appendMlBridgeDebugLog('bridge_request_ok', {
         requestId,
@@ -225,7 +284,32 @@ class PythonTrainingBridge {
     const pendingEntries = Array.from(this.pending.values());
     this.pending.clear();
     pendingEntries.forEach((entry) => {
+      if (entry.timeoutHandle) {
+        clearTimeout(entry.timeoutHandle);
+      }
       entry.reject(error);
+    });
+  }
+
+  async restartChild(error) {
+    const child = this.child;
+    this.child = null;
+    this.capabilities = null;
+    this.startPromise = null;
+    if (this.stdoutReader) {
+      this.stdoutReader.close();
+      this.stdoutReader = null;
+    }
+    this.rejectAllPending(error);
+    if (!child) return;
+    appendMlBridgeDebugLog('bridge_restart_requested', {
+      childPid: child?.pid || null,
+      reason: error?.message || String(error || 'bridge_restart'),
+    });
+    await new Promise((resolve) => {
+      child.once('exit', () => resolve());
+      child.kill();
+      setTimeout(resolve, 1000);
     });
   }
 
@@ -244,12 +328,32 @@ class PythonTrainingBridge {
       payload,
     });
     return new Promise((resolve, reject) => {
+      const timeoutMs = resolvePayloadTimeoutMs(payload, options);
       this.pending.set(requestId, {
         resolve,
         reject,
         startedAtMs: Date.now(),
         summary,
+        timeoutHandle: null,
       });
+      const pending = this.pending.get(requestId);
+      if (pending && timeoutMs > 0) {
+        pending.timeoutHandle = setTimeout(() => {
+          if (!this.pending.has(requestId)) return;
+          const err = new Error(`Python training bridge request timed out after ${timeoutMs}ms (${summary.command || 'unknown'})`);
+          err.code = 'ML_PYTHON_BRIDGE_TIMEOUT';
+          appendMlBridgeDebugLog('bridge_request_timeout', {
+            requestId,
+            timeoutMs,
+            summary,
+            childPid: this.child?.pid || null,
+          });
+          this.restartChild(err).catch(() => {});
+        }, timeoutMs);
+        if (typeof pending.timeoutHandle?.unref === 'function') {
+          pending.timeoutHandle.unref();
+        }
+      }
       appendMlBridgeDebugLog('bridge_request_start', {
         requestId,
         childPid: this.child?.pid || null,
@@ -257,6 +361,10 @@ class PythonTrainingBridge {
       });
       this.child.stdin.write(`${message}\n`, 'utf8', (err) => {
         if (!err) return;
+        const pendingEntry = this.pending.get(requestId);
+        if (pendingEntry?.timeoutHandle) {
+          clearTimeout(pendingEntry.timeoutHandle);
+        }
         this.pending.delete(requestId);
         appendMlBridgeDebugLog('bridge_request_write_error', {
           requestId,
@@ -283,6 +391,10 @@ class PythonTrainingBridge {
   }
 
   async close() {
+    this.lastStartFailure = null;
+    this.lastStartFailureAtMs = 0;
+    this.capabilities = null;
+    this.startPromise = null;
     if (!this.child) return;
     const child = this.child;
     this.child = null;

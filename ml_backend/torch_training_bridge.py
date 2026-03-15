@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import random
 import sys
 import traceback
@@ -42,6 +43,57 @@ def normalize_target(target: list[float]) -> list[float]:
   if total <= 0:
     return [0.0 for _ in values]
   return [value / total for value in values]
+
+
+def clamp_int(value: Any, fallback: int, minimum: int = 1, maximum: int | None = None) -> int:
+  try:
+    parsed = int(value)
+  except Exception:
+    parsed = int(fallback)
+  bounded = max(minimum, parsed)
+  if maximum is not None:
+    bounded = min(maximum, bounded)
+  return bounded
+
+
+def configure_torch_runtime() -> dict[str, Any]:
+  cpu_count = max(1, int(os.cpu_count() or 1))
+  intra_threads = clamp_int(
+    os.environ.get('ML_TRAINING_TORCH_THREADS'),
+    cpu_count,
+    1,
+    cpu_count,
+  )
+  interop_threads = clamp_int(
+    os.environ.get('ML_TRAINING_TORCH_INTEROP_THREADS'),
+    max(1, min(4, cpu_count)),
+    1,
+    cpu_count,
+  )
+
+  torch.set_num_threads(intra_threads)
+  try:
+    torch.set_num_interop_threads(interop_threads)
+  except RuntimeError:
+    pass
+  if hasattr(torch, 'set_float32_matmul_precision'):
+    try:
+      torch.set_float32_matmul_precision('high')
+    except Exception:
+      pass
+
+  configured_interop_threads = None
+  if hasattr(torch, 'get_num_interop_threads'):
+    try:
+      configured_interop_threads = int(torch.get_num_interop_threads())
+    except Exception:
+      configured_interop_threads = None
+
+  return {
+    'cpuCount': cpu_count,
+    'torchNumThreads': int(torch.get_num_threads()),
+    'torchNumInteropThreads': configured_interop_threads,
+  }
 
 
 class JsonMlp(nn.Module):
@@ -322,9 +374,333 @@ def enrich_identity_samples(samples: list[dict[str, Any]], inferred_identities: 
   return enriched
 
 
+def is_shared_bundle(model_bundle: dict[str, Any]) -> bool:
+  return str(model_bundle.get('family') or '').strip().lower() == 'shared_encoder_belief_ismcts_v1'
+
+
+def train_shared_policy_epoch(
+  encoder_model: JsonMlp,
+  policy_model: JsonMlp,
+  encoder_optimizer: torch.optim.Optimizer,
+  policy_optimizer: torch.optim.Optimizer,
+  samples: list[dict[str, Any]],
+  options: dict[str, Any],
+  temperature: float,
+  state_input_size: int,
+  policy_output_size: int,
+  device: torch.device,
+) -> dict[str, Any]:
+  valid_samples = []
+  for sample in samples or []:
+    state_input = sample.get('stateInput') or sample.get('features') or []
+    target = normalize_target(sample.get('target') or [])
+    if len(state_input) != state_input_size or len(target) != policy_output_size:
+      continue
+    valid_samples.append({
+      'stateInput': state_input,
+      'target': target,
+    })
+  if not valid_samples:
+    return {'samples': 0, 'loss': 0.0}
+
+  random.shuffle(valid_samples)
+  batch_size = max(1, int(options.get('batchSize', 16)))
+  clip_norm = max(0.0, float(options.get('gradientClipNorm', 0.0)))
+  total_loss = 0.0
+  processed = 0
+  safe_temperature = temperature if isinstance(temperature, (int, float)) and temperature > 0 else 1.0
+
+  for start in range(0, len(valid_samples), batch_size):
+    batch = valid_samples[start:start + batch_size]
+    state_input = torch.tensor([sample['stateInput'] for sample in batch], dtype=torch.float32, device=device)
+    target = torch.tensor([sample['target'] for sample in batch], dtype=torch.float32, device=device)
+
+    encoder_optimizer.zero_grad(set_to_none=True)
+    policy_optimizer.zero_grad(set_to_none=True)
+    latent = encoder_model(state_input)
+    logits = policy_model(latent) / safe_temperature
+    log_probs = F.log_softmax(logits, dim=1)
+    loss = -(target * log_probs).sum(dim=1).mean()
+    loss.backward()
+    if clip_norm > 0:
+      torch.nn.utils.clip_grad_norm_(list(encoder_model.parameters()) + list(policy_model.parameters()), clip_norm)
+    encoder_optimizer.step()
+    policy_optimizer.step()
+
+    total_loss += float(loss.item()) * len(batch)
+    processed += len(batch)
+
+  return {
+    'samples': processed,
+    'loss': (total_loss / processed) if processed > 0 else 0.0,
+  }
+
+
+def train_shared_value_epoch(
+  encoder_model: JsonMlp,
+  value_model: JsonMlp,
+  encoder_optimizer: torch.optim.Optimizer,
+  value_optimizer: torch.optim.Optimizer,
+  samples: list[dict[str, Any]],
+  options: dict[str, Any],
+  state_input_size: int,
+  device: torch.device,
+) -> dict[str, Any]:
+  valid_samples = []
+  for sample in samples or []:
+    state_input = sample.get('stateInput') or sample.get('features') or []
+    target = sample.get('target')
+    if len(state_input) != state_input_size or not isinstance(target, (int, float)):
+      continue
+    valid_samples.append({
+      'stateInput': state_input,
+      'target': float(target),
+    })
+  if not valid_samples:
+    return {'samples': 0, 'loss': 0.0}
+
+  random.shuffle(valid_samples)
+  batch_size = max(1, int(options.get('batchSize', 24)))
+  clip_norm = max(0.0, float(options.get('gradientClipNorm', 0.0)))
+  total_loss = 0.0
+  processed = 0
+
+  for start in range(0, len(valid_samples), batch_size):
+    batch = valid_samples[start:start + batch_size]
+    state_input = torch.tensor([sample['stateInput'] for sample in batch], dtype=torch.float32, device=device)
+    target = torch.tensor([sample['target'] for sample in batch], dtype=torch.float32, device=device).unsqueeze(1)
+
+    encoder_optimizer.zero_grad(set_to_none=True)
+    value_optimizer.zero_grad(set_to_none=True)
+    latent = encoder_model(state_input)
+    raw = value_model(latent)
+    pred = torch.tanh(raw)
+    loss = F.mse_loss(pred, target)
+    loss.backward()
+    if clip_norm > 0:
+      torch.nn.utils.clip_grad_norm_(list(encoder_model.parameters()) + list(value_model.parameters()), clip_norm)
+    encoder_optimizer.step()
+    value_optimizer.step()
+
+    total_loss += float(loss.item()) * len(batch)
+    processed += len(batch)
+
+  return {
+    'samples': processed,
+    'loss': (total_loss / processed) if processed > 0 else 0.0,
+  }
+
+
+def train_shared_identity_epoch(
+  encoder_model: JsonMlp,
+  identity_model: JsonMlp,
+  encoder_optimizer: torch.optim.Optimizer,
+  identity_optimizer: torch.optim.Optimizer,
+  samples: list[dict[str, Any]],
+  options: dict[str, Any],
+  state_input_size: int,
+  belief_identity_count: int,
+  belief_slot_count: int,
+  device: torch.device,
+) -> dict[str, Any]:
+  valid_samples = []
+  for sample in samples or []:
+    state_input = sample.get('stateInput') or sample.get('features') or []
+    piece_slot = sample.get('pieceSlot')
+    truth_index = sample.get('trueIdentityIndex')
+    if len(state_input) != state_input_size:
+      continue
+    if not isinstance(piece_slot, int) or piece_slot < 0 or piece_slot >= belief_slot_count:
+      continue
+    if not isinstance(truth_index, int) or truth_index < 0 or truth_index >= belief_identity_count:
+      continue
+    valid_samples.append({
+      'stateInput': state_input,
+      'pieceSlot': piece_slot,
+      'truthIndex': truth_index,
+    })
+  if not valid_samples:
+    return {'samples': 0, 'loss': 0.0, 'accuracy': 0.0}
+
+  random.shuffle(valid_samples)
+  batch_size = max(1, int(options.get('batchSize', 24)))
+  clip_norm = max(0.0, float(options.get('gradientClipNorm', 0.0)))
+  total_loss = 0.0
+  processed = 0
+  correct = 0
+
+  for start in range(0, len(valid_samples), batch_size):
+    batch = valid_samples[start:start + batch_size]
+    state_input = torch.tensor([sample['stateInput'] for sample in batch], dtype=torch.float32, device=device)
+    piece_slots = torch.tensor([sample['pieceSlot'] for sample in batch], dtype=torch.long, device=device)
+    target = torch.tensor([sample['truthIndex'] for sample in batch], dtype=torch.long, device=device)
+
+    encoder_optimizer.zero_grad(set_to_none=True)
+    identity_optimizer.zero_grad(set_to_none=True)
+    latent = encoder_model(state_input)
+    logits = identity_model(latent).reshape(len(batch), belief_slot_count, belief_identity_count)
+    selected_logits = logits[torch.arange(len(batch), device=device), piece_slots]
+    loss = F.cross_entropy(selected_logits, target)
+    loss.backward()
+    if clip_norm > 0:
+      torch.nn.utils.clip_grad_norm_(list(encoder_model.parameters()) + list(identity_model.parameters()), clip_norm)
+    encoder_optimizer.step()
+    identity_optimizer.step()
+
+    predictions = torch.argmax(selected_logits, dim=1)
+    correct += int((predictions == target).sum().item())
+    total_loss += float(loss.item()) * len(batch)
+    processed += len(batch)
+
+  return {
+    'samples': processed,
+    'loss': (total_loss / processed) if processed > 0 else 0.0,
+    'accuracy': (correct / processed) if processed > 0 else 0.0,
+  }
+
+
+def train_shared_bundle(payload: dict[str, Any]) -> dict[str, Any]:
+  device = choose_device(payload.get('devicePreference'))
+  model_bundle = payload.get('modelBundle') or {}
+  optimizer_state = payload.get('optimizerState') or {}
+  training_options = payload.get('trainingOptions') or {}
+  epochs = max(1, int(payload.get('epochs', 1)))
+
+  encoder_model = JsonMlp(model_bundle['encoder']['network']).to(device)
+  policy_model = JsonMlp(model_bundle['policy']['network']).to(device)
+  value_model = JsonMlp(model_bundle['value']['network']).to(device)
+  identity_model = JsonMlp(model_bundle['identity']['network']).to(device)
+
+  load_network_into_model(encoder_model, model_bundle['encoder']['network'], device)
+  load_network_into_model(policy_model, model_bundle['policy']['network'], device)
+  load_network_into_model(value_model, model_bundle['value']['network'], device)
+  load_network_into_model(identity_model, model_bundle['identity']['network'], device)
+
+  encoder_optimizer = build_optimizer(
+    encoder_model,
+    training_options.get('learningRate', 0.0025),
+    training_options.get('weightDecay', 0.0001),
+    optimizer_state.get('encoder'),
+    device,
+  )
+  policy_optimizer = build_optimizer(
+    policy_model,
+    training_options.get('learningRate', 0.0025),
+    training_options.get('weightDecay', 0.0001),
+    optimizer_state.get('policy'),
+    device,
+  )
+  value_optimizer = build_optimizer(
+    value_model,
+    training_options.get('learningRate', 0.0025),
+    training_options.get('weightDecay', 0.0001),
+    optimizer_state.get('value'),
+    device,
+  )
+  identity_optimizer = build_optimizer(
+    identity_model,
+    training_options.get('learningRate', 0.0025),
+    training_options.get('weightDecay', 0.0001),
+    optimizer_state.get('identity'),
+    device,
+  )
+
+  state_input_size = int(model_bundle.get('interface', {}).get('stateInputSize', model_bundle.get('encoder', {}).get('network', {}).get('inputSize', 0) or 0))
+  policy_output_size = int(model_bundle.get('policy', {}).get('network', {}).get('outputSize', 0) or 0)
+  belief_slot_count = int(model_bundle.get('identity', {}).get('beliefSlotCount', model_bundle.get('interface', {}).get('beliefPieceSlotsPerPerspective', 0) or 0))
+  belief_identity_count = len(model_bundle.get('identity', {}).get('inferredIdentities') or [])
+  policy_samples = payload.get('samples', {}).get('policySamples') or []
+  value_samples = payload.get('samples', {}).get('valueSamples') or []
+  identity_samples = payload.get('samples', {}).get('identitySamples') or []
+
+  history = []
+  for epoch_index in range(epochs):
+    policy = train_shared_policy_epoch(
+      encoder_model,
+      policy_model,
+      encoder_optimizer,
+      policy_optimizer,
+      policy_samples,
+      training_options,
+      float(model_bundle.get('policy', {}).get('temperature', 1.0) or 1.0),
+      state_input_size,
+      policy_output_size,
+      device,
+    )
+    value = train_shared_value_epoch(
+      encoder_model,
+      value_model,
+      encoder_optimizer,
+      value_optimizer,
+      value_samples,
+      training_options,
+      state_input_size,
+      device,
+    )
+    identity = train_shared_identity_epoch(
+      encoder_model,
+      identity_model,
+      encoder_optimizer,
+      identity_optimizer,
+      identity_samples,
+      training_options,
+      state_input_size,
+      belief_identity_count,
+      belief_slot_count,
+      device,
+    )
+    history.append({
+      'epoch': epoch_index + 1,
+      'policyLoss': float(policy['loss']),
+      'valueLoss': float(value['loss']),
+      'identityLoss': float(identity['loss']),
+      'identityAccuracy': float(identity.get('accuracy', 0.0)),
+      'policySamples': int(policy['samples']),
+      'valueSamples': int(value['samples']),
+      'identitySamples': int(identity['samples']),
+    })
+
+  updated_bundle = {
+    **model_bundle,
+    'encoder': {
+      **model_bundle.get('encoder', {}),
+      'network': export_model_to_network(encoder_model, model_bundle['encoder']['network']),
+    },
+    'policy': {
+      **model_bundle.get('policy', {}),
+      'network': export_model_to_network(policy_model, model_bundle['policy']['network']),
+    },
+    'value': {
+      **model_bundle.get('value', {}),
+      'network': export_model_to_network(value_model, model_bundle['value']['network']),
+    },
+    'identity': {
+      **model_bundle.get('identity', {}),
+      'network': export_model_to_network(identity_model, model_bundle['identity']['network']),
+    },
+  }
+
+  return {
+    'backend': 'python',
+    'device': str(device),
+    'cudaAvailable': bool(torch.cuda.is_available()),
+    'torchVersion': torch.__version__,
+    'modelBundle': updated_bundle,
+    'optimizerState': {
+      'encoder': serialize_optimizer_state(encoder_optimizer),
+      'policy': serialize_optimizer_state(policy_optimizer),
+      'value': serialize_optimizer_state(value_optimizer),
+      'identity': serialize_optimizer_state(identity_optimizer),
+    },
+    'history': history,
+  }
+
+
 def train_bundle(payload: dict[str, Any]) -> dict[str, Any]:
   device = choose_device(payload.get('devicePreference'))
   model_bundle = payload.get('modelBundle') or {}
+  if is_shared_bundle(model_bundle):
+    return train_shared_bundle(payload)
   optimizer_state = payload.get('optimizerState') or {}
   training_options = payload.get('trainingOptions') or {}
   epochs = max(1, int(payload.get('epochs', 1)))
@@ -436,12 +812,22 @@ def train_bundle(payload: dict[str, Any]) -> dict[str, Any]:
 def handle_message(payload: dict[str, Any]) -> Any:
   command = str(payload.get('command') or '').strip().lower()
   if command == 'handshake':
+    cuda_total_memory_mb = None
+    if torch.cuda.is_available():
+      try:
+        cuda_total_memory_mb = int(torch.cuda.get_device_properties(0).total_memory / (1024 * 1024))
+      except Exception:
+        cuda_total_memory_mb = None
     return {
       'backend': 'python',
       'torchVersion': torch.__version__,
       'cudaAvailable': bool(torch.cuda.is_available()),
       'cudaDeviceCount': int(torch.cuda.device_count()) if torch.cuda.is_available() else 0,
       'cudaDeviceName': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+      'cudaTotalMemoryMb': cuda_total_memory_mb,
+      'cpuCount': RUNTIME_CONFIG['cpuCount'],
+      'torchNumThreads': RUNTIME_CONFIG['torchNumThreads'],
+      'torchNumInteropThreads': RUNTIME_CONFIG['torchNumInteropThreads'],
       'pythonVersion': sys.version.split()[0],
     }
   if command == 'train_batch':
@@ -450,7 +836,6 @@ def handle_message(payload: dict[str, Any]) -> Any:
 
 
 def main() -> None:
-  torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
   for raw_line in sys.stdin:
     line = raw_line.strip()
     if not line:
@@ -466,6 +851,8 @@ def main() -> None:
       sys.stderr.flush()
       send_response(request_id, False, error=str(exc))
 
+
+RUNTIME_CONFIG = configure_torch_runtime()
 
 if __name__ == '__main__':
   main()

@@ -1,6 +1,10 @@
 export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
   const DEFAULT_HIT_RADIUS = 26;
   const DEFAULT_STICKY_RADIUS = 42;
+  const baselinePalette = ['#ef8787', '#f0b658', '#ffd89a', '#8ed18e', '#7fd2de', '#b998ff'];
+  const prePromotionColor = '#f2f5f7';
+  const promotionColor = '#9aa7ad';
+  const fallbackPalette = ['#f0b658', '#7fd2de', '#8ed18e', '#ef8787', '#ffd89a', '#c1f0f7'];
   const state = {
     series: [],
     plot: null,
@@ -24,7 +28,6 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
       </div>
       <div class="chart-tooltip-footer">&nbsp;</div>
     `;
-    tooltip.style.height = '168px';
     tooltip.style.minHeight = '168px';
     tooltip.style.display = 'flex';
   }
@@ -36,6 +39,64 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
   function formatPercent(value) {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(1)}%` : '--';
+  }
+
+  function colorWithAlpha(color, alpha) {
+    const safeAlpha = Math.max(0, Math.min(1, Number(alpha) || 0));
+    const value = String(color || '').trim();
+    const hexMatch = value.match(/^#([0-9a-f]{6})$/i);
+    if (hexMatch) {
+      const hex = hexMatch[1];
+      const r = Number.parseInt(hex.slice(0, 2), 16);
+      const g = Number.parseInt(hex.slice(2, 4), 16);
+      const b = Number.parseInt(hex.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+    const rgbMatch = value.match(/^rgba?\(([^)]+)\)$/i);
+    if (rgbMatch) {
+      const parts = rgbMatch[1].split(',').map((entry) => entry.trim());
+      if (parts.length >= 3) {
+        return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${safeAlpha})`;
+      }
+    }
+    return value;
+  }
+
+  function getSeriesColor(entry, index = 0) {
+    return entry?.color || fallbackPalette[index % fallbackPalette.length];
+  }
+
+  function getSeriesType(entry) {
+    const label = String(entry?.label || '').toLowerCase();
+    if (label === 'pre-promo gate' || /pre-promotion/.test(label)) return 'pre-promotion';
+    if (/^promotion vs g\d+$/.test(label)) return 'promotion';
+    if (/^baseline vs g\d+$/.test(label)) return 'baseline';
+    return 'other';
+  }
+
+  function getSeriesGeneration(entry) {
+    const match = String(entry?.label || '').match(/g(\d+)/i);
+    return match ? Number.parseInt(match[1], 10) : Number.NaN;
+  }
+
+  function assignSeriesColors(series = []) {
+    const baselineSeries = series
+      .filter((entry) => getSeriesType(entry) === 'baseline')
+      .sort((left, right) => getSeriesGeneration(left) - getSeriesGeneration(right));
+    const baselineColors = new Map(
+      baselineSeries.map((entry, index) => [String(entry.label || ''), baselinePalette[index % baselinePalette.length]])
+    );
+    return series.map((entry, index) => {
+      const type = getSeriesType(entry);
+      let color = fallbackPalette[index % fallbackPalette.length];
+      if (type === 'baseline') color = baselineColors.get(String(entry.label || '')) || baselinePalette[0];
+      else if (type === 'pre-promotion') color = prePromotionColor;
+      else if (type === 'promotion') color = promotionColor;
+      return {
+        ...entry,
+        color,
+      };
+    });
   }
 
   function getCanvasCssSize() {
@@ -113,8 +174,20 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
       return;
     }
 
+    if (shape === 'diamond') {
+      ctx.beginPath();
+      ctx.moveTo(x, y - safeRadius - 1);
+      ctx.lineTo(x + safeRadius + 1, y);
+      ctx.lineTo(x, y + safeRadius + 1);
+      ctx.lineTo(x - safeRadius - 1, y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      return;
+    }
+
     ctx.beginPath();
-    ctx.arc(x, y, shape === 'dot' ? Math.max(6, safeRadius - 1) : safeRadius, 0, Math.PI * 2);
+    ctx.arc(x, y, safeRadius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
@@ -205,46 +278,54 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
       ctx.font = '12px Aptos';
     }
 
-    const palette = ['#f0b658', '#7fd2de', '#8ed18e', '#ef8787', '#ffd89a', '#c1f0f7'];
     const hoverPoints = [];
 
     state.series.forEach((entry, seriesIndex) => {
-      const color = palette[seriesIndex % palette.length];
+      const color = getSeriesColor(entry, seriesIndex);
+      const markerFill = entry.lineStyle === 'none' ? colorWithAlpha(color, 0.72) : color;
       const points = (entry.points || [])
         .filter((point) => Number.isFinite(point?.candidateGeneration))
         .sort((left, right) => Number(left.candidateGeneration || 0) - Number(right.candidateGeneration || 0));
       if (!points.length) return;
+      const shouldDrawLine = entry.lineStyle !== 'none';
 
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
       points.forEach((point, pointIndex) => {
         const x = xForGeneration(point.candidateGeneration);
         const y = yForWinRate(point.winRate);
-        if (pointIndex === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-        const markerShape = point.markerShape || (point.promoted ? 'circle' : 'dot');
-        const radius = markerShape === 'star' ? 7 : (point.promoted ? 8 : 6);
+        if (shouldDrawLine) {
+          if (pointIndex === 0) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        const markerShape = point.markerShape || (point.promoted ? 'star' : 'circle');
+        const radius = markerShape === 'star' ? 7 : (markerShape === 'diamond' ? 7 : 6);
         hoverPoints.push({
           key: getHoverKey({ point, label: entry.label }),
           x,
           y,
           point,
-          color,
+          color: markerFill,
           label: entry.label,
           radius,
           hitRadius: Math.max(DEFAULT_HIT_RADIUS, radius + 14),
           stickyRadius: Math.max(DEFAULT_STICKY_RADIUS, radius + 22),
         });
       });
-      ctx.stroke();
+      if (shouldDrawLine && points.length > 1) {
+        ctx.stroke();
+      }
 
       points.forEach((point) => {
         const x = xForGeneration(point.candidateGeneration);
         const y = yForWinRate(point.winRate);
-        const markerShape = point.markerShape || (point.promoted ? 'circle' : 'dot');
-        const radius = markerShape === 'star' ? 7 : (point.promoted ? 8 : 6);
-        drawMarker(ctx, x, y, markerShape, color, radius);
+        const markerShape = point.markerShape || (point.promoted ? 'star' : 'circle');
+        const radius = markerShape === 'star' ? 7 : (markerShape === 'diamond' ? 7 : 6);
+        drawMarker(ctx, x, y, markerShape, markerFill, radius);
       });
     });
 
@@ -274,7 +355,7 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
     if (legend) {
       legend.innerHTML = state.series
         .map((entry, index) => {
-          const color = palette[index % palette.length];
+          const color = getSeriesColor(entry, index);
           return `<span style="color:${color};">${entry.label}</span>`;
         })
         .join(' | ');
@@ -293,6 +374,12 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
       hideTooltip();
       return;
     }
+    const seriesColors = new Map(
+      (state.series || []).map((entry, index) => {
+        const key = String(entry?.label || '');
+        return [key, getSeriesColor(entry, index)];
+      })
+    );
     const sections = Array.isArray(hover.point.tooltipSections) && hover.point.tooltipSections.length
       ? hover.point.tooltipSections
       : [{
@@ -310,14 +397,24 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
       const title = String(section?.title || '');
       const isBaselineInfo = /(baseline|gen0)/i.test(title);
       const isPrePromotion = /pre-promotion/i.test(title);
-      const sectionStyle = isBaselineInfo
-        ? 'margin-top:6px;padding:6px 8px;border-radius:10px;border:1px solid rgba(240,182,88,0.38);background:rgba(240,182,88,0.12);color:#ffe2ab;'
-        : (isPrePromotion
-          ? 'margin-top:6px;padding:6px 8px;border-radius:10px;border:1px solid rgba(142,209,142,0.34);background:rgba(142,209,142,0.11);color:#ddf7dd;'
-          : 'margin-top:6px;padding:6px 8px;border-radius:10px;border:1px solid rgba(127,210,222,0.18);background:rgba(127,210,222,0.06);');
-      const titleStyle = isBaselineInfo
-        ? 'color:#f0b658;'
-        : (isPrePromotion ? 'color:#8ed18e;' : 'color:#d7efef;');
+      const generation = Number(section?.generation);
+      const seriesLabel = isBaselineInfo
+        ? `baseline vs G${generation}`
+        : (isPrePromotion ? 'pre-promo gate' : `promotion vs G${generation}`);
+      const sectionColor = seriesColors.get(seriesLabel)
+        || (isBaselineInfo
+          ? baselinePalette[0]
+          : (isPrePromotion ? prePromotionColor : promotionColor));
+      const bodyColor = '#d7efef';
+      const sectionStyle = [
+        'margin-top:6px',
+        'padding:6px 8px',
+        'border-radius:10px',
+        `border:2px solid ${sectionColor}`,
+        `background:${colorWithAlpha(sectionColor, 0.08)}`,
+        `color:${bodyColor}`,
+      ].join(';');
+      const titleStyle = `color:${sectionColor};`;
       return `
         <div style="${sectionStyle}">
           <div style="${titleStyle}"><strong>${section.title}</strong>${Number.isFinite(Number(section.generation)) ? ` vs G${Number(section.generation)}` : ''}</div>
@@ -333,7 +430,6 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
       <div class="chart-tooltip-grid">${sections.map((section) => renderSection(section)).join('')}</div>
       <div class="chart-tooltip-footer">${hover.point.promoted ? 'Promoted' : 'Not promoted'}</div>
     `;
-    tooltip.style.height = '168px';
     tooltip.style.minHeight = '168px';
     tooltip.style.display = 'flex';
   }
@@ -400,7 +496,7 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
 
   return {
     setData({ series = [], title = '' } = {}) {
-      const nextSeries = Array.isArray(series) ? series : [];
+      const nextSeries = assignSeriesColors(Array.isArray(series) ? series : []);
       const nextTitle = title || '';
       state.series = nextSeries;
       state.title = nextTitle;

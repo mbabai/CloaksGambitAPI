@@ -1,6 +1,6 @@
 const { parentPort } = require('worker_threads');
 
-const { MlRuntime } = require('./runtime');
+const { runFastGame } = require('./gameRunner');
 const {
   trainPolicyModel,
   trainValueModel,
@@ -15,9 +15,7 @@ function serializeError(err) {
 }
 
 async function handlePlayGameTask(task = {}) {
-  const runtime = new MlRuntime({ persist: false });
-  const game = await runtime.runSingleGame(task.options || {});
-  return game;
+  return runFastGame(task.options || {});
 }
 
 function handleTrainHeadTask(task = {}) {

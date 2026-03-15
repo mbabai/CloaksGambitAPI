@@ -181,6 +181,26 @@ describe('ml state encoding', () => {
     expect(computeStateHash(nextState)).not.toBe(firstHash);
   });
 
+  test('state hashes include determinized hidden identities', () => {
+    const state = createInitialState({ seed: 717, maxPlies: 80 });
+    const hiddenEnemyPieceId = Object.values(state.pieces).find((piece) => (
+      piece
+      && piece.color === BLACK
+      && piece.alive
+      && !Number.isFinite(state.revealedIdentities?.[piece.id])
+    ))?.id;
+
+    expect(hiddenEnemyPieceId).toBeTruthy();
+
+    const determinized = cloneState(state);
+    const originalIdentity = determinized.pieces[hiddenEnemyPieceId].identity;
+    determinized.pieces[hiddenEnemyPieceId].identity = (
+      originalIdentity === IDENTITIES.ROOK ? IDENTITIES.BISHOP : IDENTITIES.ROOK
+    );
+
+    expect(computeStateHash(determinized)).not.toBe(computeStateHash(state));
+  });
+
   test('mcts exposes encoded search cache statistics', () => {
     const state = createInitialState({ seed: 808, maxPlies: 80 });
     const modelBundle = createDefaultModelBundle({ seed: 909 });

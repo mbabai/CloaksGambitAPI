@@ -1,11 +1,20 @@
 const {
   getLegalActions,
   applyAction,
+  applyActionMutable,
+  applyActionWithUndo,
+  undoAppliedAction,
   actionKey,
   computeStateHash,
+  getInformationHistoryHash,
   IDENTITIES,
   cloneState,
+  cloneStateForSearch,
+  createRng,
+  getHiddenPieceIds,
+  getVisibleIdentity,
 } = require('./engine');
+const { ensureEncodedState } = require('./stateEncoding');
 const {
   predictPolicy,
   predictValue,
@@ -53,6 +62,413 @@ function applyIdentityAssignmentToState(state, assignment = {}) {
     };
   });
   return nextState;
+}
+
+function getStateCache(state) {
+  if (!state || typeof state !== 'object') return {};
+  if (!Object.prototype.hasOwnProperty.call(state, '__mlCache')) {
+    Object.defineProperty(state, '__mlCache', {
+      value: {},
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    });
+  }
+  return state.__mlCache;
+}
+
+function serializePublicActionDetails(details = {}) {
+  const from = details?.from
+    ? `${Number(details.from.row)}:${Number(details.from.col)}`
+    : '-';
+  const to = details?.to
+    ? `${Number(details.to.row)}:${Number(details.to.col)}`
+    : '-';
+  const declaration = Number.isFinite(details?.declaration)
+    ? Number(details.declaration)
+    : 'x';
+  const outcome = details?.outcome || '-';
+  return `${from}>${to}:${declaration}:${outcome}`;
+}
+
+function mixHashWord(current, value) {
+  const word = (Number.isFinite(value) ? Math.floor(value) : 0) >>> 0;
+  return (Math.imul((current ^ (word + 0x9e3779b9)) >>> 0, 2246822519) + 0x85ebca6b) >>> 0;
+}
+
+function mixHashPair(hash, first, second = 0) {
+  hash[0] = mixHashWord(hash[0], first);
+  hash[1] = mixHashWord(hash[1], second);
+}
+
+function computeInformationStateHash(state, perspective) {
+  const cache = getStateCache(state);
+  cache.informationStateHashByPerspective = cache.informationStateHashByPerspective || [{}, {}];
+  if (cache.informationStateHashByPerspective[perspective]?.hash) {
+    return cache.informationStateHashByPerspective[perspective].hash;
+  }
+  const encoded = ensureEncodedState(state);
+  const hash = [
+    0x811c9dc5,
+    (0x9e3779b9 ^ (Number.isFinite(perspective) ? perspective : 0)) >>> 0,
+  ];
+
+  mixHashPair(hash, perspective, state?.playerTurn ?? -1);
+  mixHashPair(hash, state?.onDeckingPlayer ?? -1, Number(state?.movesSinceAction || 0));
+  mixHashPair(hash, Number(state?.ply || 0), state?.winner ?? -1);
+  mixHashPair(hash, state?.isActive === false ? 0 : 1, Number(state?.winReason ? String(state.winReason).length : 0));
+  mixHashPair(hash, Number(state?.daggers?.[0] || 0), Number(state?.daggers?.[1] || 0));
+
+  for (let pieceIndex = 0; pieceIndex < encoded.pieceCount; pieceIndex += 1) {
+    const pieceId = encoded.pieceIds[pieceIndex];
+    const piece = state?.pieces?.[pieceId];
+    const color = Number(encoded.pieceColor[pieceIndex] || 0);
+    const zone = Number(encoded.pieceZone[pieceIndex] || 0);
+    const square = Number(encoded.pieceSquareIndices[pieceIndex] || -1) + 1;
+    const publicIdentity = piece
+      ? getVisibleIdentity(state, piece, perspective)
+      : 0;
+    const capturedBy = Number(encoded.pieceCapturedBy[pieceIndex] || -1) + 2;
+    mixHashPair(
+      hash,
+      ((pieceIndex + 1) << 8) ^ (color << 4) ^ zone,
+      (publicIdentity << 8) ^ square,
+    );
+    mixHashPair(hash, capturedBy, Number(encoded.pieceAlive[pieceIndex] || 0));
+  }
+
+  const historyHash = getInformationHistoryHash(state);
+  mixHashPair(hash, historyHash?.moveHash?.[0] || 0, historyHash?.moveHash?.[1] || 0);
+  mixHashPair(hash, historyHash?.actionHash?.[0] || 0, historyHash?.actionHash?.[1] || 0);
+
+  const hashValue = `${hash[0].toString(16).padStart(8, '0')}${hash[1].toString(16).padStart(8, '0')}`;
+
+  cache.informationStateHashByPerspective[perspective] = { hash: hashValue };
+  return hashValue;
+}
+
+function createInformationNode(infoHash, player, depth = 0) {
+  return {
+    hash: infoHash,
+    player,
+    depth,
+    visits: 0,
+    valueSum: 0,
+    expanded: false,
+    legalActions: [],
+    actionKeys: [],
+    unvisitedActionKeys: [],
+    nextUnvisitedActionIndex: 0,
+    priorsByActionKey: {},
+    actionByKey: {},
+    actionStatsByKey: {},
+    policyFeaturesByActionKey: {},
+    policyStateFeatures: [],
+    identitySamples: [],
+    hypothesisSummary: [],
+    valueEstimate: 0,
+  };
+}
+
+function getOrCreateInformationNode(searchCache, state, player, depth = 0) {
+  const infoHash = computeInformationStateHash(state, player);
+  if (searchCache.nodesByHash.has(infoHash)) {
+    searchCache.stats.transpositionHits += 1;
+    const existing = searchCache.nodesByHash.get(infoHash);
+    existing.player = player;
+    existing.depth = Math.min(Number.isFinite(existing.depth) ? existing.depth : depth, depth);
+    return existing;
+  }
+  const node = createInformationNode(infoHash, player, depth);
+  searchCache.nodesByHash.set(infoHash, node);
+  searchCache.stats.nodeCount += 1;
+  return node;
+}
+
+function evaluateInformationState(modelBundle, state, currentPlayer, rootPlayer, options = {}) {
+  const evaluationCache = options.searchCache?.informationEvaluationsByHash || null;
+  const infoHash = computeInformationStateHash(state, currentPlayer);
+  if (evaluationCache && evaluationCache.has(infoHash)) {
+    options.searchCache.stats.evaluationCacheHits += 1;
+    return evaluationCache.get(infoHash);
+  }
+
+  const legalActions = getLegalActions(state, currentPlayer);
+  if (!legalActions.length) {
+    const evaluation = {
+      legalActions,
+      priors: [],
+      valueRoot: currentPlayer === rootPlayer ? -1 : 1,
+      policyFeatures: [],
+      policyStateFeatures: [],
+      identitySamples: [],
+      hypothesisSummary: [],
+    };
+    if (evaluationCache) {
+      evaluationCache.set(infoHash, evaluation);
+      options.searchCache.stats.evaluationCount += 1;
+    }
+    return evaluation;
+  }
+
+  const policy = predictPolicy(
+    modelBundle,
+    state,
+    currentPlayer,
+    legalActions,
+    null,
+    null,
+  );
+  const value = predictValue(
+    modelBundle,
+    state,
+    currentPlayer,
+    null,
+    policy.stateFeatures,
+  );
+
+  const evaluation = {
+    legalActions,
+    priors: normalizeArray(policy.probabilities),
+    valueRoot: currentPlayer === rootPlayer ? value.value : -value.value,
+    policyFeatures: policy.features || [],
+    policyStateFeatures: policy.stateFeatures || [],
+    identitySamples: [],
+    hypothesisSummary: [],
+  };
+  if (evaluationCache) {
+    evaluationCache.set(infoHash, evaluation);
+    options.searchCache.stats.evaluationCount += 1;
+  }
+  return evaluation;
+}
+
+function buildSampledIdentityGuessMap(state, perspective) {
+  const hiddenPieceIds = getHiddenPieceIds(state, perspective);
+  if (!hiddenPieceIds.length) return null;
+  const guessedIdentities = {};
+  hiddenPieceIds.forEach((pieceId) => {
+    const piece = state?.pieces?.[pieceId];
+    if (!piece || !Number.isFinite(piece.identity)) return;
+    guessedIdentities[pieceId] = piece.identity;
+  });
+  return Object.keys(guessedIdentities).length ? guessedIdentities : null;
+}
+
+function evaluateSampledLeaf(modelBundle, state, currentPlayer, rootPlayer, options = {}) {
+  const evaluationCache = options.searchCache?.sampledValueByHash || null;
+  const cacheKey = `${Number(currentPlayer)}::${computeStateHash(state)}`;
+  if (evaluationCache && evaluationCache.has(cacheKey)) {
+    options.searchCache.stats.evaluationCacheHits += 1;
+    return evaluationCache.get(cacheKey);
+  }
+  const guessedIdentities = buildSampledIdentityGuessMap(state, currentPlayer);
+  const value = predictValue(
+    modelBundle,
+    state,
+    currentPlayer,
+    guessedIdentities,
+  );
+  const valueRoot = currentPlayer === rootPlayer ? value.value : -value.value;
+  if (evaluationCache) {
+    evaluationCache.set(cacheKey, valueRoot);
+    options.searchCache.stats.evaluationCount += 1;
+  }
+  return valueRoot;
+}
+
+function expandInformationNode(node, modelBundle, state, rootPlayer, options = {}) {
+  if (node.expanded) {
+    return node;
+  }
+
+  const evaluation = evaluateInformationState(
+    modelBundle,
+    state,
+    node.player,
+    rootPlayer,
+    options,
+  );
+
+  node.legalActions = evaluation.legalActions;
+  node.actionKeys = new Array(node.legalActions.length);
+  node.policyStateFeatures = evaluation.policyStateFeatures;
+  node.identitySamples = evaluation.identitySamples;
+  node.hypothesisSummary = evaluation.hypothesisSummary;
+
+  node.legalActions.forEach((action, idx) => {
+    const key = actionKey(action);
+    node.actionKeys[idx] = key;
+    node.priorsByActionKey[key] = evaluation.priors[idx] || 0;
+    node.actionByKey[key] = action;
+    node.policyFeaturesByActionKey[key] = evaluation.policyFeatures[idx] || [];
+    node.actionStatsByKey[key] = node.actionStatsByKey[key] || {
+      visits: 0,
+      valueSum: 0,
+    };
+  });
+
+  node.unvisitedActionKeys = node.actionKeys
+    .slice()
+    .sort((a, b) => (node.priorsByActionKey[b] || 0) - (node.priorsByActionKey[a] || 0));
+  node.nextUnvisitedActionIndex = 0;
+
+  node.valueEstimate = evaluation.valueRoot;
+  node.expanded = true;
+  return node;
+}
+
+function isPopulatedFeatureVector(vector) {
+  return Array.isArray(vector) && vector.length > 0;
+}
+
+function ensureTrainingPolicySnapshot(node, modelBundle, state, player, actionKeys, actionByKey) {
+  const isSharedModel = String(modelBundle?.family || '').trim().toLowerCase() === 'shared_encoder_belief_ismcts_v1';
+  const normalizedActionKeys = Array.isArray(actionKeys) ? actionKeys.slice() : [];
+  if (!normalizedActionKeys.length) {
+    return {
+      stateFeatures: Array.isArray(node?.policyStateFeatures) ? node.policyStateFeatures : [],
+      features: [],
+      stateInput: Array.isArray(node?.policyStateInput) ? node.policyStateInput : [],
+      slotIndices: [],
+      refreshed: false,
+    };
+  }
+
+  const existingStateFeatures = Array.isArray(node?.policyStateFeatures)
+    ? node.policyStateFeatures
+    : [];
+  const existingFeatures = normalizedActionKeys.map((key) => node?.policyFeaturesByActionKey?.[key]);
+  const hasMissingFeatures = !existingStateFeatures.length
+    || existingFeatures.some((vector) => !isPopulatedFeatureVector(vector));
+  if (!hasMissingFeatures) {
+    return {
+      stateFeatures: existingStateFeatures,
+      features: existingFeatures,
+      stateInput: Array.isArray(node?.policyStateInput) ? node.policyStateInput : [],
+      slotIndices: normalizedActionKeys.map((key) => node?.policySlotIndexByActionKey?.[key]).filter(Number.isFinite),
+      refreshed: false,
+    };
+  }
+
+  const legalActions = normalizedActionKeys
+    .map((key) => actionByKey?.[key] || null)
+    .filter(Boolean);
+  if (legalActions.length !== normalizedActionKeys.length) {
+    return {
+      stateFeatures: existingStateFeatures,
+      features: existingFeatures.map((vector) => (Array.isArray(vector) ? vector : [])),
+      stateInput: Array.isArray(node?.policyStateInput) ? node.policyStateInput : [],
+      slotIndices: normalizedActionKeys.map((key) => node?.policySlotIndexByActionKey?.[key]).filter(Number.isFinite),
+      refreshed: false,
+    };
+  }
+
+  const policy = predictPolicy(
+    modelBundle,
+    state,
+    player,
+    legalActions,
+    null,
+    null,
+  );
+
+  node.policyStateFeatures = Array.isArray(policy.stateFeatures) ? policy.stateFeatures : [];
+  node.policyStateInput = Array.isArray(policy.stateInput) ? policy.stateInput : [];
+  node.policyFeaturesByActionKey = node.policyFeaturesByActionKey || {};
+  node.policySlotIndexByActionKey = node.policySlotIndexByActionKey || {};
+  node.priorsByActionKey = node.priorsByActionKey || {};
+  node.actionByKey = node.actionByKey || {};
+
+  normalizedActionKeys.forEach((key, index) => {
+    node.actionByKey[key] = legalActions[index];
+    node.policyFeaturesByActionKey[key] = isSharedModel
+      ? []
+      : (Array.isArray(policy.features?.[index])
+      ? policy.features[index]
+      : []);
+    node.policySlotIndexByActionKey[key] = Number.isFinite(policy.slotIndices?.[index])
+      ? policy.slotIndices[index]
+      : null;
+    if (Array.isArray(policy.probabilities) && Number.isFinite(policy.probabilities[index])) {
+      node.priorsByActionKey[key] = policy.probabilities[index];
+    }
+  });
+
+  return {
+    stateFeatures: node.policyStateFeatures,
+    features: normalizedActionKeys.map((key) => node.policyFeaturesByActionKey[key] || []),
+    stateInput: Array.isArray(node.policyStateInput) ? node.policyStateInput.slice() : [],
+    slotIndices: normalizedActionKeys.map((key) => node.policySlotIndexByActionKey[key]),
+    refreshed: true,
+  };
+}
+
+function chooseUnvisitedActionKey(node) {
+  const keys = Array.isArray(node.unvisitedActionKeys) && node.unvisitedActionKeys.length
+    ? node.unvisitedActionKeys
+    : (Array.isArray(node.actionKeys) ? node.actionKeys : []);
+  let index = Number(node.nextUnvisitedActionIndex || 0);
+  while (index < keys.length) {
+    const key = keys[index];
+    const stats = node.actionStatsByKey[key];
+    if (Number(stats?.visits || 0) <= 0) {
+      node.nextUnvisitedActionIndex = index;
+      return key;
+    }
+    index += 1;
+  }
+  node.nextUnvisitedActionIndex = index;
+  return null;
+}
+
+function selectActionKeyForInformationNode(node, rootPlayer, exploration = 1.25) {
+  const actionKeys = Array.isArray(node.actionKeys) ? node.actionKeys : Object.keys(node.actionByKey || {});
+  if (!actionKeys.length) return null;
+  const parentVisits = Math.max(1, node.visits);
+  let bestKey = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  actionKeys.forEach((key) => {
+    const stats = node.actionStatsByKey[key] || { visits: 0, valueSum: 0 };
+    const prior = node.priorsByActionKey[key] || 0;
+    const qRaw = stats.visits > 0 ? (stats.valueSum / stats.visits) : 0;
+    const q = node.player === rootPlayer ? qRaw : -qRaw;
+    const u = exploration * prior * (Math.sqrt(parentVisits) / (1 + stats.visits));
+    const score = q + u;
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = key;
+    }
+  });
+
+  return bestKey;
+}
+
+function backpropagateInformationPath(path, valueRoot) {
+  const value = Number.isFinite(valueRoot) ? valueRoot : 0;
+  path.forEach((entry) => {
+    if (!entry?.node) return;
+    entry.node.visits += 1;
+    entry.node.valueSum += value;
+    if (!entry.actionKey) return;
+    const stats = entry.node.actionStatsByKey[entry.actionKey]
+      || (entry.node.actionStatsByKey[entry.actionKey] = { visits: 0, valueSum: 0 });
+    stats.visits += 1;
+    stats.valueSum += value;
+  });
+}
+
+function sampleWeightedIndex(weights = [], rng = Math.random) {
+  const normalized = normalizeArray(weights);
+  if (!normalized.length) return 0;
+  const target = (typeof rng === 'function' ? rng() : Math.random()) || 0;
+  let cumulative = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    cumulative += normalized[index];
+    if (target <= cumulative) return index;
+  }
+  return normalized.length - 1;
 }
 
 function evaluateDeterminizedState(modelBundle, state, currentPlayer, rootPlayer, options = {}) {
@@ -138,6 +554,8 @@ function createSearchCache() {
   return {
     nodesByHash: new Map(),
     evaluationsByHash: new Map(),
+    informationEvaluationsByHash: new Map(),
+    sampledValueByHash: new Map(),
     stats: {
       transpositionHits: 0,
       evaluationCacheHits: 0,
@@ -409,20 +827,42 @@ function runDeterminizedMcts(modelBundle, rootState, options = {}) {
       q,
     };
   });
+  const trainingPolicy = ensureTrainingPolicySnapshot(
+    root,
+    modelBundle,
+    rootState,
+    rootState.toMove,
+    actionKeys,
+    root.actionByKey,
+  );
+  const isSharedModel = String(modelBundle?.family || '').trim().toLowerCase() === 'shared_encoder_belief_ismcts_v1';
+  const sharedPolicyTarget = isSharedModel
+    ? (() => {
+      const dense = new Array(Number(modelBundle?.policy?.network?.outputSize || 0)).fill(0);
+      (trainingPolicy.slotIndices || []).forEach((slotIndex, index) => {
+        if (!Number.isFinite(slotIndex) || slotIndex < 0 || slotIndex >= dense.length) return;
+        dense[slotIndex] = Number(policyTarget[index] || 0);
+      });
+      return dense;
+    })()
+    : policyTarget;
 
   const trainingRecord = {
     player: rootState.toMove,
-    stateFeatures: root.policyStateFeatures || [],
+    stateFeatures: trainingPolicy.stateFeatures || [],
     policy: {
       actionKeys,
       moveKeys: actionKeys.slice(),
-      features: actionKeys.map((key) => root.policyFeaturesByActionKey[key] || []),
-      target: policyTarget,
+      features: trainingPolicy.features,
+      target: sharedPolicyTarget,
+      stateInput: trainingPolicy.stateInput || [],
+      slotIndices: trainingPolicy.slotIndices || [],
       selectedActionKey: selectedKey,
       selectedMoveKey: selectedKey,
     },
     value: {
-      features: root.policyStateFeatures || [],
+      features: trainingPolicy.stateFeatures || [],
+      stateInput: trainingPolicy.stateInput || [],
       target: 0,
     },
     identitySamples: [],
@@ -476,15 +916,19 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
     });
   }
 
-  const observationPolicy = predictPolicy(
-    modelBundle,
-    rootState,
-    rootPlayer,
-    rootLegalActions,
-    null,
-    null,
-  );
-  const observationStateFeatures = observationPolicy.stateFeatures || [];
+  const iterations = Number.isFinite(options.iterations) ? Math.max(1, Math.floor(options.iterations)) : 80;
+  const maxDepth = Number.isFinite(options.maxDepth) ? Math.max(1, Math.floor(options.maxDepth)) : 16;
+  const exploration = Number.isFinite(options.exploration) ? Math.max(0, options.exploration) : 1.25;
+  const rng = typeof options.rng === 'function'
+    ? options.rng
+    : createRng(Number.isFinite(options.seed) ? options.seed : Date.now());
+  const searchCache = options.searchCache || createSearchCache();
+  const statsBefore = {
+    transpositionHits: Number(searchCache.stats?.transpositionHits || 0),
+    evaluationCacheHits: Number(searchCache.stats?.evaluationCacheHits || 0),
+    evaluationCount: Number(searchCache.stats?.evaluationCount || 0),
+    nodeCount: Number(searchCache.stats?.nodeCount || 0),
+  };
   const identityInference = inferIdentityHypotheses(
     modelBundle,
     rootState,
@@ -492,162 +936,269 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
     { count: options.hypothesisCount },
   );
   const hypotheses = ensureHypotheses(identityInference);
-  const hypothesisSearches = hypotheses.map((hypothesis) => {
-    const assignment = hypothesis?.assignment || {};
-    const determinizedState = applyIdentityAssignmentToState(rootState, assignment);
-    const search = runDeterminizedMcts(modelBundle, determinizedState, {
-      ...options,
-      rootPlayer,
-    });
-    return {
-      hypothesis,
-      search,
-    };
-  });
-
-  const valuesRoot = hypothesisSearches.map(({ search }) => Number(search?.valueEstimate || 0));
-  const riskAggregation = applyRiskBiasToHypotheses(hypotheses, valuesRoot, options.riskBias);
-  const hypothesisWeights = riskAggregation.weights.length === hypothesisSearches.length
-    ? riskAggregation.weights
-    : normalizeArray(hypotheses.map((hypothesis) => Number(hypothesis?.probability || 0)));
+  const useUndoTraversal = options.useUndoTraversal !== false && (
+    Boolean(options.forceUndoTraversal)
+    || (((rootState?.moves?.length || 0) + (rootState?.actions?.length || 0)) >= 8)
+  );
   const actionKeys = rootLegalActions.map((action) => actionKey(action));
   const actionByKey = {};
-  const policyFeaturesByActionKey = {};
   rootLegalActions.forEach((action, idx) => {
     const key = actionKeys[idx];
     actionByKey[key] = action;
-    policyFeaturesByActionKey[key] = observationPolicy.features?.[idx] || [];
   });
-
-  let legalActionMismatchCount = 0;
-  const statsByActionKeyByHypothesis = hypothesisSearches.map(({ search }) => {
-    const statsByActionKey = {};
-    const searchActionKeys = new Set();
-    (search?.trace?.actionStats || []).forEach((entry) => {
-      const key = entry?.actionKey || entry?.moveKey || '';
-      if (!key) return;
-      statsByActionKey[key] = entry;
-      searchActionKeys.add(key);
-    });
-    if (searchActionKeys.size !== actionKeys.length || actionKeys.some((key) => !searchActionKeys.has(key))) {
-      legalActionMismatchCount += 1;
-    }
-    return statsByActionKey;
-  });
-
-  const aggregatedVisits = actionKeys.map((key) => (
-    hypothesisSearches.reduce((sum, _, hypothesisIndex) => (
-      sum + (Number(statsByActionKeyByHypothesis[hypothesisIndex]?.[key]?.visits || 0) * (hypothesisWeights[hypothesisIndex] || 0))
-    ), 0)
+  const determinizedRootStates = hypotheses.map((hypothesis) => (
+    applyIdentityAssignmentToState(rootState, hypothesis?.assignment || {})
   ));
-  const policyTarget = normalizeTargetProbabilities(aggregatedVisits);
-  const ranked = actionKeys
-    .map((key, idx) => ({
-      key,
-      visits: aggregatedVisits[idx],
+  const reusableSampledStates = useUndoTraversal
+    ? determinizedRootStates.map((state) => cloneStateForSearch(state))
+    : null;
+  const rootValueEstimates = determinizedRootStates.map((determinizedState) => {
+    const guessedIdentities = buildSampledIdentityGuessMap(determinizedState, rootPlayer);
+    return Number(predictValue(modelBundle, determinizedState, rootPlayer, guessedIdentities).value || 0);
+  });
+  const riskAggregation = applyRiskBiasToHypotheses(hypotheses, rootValueEstimates, options.riskBias);
+  const hypothesisWeights = riskAggregation.weights.length === hypotheses.length
+    ? riskAggregation.weights
+    : normalizeArray(hypotheses.map((hypothesis) => Number(hypothesis?.probability || 0)));
+  const hypothesisSampleCounts = Array.from({ length: hypotheses.length }, () => 0);
+  const root = getOrCreateInformationNode(searchCache, rootState, rootPlayer, 0);
+  expandInformationNode(root, modelBundle, rootState, rootPlayer, {
+    ...options,
+    searchCache,
+  });
+
+  for (let iter = 0; iter < iterations; iter += 1) {
+    const sampledHypothesisIndex = sampleWeightedIndex(hypothesisWeights, rng);
+    hypothesisSampleCounts[sampledHypothesisIndex] += 1;
+    const sampledState = reusableSampledStates
+      ? reusableSampledStates[sampledHypothesisIndex]
+      : cloneStateForSearch(determinizedRootStates[sampledHypothesisIndex] || rootState);
+    const undoFrames = [];
+    let node = root;
+    const path = [{ node, actionKey: null }];
+    let depth = 0;
+
+    try {
+      while (true) {
+        if (!sampledState.isActive) {
+          backpropagateInformationPath(path, terminalValueForRoot(sampledState, rootPlayer));
+          break;
+        }
+
+        expandInformationNode(node, modelBundle, sampledState, rootPlayer, {
+          ...options,
+          searchCache,
+        });
+
+        if (!node.legalActions.length) {
+          backpropagateInformationPath(path, evaluateSampledLeaf(
+            modelBundle,
+            sampledState,
+            node.player,
+            rootPlayer,
+            {
+              ...options,
+              searchCache,
+            },
+          ));
+          break;
+        }
+
+        if (depth >= maxDepth) {
+          backpropagateInformationPath(path, evaluateSampledLeaf(
+            modelBundle,
+            sampledState,
+            node.player,
+            rootPlayer,
+            {
+              ...options,
+              searchCache,
+            },
+          ));
+          break;
+        }
+
+        const unvisitedKey = chooseUnvisitedActionKey(node);
+        const selectedKey = unvisitedKey || selectActionKeyForInformationNode(node, rootPlayer, exploration);
+        if (!selectedKey) {
+          backpropagateInformationPath(path, evaluateSampledLeaf(
+            modelBundle,
+            sampledState,
+            node.player,
+            rootPlayer,
+            {
+              ...options,
+              searchCache,
+            },
+          ));
+          break;
+        }
+
+        const selectedAction = node.actionByKey[selectedKey];
+        if (!selectedAction) {
+          backpropagateInformationPath(path, 0);
+          break;
+        }
+
+        if (reusableSampledStates) {
+          undoFrames.push(applyActionWithUndo(sampledState, selectedAction));
+        } else {
+          applyActionMutable(sampledState, selectedAction);
+        }
+        const nextPlayer = Number.isFinite(sampledState?.toMove) ? sampledState.toMove : sampledState?.playerTurn;
+        const child = getOrCreateInformationNode(searchCache, sampledState, nextPlayer, depth + 1);
+        path[path.length - 1].actionKey = selectedKey;
+        node = child;
+        path.push({ node, actionKey: null });
+        depth += 1;
+
+        if (unvisitedKey) {
+          if (!sampledState.isActive) {
+            backpropagateInformationPath(path, terminalValueForRoot(sampledState, rootPlayer));
+          } else {
+            expandInformationNode(node, modelBundle, sampledState, rootPlayer, {
+              ...options,
+              searchCache,
+            });
+            backpropagateInformationPath(path, evaluateSampledLeaf(
+              modelBundle,
+              sampledState,
+              node.player,
+              rootPlayer,
+              {
+                ...options,
+                searchCache,
+              },
+            ));
+          }
+          break;
+        }
+      }
+    } finally {
+      if (reusableSampledStates) {
+        while (undoFrames.length) {
+          undoAppliedAction(sampledState, undoFrames.pop());
+        }
+      }
+    }
+  }
+
+  const rootActionStats = actionKeys.map((key) => {
+    const stats = root.actionStatsByKey[key] || { visits: 0, valueSum: 0 };
+    const visits = Number(stats.visits || 0);
+    return {
+      actionKey: key,
+      moveKey: key,
+      visits,
+      prior: root.priorsByActionKey[key] || 0,
+      q: visits > 0 ? (stats.valueSum / visits) : 0,
+    };
+  });
+  const policyTarget = normalizeTargetProbabilities(rootActionStats.map((entry) => entry.visits));
+  const ranked = rootActionStats
+    .map((entry) => ({
+      key: entry.actionKey,
+      visits: entry.visits,
     }))
     .sort((a, b) => b.visits - a.visits);
   const nonCatastrophic = ranked.find((entry) => !isCatastrophicKingBluff(rootState, actionByKey[entry.key]));
   const selectedEntry = nonCatastrophic || ranked[0];
   const selectedKey = selectedEntry?.key || actionKeys[0];
   const selectedAction = actionByKey[selectedKey] || rootLegalActions[0] || null;
-  const actionStats = actionKeys.map((key, idx) => ({
-    actionKey: key,
-    moveKey: key,
-    visits: aggregatedVisits[idx],
-    prior: observationPolicy.probabilities?.[idx] || 0,
-    q: hypothesisSearches.reduce((sum, _, hypothesisIndex) => (
-      sum + (Number(statsByActionKeyByHypothesis[hypothesisIndex]?.[key]?.q || 0) * (hypothesisWeights[hypothesisIndex] || 0))
-    ), 0),
-  }));
-
-  const totalRootVisits = hypothesisSearches.reduce((sum, { search }) => sum + Number(search?.trace?.rootVisits || 0), 0);
-  const hypothesisSummary = hypothesisSearches.map(({ hypothesis, search }, index) => ({
+  const hypothesisSummary = hypotheses.map((hypothesis, index) => ({
     probability: Number(hypothesis?.probability || 0),
     searchWeight: Number(hypothesisWeights[index] || 0),
-    valueRoot: Number(search?.valueEstimate || 0),
-    selectedActionKey: search?.action ? actionKey(search.action) : null,
+    valueRoot: Number(rootValueEstimates[index] || 0),
+    sampledCount: Number(hypothesisSampleCounts[index] || 0),
     assignment: hypothesis?.assignment || {},
   }));
 
-  const root = {
-    hash: computeStateHash(rootState),
-    state: rootState,
-    visits: totalRootVisits,
-    valueSum: Number(riskAggregation.value || 0) * totalRootVisits,
-    expanded: true,
-    legalActions: rootLegalActions,
-    priorsByActionKey: actionKeys.reduce((acc, key, idx) => {
-      acc[key] = observationPolicy.probabilities?.[idx] || 0;
-      return acc;
-    }, {}),
+  root.state = rootState;
+  root.childrenByActionKey = actionKeys.reduce((acc, key) => {
+    const stats = root.actionStatsByKey[key] || { visits: 0, valueSum: 0 };
+    acc[key] = {
+      visits: Number(stats.visits || 0),
+      valueSum: Number(stats.valueSum || 0),
+    };
+    return acc;
+  }, {});
+  root.hypothesisSummary = hypothesisSummary;
+  root.identitySamples = identityInference.samples || [];
+  const trainingPolicy = ensureTrainingPolicySnapshot(
+    root,
+    modelBundle,
+    rootState,
+    rootPlayer,
+    actionKeys,
     actionByKey,
-    childrenByActionKey: actionKeys.reduce((acc, key, idx) => {
-      acc[key] = {
-        visits: aggregatedVisits[idx],
-        valueSum: (actionStats[idx]?.q || 0) * aggregatedVisits[idx],
-      };
-      return acc;
-    }, {}),
-    policyFeaturesByActionKey,
-    policyStateFeatures: observationStateFeatures,
-    identitySamples: identityInference.samples || [],
-    hypothesisSummary,
-  };
+  );
+  const isSharedModel = String(modelBundle?.family || '').trim().toLowerCase() === 'shared_encoder_belief_ismcts_v1';
+  const sharedPolicyTarget = isSharedModel
+    ? (() => {
+      const dense = new Array(Number(modelBundle?.policy?.network?.outputSize || 0)).fill(0);
+      (trainingPolicy.slotIndices || []).forEach((slotIndex, index) => {
+        if (!Number.isFinite(slotIndex) || slotIndex < 0 || slotIndex >= dense.length) return;
+        dense[slotIndex] = Number(policyTarget[index] || 0);
+      });
+      return dense;
+    })()
+    : policyTarget;
 
   const trainingRecord = {
     player: rootState.toMove,
-    stateFeatures: observationStateFeatures,
+    stateFeatures: trainingPolicy.stateFeatures || [],
     policy: {
       actionKeys,
       moveKeys: actionKeys.slice(),
-      features: observationPolicy.features?.map((vector) => vector.slice()) || [],
-      target: policyTarget,
+      features: trainingPolicy.features,
+      target: sharedPolicyTarget,
+      stateInput: trainingPolicy.stateInput || [],
+      slotIndices: trainingPolicy.slotIndices || [],
       selectedActionKey: selectedKey,
       selectedMoveKey: selectedKey,
     },
     value: {
-      features: observationStateFeatures.slice(),
+      features: trainingPolicy.stateFeatures ? trainingPolicy.stateFeatures.slice() : [],
+      stateInput: trainingPolicy.stateInput || [],
       target: 0,
     },
     identitySamples: identityInference.samples || [],
     hypothesisSummary,
   };
-
-  const aggregateTrace = hypothesisSearches.reduce((acc, { search }) => {
-    acc.iterations += Number(search?.trace?.iterations || 0);
-    acc.transpositionHits += Number(search?.trace?.transpositionHits || 0);
-    acc.evaluationCacheHits += Number(search?.trace?.evaluationCacheHits || 0);
-    acc.evaluationCount += Number(search?.trace?.evaluationCount || 0);
-    acc.nodeCount += Number(search?.trace?.nodeCount || 0);
-    return acc;
-  }, {
-    iterations: 0,
-    transpositionHits: 0,
-    evaluationCacheHits: 0,
-    evaluationCount: 0,
-    nodeCount: 0,
-  });
+  const statsDelta = {
+    transpositionHits: Math.max(0, Number(searchCache.stats.transpositionHits || 0) - statsBefore.transpositionHits),
+    evaluationCacheHits: Math.max(0, Number(searchCache.stats.evaluationCacheHits || 0) - statsBefore.evaluationCacheHits),
+    evaluationCount: Math.max(0, Number(searchCache.stats.evaluationCount || 0) - statsBefore.evaluationCount),
+    nodeCount: Math.max(0, Number(searchCache.stats.nodeCount || 0) - statsBefore.nodeCount),
+  };
 
   return buildSearchResult({
     action: selectedAction,
     root,
     policyTarget,
-    valueEstimate: Number(riskAggregation.value || 0),
+    valueEstimate: root.visits > 0
+      ? (root.valueSum / root.visits)
+      : Number(riskAggregation.value || 0),
     trace: {
-      iterations: aggregateTrace.iterations,
-      iterationsPerHypothesis: hypothesisSearches.length ? Number(hypothesisSearches[0]?.trace?.iterations || 0) : 0,
-      hypothesisCount: hypothesisSearches.length,
-      rootVisits: totalRootVisits,
-      actionStats,
-      moveStats: actionStats,
+      algorithm: 'ismcts',
+      iterations,
+      iterationsPerHypothesis: null,
+      hypothesisCount: hypotheses.length,
+      rootVisits: root.visits,
+      actionStats: rootActionStats,
+      moveStats: rootActionStats,
       hypothesisSummary,
-      legalActionMismatchCount,
+      sampledHypothesisCounts: hypothesisSampleCounts.slice(),
+      legalActionMismatchCount: 0,
       kingBluffGuardApplied: Boolean(nonCatastrophic && selectedEntry && selectedEntry.key !== ranked[0]?.key),
-      transpositionHits: aggregateTrace.transpositionHits,
-      evaluationCacheHits: aggregateTrace.evaluationCacheHits,
-      evaluationCount: aggregateTrace.evaluationCount,
-      nodeCount: aggregateTrace.nodeCount,
+      transpositionHits: statsDelta.transpositionHits,
+      evaluationCacheHits: statsDelta.evaluationCacheHits,
+      evaluationCount: statsDelta.evaluationCount,
+      nodeCount: statsDelta.nodeCount,
+      sharedTree: {
+        totalNodeCount: Number(searchCache.stats.nodeCount || 0),
+        totalEvaluationCount: Number(searchCache.stats.evaluationCount || 0),
+      },
     },
     trainingRecord,
   });
@@ -666,6 +1217,7 @@ function chooseActionFromPolicy(actions, probabilities) {
 }
 
 module.exports = {
+  createSearchCache,
   runHiddenInfoMcts,
   chooseActionFromPolicy,
   chooseMoveFromPolicy: chooseActionFromPolicy,

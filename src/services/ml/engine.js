@@ -2,6 +2,9 @@ const gameConstants = require('../../../shared/constants/game.json');
 const {
   NO_PIECE,
   ensureEncodedState,
+  cloneEncodedState,
+  syncEncodedPieceState,
+  syncEncodedPieceReveal,
   computeEncodedStateHash,
   getMoveTemplatesForSquare,
   squareToIndex,
@@ -19,6 +22,7 @@ const FILES = BOARD_DIMENSIONS.FILES;
 
 const WHITE = COLORS.WHITE;
 const BLACK = COLORS.BLACK;
+const SQUARE_COORDS = Array.from({ length: RANKS * FILES }, (_, index) => Object.freeze(indexToSquare(index)));
 
 const DECLARABLE_IDENTITIES = Object.freeze([
   IDENTITIES.KING,
@@ -54,6 +58,69 @@ const PIECE_VALUES = Object.freeze({
   [IDENTITIES.KNIGHT]: 3.6,
   [IDENTITIES.UNKNOWN]: 0,
 });
+
+const INFO_ACTION_TYPES = Object.freeze({
+  MOVE: 1,
+  CHALLENGE: 2,
+  BOMB: 3,
+  PASS: 4,
+  ON_DECK: 5,
+});
+
+const INFO_OUTCOMES = Object.freeze({
+  SUCCESS: 1,
+  FAIL: 2,
+});
+
+let infoHashSeed = 0x51ed270b;
+
+function nextInfoHashWord() {
+  infoHashSeed = (Math.imul(infoHashSeed, 1664525) + 1013904223) >>> 0;
+  return infoHashSeed;
+}
+
+function createInfoHashPair() {
+  return [nextInfoHashWord(), nextInfoHashWord()];
+}
+
+function xorInfoHashPair(target, pair) {
+  if (!pair) return;
+  target[0] = (target[0] ^ pair[0]) >>> 0;
+  target[1] = (target[1] ^ pair[1]) >>> 0;
+}
+
+function cloneHashPair(pair) {
+  return Array.isArray(pair) ? [pair[0] >>> 0, pair[1] >>> 0] : [0, 0];
+}
+
+function createInfoPairTable(initialSize = 0) {
+  const pairs = [];
+  for (let index = 0; index < initialSize; index += 1) {
+    pairs.push(createInfoHashPair());
+  }
+  return {
+    get(index) {
+      const safeIndex = Number.isFinite(index) && index >= 0 ? Math.floor(index) : 0;
+      while (pairs.length <= safeIndex) {
+        pairs.push(createInfoHashPair());
+      }
+      return pairs[safeIndex];
+    },
+  };
+}
+
+const infoMoveIndexHash = createInfoPairTable(256);
+const infoMovePieceHash = createInfoPairTable(20);
+const infoMoveDeclarationHash = createInfoPairTable(16);
+const infoMoveStateHash = createInfoPairTable(8);
+const infoMoveSquareHash = createInfoPairTable((RANKS * FILES) + 2);
+const infoMovePlayerHash = [createInfoHashPair(), createInfoHashPair()];
+const infoActionIndexHash = createInfoPairTable(256);
+const infoActionTypeHash = createInfoPairTable(8);
+const infoActionPlayerHash = [createInfoHashPair(), createInfoHashPair()];
+const infoActionDeclarationHash = createInfoPairTable(16);
+const infoActionOutcomeHash = createInfoPairTable(8);
+const infoActionSquareHash = createInfoPairTable((RANKS * FILES) + 2);
 
 function createRng(seed) {
   let t = Number(seed) || Date.now();
@@ -214,10 +281,6 @@ function cloneState(state) {
   Object.keys(state.pieces || {}).forEach((id) => {
     pieces[id] = { ...state.pieces[id] };
   });
-  const moveHistoryByPiece = {};
-  Object.keys(state.moveHistoryByPiece || {}).forEach((id) => {
-    moveHistoryByPiece[id] = (state.moveHistoryByPiece[id] || []).map((entry) => ({ ...entry }));
-  });
   return {
     ...state,
     board,
@@ -225,21 +288,166 @@ function cloneState(state) {
     stashes: (state.stashes || [[], []]).map((stash) => stash.slice()),
     onDecks: (state.onDecks || [null, null]).slice(),
     captured: (state.captured || [[], []]).map((arr) => arr.slice()),
-    moves: (state.moves || []).map((move) => ({
-      ...move,
-      from: move.from ? { ...move.from } : null,
-      to: move.to ? { ...move.to } : null,
-    })),
-    actions: (state.actions || []).map((action) => ({
-      ...action,
-      details: action.details ? { ...action.details } : {},
-    })),
+    moves: (state.moves || []).slice(),
+    actions: (state.actions || []).slice(),
     daggers: (state.daggers || [0, 0]).slice(),
     setupComplete: (state.setupComplete || [true, true]).slice(),
     playersReady: (state.playersReady || [true, true]).slice(),
-    moveHistoryByPiece,
+    moveHistoryByPiece: { ...(state.moveHistoryByPiece || {}) },
     revealedIdentities: { ...(state.revealedIdentities || {}) },
   };
+}
+
+function cloneStateForSearch(state) {
+  const next = cloneState(state);
+  const sourceCache = getStateCache(state);
+  if (!sourceCache.encoded) {
+    return next;
+  }
+  const targetCache = getStateCache(next);
+  targetCache.encoded = cloneEncodedState(sourceCache.encoded);
+  if (sourceCache.encodedHash) {
+    targetCache.encodedHash = sourceCache.encodedHash;
+  }
+  if (sourceCache.infoHistoryHash) {
+    targetCache.infoHistoryHash = cloneInfoHistoryHash(sourceCache.infoHistoryHash);
+  }
+  if (sourceCache.declaredMoveActionsByColor) {
+    targetCache.declaredMoveActionsByColor = sourceCache.declaredMoveActionsByColor.map((actions) => (
+      Array.isArray(actions) ? actions.slice() : actions
+    ));
+  }
+  if (sourceCache.moveOptionCountsByColor) {
+    targetCache.moveOptionCountsByColor = sourceCache.moveOptionCountsByColor.slice();
+  }
+  return next;
+}
+
+function normalizeInfoActionType(type) {
+  const normalized = String(type || '').trim().toUpperCase();
+  return INFO_ACTION_TYPES[normalized] || 0;
+}
+
+function normalizeInfoOutcome(outcome) {
+  const normalized = String(outcome || '').trim().toUpperCase();
+  return INFO_OUTCOMES[normalized] || 0;
+}
+
+function hashMoveEntryPair(state, move, index) {
+  if (!move) return null;
+  const encoded = ensureEncodedState(state);
+  const pair = [0, 0];
+  const pieceIndex = move?.pieceId && Object.prototype.hasOwnProperty.call(encoded.pieceIndexById, move.pieceId)
+    ? (encoded.pieceIndexById[move.pieceId] + 1)
+    : 0;
+  xorInfoHashPair(pair, infoMoveIndexHash.get(index + 1));
+  xorInfoHashPair(pair, infoMovePieceHash.get(pieceIndex));
+  xorInfoHashPair(pair, infoMovePlayerHash[move.player === BLACK ? BLACK : WHITE]);
+  xorInfoHashPair(pair, infoMoveDeclarationHash.get(Number(move.declaration || 0)));
+  xorInfoHashPair(pair, infoMoveStateHash.get(Number(move.state || 0)));
+  xorInfoHashPair(pair, infoMoveSquareHash.get(squareToIndex(move?.from?.row, move?.from?.col) + 1));
+  xorInfoHashPair(pair, infoMoveSquareHash.get(squareToIndex(move?.to?.row, move?.to?.col) + 1));
+  return pair;
+}
+
+function hashActionEntryPair(action, index) {
+  if (!action) return null;
+  const details = action.details || {};
+  const pair = [0, 0];
+  xorInfoHashPair(pair, infoActionIndexHash.get(index + 1));
+  xorInfoHashPair(pair, infoActionTypeHash.get(normalizeInfoActionType(action.type)));
+  xorInfoHashPair(pair, infoActionPlayerHash[action.player === BLACK ? BLACK : WHITE]);
+  xorInfoHashPair(pair, infoActionDeclarationHash.get(Number(details.declaration || 0)));
+  xorInfoHashPair(pair, infoActionOutcomeHash.get(normalizeInfoOutcome(details.outcome)));
+  xorInfoHashPair(pair, infoActionSquareHash.get(squareToIndex(details?.from?.row, details?.from?.col) + 1));
+  xorInfoHashPair(pair, infoActionSquareHash.get(squareToIndex(details?.to?.row, details?.to?.col) + 1));
+  return pair;
+}
+
+function cloneInfoHistoryHash(infoHistoryHash) {
+  if (!infoHistoryHash) return null;
+  return {
+    moveHash: cloneHashPair(infoHistoryHash.moveHash),
+    actionHash: cloneHashPair(infoHistoryHash.actionHash),
+    moveEntries: Array.isArray(infoHistoryHash.moveEntries)
+      ? infoHistoryHash.moveEntries.map((pair) => (pair ? cloneHashPair(pair) : null))
+      : [],
+    actionEntries: Array.isArray(infoHistoryHash.actionEntries)
+      ? infoHistoryHash.actionEntries.map((pair) => (pair ? cloneHashPair(pair) : null))
+      : [],
+  };
+}
+
+function ensureInfoHistoryHash(state) {
+  const cache = getStateCache(state);
+  if (cache.infoHistoryHash) {
+    return cache.infoHistoryHash;
+  }
+
+  const moveHash = [0, 0];
+  const actionHash = [0, 0];
+  const moves = Array.isArray(state.moves) ? state.moves : [];
+  const actions = Array.isArray(state.actions) ? state.actions : [];
+  const moveEntries = new Array(moves.length);
+  const actionEntries = new Array(actions.length);
+
+  for (let index = 0; index < moves.length; index += 1) {
+    const pair = hashMoveEntryPair(state, moves[index], index);
+    moveEntries[index] = pair;
+    xorInfoHashPair(moveHash, pair);
+  }
+
+  for (let index = 0; index < actions.length; index += 1) {
+    const pair = hashActionEntryPair(actions[index], index);
+    actionEntries[index] = pair;
+    xorInfoHashPair(actionHash, pair);
+  }
+
+  cache.infoHistoryHash = {
+    moveHash,
+    actionHash,
+    moveEntries,
+    actionEntries,
+  };
+  return cache.infoHistoryHash;
+}
+
+function refreshInfoMoveHashEntry(state, index) {
+  const cache = getStateCache(state);
+  if (!cache.infoHistoryHash || !Number.isFinite(index) || index < 0) return;
+  const history = cache.infoHistoryHash;
+  const oldPair = history.moveEntries[index];
+  if (oldPair) {
+    xorInfoHashPair(history.moveHash, oldPair);
+  }
+  const move = Array.isArray(state.moves) ? state.moves[index] : null;
+  const nextPair = move ? hashMoveEntryPair(state, move, index) : null;
+  history.moveEntries[index] = nextPair;
+  if (nextPair) {
+    xorInfoHashPair(history.moveHash, nextPair);
+  }
+  history.moveEntries.length = Array.isArray(state.moves) ? state.moves.length : 0;
+}
+
+function refreshInfoActionHashEntry(state, index) {
+  const cache = getStateCache(state);
+  if (!cache.infoHistoryHash || !Number.isFinite(index) || index < 0) return;
+  const history = cache.infoHistoryHash;
+  const oldPair = history.actionEntries[index];
+  if (oldPair) {
+    xorInfoHashPair(history.actionHash, oldPair);
+  }
+  const action = Array.isArray(state.actions) ? state.actions[index] : null;
+  const nextPair = action ? hashActionEntryPair(action, index) : null;
+  history.actionEntries[index] = nextPair;
+  if (nextPair) {
+    xorInfoHashPair(history.actionHash, nextPair);
+  }
+  history.actionEntries.length = Array.isArray(state.actions) ? state.actions.length : 0;
+}
+
+function getInformationHistoryHash(state) {
+  return ensureInfoHistoryHash(state);
 }
 
 function getStateCache(state) {
@@ -253,6 +461,29 @@ function getStateCache(state) {
     });
   }
   return state.__mlCache;
+}
+
+function clearStateCache(state, options = {}) {
+  if (!state || typeof state !== 'object') return;
+  if (Object.prototype.hasOwnProperty.call(state, '__mlCache')) {
+    const preserveEncoded = options.preserveEncoded !== false;
+    const preserveInfoHistoryHash = options.preserveInfoHistoryHash !== false;
+    const preserveMoveGeneration = options.preserveMoveGeneration === true;
+    const nextCache = {};
+    if (preserveEncoded && state.__mlCache?.encoded) {
+      nextCache.encoded = state.__mlCache.encoded;
+    }
+    if (preserveInfoHistoryHash && state.__mlCache?.infoHistoryHash) {
+      nextCache.infoHistoryHash = state.__mlCache.infoHistoryHash;
+    }
+    if (preserveMoveGeneration && state.__mlCache?.declaredMoveActionsByColor) {
+      nextCache.declaredMoveActionsByColor = state.__mlCache.declaredMoveActionsByColor;
+    }
+    if (preserveMoveGeneration && state.__mlCache?.moveOptionCountsByColor) {
+      nextCache.moveOptionCountsByColor = state.__mlCache.moveOptionCountsByColor;
+    }
+    state.__mlCache = nextCache;
+  }
 }
 
 function getPieceAt(state, row, col) {
@@ -277,6 +508,182 @@ function getLastAction(state) {
   return state.actions[state.actions.length - 1];
 }
 
+function cloneSquareLike(square) {
+  return square ? { ...square } : square;
+}
+
+function cloneMoveLike(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  return {
+    ...entry,
+    from: cloneSquareLike(entry.from),
+    to: cloneSquareLike(entry.to),
+  };
+}
+
+function cloneMoveHistoryEntries(entries = []) {
+  return entries.map((entry) => cloneMoveLike(entry));
+}
+
+function createCacheSnapshot(state) {
+  const cache = getStateCache(state);
+  return {
+    encoded: cache.encoded ? cloneEncodedState(cache.encoded) : null,
+    infoHistoryHash: cache.infoHistoryHash ? cloneInfoHistoryHash(cache.infoHistoryHash) : null,
+    declaredMoveActionsByColor: cache.declaredMoveActionsByColor
+      ? cache.declaredMoveActionsByColor.map((actions) => (Array.isArray(actions) ? actions.slice() : actions))
+      : null,
+    moveOptionCountsByColor: cache.moveOptionCountsByColor
+      ? cache.moveOptionCountsByColor.slice()
+      : null,
+  };
+}
+
+function createUndoFrame(state) {
+  return {
+    scalars: {
+      playerTurn: state.playerTurn,
+      toMove: state.toMove,
+      onDeckingPlayer: state.onDeckingPlayer,
+      movesSinceAction: state.movesSinceAction,
+      ply: state.ply,
+      winner: state.winner,
+      winReason: state.winReason,
+      isActive: state.isActive,
+    },
+    onDecks: (state.onDecks || [null, null]).slice(),
+    daggers: (state.daggers || [0, 0]).slice(),
+    stashes: (state.stashes || [[], []]).map((stash) => stash.slice()),
+    captured: (state.captured || [[], []]).map((arr) => arr.slice()),
+    revealedIdentities: { ...(state.revealedIdentities || {}) },
+    movesLength: Array.isArray(state.moves) ? state.moves.length : 0,
+    actionsLength: Array.isArray(state.actions) ? state.actions.length : 0,
+    moveEntries: Object.create(null),
+    moveHistoryByPiece: Object.create(null),
+    boardCells: Object.create(null),
+    pieces: Object.create(null),
+    cache: createCacheSnapshot(state),
+  };
+}
+
+function setActiveUndoFrame(state, frame) {
+  if (!state || typeof state !== 'object') return;
+  Object.defineProperty(state, '__mlUndoFrame', {
+    value: frame,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+}
+
+function clearActiveUndoFrame(state) {
+  if (!state || typeof state !== 'object') return;
+  if (Object.prototype.hasOwnProperty.call(state, '__mlUndoFrame')) {
+    state.__mlUndoFrame = null;
+  }
+}
+
+function getActiveUndoFrame(state) {
+  if (!state || typeof state !== 'object') return null;
+  return Object.prototype.hasOwnProperty.call(state, '__mlUndoFrame')
+    ? state.__mlUndoFrame
+    : null;
+}
+
+function recordUndoBoardCell(state, row, col) {
+  const frame = getActiveUndoFrame(state);
+  if (!frame || !isInside(row, col)) return;
+  const key = `${row}:${col}`;
+  if (!Object.prototype.hasOwnProperty.call(frame.boardCells, key)) {
+    frame.boardCells[key] = state.board[row][col];
+  }
+}
+
+function recordUndoPiece(state, pieceId) {
+  const frame = getActiveUndoFrame(state);
+  if (!frame || !pieceId || Object.prototype.hasOwnProperty.call(frame.pieces, pieceId)) return;
+  const piece = state.pieces[pieceId];
+  frame.pieces[pieceId] = piece ? { ...piece } : null;
+}
+
+function recordUndoMoveEntry(state, index) {
+  const frame = getActiveUndoFrame(state);
+  if (!frame || !Number.isFinite(index) || index < 0) return;
+  const key = String(index);
+  if (Object.prototype.hasOwnProperty.call(frame.moveEntries, key)) return;
+  frame.moveEntries[key] = cloneMoveLike(state.moves?.[index] || null);
+}
+
+function recordUndoMoveHistory(state, pieceId) {
+  const frame = getActiveUndoFrame(state);
+  if (!frame || !pieceId || Object.prototype.hasOwnProperty.call(frame.moveHistoryByPiece, pieceId)) return;
+  frame.moveHistoryByPiece[pieceId] = cloneMoveHistoryEntries(state.moveHistoryByPiece?.[pieceId] || []);
+}
+
+function applyActionWithUndo(state, rawAction) {
+  const frame = createUndoFrame(state);
+  setActiveUndoFrame(state, frame);
+  applyActionInPlace(state, rawAction);
+  clearActiveUndoFrame(state);
+  return frame;
+}
+
+function undoAppliedAction(state, frame) {
+  if (!state || !frame) return state;
+
+  Object.assign(state, frame.scalars || {});
+  state.onDecks = (frame.onDecks || [null, null]).slice();
+  state.daggers = (frame.daggers || [0, 0]).slice();
+  state.stashes = (frame.stashes || [[], []]).map((stash) => stash.slice());
+  state.captured = (frame.captured || [[], []]).map((arr) => arr.slice());
+  state.revealedIdentities = { ...(frame.revealedIdentities || {}) };
+
+  const boardKeys = Object.keys(frame.boardCells || {});
+  boardKeys.forEach((key) => {
+    const [rowText, colText] = key.split(':');
+    const row = Number(rowText);
+    const col = Number(colText);
+    if (isInside(row, col)) {
+      state.board[row][col] = frame.boardCells[key];
+    }
+  });
+
+  Object.keys(frame.pieces || {}).forEach((pieceId) => {
+    const pieceSnapshot = frame.pieces[pieceId];
+    state.pieces[pieceId] = pieceSnapshot ? { ...pieceSnapshot } : pieceSnapshot;
+  });
+
+  Object.keys(frame.moveHistoryByPiece || {}).forEach((pieceId) => {
+    state.moveHistoryByPiece[pieceId] = cloneMoveHistoryEntries(frame.moveHistoryByPiece[pieceId]);
+  });
+
+  state.moves.length = Number(frame.movesLength || 0);
+  Object.keys(frame.moveEntries || {}).forEach((key) => {
+    const index = Number(key);
+    state.moves[index] = cloneMoveLike(frame.moveEntries[key]);
+  });
+  state.actions.length = Number(frame.actionsLength || 0);
+
+  const cacheSnapshot = frame.cache || {};
+  state.__mlCache = {};
+  if (cacheSnapshot.encoded) {
+    state.__mlCache.encoded = cloneEncodedState(cacheSnapshot.encoded);
+  }
+  if (cacheSnapshot.infoHistoryHash) {
+    state.__mlCache.infoHistoryHash = cloneInfoHistoryHash(cacheSnapshot.infoHistoryHash);
+  }
+  if (cacheSnapshot.declaredMoveActionsByColor) {
+    state.__mlCache.declaredMoveActionsByColor = cacheSnapshot.declaredMoveActionsByColor.map((actions) => (
+      Array.isArray(actions) ? actions.slice() : actions
+    ));
+  }
+  if (cacheSnapshot.moveOptionCountsByColor) {
+    state.__mlCache.moveOptionCountsByColor = cacheSnapshot.moveOptionCountsByColor.slice();
+  }
+  clearActiveUndoFrame(state);
+  return state;
+}
+
 function removeFromArray(array, value) {
   if (!Array.isArray(array)) return false;
   const index = array.indexOf(value);
@@ -291,6 +698,7 @@ function removePieceFromZones(state, pieceId) {
   if (!piece) return;
 
   if (piece.zone === 'board' && isInside(piece.row, piece.col)) {
+    recordUndoBoardCell(state, piece.row, piece.col);
     if (state.board[piece.row][piece.col] === pieceId) {
       state.board[piece.row][piece.col] = null;
     }
@@ -312,28 +720,77 @@ function removePieceFromZones(state, pieceId) {
   }
 }
 
+function syncEncodedPieceMutation(state, pieceId, previousPiece = null) {
+  if (!pieceId) return;
+  const cache = getStateCache(state);
+  const encoded = cache.encoded;
+  if (!encoded) return;
+  const nextPiece = state.pieces[pieceId] || null;
+  if (cache.mutationFlags && (
+    String(previousPiece?.zone || '') === 'board'
+    || String(nextPiece?.zone || '') === 'board'
+  )) {
+    cache.mutationFlags.boardChanged = true;
+  }
+  const pieceIndex = Object.prototype.hasOwnProperty.call(encoded.pieceIndexById, pieceId)
+    ? encoded.pieceIndexById[pieceId]
+    : -1;
+  if (pieceIndex < 0) {
+    clearStateCache(state, { preserveEncoded: false });
+    return;
+  }
+  syncEncodedPieceState(encoded, pieceIndex, previousPiece, nextPiece);
+}
+
+function setRevealedIdentity(state, pieceId, identity) {
+  if (!pieceId) return;
+  if (Number.isFinite(identity)) {
+    state.revealedIdentities[pieceId] = identity;
+  } else {
+    delete state.revealedIdentities[pieceId];
+  }
+  const cache = getStateCache(state);
+  const encoded = cache.encoded;
+  if (!encoded) return;
+  const pieceIndex = Object.prototype.hasOwnProperty.call(encoded.pieceIndexById, pieceId)
+    ? encoded.pieceIndexById[pieceId]
+    : -1;
+  if (pieceIndex < 0) {
+    clearStateCache(state, { preserveEncoded: false });
+    return;
+  }
+  syncEncodedPieceReveal(encoded, pieceIndex, Number.isFinite(identity) ? identity : 0);
+}
+
 function placePieceOnBoard(state, pieceId, row, col) {
   if (!pieceId) {
     if (isInside(row, col)) {
+      recordUndoBoardCell(state, row, col);
       state.board[row][col] = null;
     }
     return;
   }
   const piece = state.pieces[pieceId];
   if (!piece) return;
+  recordUndoPiece(state, pieceId);
+  const previousPiece = { ...piece };
   removePieceFromZones(state, pieceId);
+  recordUndoBoardCell(state, row, col);
   state.board[row][col] = pieceId;
   piece.zone = 'board';
   piece.row = row;
   piece.col = col;
   piece.alive = true;
   piece.capturedBy = null;
+  syncEncodedPieceMutation(state, pieceId, previousPiece);
 }
 
 function movePieceToStash(state, pieceId, color) {
   if (!pieceId) return;
   const piece = state.pieces[pieceId];
   if (!piece) return;
+  recordUndoPiece(state, pieceId);
+  const previousPiece = { ...piece };
   removePieceFromZones(state, pieceId);
   if (!state.stashes[color].includes(pieceId)) {
     state.stashes[color].push(pieceId);
@@ -343,12 +800,15 @@ function movePieceToStash(state, pieceId, color) {
   piece.col = -1;
   piece.alive = true;
   piece.capturedBy = null;
+  syncEncodedPieceMutation(state, pieceId, previousPiece);
 }
 
 function movePieceToOnDeck(state, pieceId, color) {
   if (!pieceId) return;
   const piece = state.pieces[pieceId];
   if (!piece) return;
+  recordUndoPiece(state, pieceId);
+  const previousPiece = { ...piece };
   removePieceFromZones(state, pieceId);
   state.onDecks[color] = pieceId;
   piece.zone = 'onDeck';
@@ -356,12 +816,15 @@ function movePieceToOnDeck(state, pieceId, color) {
   piece.col = -1;
   piece.alive = true;
   piece.capturedBy = null;
+  syncEncodedPieceMutation(state, pieceId, previousPiece);
 }
 
 function capturePiece(state, pieceId, captorColor) {
   if (!pieceId) return null;
   const piece = state.pieces[pieceId];
   if (!piece || !piece.alive) return null;
+  recordUndoPiece(state, pieceId);
+  const previousPiece = { ...piece };
 
   removePieceFromZones(state, pieceId);
   piece.alive = false;
@@ -372,6 +835,7 @@ function capturePiece(state, pieceId, captorColor) {
   if (!state.captured[captorColor].includes(pieceId)) {
     state.captured[captorColor].push(pieceId);
   }
+  syncEncodedPieceMutation(state, pieceId, previousPiece);
   return piece;
 }
 
@@ -393,6 +857,36 @@ function addAction(state, type, player, details = {}) {
     timestamp: state.ply,
     details: { ...(details || {}) },
   });
+  refreshInfoActionHashEntry(state, state.actions.length - 1);
+}
+
+function cloneMoveEntry(move) {
+  if (!move) return move;
+  return {
+    ...move,
+    from: move.from ? { ...move.from } : null,
+    to: move.to ? { ...move.to } : null,
+  };
+}
+
+function ensureWritableMoveAt(state, index) {
+  if (!Array.isArray(state?.moves) || index < 0 || index >= state.moves.length) return null;
+  recordUndoMoveEntry(state, index);
+  const move = state.moves[index];
+  const cloned = cloneMoveEntry(move);
+  state.moves[index] = cloned;
+  return cloned;
+}
+
+function ensureWritableMoveHistoryForPiece(state, pieceId) {
+  if (!pieceId) return [];
+  recordUndoMoveHistory(state, pieceId);
+  const existing = Array.isArray(state?.moveHistoryByPiece?.[pieceId])
+    ? state.moveHistoryByPiece[pieceId]
+    : [];
+  const cloned = existing.slice();
+  state.moveHistoryByPiece[pieceId] = cloned;
+  return cloned;
 }
 
 function isLineClear(state, from, to) {
@@ -444,24 +938,28 @@ function getDeclaredMoveActionsForColor(state, color) {
 
   const encoded = ensureEncodedState(state);
   const actions = [];
-  const boardMask = encoded.boardMaskByColor[color] >>> 0;
+  let boardMask = encoded.boardMaskByColor[color] >>> 0;
 
-  for (let squareIndex = 0; squareIndex < boardPieceIndicesLength(encoded); squareIndex += 1) {
-    if ((boardMask & (1 << squareIndex)) === 0) continue;
+  while (boardMask) {
+    const bit = boardMask & -boardMask;
+    const squareIndex = 31 - Math.clz32(bit);
+    boardMask ^= bit;
     const pieceIndex = encoded.boardPieceIndices[squareIndex];
     if (pieceIndex === NO_PIECE) continue;
     const pieceId = encoded.pieceIds[pieceIndex];
-    const from = indexToSquare(squareIndex);
+    const from = SQUARE_COORDS[squareIndex];
 
-    DECLARABLE_IDENTITIES.forEach((declaration) => {
+    for (let declarationIndex = 0; declarationIndex < DECLARABLE_IDENTITIES.length; declarationIndex += 1) {
+      const declaration = DECLARABLE_IDENTITIES[declarationIndex];
       const templates = getMoveTemplatesForSquare(squareIndex, declaration);
-      templates.forEach((template) => {
+      for (let templateIndex = 0; templateIndex < templates.length; templateIndex += 1) {
+        const template = templates[templateIndex];
         if ((encoded.occupancyMask & template.blockersMask) !== 0) {
-          return;
+          continue;
         }
         const targetPieceIndex = encoded.boardPieceIndices[template.toIndex];
         if (targetPieceIndex !== NO_PIECE && encoded.pieceColor[targetPieceIndex] === color) {
-          return;
+          continue;
         }
         const capturePieceId = targetPieceIndex !== NO_PIECE
           ? encoded.pieceIds[targetPieceIndex]
@@ -471,13 +969,17 @@ function getDeclaredMoveActionsForColor(state, color) {
           player: color,
           pieceId,
           from,
-          to: { row: template.toRow, col: template.toCol },
+          to: SQUARE_COORDS[template.toIndex],
           declaration,
           capturePieceId,
+          _pieceIndex: pieceIndex,
+          _fromIndex: squareIndex,
+          _toIndex: template.toIndex,
+          _capturePieceIndex: targetPieceIndex !== NO_PIECE ? targetPieceIndex : NO_PIECE,
           _key: `M:${pieceId}:${squareIndex}:${template.toIndex}:${declaration}`,
         });
-      });
-    });
+      }
+    }
   }
 
   cache.declaredMoveActionsByColor = cache.declaredMoveActionsByColor || [null, null];
@@ -487,25 +989,29 @@ function getDeclaredMoveActionsForColor(state, color) {
 
 function countDeclaredMoveOptionsForColorEncoded(state, color) {
   const encoded = ensureEncodedState(state);
-  const boardMask = encoded.boardMaskByColor[color] >>> 0;
+  let boardMask = encoded.boardMaskByColor[color] >>> 0;
   let count = 0;
 
-  for (let squareIndex = 0; squareIndex < boardPieceIndicesLength(encoded); squareIndex += 1) {
-    if ((boardMask & (1 << squareIndex)) === 0) continue;
+  while (boardMask) {
+    const bit = boardMask & -boardMask;
+    const squareIndex = 31 - Math.clz32(bit);
+    boardMask ^= bit;
 
-    DECLARABLE_IDENTITIES.forEach((declaration) => {
+    for (let declarationIndex = 0; declarationIndex < DECLARABLE_IDENTITIES.length; declarationIndex += 1) {
+      const declaration = DECLARABLE_IDENTITIES[declarationIndex];
       const templates = getMoveTemplatesForSquare(squareIndex, declaration);
-      templates.forEach((template) => {
+      for (let templateIndex = 0; templateIndex < templates.length; templateIndex += 1) {
+        const template = templates[templateIndex];
         if ((encoded.occupancyMask & template.blockersMask) !== 0) {
-          return;
+          continue;
         }
         const targetPieceIndex = encoded.boardPieceIndices[template.toIndex];
         if (targetPieceIndex !== NO_PIECE && encoded.pieceColor[targetPieceIndex] === color) {
-          return;
+          continue;
         }
         count += 1;
-      });
-    });
+      }
+    }
   }
 
   return count;
@@ -613,22 +1119,22 @@ function getLegalMoves(state, color = state.playerTurn) {
 }
 
 function updateMoveHistoryEntry(state, pieceId, patch = {}) {
-  const entries = state.moveHistoryByPiece[pieceId];
-  if (!Array.isArray(entries) || !entries.length) return;
+  const entries = ensureWritableMoveHistoryForPiece(state, pieceId);
+  if (!entries.length) return;
   const last = entries[entries.length - 1];
-  Object.assign(last, patch);
+  entries[entries.length - 1] = { ...(last || {}) };
+  const writableLast = entries[entries.length - 1];
+  Object.assign(writableLast, patch);
 }
 
 function appendMoveHistory(state, move) {
   if (!move || !move.pieceId) return;
-  if (!Array.isArray(state.moveHistoryByPiece[move.pieceId])) {
-    state.moveHistoryByPiece[move.pieceId] = [];
-  }
+  const entries = ensureWritableMoveHistoryForPiece(state, move.pieceId);
   const from = move.from || { row: -1, col: -1 };
   const to = move.to || { row: -1, col: -1 };
   const dr = to.row - from.row;
   const dc = to.col - from.col;
-  state.moveHistoryByPiece[move.pieceId].push({
+  entries.push({
     turnIndex: state.ply,
     from: { ...from },
     to: { ...to },
@@ -640,7 +1146,7 @@ function appendMoveHistory(state, move) {
   });
 }
 
-function resolveMove(state, move) {
+function resolveMove(state, move, moveIndex = -1) {
   if (!move) return false;
   const from = move.from;
   const to = move.to;
@@ -659,8 +1165,12 @@ function resolveMove(state, move) {
   }
 
   placePieceOnBoard(state, movingPieceId, to.row, to.col);
+  recordUndoBoardCell(state, from.row, from.col);
   state.board[from.row][from.col] = null;
   move.state = MOVE_STATES.RESOLVED;
+  if (moveIndex >= 0) {
+    refreshInfoMoveHashEntry(state, moveIndex);
+  }
   updateMoveHistoryEntry(state, movingPieceId, {
     resolvedState: MOVE_STATES.RESOLVED,
     capture: Boolean(targetPiece),
@@ -742,7 +1252,8 @@ function applyMoveAction(state, action) {
       && equalsSquare(prevMove.to, to)
     ) {
       earlyResolved = true;
-      const endedEarly = resolveMove(state, prevMove);
+      const writablePrevMove = ensureWritableMoveAt(state, state.moves.length - 1);
+      const endedEarly = resolveMove(state, writablePrevMove, state.moves.length - 1);
       if (endedEarly) {
         state.ply += 1;
         syncTurn(state);
@@ -764,12 +1275,14 @@ function applyMoveAction(state, action) {
     timestamp: state.ply,
   };
   state.moves.push(move);
+  refreshInfoMoveHashEntry(state, state.moves.length - 1);
   appendMoveHistory(state, move);
 
   if (!earlyResolved && state.moves.length > 1) {
     const prevMove = state.moves[state.moves.length - 2];
     if (prevMove && prevMove.state === MOVE_STATES.PENDING) {
-      const ended = resolveMove(state, prevMove);
+      const writablePrevMove = ensureWritableMoveAt(state, state.moves.length - 2);
+      const ended = resolveMove(state, writablePrevMove, state.moves.length - 2);
       if (ended) {
         state.ply += 1;
         syncTurn(state);
@@ -814,13 +1327,15 @@ function applyPassAction(state, action) {
   if (state.playerTurn !== color) return false;
   const lastAction = getLastAction(state);
   if (!lastAction || lastAction.type !== ACTIONS.BOMB) return false;
-  const lastMove = getLastMove(state);
+  let lastMove = getLastMove(state);
   if (!lastMove) return false;
   const piece = getPieceAt(state, lastMove.from.row, lastMove.from.col);
   if (!piece) return false;
 
+  lastMove = ensureWritableMoveAt(state, state.moves.length - 1);
   const captured = capturePiece(state, piece.id, color);
   lastMove.state = MOVE_STATES.RESOLVED;
+  refreshInfoMoveHashEntry(state, state.moves.length - 1);
   updateMoveHistoryEntry(state, lastMove.pieceId, {
     resolvedState: MOVE_STATES.RESOLVED,
   });
@@ -845,10 +1360,11 @@ function applyChallengeAction(state, action) {
   if (state.onDeckingPlayer === challenger) return false;
 
   const lastAction = getLastAction(state);
-  const lastMove = getLastMove(state);
+  let lastMove = getLastMove(state);
   if (!lastAction || !lastMove) return false;
   if (lastAction.type !== ACTIONS.MOVE && lastAction.type !== ACTIONS.BOMB) return false;
   if (lastAction.type === ACTIONS.MOVE && lastMove.state !== MOVE_STATES.PENDING) return false;
+  lastMove = ensureWritableMoveAt(state, state.moves.length - 1);
 
   let capturedPieceId = null;
   let captureBy = null;
@@ -868,22 +1384,24 @@ function applyChallengeAction(state, action) {
       capturedPieceId = pieceFrom.id;
       captureBy = challenger;
       lastMove.state = MOVE_STATES.RESOLVED;
+      refreshInfoMoveHashEntry(state, state.moves.length - 1);
       updateMoveHistoryEntry(state, lastMove.pieceId, {
         resolvedState: MOVE_STATES.RESOLVED,
         revealedIdentity: pieceFrom.identity,
       });
-      state.revealedIdentities[pieceFrom.id] = pieceFrom.identity;
+      setRevealedIdentity(state, pieceFrom.id, pieceFrom.identity);
       wasSuccessful = true;
       state.onDeckingPlayer = null;
     } else {
       lastMove.state = MOVE_STATES.COMPLETED;
+      refreshInfoMoveHashEntry(state, state.moves.length - 1);
       updateMoveHistoryEntry(state, lastMove.pieceId, {
         resolvedState: MOVE_STATES.COMPLETED,
         truthfulChallenge: true,
         revealedIdentity: pieceFrom.identity,
       });
       state.daggers[challenger] += 1;
-      state.revealedIdentities[pieceFrom.id] = pieceFrom.identity;
+      setRevealedIdentity(state, pieceFrom.id, pieceFrom.identity);
 
       if (
         lastMove.declaration === IDENTITIES.KING
@@ -904,6 +1422,7 @@ function applyChallengeAction(state, action) {
       if (deckPieceId) {
         placePieceOnBoard(state, deckPieceId, to.row, to.col);
       } else {
+        recordUndoBoardCell(state, to.row, to.col);
         state.board[to.row][to.col] = null;
       }
 
@@ -926,21 +1445,24 @@ function applyChallengeAction(state, action) {
         state.daggers[pieceTo.color] += 1;
       }
       placePieceOnBoard(state, pieceFrom.id, to.row, to.col);
+      recordUndoBoardCell(state, from.row, from.col);
       state.board[from.row][from.col] = null;
       lastMove.state = MOVE_STATES.RESOLVED;
+      refreshInfoMoveHashEntry(state, state.moves.length - 1);
       updateMoveHistoryEntry(state, lastMove.pieceId, {
         resolvedState: MOVE_STATES.RESOLVED,
       });
       wasSuccessful = true;
       state.onDeckingPlayer = null;
     } else {
-      state.revealedIdentities[pieceTo.id] = IDENTITIES.BOMB;
+      setRevealedIdentity(state, pieceTo.id, IDENTITIES.BOMB);
       movePieceToStash(state, pieceTo.id, pieceTo.color);
       const deckPieceId = state.onDecks[pieceTo.color];
       state.onDecks[pieceTo.color] = null;
       if (deckPieceId) {
         placePieceOnBoard(state, deckPieceId, to.row, to.col);
       } else {
+        recordUndoBoardCell(state, to.row, to.col);
         state.board[to.row][to.col] = null;
       }
 
@@ -952,6 +1474,7 @@ function applyChallengeAction(state, action) {
       captureBy = pieceTo.color;
       state.daggers[challenger] += 1;
       lastMove.state = MOVE_STATES.COMPLETED;
+      refreshInfoMoveHashEntry(state, state.moves.length - 1);
       updateMoveHistoryEntry(state, lastMove.pieceId, {
         resolvedState: MOVE_STATES.COMPLETED,
       });
@@ -1016,8 +1539,9 @@ function applyOnDeckAction(state, action) {
   state.onDeckingPlayer = null;
 
   if (state.moves.length > 0) {
-    const lastMove = state.moves[state.moves.length - 1];
+    const lastMove = ensureWritableMoveAt(state, state.moves.length - 1);
     lastMove.state = MOVE_STATES.RESOLVED;
+    refreshInfoMoveHashEntry(state, state.moves.length - 1);
     updateMoveHistoryEntry(state, lastMove.pieceId, {
       resolvedState: MOVE_STATES.RESOLVED,
     });
@@ -1063,39 +1587,61 @@ function normalizeAction(rawAction, playerTurn) {
   return { type: null, player };
 }
 
-function applyAction(state, rawAction) {
-  const next = cloneState(state);
-  if (!next.isActive) return next;
-  const action = normalizeAction(rawAction, next.playerTurn);
+function applyActionInPlace(state, rawAction) {
+  if (!state?.isActive) return state;
+  clearStateCache(state, { preserveMoveGeneration: true });
+  getStateCache(state).mutationFlags = { boardChanged: false };
+  const action = normalizeAction(rawAction, state.playerTurn);
   let applied = false;
 
   if (action.type === 'MOVE') {
-    applied = applyMoveAction(next, action);
+    applied = applyMoveAction(state, action);
   } else if (action.type === 'CHALLENGE') {
-    applied = applyChallengeAction(next, action);
+    applied = applyChallengeAction(state, action);
   } else if (action.type === 'BOMB') {
-    applied = applyBombAction(next, action);
+    applied = applyBombAction(state, action);
   } else if (action.type === 'PASS') {
-    applied = applyPassAction(next, action);
+    applied = applyPassAction(state, action);
   } else if (action.type === 'ON_DECK') {
-    applied = applyOnDeckAction(next, action);
+    applied = applyOnDeckAction(state, action);
   }
 
-  if (!applied) return next;
-
-  if (next.isActive && next.ply >= next.maxPlies) {
-    endGame(next, null, 'draw');
+  const mutationFlags = getStateCache(state).mutationFlags || { boardChanged: false };
+  delete getStateCache(state).mutationFlags;
+  if (!applied) {
+    clearStateCache(state, { preserveMoveGeneration: true });
+    return state;
   }
-  syncTurn(next);
-  return next;
+
+  if (state.isActive && state.ply >= state.maxPlies) {
+    endGame(state, null, 'draw');
+  }
+  syncTurn(state);
+  clearStateCache(state, {
+    preserveMoveGeneration: !mutationFlags.boardChanged,
+  });
+  return state;
+}
+
+function applyActionMutable(state, rawAction) {
+  return applyActionInPlace(state, rawAction);
+}
+
+function applyAction(state, rawAction) {
+  const next = cloneState(state);
+  return applyActionInPlace(next, rawAction);
 }
 
 function actionKey(action) {
   if (!action || !action.type) return '';
   if (action._key) return action._key;
   if (action.type === 'MOVE') {
-    const fromIndex = squareToIndex(action?.from?.row, action?.from?.col);
-    const toIndex = squareToIndex(action?.to?.row, action?.to?.col);
+    const fromIndex = Number.isFinite(action?._fromIndex)
+      ? action._fromIndex
+      : squareToIndex(action?.from?.row, action?.from?.col);
+    const toIndex = Number.isFinite(action?._toIndex)
+      ? action._toIndex
+      : squareToIndex(action?.to?.row, action?.to?.col);
     return `M:${action.pieceId}:${fromIndex}:${toIndex}:${action.declaration}`;
   }
   if (action.type === 'ON_DECK') {
@@ -1297,6 +1843,7 @@ module.exports = {
   createEmptyBoard,
   createInitialState,
   cloneState,
+  cloneStateForSearch,
   otherColor,
   getPieceAt,
   getPieceIdAt,
@@ -1306,6 +1853,9 @@ module.exports = {
   getLegalMoves,
   countMoveOptionsForColor,
   applyAction,
+  applyActionMutable,
+  applyActionWithUndo,
+  undoAppliedAction,
   actionKey,
   isInside,
   equalsSquare,
@@ -1320,5 +1870,6 @@ module.exports = {
   moveCompatibilityScore,
   serializeBoardWithTruth,
   computeStateHash,
+  getInformationHistoryHash,
   toReplayFrame,
 };

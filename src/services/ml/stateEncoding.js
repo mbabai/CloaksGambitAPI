@@ -39,6 +39,12 @@ const HASH_TYPES = Object.freeze({
   ON_DECK: 5,
 });
 
+function normalizeZoneCode(zone) {
+  return Object.prototype.hasOwnProperty.call(ZONE_CODES, zone)
+    ? ZONE_CODES[zone]
+    : ZONE_CODES.unknown;
+}
+
 function createMlCache(state) {
   if (!state || typeof state !== 'object') return {};
   if (!Object.prototype.hasOwnProperty.call(state, '__mlCache')) {
@@ -167,6 +173,7 @@ function createExtensiblePairTable(initialSize = 0) {
 
 const pieceBoardHashTables = [];
 const pieceZoneHashTables = [];
+const pieceIdentityHashTables = [];
 const pieceRevealHashTables = [];
 const playerTurnHash = [createHashPair(), createHashPair()];
 const onDeckingPlayerHash = [createHashPair(), createHashPair(), createHashPair()];
@@ -186,6 +193,7 @@ function ensurePieceHashCapacity(pieceCount) {
   while (pieceBoardHashTables.length < target) {
     pieceBoardHashTables.push(Array.from({ length: BOARD_SIZE }, () => createHashPair()));
     pieceZoneHashTables.push(Array.from({ length: 5 }, () => createHashPair()));
+    pieceIdentityHashTables.push(Array.from({ length: 16 }, () => createHashPair()));
     pieceRevealHashTables.push(Array.from({ length: 16 }, () => createHashPair()));
   }
 }
@@ -236,9 +244,7 @@ function ensureEncodedState(state) {
     const color = Number.isFinite(piece?.color) ? piece.color : 0;
     const identity = Number.isFinite(piece?.identity) ? piece.identity : IDENTITIES.UNKNOWN;
     const alive = Boolean(piece?.alive);
-    const zoneCode = Object.prototype.hasOwnProperty.call(ZONE_CODES, piece?.zone)
-      ? ZONE_CODES[piece.zone]
-      : ZONE_CODES.unknown;
+    const zoneCode = normalizeZoneCode(piece?.zone);
 
     pieceColor[index] = color;
     pieceIdentity[index] = identity;
@@ -310,6 +316,163 @@ function ensureEncodedState(state) {
   return encoded;
 }
 
+function findAliveKingIndex(encoded, color) {
+  for (let pieceIndex = 0; pieceIndex < encoded.pieceCount; pieceIndex += 1) {
+    if (!encoded.pieceAlive[pieceIndex]) continue;
+    if (encoded.pieceColor[pieceIndex] !== color) continue;
+    if (encoded.pieceIdentity[pieceIndex] !== IDENTITIES.KING) continue;
+    return pieceIndex;
+  }
+  return -1;
+}
+
+function rebuildAlivePieceViews(encoded) {
+  const alivePieceIdsByColor = [[], []];
+  const hiddenPieceIdsByPerspective = [[], []];
+
+  for (let pieceIndex = 0; pieceIndex < encoded.pieceCount; pieceIndex += 1) {
+    if (!encoded.pieceAlive[pieceIndex]) continue;
+    const color = encoded.pieceColor[pieceIndex];
+    const pieceId = encoded.pieceIds[pieceIndex];
+    alivePieceIdsByColor[color].push(pieceId);
+    if (encoded.revealedIdentity[pieceIndex] > 0) continue;
+    hiddenPieceIdsByPerspective[color === WHITE ? BLACK : WHITE].push(pieceId);
+  }
+
+  encoded.alivePieceIdsByColor = alivePieceIdsByColor;
+  encoded.hiddenPieceIdsByPerspective = hiddenPieceIdsByPerspective;
+  return encoded;
+}
+
+function cloneEncodedState(encoded) {
+  if (!encoded) return null;
+  return {
+    pieceIds: encoded.pieceIds.slice(),
+    pieceIndexById: { ...(encoded.pieceIndexById || {}) },
+    pieceCount: encoded.pieceCount,
+    boardPieceIndices: new Int16Array(encoded.boardPieceIndices || []),
+    pieceSquareIndices: new Int16Array(encoded.pieceSquareIndices || []),
+    pieceColor: new Uint8Array(encoded.pieceColor || []),
+    pieceIdentity: new Uint8Array(encoded.pieceIdentity || []),
+    pieceAlive: new Uint8Array(encoded.pieceAlive || []),
+    pieceZone: new Uint8Array(encoded.pieceZone || []),
+    pieceCapturedBy: new Int8Array(encoded.pieceCapturedBy || []),
+    revealedIdentity: new Uint8Array(encoded.revealedIdentity || []),
+    boardMaskByColor: Array.isArray(encoded.boardMaskByColor)
+      ? encoded.boardMaskByColor.slice()
+      : [0, 0],
+    occupancyMask: Number(encoded.occupancyMask || 0) >>> 0,
+    aliveCountByColor: Array.isArray(encoded.aliveCountByColor)
+      ? encoded.aliveCountByColor.slice()
+      : [0, 0],
+    stashCountByColor: Array.isArray(encoded.stashCountByColor)
+      ? encoded.stashCountByColor.slice()
+      : [0, 0],
+    materialTruthByColor: Array.isArray(encoded.materialTruthByColor)
+      ? encoded.materialTruthByColor.slice()
+      : [0, 0],
+    kingIndexByColor: Array.isArray(encoded.kingIndexByColor)
+      ? encoded.kingIndexByColor.slice()
+      : [-1, -1],
+    onDeckPieceIndexByColor: Array.isArray(encoded.onDeckPieceIndexByColor)
+      ? encoded.onDeckPieceIndexByColor.slice()
+      : [-1, -1],
+    alivePieceIdsByColor: Array.isArray(encoded.alivePieceIdsByColor)
+      ? encoded.alivePieceIdsByColor.map((list) => (Array.isArray(list) ? list.slice() : []))
+      : [[], []],
+    hiddenPieceIdsByPerspective: Array.isArray(encoded.hiddenPieceIdsByPerspective)
+      ? encoded.hiddenPieceIdsByPerspective.map((list) => (Array.isArray(list) ? list.slice() : []))
+      : [[], []],
+    moveActionsByColor: [null, null],
+    moveCountsByColor: [null, null],
+  };
+}
+
+function syncEncodedPieceState(encoded, pieceIndex, previousPiece = null, nextPiece = null) {
+  if (!encoded || !Number.isFinite(pieceIndex) || pieceIndex < 0 || pieceIndex >= encoded.pieceCount) {
+    return encoded;
+  }
+
+  const previous = previousPiece || {};
+  const next = nextPiece || {};
+  const color = Number.isFinite(next.color)
+    ? next.color
+    : (Number.isFinite(previous.color) ? previous.color : Number(encoded.pieceColor[pieceIndex] || 0));
+  const oldIdentity = Number.isFinite(previous.identity)
+    ? previous.identity
+    : Number(encoded.pieceIdentity[pieceIndex] || IDENTITIES.UNKNOWN);
+  const newIdentity = Number.isFinite(next.identity)
+    ? next.identity
+    : oldIdentity;
+  const oldAlive = Boolean(previous.alive);
+  const newAlive = Boolean(next.alive);
+  const oldZoneCode = normalizeZoneCode(previous.zone);
+  const newZoneCode = normalizeZoneCode(next.zone);
+  const oldSquareIndex = oldZoneCode === ZONE_CODES.board
+    ? squareToIndex(previous.row, previous.col)
+    : -1;
+  const newSquareIndex = newZoneCode === ZONE_CODES.board
+    ? squareToIndex(next.row, next.col)
+    : -1;
+
+  if (oldZoneCode === ZONE_CODES.board && oldSquareIndex >= 0) {
+    if (encoded.boardPieceIndices[oldSquareIndex] === pieceIndex) {
+      encoded.boardPieceIndices[oldSquareIndex] = NO_PIECE;
+    }
+    encoded.boardMaskByColor[color] = (encoded.boardMaskByColor[color] & ~(1 << oldSquareIndex)) >>> 0;
+  }
+
+  if (newZoneCode === ZONE_CODES.board && newSquareIndex >= 0) {
+    encoded.boardPieceIndices[newSquareIndex] = pieceIndex;
+    encoded.boardMaskByColor[color] = (encoded.boardMaskByColor[color] | (1 << newSquareIndex)) >>> 0;
+  }
+
+  if (oldZoneCode === ZONE_CODES.stash) {
+    encoded.stashCountByColor[color] = Math.max(0, Number(encoded.stashCountByColor[color] || 0) - 1);
+  }
+  if (newZoneCode === ZONE_CODES.stash) {
+    encoded.stashCountByColor[color] = Number(encoded.stashCountByColor[color] || 0) + 1;
+  }
+
+  if (oldZoneCode === ZONE_CODES.onDeck && encoded.onDeckPieceIndexByColor[color] === pieceIndex) {
+    encoded.onDeckPieceIndexByColor[color] = -1;
+  }
+  if (newZoneCode === ZONE_CODES.onDeck) {
+    encoded.onDeckPieceIndexByColor[color] = pieceIndex;
+  }
+
+  const oldValue = oldAlive ? (PIECE_VALUES[oldIdentity] || 0) : 0;
+  const newValue = newAlive ? (PIECE_VALUES[newIdentity] || 0) : 0;
+  encoded.materialTruthByColor[color] = Number(encoded.materialTruthByColor[color] || 0) + (newValue - oldValue);
+  encoded.aliveCountByColor[color] = Number(encoded.aliveCountByColor[color] || 0) + (newAlive ? 1 : 0) - (oldAlive ? 1 : 0);
+
+  encoded.pieceColor[pieceIndex] = color;
+  encoded.pieceIdentity[pieceIndex] = newIdentity;
+  encoded.pieceAlive[pieceIndex] = newAlive ? 1 : 0;
+  encoded.pieceZone[pieceIndex] = newZoneCode;
+  encoded.pieceSquareIndices[pieceIndex] = newSquareIndex >= 0 ? newSquareIndex : -1;
+  encoded.pieceCapturedBy[pieceIndex] = Number.isFinite(next.capturedBy) ? next.capturedBy : -1;
+  encoded.occupancyMask = (encoded.boardMaskByColor[WHITE] | encoded.boardMaskByColor[BLACK]) >>> 0;
+
+  if ((oldAlive && oldIdentity === IDENTITIES.KING) || (newAlive && newIdentity === IDENTITIES.KING)) {
+    encoded.kingIndexByColor[color] = findAliveKingIndex(encoded, color);
+  }
+
+  rebuildAlivePieceViews(encoded);
+  return encoded;
+}
+
+function syncEncodedPieceReveal(encoded, pieceIndex, revealedIdentity) {
+  if (!encoded || !Number.isFinite(pieceIndex) || pieceIndex < 0 || pieceIndex >= encoded.pieceCount) {
+    return encoded;
+  }
+  encoded.revealedIdentity[pieceIndex] = Number.isFinite(revealedIdentity)
+    ? Number(revealedIdentity)
+    : 0;
+  rebuildAlivePieceViews(encoded);
+  return encoded;
+}
+
 function getMoveTemplatesForSquare(squareIndex, declaration) {
   if (!Number.isFinite(squareIndex) || squareIndex < 0 || squareIndex >= BOARD_SIZE) {
     return [];
@@ -337,6 +500,8 @@ function computeEncodedStateHash(state) {
     } else {
       xorHashPair(hash, pieceZoneHashTables[pieceIndex][zoneCode]);
     }
+
+    xorHashPair(hash, pieceIdentityHashTables[pieceIndex][Number(encoded.pieceIdentity[pieceIndex] || 0)]);
 
     const revealed = encoded.revealedIdentity[pieceIndex];
     if (revealed > 0) {
@@ -392,6 +557,9 @@ module.exports = {
   WHITE,
   BLACK,
   ensureEncodedState,
+  cloneEncodedState,
+  syncEncodedPieceState,
+  syncEncodedPieceReveal,
   computeEncodedStateHash,
   getMoveTemplatesForSquare,
   squareToIndex,
