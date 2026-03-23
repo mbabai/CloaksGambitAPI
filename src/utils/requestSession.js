@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const ensureUser = require('./ensureUser');
 const { buildAuthCookieOptions } = require('./authCookies');
@@ -11,6 +12,17 @@ const {
 
 const FALLBACK_USERNAME = 'GoogleUser';
 const GUEST_EMAIL_REGEX = /@guest\.local$/i;
+
+function isMongoConnected() {
+  return mongoose?.connection?.readyState === 1;
+}
+
+function isMongoUnavailableError(err) {
+  if (!err) return false;
+  return err?.name === 'MongoNotConnectedError'
+    || err?.name === 'MongooseServerSelectionError'
+    || (typeof err?.message === 'string' && err.message.includes('buffering timed out after'));
+}
 
 function clearCookie(res, name, baseOptions = {}) {
   if (!res || typeof res.cookie !== 'function') return;
@@ -95,6 +107,7 @@ function normalizeInjectedSession(session) {
 
 async function resolveGuestFromCookieUser(cookieUserId) {
   if (!cookieUserId) return null;
+  if (!isMongoConnected()) return null;
 
   if (process.env.NODE_ENV !== 'production') {
     const localUser = await User.findById(cookieUserId).catch(() => null);
@@ -135,19 +148,23 @@ async function resolveSessionFromRequest(req, options = {}) {
 
   if (token) {
     try {
-      const resolved = await resolveUserFromToken(token);
-      const normalized = normalizeResolvedUser(resolved);
-      if (normalized) {
-        if (normalized.authenticated && normalized.user) {
-          normalized.user = await repairAuthenticatedUser(normalized.user);
-          normalized.isGuest = false;
-          normalized.type = 'authenticated';
-          normalized.authenticated = true;
+      if (isMongoConnected()) {
+        const resolved = await resolveUserFromToken(token);
+        const normalized = normalizeResolvedUser(resolved);
+        if (normalized) {
+          if (normalized.authenticated && normalized.user) {
+            normalized.user = await repairAuthenticatedUser(normalized.user);
+            normalized.isGuest = false;
+            normalized.type = 'authenticated';
+            normalized.authenticated = true;
+          }
+          return normalized;
         }
-        return normalized;
       }
     } catch (err) {
-      console.warn('Failed to resolve session from token', err);
+      if (!isMongoUnavailableError(err)) {
+        console.warn('Failed to resolve session from token', err);
+      }
     }
   }
 
@@ -160,7 +177,9 @@ async function resolveSessionFromRequest(req, options = {}) {
         return resolvedFromCookie;
       }
     } catch (err) {
-      console.warn('Failed to resolve session from cookie userId', err);
+      if (!isMongoUnavailableError(err)) {
+        console.warn('Failed to resolve session from cookie userId', err);
+      }
     }
   }
 

@@ -22,6 +22,8 @@ The observable success case is: create a new bootstrap run, inspect the model de
 - [x] (2026-03-14 19:07 -07:00) Updated runtime naming, compatibility helpers, admin seed-label fallbacks, and added focused shared-model regression coverage in `tests/mlSharedEncoderModel.test.js`.
 - [x] (2026-03-14 21:58 -07:00) Added a persistence codec for packed float32 tensor storage, made zeroed optimizer state lazy for new runs, and deduplicated untouched working bundles against their base generation during persistence so the larger shared family can save/reload without exploding runtime artifact size.
 - [x] (2026-03-14 20:49 -07:00) Followed up on the shared-family training/runtime path by making `trainingBackend: auto` prefer Python CPU/CUDA when available, adding worker/bridge timeouts, and fixing the snapshot-training bundle swap plus background-training batch sizing.
+- [x] (2026-03-15 13:40 -07:00) Reworked the shared-family default from one 1.6M-parameter bundle into selectable hidden-size presets (`32k`, `65k`, `126k`, `256k`, `512k`) while keeping the published shared input/output slots locked. The new default future-run preset is `65k`.
+- [x] (2026-03-15 14:10 -07:00) Tightened local responsiveness around the shared-family runtime by reserving CPU headroom for default self-play/training threads and by throttling the ML admin page's selected-run detail refresh path.
 - [ ] Broaden the runtime-level regression suite so more of `tests/mlRuntime.test.js` explicitly covers the new shared family instead of assuming the old per-head default bundle.
 
 ## Surprises & Discoveries
@@ -82,9 +84,13 @@ The observable success case is: create a new bootstrap run, inspect the model de
   Rationale: published in-memory bundles must remain JSON-shaped and backward-compatible, but the expanded nested arrays were far too expensive to save/load for the new default family. Packing tensors and keeping zero-state lazy cuts persistence cost without changing the published model IO contract.
   Date/Author: 2026-03-14 / Codex
 
+- Decision: keep the shared published interface fixed, but expose several hidden-size presets and make `65k` the default future-run preset instead of the original 1.6M default.
+  Rationale: the 1.6M shared family proved too expensive for IS-MCTS-heavy self-play on this hardware. Presets preserve the AlphaZero-like shared interface while letting operators trade strength against throughput explicitly.
+  Date/Author: 2026-03-15 / Codex
+
 ## Outcomes & Retrospective
 
-The first implementation slice landed. Newly created default bundles now publish the `shared_encoder_belief_ismcts_v1` family and describe themselves as `Shared-Encoder MLP (1.6M params)`. The published state input currently has 1,534 slots, the fixed policy vocabulary has 691 outputs, and the fixed opponent-belief head has 40 outputs arranged as eight opponent-piece slots times five identity classes.
+The shared-interface migration is still the active published family, but the default future-run shape is no longer the original 1.6M-parameter bundle. Newly created shared bundles now publish the same `shared_encoder_belief_ismcts_v1` IO contract through selectable presets: `32k`, `65k`, `126k`, `256k`, and `512k`. The current default future-run preset is `65k`, and published run/model names still use the exact live parameter count from the chosen bundle. The published state input still has 1,534 slots, the fixed policy vocabulary still has 691 outputs, and the fixed opponent-belief head still has 40 outputs arranged as eight opponent-piece slots times five identity classes.
 
 IS-MCTS now consumes that family through one shared-state encoding and one shared encoder trunk for policy, value, and belief inference. The training path can update the shared family in both the Node trainer and the Python Torch bridge without abandoning the existing JSON serialization contract. Legacy `version: 2` bundles are still normalized and loadable.
 
@@ -173,13 +179,13 @@ Observed results:
 
     - all four Node syntax checks passed
     - `python -m py_compile ml_backend/torch_training_bridge.py` passed
-    - `tests/mlSharedEncoderModel.test.js` passed with 3 tests
+    - `tests/mlSharedEncoderModel.test.js` passed with 4 tests
     - `tests/mlRoutes.test.js` passed with 11 tests
     - the focused runtime naming/shape tests in `tests/mlRuntime.test.js` passed
     - a direct Node persistence round-trip check passed and reported:
       {"ok":true,"runtimeJsonBytes":8527040,"checkpointBytes":8529108,"workingStateBytes":42,"canContinue":true,"family":"shared_encoder_belief_ismcts_v1"}
-    - a direct Node probe reports:
-      {"family":"shared_encoder_belief_ismcts_v1","descriptor":"Shared-Encoder MLP (1.6M params)","params":1598172,"stateInputSize":1534,"policyOutputSize":691,"beliefOutputSize":40}
+    - a direct Node probe now reports the default preset bundle:
+      {"family":"shared_encoder_belief_ismcts_v1","descriptor":"Shared-Encoder MLP (65.6K params)","params":65600,"presetId":"65k","stateInputSize":1534,"policyOutputSize":691,"beliefOutputSize":40}
 
 ## Idempotence and Recovery
 
@@ -225,3 +231,5 @@ Revision note: created on 2026-03-14 to guide the migration from the current sep
 Revision note: updated on 2026-03-14 after the first implementation slice landed. The plan now records the shipped shared-interface module, modeling/runtime/Python changes, focused test evidence, the current published slot counts, and the remaining runtime-suite follow-up work.
 
 Revision note: updated again on 2026-03-14 after the training-runtime follow-up to record the new auto-backend behavior, timeout/watchdog coverage, and the shared-family batch-size/persistence fixes.
+
+Revision note: updated on 2026-03-15 after the preset/downsize follow-up. The shared family still publishes the same IO contract, but the default future-run bundle is now the `65k` preset instead of the original 1.6M baseline, and the runtime/UI now reserve headroom for local browser responsiveness.

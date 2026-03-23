@@ -67,6 +67,9 @@ function buildTrainingSamplesFromDecisions(decisions, winner) {
     if (!decision || !decision.trainingRecord) return;
     const record = decision.trainingRecord;
     const valueTarget = resultValueForPlayer(record.player);
+    const sampleKey = Number.isFinite(decision?.ply)
+      ? `ply:${Number(decision.ply)}`
+      : `decision:${policySamples.length}`;
 
     if (record.policy && Array.isArray(record.policy.features) && Array.isArray(record.policy.target)) {
       const stateInput = Array.isArray(record.policy.stateInput) ? record.policy.stateInput : null;
@@ -80,6 +83,7 @@ function buildTrainingSamplesFromDecisions(decisions, winner) {
         snapshotId: record.snapshotId,
         generation: Number.isFinite(record.sourceGeneration) ? record.sourceGeneration : null,
         player: record.player,
+        sampleKey,
         features: record.policy.features.map((vector) => vector.slice()),
         stateInput: Array.isArray(stateInput) ? stateInput.slice() : null,
         target: record.policy.target.slice(),
@@ -100,6 +104,7 @@ function buildTrainingSamplesFromDecisions(decisions, winner) {
         snapshotId: record.snapshotId,
         generation: Number.isFinite(record.sourceGeneration) ? record.sourceGeneration : null,
         player: record.player,
+        sampleKey,
         features: [],
         stateInput: record.policy.stateInput.slice(),
         target: record.policy.target.slice(),
@@ -116,6 +121,7 @@ function buildTrainingSamplesFromDecisions(decisions, winner) {
         snapshotId: record.snapshotId,
         generation: Number.isFinite(record.sourceGeneration) ? record.sourceGeneration : null,
         player: record.player,
+        sampleKey,
         features: Array.isArray(record.value.features) ? record.value.features.slice() : [],
         stateInput: Array.isArray(record.value.stateInput) ? record.value.stateInput.slice() : null,
         target: valueTarget,
@@ -128,6 +134,7 @@ function buildTrainingSamplesFromDecisions(decisions, winner) {
           snapshotId: record.snapshotId,
           generation: Number.isFinite(record.sourceGeneration) ? record.sourceGeneration : null,
           player: record.player,
+          sampleKey,
           pieceId: sample.pieceId,
           pieceSlot: Number.isFinite(sample.pieceSlot) ? sample.pieceSlot : null,
           trueIdentity: sample.trueIdentity,
@@ -144,6 +151,64 @@ function buildTrainingSamplesFromDecisions(decisions, winner) {
   });
 
   return { policySamples, valueSamples, identitySamples };
+}
+
+function normalizeActionFamily(actionType) {
+  const normalized = String(actionType || '').trim().toUpperCase();
+  if (normalized === 'MOVE') return 'move';
+  if (normalized === 'CHALLENGE') return 'challenge';
+  if (normalized === 'BOMB') return 'bomb';
+  if (normalized === 'PASS') return 'pass';
+  if (normalized === 'ON_DECK') return 'onDeck';
+  if (normalized === 'RESIGN') return 'resign';
+  return 'other';
+}
+
+function summarizeLegalActions(legalActions = []) {
+  const summary = {
+    total: 0,
+    move: 0,
+    challenge: 0,
+    bomb: 0,
+    pass: 0,
+    onDeck: 0,
+    resign: 0,
+    other: 0,
+  };
+  (Array.isArray(legalActions) ? legalActions : []).forEach((action) => {
+    summary.total += 1;
+    const family = normalizeActionFamily(action?.type);
+    if (Object.prototype.hasOwnProperty.call(summary, family)) {
+      summary[family] += 1;
+    } else {
+      summary.other += 1;
+    }
+  });
+  return summary;
+}
+
+function buildPolicyCoverageSummary(search = {}, legalActions = []) {
+  const totalLegalActions = Array.isArray(legalActions) ? legalActions.length : 0;
+  const actionKeys = Array.isArray(search?.trainingRecord?.policy?.actionKeys)
+    ? search.trainingRecord.policy.actionKeys
+    : (Array.isArray(search?.trainingRecord?.policy?.moveKeys) ? search.trainingRecord.policy.moveKeys : []);
+  if (!actionKeys.length) {
+    return {
+      totalLegalActions,
+      mappedPolicyActions: null,
+      unmappedLegalActions: null,
+    };
+  }
+  const hasSlotIndices = Array.isArray(search?.trainingRecord?.policy?.slotIndices);
+  const slotIndices = hasSlotIndices
+    ? search.trainingRecord.policy.slotIndices.filter(Number.isFinite)
+    : [];
+  const mappedPolicyActions = hasSlotIndices ? slotIndices.length : actionKeys.length;
+  return {
+    totalLegalActions,
+    mappedPolicyActions,
+    unmappedLegalActions: Math.max(0, totalLegalActions - mappedPolicyActions),
+  };
 }
 
 function hasResponsePhase(state) {
@@ -163,10 +228,15 @@ function buildAdaptiveSearchOptions(state, participant, legalActions, baseOption
     hypothesisCount: clampPositiveInt(baseOptions.hypothesisCount, 8, 1, 24),
     riskBias: normalizeFloat(baseOptions.riskBias, 0, 0, 3),
     exploration: normalizeFloat(baseOptions.exploration, 1.25, 0, 5),
+    stochasticRoot: baseOptions.stochasticRoot === true,
+    rootTemperature: normalizeFloat(baseOptions.rootTemperature, 1.15, 0, 10),
+    stochasticRootMaxPly: clampPositiveInt(baseOptions.stochasticRootMaxPly, 8, 0, 300),
   };
+  const stochasticRootActive = normalized.stochasticRoot && Number(state?.ply || 0) < normalized.stochasticRootMaxPly;
   if (!baseOptions.adaptiveSearch || !participant || participant.type === 'builtin') {
     return {
       ...normalized,
+      stochasticRoot: stochasticRootActive,
       adaptiveSearchApplied: false,
       quietPosition: false,
       responsePhase: hasResponsePhase(state),
@@ -184,7 +254,9 @@ function buildAdaptiveSearchOptions(state, participant, legalActions, baseOption
 
   if (!responsePhase) {
     if ((state?.ply || 0) <= 6) {
-      iterations = Math.max(16, Math.floor(iterations / 4));
+      iterations = stochasticRootActive
+        ? Math.max(24, Math.floor(iterations / 2))
+        : Math.max(16, Math.floor(iterations / 4));
     } else if (legalCount >= 40) {
       iterations = Math.max(16, Math.floor(iterations / 3));
     } else if (legalCount >= 24) {
@@ -192,7 +264,9 @@ function buildAdaptiveSearchOptions(state, participant, legalActions, baseOption
     }
 
     if (hiddenPieceCount >= 4) {
-      hypothesisCount = 1;
+      hypothesisCount = stochasticRootActive
+        ? Math.max(2, Math.min(hypothesisCount, 4))
+        : 1;
     } else if (hiddenPieceCount >= 2) {
       hypothesisCount = Math.min(hypothesisCount, 2);
     }
@@ -200,6 +274,7 @@ function buildAdaptiveSearchOptions(state, participant, legalActions, baseOption
 
   return {
     ...normalized,
+    stochasticRoot: stochasticRootActive,
     iterations,
     hypothesisCount,
     adaptiveSearchApplied: true,
@@ -238,6 +313,8 @@ function chooseActionForParticipant(participant, state, options = {}) {
     iterations: options.iterations,
     maxDepth: options.maxDepth,
     hypothesisCount: options.hypothesisCount,
+    stochasticRoot: options.stochasticRoot === true,
+    rootTemperature: options.rootTemperature,
     riskBias: options.riskBias,
     exploration: options.exploration,
     searchCache: options.searchCache || null,
@@ -254,9 +331,14 @@ function forceTerminalState(state, winner, winReason) {
   return next;
 }
 
-function buildDecisionTrace(search = {}, searchOptions = {}, fallbackUsed = false) {
+function buildDecisionTrace(search = {}, searchOptions = {}, fallbackUsed = false, legalActions = []) {
   return {
     ...deepClone(search?.trace || {}),
+    searchDurationMs: Number(search?.trace?.searchDurationMs || 0),
+    forwardPassCount: Number(search?.trace?.forwardPassCount || 0),
+    forwardPassDurationMs: Number(search?.trace?.forwardPassDurationMs || 0),
+    legalActionSummary: summarizeLegalActions(legalActions),
+    policyCoverage: buildPolicyCoverageSummary(search, legalActions),
     fastPath: {
       fallbackUsed: Boolean(fallbackUsed),
       adaptiveSearchApplied: Boolean(searchOptions.adaptiveSearchApplied),
@@ -266,13 +348,15 @@ function buildDecisionTrace(search = {}, searchOptions = {}, fallbackUsed = fals
       iterations: Number(searchOptions.iterations || 0),
       maxDepth: Number(searchOptions.maxDepth || 0),
       hypothesisCount: Number(searchOptions.hypothesisCount || 0),
+      stochasticRoot: Boolean(searchOptions.stochasticRoot),
+      rootTemperature: Number(searchOptions.rootTemperature || 0),
       riskBias: Number(searchOptions.riskBias || 0),
       exploration: Number(searchOptions.exploration || 0),
     },
   };
 }
 
-async function runFastGame(options = {}) {
+async function runFastGame(options = {}, hooks = {}) {
   const startedAtMs = Date.now();
   const whiteParticipant = options.whiteParticipant || null;
   const blackParticipant = options.blackParticipant || null;
@@ -282,6 +366,8 @@ async function runFastGame(options = {}) {
   const blackParticipantLabel = getDisplayParticipantLabel(blackParticipant, blackParticipantId);
   const seed = Number.isFinite(options.seed) ? options.seed : Date.now();
   const maxPlies = clampPositiveInt(options.maxPlies, 120, 40, 300);
+  const phase = String(options.phase || '').trim().toLowerCase();
+  const stochasticRoot = options.stochasticRoot === true || phase === 'selfplay';
   const baseSearchOptions = {
     iterations: clampPositiveInt(options.iterations, 90, 10, 800),
     maxDepth: clampPositiveInt(options.maxDepth, 16, 4, 80),
@@ -289,18 +375,31 @@ async function runFastGame(options = {}) {
     riskBias: normalizeFloat(options.riskBias, 0, 0, 3),
     exploration: normalizeFloat(options.exploration, 1.25, 0, 5),
     adaptiveSearch: options.adaptiveSearch !== false,
+    stochasticRoot,
+    rootTemperature: normalizeFloat(options.rootTemperature, 1.15, 0, 10),
+    stochasticRootMaxPly: clampPositiveInt(options.stochasticRootMaxPly, 8, 0, 300),
   };
   const maxDecisionSafety = Math.max(maxPlies * 6, maxPlies + 24);
 
-  let state = createInitialState({ seed, maxPlies });
+  let state = createInitialState({
+    seed,
+    maxPlies,
+    curriculum: options.curriculum || null,
+  });
   const searchContextByParticipantId = new Map();
   const replay = [toReplayFrame(state, {
     note: 'start',
     actionCount: Array.isArray(state.actions) ? state.actions.length : 0,
     moveCount: Array.isArray(state.moves) ? state.moves.length : 0,
+    curriculum: state?.curriculum ? deepClone(state.curriculum) : null,
   })];
   const decisions = [];
   let forcedStopReason = null;
+  let totalSearchDurationMs = 0;
+  let timedSearches = 0;
+  let totalForwardPassDurationMs = 0;
+  let totalForwardPassCount = 0;
+  let lastProgressAtMs = startedAtMs;
 
   for (let step = 0; step < maxDecisionSafety; step += 1) {
     if (!state?.isActive) break;
@@ -360,7 +459,7 @@ async function runFastGame(options = {}) {
       snapshotId: participant.snapshotId || null,
       action: deepClone(executedAction),
       move: deepClone(executedAction),
-      trace: buildDecisionTrace(search, searchOptions, fallbackUsed),
+      trace: buildDecisionTrace(search, searchOptions, fallbackUsed, legalActions),
       valueEstimate: Number.isFinite(search?.valueEstimate) ? search.valueEstimate : 0,
       trainingRecord: !fallbackUsed && search?.trainingRecord
         ? {
@@ -371,6 +470,31 @@ async function runFastGame(options = {}) {
         : null,
     };
     decisions.push(decision);
+    if (Number(decision.trace?.searchDurationMs || 0) > 0) {
+      totalSearchDurationMs += Number(decision.trace.searchDurationMs || 0);
+      timedSearches += 1;
+    }
+    if (Number(decision.trace?.forwardPassDurationMs || 0) > 0) {
+      totalForwardPassDurationMs += Number(decision.trace.forwardPassDurationMs || 0);
+    }
+    if (Number(decision.trace?.forwardPassCount || 0) > 0) {
+      totalForwardPassCount += Number(decision.trace.forwardPassCount || 0);
+    }
+    const nowMs = Date.now();
+    if (typeof hooks.onProgress === 'function' && (decisions.length === 1 || (nowMs - lastProgressAtMs) >= 1000)) {
+      lastProgressAtMs = nowMs;
+      hooks.onProgress({
+        decisionsCompleted: decisions.length,
+        pliesCompleted: decisions.length,
+        elapsedMs: Math.max(0, nowMs - startedAtMs),
+        totalSearchDurationMs,
+        timedSearches,
+        averageMctsSearchDurationMs: timedSearches > 0 ? (totalSearchDurationMs / timedSearches) : 0,
+        totalForwardPassDurationMs,
+        totalForwardPassCount,
+        averageForwardPassDurationMs: totalForwardPassCount > 0 ? (totalForwardPassDurationMs / totalForwardPassCount) : 0,
+      });
+    }
     replay.push(toReplayFrame(state, {
       actionCount: state.actions.length,
       moveCount: state.moves.length,
@@ -408,6 +532,7 @@ async function runFastGame(options = {}) {
     createdAt: new Date().toISOString(),
     durationMs: Math.max(0, Date.now() - startedAtMs),
     seed,
+    phase: phase || 'selfplay',
     setupMode: 'engine-fast',
     whiteParticipantId,
     blackParticipantId,
@@ -415,6 +540,7 @@ async function runFastGame(options = {}) {
     blackParticipantLabel,
     winner,
     winReason,
+    curriculum: state?.curriculum ? deepClone(state.curriculum) : null,
     plies: decisions.length,
     actionHistory: Array.isArray(state?.actions) ? deepClone(state.actions) : [],
     moveHistory: Array.isArray(state?.moves) ? deepClone(state.moves) : [],

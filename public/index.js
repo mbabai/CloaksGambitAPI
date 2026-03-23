@@ -3446,9 +3446,9 @@ logBootConstantsOnce();
       goBtn.disabled = catalogLoading || matchStarting || !hasItems;
       cancelBtn.disabled = matchStarting;
       if (matchStarting) {
-        goBtn.textContent = 'Startingâ€¦';
+        goBtn.textContent = 'Starting...';
       } else if (catalogLoading) {
-        goBtn.textContent = 'Loadingâ€¦';
+        goBtn.textContent = 'Loading...';
       } else {
         goBtn.textContent = 'Go';
       }

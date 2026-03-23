@@ -24,6 +24,8 @@ After this change, future continuous ML runs should drive substantially higher h
 - [x] (2026-03-14 20:49 -07:00) Fixed the snapshot-training bundle persistence bug and replaced the unsafe “full sample count” background-training batch sizing with the same hardware-aware batch selection used elsewhere.
 - [x] (2026-03-14 21:02 -07:00) Re-ran focused runtime and route validation and captured a direct hardware/defaults probe from this machine for the final recorded behavior.
 - [x] (2026-03-14 22:18 -07:00) Added a destructive `Kill Run` control that immediately retires a run, ignores stale async completions after the kill, and resets the shared worker pool so pooled self-play work is cut off instead of draining in the background.
+- [x] (2026-03-15 13:40 -07:00) Rebalanced future-run defaults for local responsiveness: shared-family runs now expose selectable parameter-budget presets, the default future-run preset dropped to `65k`, and default CPU worker/thread counts now intentionally leave headroom for the browser and the rest of the desktop.
+- [x] (2026-03-15 14:10 -07:00) Reduced admin-page churn by batching live rerenders, throttling repeated selected-run detail fetches, and skipping hidden-tab polling work where live socket/poll data is already sufficient.
 
 ## Surprises & Discoveries
 
@@ -53,6 +55,9 @@ After this change, future continuous ML runs should drive substantially higher h
 
 - Observation: cooperative `Stop Run` still only requests cancellation at safe phase boundaries, so it does not satisfy the operational need for an immediate override.
   Evidence: `stopRun()` flips `status: stopping` and `cancelRequested`, but long self-play chunks and training calls only observe that flag after the in-flight await returns.
+
+- Observation: maximizing ML throughput on the same machine as the browser can make the admin UI feel unresponsive even when the page itself is not doing much work.
+  Evidence: the runtime previously defaulted to all-core self-play/training settings and the admin page was still force-refreshing selected run details every live poll, which kept both the server and browser busier than necessary during active runs.
 
 ## Decision Log
 
@@ -84,6 +89,10 @@ After this change, future continuous ML runs should drive substantially higher h
   Rationale: operators need an immediate override that can discard in-flight unsaved work, while the older stop path is still useful when a clean phase-boundary exit is preferred.
   Date/Author: 2026-03-14 / Codex
 
+- Decision: prefer sustained local responsiveness over absolute all-core saturation for default future runs.
+  Rationale: this workstation hosts both the server and the browser. Reserving CPU headroom and shrinking the default shared-model preset to `65k` keeps the ML workbench usable while still allowing larger presets to be selected explicitly.
+  Date/Author: 2026-03-15 / Codex
+
 ## Outcomes & Retrospective
 
 Future runs now default to a denser training workload and a larger model architecture, while bootstrap seeding prefers a new modern baseline instead of inheriting the legacy small root snapshot forever. Self-play chunking now scales to the configured game-worker count, so a single run can actually fill the worker pool during CPU-heavy phases. The ML workbench defaults/help text and focused regression coverage were updated to match.
@@ -91,6 +100,8 @@ Future runs now default to a denser training workload and a larger model archite
 The follow-up utilization pass also removed the last obvious throughput and stall traps in the shared-family training path. `trainingBackend: auto` now prefers the Python bridge whenever it is available, using CUDA when possible and Python CPU otherwise. The bridge now reports hardware details that the runtime uses for future-run defaults, snapshot/background training no longer use pathological batch sizes, and both worker-thread tasks and bridge requests now time out instead of hanging indefinitely.
 
 The run controls now distinguish cooperative stop from destructive kill. `Stop Run` still waits for the next safe boundary. `Kill Run` immediately marks the run `stopped` with `manual_kill`, removes its active task slot, and treats any later pipeline completion or failure as stale so it cannot overwrite the killed state. The runtime also recreates the shared worker pool so pooled self-play work is interrupted instead of draining until timeout.
+
+That initial throughput push has since been rebalanced for local-machine usability. The shared-family architecture is still the default published path, but new runs now choose among `32k`, `65k`, `126k`, `256k`, and `512k` parameter-budget presets, with `65k` as the default. Default `parallelGameWorkers` and Torch CPU thread counts now reserve explicit CPU headroom instead of consuming every available core, and the admin UI now avoids unnecessary live-detail fetches and hidden-tab redraws.
 
 The structural limit remains that one run still alternates self-play and training rather than overlapping them, so this change improves phase utilization and throughput without claiming perfect simultaneous CPU/GPU saturation from one run.
 
@@ -154,3 +165,5 @@ Testing caveat:
   - The targeted runtime slice still needed `--forceExit` to terminate cleanly after passing, which matches the suite's long-standing open-handle behavior rather than a newly discovered failing assertion.
 
 Revision note (2026-03-14 / Codex): updated after the shared-encoder follow-up to record the new auto-backend behavior, hardware-aware training defaults, timeout/watchdog coverage, and the focused validation/results from the throughput-and-stability pass.
+
+Revision note (2026-03-15 / Codex): updated after the model-size-preset and responsiveness follow-up to record the new `32k`/`65k`/`126k`/`256k`/`512k` shared-family presets, the `65k` default, the CPU-headroom policy, and the admin-page polling/render throttles.

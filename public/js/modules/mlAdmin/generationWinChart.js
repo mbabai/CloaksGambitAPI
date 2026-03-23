@@ -41,6 +41,13 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
     return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(1)}%` : '--';
   }
 
+  function formatTimestamp(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString();
+  }
+
   function colorWithAlpha(color, alpha) {
     const safeAlpha = Math.max(0, Math.min(1, Number(alpha) || 0));
     const value = String(color || '').trim();
@@ -425,10 +432,14 @@ export function createGenerationWinChart({ canvas, tooltip, legend } = {}) {
       `;
     };
     tooltip.classList.remove('is-empty');
+    const finishedAt = formatTimestamp(hover.point?.timestamp || null);
     tooltip.innerHTML = `
       <div class="chart-tooltip-title"><strong>Candidate G${hover.point.candidateGeneration}</strong></div>
       <div class="chart-tooltip-grid">${sections.map((section) => renderSection(section)).join('')}</div>
-      <div class="chart-tooltip-footer">${hover.point.promoted ? 'Promoted' : 'Not promoted'}</div>
+      <div class="chart-tooltip-footer">${[
+        hover.point.promoted ? 'Promoted' : 'Not promoted',
+        finishedAt ? `Finished ${finishedAt}` : '',
+      ].filter(Boolean).join(' | ')}</div>
     `;
     tooltip.style.minHeight = '168px';
     tooltip.style.display = 'flex';

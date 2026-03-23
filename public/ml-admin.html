@@ -151,6 +151,29 @@
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
+        align-items: center;
+      }
+
+      .runtime-chip {
+        margin-right: auto;
+        min-width: 150px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(133, 184, 175, 0.18);
+        background: rgba(10, 27, 32, 0.88);
+      }
+
+      .runtime-chip .k {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .runtime-chip .v {
+        margin-top: 2px;
+        font-size: 18px;
+        font-weight: 700;
       }
 
       .panel-title {
@@ -584,6 +607,24 @@
         border-radius: 14px;
         border: 1px solid rgba(133, 184, 175, 0.16);
         background: rgba(10, 27, 32, 0.88);
+        transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+      }
+
+      .run-stat.active {
+        border-color: rgba(240, 182, 88, 0.65);
+        background: rgba(29, 24, 11, 0.68);
+        box-shadow: inset 0 1px 0 rgba(240, 182, 88, 0.2), inset 0 -1px 0 rgba(240, 182, 88, 0.2);
+      }
+
+      .run-stat-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .run-stat-badge {
+        display: none;
       }
 
       .run-stat .k {
@@ -597,6 +638,53 @@
         margin-top: 6px;
         font-size: 20px;
         font-weight: 700;
+      }
+
+      .run-stat .subv {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .run-diagnostics {
+        display: grid;
+        gap: 10px;
+      }
+
+      .diagnostic-check-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .diagnostic-check {
+        padding: 10px 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(133, 184, 175, 0.16);
+        background: rgba(10, 27, 32, 0.88);
+      }
+
+      .diagnostic-check.warn {
+        border-color: rgba(240, 182, 88, 0.44);
+      }
+
+      .diagnostic-check.error {
+        border-color: rgba(244, 91, 105, 0.44);
+      }
+
+      .diagnostic-check.info {
+        border-color: rgba(127, 210, 222, 0.32);
+      }
+
+      .diagnostic-check .k {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .diagnostic-check .v {
+        margin-top: 4px;
+        font-size: 13px;
       }
 
       .table-shell {
@@ -882,8 +970,8 @@
                 <div>
                   <label for="seedModeSelect">Seed Model</label>
                   <select id="seedModeSelect">
-                    <option value="bootstrap">Bootstrap Shared-Encoder MLP (1.6M params)</option>
-                    <option value="random">Random Shared-Encoder MLP (1.6M params)</option>
+                    <option value="bootstrap">Bootstrap Shared-Encoder MLP</option>
+                    <option value="random">Random Shared-Encoder MLP</option>
                   </select>
                 </div>
                 <div>
@@ -891,8 +979,24 @@
                   <input id="seedInput" type="number" placeholder="Optional" />
                 </div>
                 <div>
+                  <label for="modelSizePresetSelect">Model Size</label>
+                  <select id="modelSizePresetSelect"></select>
+                </div>
+                <div>
+                  <label for="maxLogicalProcessorsInput">Max Logical Processors</label>
+                  <input id="maxLogicalProcessorsInput" type="number" min="1" />
+                </div>
+                <div>
                   <label for="numSelfplayWorkersInput">Self-Play Games / Cycle</label>
                   <input id="numSelfplayWorkersInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="curriculumCadenceInput">Curriculum Cadence</label>
+                  <input id="curriculumCadenceInput" type="number" min="1" />
+                </div>
+                <div>
+                  <label for="parallelGameWorkersInput">Game Worker Concurrency</label>
+                  <input id="parallelGameWorkersInput" type="number" min="1" />
                 </div>
                 <div class="full config-section-heading">Search</div>
                 <div>
@@ -911,7 +1015,7 @@
                   <label for="explorationInput">Exploration</label>
                   <input id="explorationInput" type="number" step="0.01" min="0" />
                 </div>
-                <div class="full subtle config-section-note">Game worker concurrency and search risk tuning are auto-managed now.</div>
+                <div class="full subtle config-section-note">Game worker concurrency leaves CPU headroom behind for the browser and the rest of the system. Search risk tuning is auto-managed.</div>
                 <div class="full config-section-heading">Training</div>
                 <div>
                   <label for="replayBufferMaxPositionsInput">Replay Buffer Max Positions</label>
@@ -938,21 +1042,17 @@
                   <input id="trainingStepsPerCycleInput" type="number" min="1" />
                 </div>
                 <div>
-                  <label for="parallelTrainingHeadWorkersInput">Parallel Training Heads</label>
-                  <input id="parallelTrainingHeadWorkersInput" type="number" min="1" max="3" />
-                </div>
-                <div>
                   <label for="checkpointIntervalInput">Checkpoint Interval</label>
                   <input id="checkpointIntervalInput" type="number" min="1" />
                 </div>
                 <div class="full subtle config-section-note">Training backend and device selection are chosen automatically from the available runtime.</div>
                 <div class="full config-section-heading">Promotion</div>
                 <div>
-                  <label for="prePromotionTestGamesInput">Pre-Promotion Test Games</label>
+                  <label for="prePromotionTestGamesInput">Baseline Test Games</label>
                   <input id="prePromotionTestGamesInput" type="number" min="1" />
                 </div>
                 <div>
-                  <label for="prePromotionTestWinRateInput">Pre-Promotion Test Win Rate</label>
+                  <label for="prePromotionTestWinRateInput">Baseline Test Win Rate</label>
                   <input id="prePromotionTestWinRateInput" type="number" step="0.01" min="0" max="1" />
                 </div>
                 <div>
@@ -967,6 +1067,7 @@
                   <label for="promotionTestPriorGenerationsInput">Promotion Test Prior Generations</label>
                   <input id="promotionTestPriorGenerationsInput" type="number" min="1" max="10" />
                 </div>
+                <div class="full subtle config-section-note">Promotion now runs in order: baseline first, then the most recent promoted generations. If the lineage is shorter than the requested count, the remaining checks reuse the current baseline generation.</div>
                 <div>
                   <label for="olderGenerationSampleProbabilityInput">Older Gen Mix Probability</label>
                   <input id="olderGenerationSampleProbabilityInput" type="number" step="0.01" min="0" max="1" />
@@ -988,6 +1089,7 @@
             </div>
             <div class="panel-body stack">
               <div class="subtle">Self-play games per cycle controls how many fresh games are generated before the trainer samples from the replay buffer.</div>
+              <div class="subtle">Curriculum cadence controls how quickly self-play slides from short, advanced endgames toward full setup starts. Lower values shift faster; higher values keep the endgame-heavy bias longer.</div>
               <div class="subtle">Belief samples per move controls how broadly shared-tree ISMCTS samples hidden worlds that fit the public history. It no longer spins up a separate MCTS tree per identity hypothesis.</div>
               <div class="subtle">Backend selection, device preference, game worker concurrency, worker refresh cadence, graph stride, and risk bias are auto-managed.</div>
               <div class="subtle">Promotion is based on head-to-head results, not just loss. A new checkpoint only becomes the best generation if it reaches the configured win-rate threshold against the current best generation and the earlier promoted generations you include.</div>
@@ -1031,6 +1133,10 @@
               <div class="panel-head">
                 <h2 class="panel-title">Selected Run</h2>
                 <div class="panel-actions">
+                  <div id="selectedRunRuntime" class="runtime-chip">
+                    <div class="k">Run Time</div>
+                    <div class="v">--</div>
+                  </div>
                   <button id="stopRunBtn" class="secondary" type="button">Stop Run</button>
                   <button id="killRunBtn" class="secondary" type="button">Kill Run</button>
                   <button id="continueRunBtn" class="secondary" type="button">Continue Run</button>
@@ -1044,6 +1150,7 @@
                 </div>
                 <div id="selectedRunStats" class="run-stat-grid"></div>
                 <div id="selectedRunGenerations" class="chip-list"></div>
+                <div id="selectedRunDiagnostics" class="run-diagnostics"></div>
               </div>
             </section>
 
@@ -1093,8 +1200,23 @@
                   <select id="replayRunSelect"></select>
                 </div>
                 <div>
+                  <label for="replayTypeSelect">Game Type</label>
+                  <select id="replayTypeSelect">
+                    <option value="evaluation" selected>Evaluation</option>
+                    <option value="simulation">Simulation</option>
+                  </select>
+                </div>
+                <div id="replayGenerationFilterGroup">
                   <label for="replayGenerationFilterSelect">Generation</label>
                   <select id="replayGenerationFilterSelect"></select>
+                </div>
+                <div id="replayBoardPiecesFilterGroup" hidden>
+                  <label for="replayBoardPiecesFilterSelect">Board Pieces</label>
+                  <select id="replayBoardPiecesFilterSelect"></select>
+                </div>
+                <div id="replayAdvanceDepthFilterGroup" hidden>
+                  <label for="replayAdvanceDepthFilterSelect">Advancement</label>
+                  <select id="replayAdvanceDepthFilterSelect"></select>
                 </div>
                 <div class="replay-list-controls">
                   <label>Scroll</label>

@@ -7,6 +7,8 @@ const {
   trainIdentityModel,
 } = require('./modeling');
 
+let currentRequestId = null;
+
 function serializeError(err) {
   return {
     message: err?.message || String(err || 'Worker task failed'),
@@ -14,8 +16,12 @@ function serializeError(err) {
   };
 }
 
-async function handlePlayGameTask(task = {}) {
-  return runFastGame(task.options || {});
+async function handlePlayGameTask(task = {}, reportProgress = null) {
+  return runFastGame(task.options || {}, {
+    onProgress: typeof reportProgress === 'function'
+      ? (progress) => reportProgress(progress)
+      : null,
+  });
 }
 
 function handleTrainHeadTask(task = {}) {
@@ -70,7 +76,14 @@ function handleTrainHeadTask(task = {}) {
 async function handleTask(task = {}) {
   const type = String(task.type || '').trim();
   if (type === 'playGame') {
-    return handlePlayGameTask(task);
+    return handlePlayGameTask(task, (progress) => {
+      parentPort.postMessage({
+        requestId: currentRequestId,
+        ok: true,
+        progress: true,
+        result: progress,
+      });
+    });
   }
   if (type === 'trainHead') {
     return handleTrainHeadTask(task);
@@ -84,6 +97,7 @@ if (!parentPort) {
 
 parentPort.on('message', async (message = {}) => {
   const requestId = message.requestId;
+  currentRequestId = requestId;
   try {
     const result = await handleTask(message.task || {});
     parentPort.postMessage({

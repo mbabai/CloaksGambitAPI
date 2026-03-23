@@ -14,6 +14,7 @@ const mockRuntime = {
   continueRun: jest.fn(),
   deleteRun: jest.fn(),
   listRunGames: jest.fn(),
+  getRunReplayGameCatalog: jest.fn(),
   getRunReplay: jest.fn(),
   getLiveStatus: jest.fn(),
   trainSnapshot: jest.fn(),
@@ -54,10 +55,10 @@ describe('ml routes', () => {
         },
       },
       defaults: {
+        maxLogicalProcessors: 12,
         numSelfplayWorkers: 32,
         parallelGameWorkers: 16,
         batchSize: 256,
-        parallelTrainingHeadWorkers: 3,
         trainingBackend: 'auto',
         trainingDevicePreference: 'auto',
       },
@@ -118,6 +119,22 @@ describe('ml routes', () => {
     mockRuntime.stopRun.mockResolvedValue({
       stopped: true,
       run: { id: 'run-1', label: 'Run 1', status: 'stopping' },
+    });
+    mockRuntime.getRunReplayGameCatalog.mockResolvedValue({
+      items: [{ id: 'page-1', whiteGeneration: 1, blackGeneration: 1 }],
+      pageInfo: {
+        limit: 100,
+        beforeId: '',
+        nextBeforeId: 'page-1',
+        hasMore: true,
+        matchingCount: 14,
+        totalAvailableCount: 28,
+      },
+      filters: {
+        generationOptions: [0, 1, 2],
+        boardPiecesOptions: [],
+        advanceDepthOptions: [],
+      },
     });
     mockRuntime.killRun.mockResolvedValue({
       killed: true,
@@ -198,10 +215,10 @@ describe('ml routes', () => {
         },
       },
       defaults: {
+        maxLogicalProcessors: 12,
         numSelfplayWorkers: 32,
         parallelGameWorkers: 16,
         batchSize: 256,
-        parallelTrainingHeadWorkers: 3,
         trainingBackend: 'auto',
         trainingDevicePreference: 'auto',
       },
@@ -305,21 +322,80 @@ describe('ml routes', () => {
 
     const allGames = await request(createApp()).get('/api/v1/ml/runs/run-1/games');
     expect(allGames.status).toBe(200);
-    expect(mockRuntime.listRunGames).toHaveBeenCalledWith('run-1', null, null);
+    expect(mockRuntime.listRunGames).toHaveBeenCalledWith('run-1', null, null, { replayType: 'evaluation' });
 
     const games = await request(createApp())
       .get('/api/v1/ml/runs/run-1/games')
       .query({ generationA: 0, generationB: 1 });
     expect(games.status).toBe(200);
-    expect(mockRuntime.listRunGames).toHaveBeenCalledWith('run-1', 0, 1);
+    expect(mockRuntime.listRunGames).toHaveBeenCalledWith('run-1', 0, 1, { replayType: 'evaluation' });
     expect(games.body).toEqual({
       items: [{ id: 'game-1', whiteGeneration: 0, blackGeneration: 1 }],
     });
+
+    const simulationGames = await request(createApp())
+      .get('/api/v1/ml/runs/run-1/games')
+      .query({ replayType: 'simulation' });
+    expect(simulationGames.status).toBe(200);
+    expect(mockRuntime.listRunGames).toHaveBeenCalledWith('run-1', null, null, { replayType: 'simulation' });
 
     const replay = await request(createApp()).get('/api/v1/ml/runs/run-1/replay/game-1');
     expect(replay.status).toBe(200);
     expect(mockRuntime.getRunReplay).toHaveBeenCalledWith('run-1', 'game-1');
     expect(replay.body.game.replay).toHaveLength(2);
+  });
+
+  test('GET /runs/:runId/games supports paged replay catalogs for the replay workbench', async () => {
+    const response = await request(createApp())
+      .get('/api/v1/ml/runs/run-1/games')
+      .query({
+        replayType: 'evaluation',
+        limit: 100,
+        generation: 1,
+        beforeId: 'game-older',
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockRuntime.getRunReplayGameCatalog).toHaveBeenCalledWith('run-1', {
+      replayType: 'evaluation',
+      limit: '100',
+      beforeId: 'game-older',
+      generation: 1,
+      generationA: null,
+      generationB: null,
+      boardPieces: null,
+      advanceDepth: null,
+    });
+    expect(response.body.pageInfo).toMatchObject({
+      limit: 100,
+      hasMore: true,
+      matchingCount: 14,
+    });
+    expect(response.body.filters.generationOptions).toEqual([0, 1, 2]);
+  });
+
+  test('GET /runs/:runId/games returns 404 when a paged replay catalog run is missing', async () => {
+    mockRuntime.getRunReplayGameCatalog.mockResolvedValueOnce(null);
+
+    const response = await request(createApp())
+      .get('/api/v1/ml/runs/missing-run/games')
+      .query({
+        replayType: 'simulation',
+        limit: 100,
+      });
+
+    expect(response.status).toBe(404);
+    expect(mockRuntime.getRunReplayGameCatalog).toHaveBeenCalledWith('missing-run', {
+      replayType: 'simulation',
+      limit: '100',
+      beforeId: '',
+      generation: null,
+      generationA: null,
+      generationB: null,
+      boardPieces: null,
+      advanceDepth: null,
+    });
+    expect(response.body).toEqual({ message: 'Run not found' });
   });
 
   test('POST /runs/:runId/stop and GET /live surface run state', async () => {

@@ -188,13 +188,55 @@ router.delete('/runs/:runId', async (req, res) => {
 router.get('/runs/:runId/games', async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
+    const replayType = String(req.query.replayType || 'evaluation').trim().toLowerCase() === 'simulation'
+      ? 'simulation'
+      : 'evaluation';
     const hasGenerationFilters = req.query.generationA !== undefined || req.query.generationB !== undefined;
     const generationA = hasGenerationFilters ? Number.parseInt(req.query.generationA, 10) : null;
     const generationB = hasGenerationFilters ? Number.parseInt(req.query.generationB, 10) : null;
+    const hasPagedFilters = req.query.limit !== undefined
+      || req.query.beforeId !== undefined
+      || req.query.generation !== undefined
+      || req.query.boardPieces !== undefined
+      || req.query.advanceDepth !== undefined;
+    const generation = req.query.generation !== undefined
+      ? Number.parseInt(req.query.generation, 10)
+      : null;
+    const boardPieces = req.query.boardPieces !== undefined
+      ? Number.parseInt(req.query.boardPieces, 10)
+      : null;
+    const advanceDepth = req.query.advanceDepth !== undefined
+      ? Number.parseInt(req.query.advanceDepth, 10)
+      : null;
     if (hasGenerationFilters && (!Number.isFinite(generationA) || !Number.isFinite(generationB))) {
       return res.status(400).json({ message: 'generationA and generationB must both be integers when provided' });
     }
-    const items = await mlRuntime.listRunGames(req.params.runId, generationA, generationB);
+    if (req.query.generation !== undefined && !Number.isFinite(generation)) {
+      return res.status(400).json({ message: 'generation must be an integer when provided' });
+    }
+    if (req.query.boardPieces !== undefined && !Number.isFinite(boardPieces)) {
+      return res.status(400).json({ message: 'boardPieces must be an integer when provided' });
+    }
+    if (req.query.advanceDepth !== undefined && !Number.isFinite(advanceDepth)) {
+      return res.status(400).json({ message: 'advanceDepth must be an integer when provided' });
+    }
+    if (hasPagedFilters) {
+      const catalog = await mlRuntime.getRunReplayGameCatalog(req.params.runId, {
+        replayType,
+        limit: req.query.limit,
+        beforeId: req.query.beforeId || '',
+        generation,
+        generationA,
+        generationB,
+        boardPieces,
+        advanceDepth,
+      });
+      if (!catalog) {
+        return res.status(404).json({ message: 'Run not found' });
+      }
+      return res.json(catalog);
+    }
+    const items = await mlRuntime.listRunGames(req.params.runId, generationA, generationB, { replayType });
     res.json({ items });
   } catch (err) {
     res.status(500).json({ message: err.message || 'Failed to load run games' });

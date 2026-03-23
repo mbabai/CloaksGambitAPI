@@ -10,6 +10,7 @@ const readyRoute = require('../src/routes/v1/gameAction/ready');
 const {
   WHITE,
   BLACK,
+  RANKS,
   IDENTITIES,
   IDENTITY_COUNTS,
   ACTIONS,
@@ -28,7 +29,12 @@ const {
   inferIdentityHypotheses,
   applyRiskBiasToHypotheses,
 } = require('../src/services/ml/modeling');
+const {
+  getPolicySlotForAction,
+  mapLegalActionsToPolicySlots,
+} = require('../src/services/ml/sharedEncoderModel');
 const { createSearchCache, runHiddenInfoMcts } = require('../src/services/ml/mcts');
+const { runFastGame } = require('../src/services/ml/gameRunner');
 const { BUILTIN_MEDIUM_ID, chooseBuiltinAction } = require('../src/services/ml/builtinBots');
 const SimulationModel = require('../src/models/Simulation');
 const SimulationGameModel = require('../src/models/SimulationGame');
@@ -134,10 +140,13 @@ function createInternalSession(userId, username, options = {}) {
 }
 
 function getExpectedDefaultParallelGameWorkers() {
-  if (typeof os.availableParallelism === 'function') {
-    return Math.max(1, Math.floor(os.availableParallelism()));
-  }
-  return Math.max(1, Math.floor((Array.isArray(os.cpus()) ? os.cpus().length : 1) || 1));
+  const systemParallelism = (typeof os.availableParallelism === 'function')
+    ? Math.max(1, Math.floor(os.availableParallelism()))
+    : Math.max(1, Math.floor((Array.isArray(os.cpus()) ? os.cpus().length : 1) || 1));
+  if (systemParallelism <= 2) return 1;
+  if (systemParallelism <= 4) return Math.max(1, systemParallelism - 1);
+  const headroom = Math.min(systemParallelism - 1, Math.max(2, Math.ceil(systemParallelism * 0.25)));
+  return Math.max(1, systemParallelism - headroom);
 }
 
 function getExpectedDefaultNumSelfplayWorkers() {
@@ -212,12 +221,12 @@ describeMlWorkflow('ML runtime', () => {
   function createSmallRunConfig(overrides = {}) {
     return {
       label: 'test-run',
+      maxLogicalProcessors: 4,
       numSelfplayWorkers: 1,
       parallelGameWorkers: 1,
       replayBufferMaxPositions: 32,
       batchSize: 4,
       trainingStepsPerCycle: 1,
-      parallelTrainingHeadWorkers: 1,
       trainingBackend: 'node',
       trainingDevicePreference: 'auto',
       checkpointInterval: 1,
@@ -236,10 +245,34 @@ describeMlWorkflow('ML runtime', () => {
       maxTrainingSteps: 6,
       stopOnMaxFailedPromotions: true,
       maxFailedPromotions: 6,
+      curriculumCadence: 100,
       numMctsSimulationsPerMove: 4,
       maxDepth: 4,
       hypothesisCount: 2,
       ...overrides,
+    };
+  }
+
+  function summarizeCurriculumState(state) {
+    const boardCounts = { [WHITE]: 0, [BLACK]: 0 };
+    const boardRelativeRanks = { [WHITE]: [], [BLACK]: [] };
+    Object.values(state?.pieces || {}).forEach((piece) => {
+      if (!piece || piece.zone !== 'board') return;
+      boardCounts[piece.color] += 1;
+      boardRelativeRanks[piece.color].push(
+        piece.color === WHITE
+          ? piece.row
+          : (RANKS - 1 - piece.row),
+      );
+    });
+    return {
+      boardCounts,
+      boardRelativeRanks,
+      capturedCounts: {
+        [WHITE]: Array.isArray(state?.captured?.[WHITE]) ? state.captured[WHITE].length : 0,
+        [BLACK]: Array.isArray(state?.captured?.[BLACK]) ? state.captured[BLACK].length : 0,
+      },
+      daggers: Array.isArray(state?.daggers) ? state.daggers.slice() : [0, 0],
     };
   }
 
@@ -338,6 +371,90 @@ describeMlWorkflow('ML runtime', () => {
     return state;
   }
 
+  function createDiagnosticBoard(setupIndex = 0) {
+    const board = Array.from({ length: 6 }, () => Array.from({ length: 5 }, () => null));
+    board[0][setupIndex % 5] = { color: WHITE, identity: IDENTITIES.KING };
+    board[0][(setupIndex + 1) % 5] = { color: WHITE, identity: IDENTITIES.ROOK };
+    board[5][(setupIndex + 2) % 5] = { color: BLACK, identity: IDENTITIES.KING };
+    board[5][(setupIndex + 3) % 5] = { color: BLACK, identity: IDENTITIES.BISHOP };
+    return board;
+  }
+
+  function createDiagnosticAction(action, index = 0) {
+    if (action?.type === 'MOVE') {
+      return {
+        type: 'MOVE',
+        player: index % 2 === 0 ? WHITE : BLACK,
+        from: { row: 0, col: index % 5 },
+        to: { row: 1, col: (index + 1) % 5 },
+        declaration: action.declaration ?? IDENTITIES.ROOK,
+      };
+    }
+    if (action?.type === 'ON_DECK') {
+      return {
+        type: 'ON_DECK',
+        player: action.player ?? WHITE,
+        identity: action.identity ?? IDENTITIES.BISHOP,
+      };
+    }
+    return {
+      type: action?.type || 'CHALLENGE',
+      player: action?.player ?? (index % 2 === 0 ? WHITE : BLACK),
+    };
+  }
+
+  function createDiagnosticRetainedGame(options = {}) {
+    const sequence = Array.isArray(options.sequence) ? options.sequence : [];
+    const legalSummaries = Array.isArray(options.legalSummaries) ? options.legalSummaries : [];
+    const board = createDiagnosticBoard(options.setupIndex || 0);
+    const replay = [{
+      board,
+      onDecks: [
+        { color: WHITE, identity: options.whiteOnDeckIdentity ?? IDENTITIES.BISHOP },
+        { color: BLACK, identity: options.blackOnDeckIdentity ?? IDENTITIES.ROOK },
+      ],
+    }];
+    sequence.forEach((entry, index) => {
+      const action = createDiagnosticAction(entry, index);
+      const legalSummary = {
+        total: 1,
+        move: 0,
+        challenge: 0,
+        bomb: 0,
+        pass: 0,
+        onDeck: 0,
+        resign: 0,
+        ...(legalSummaries[index] || {}),
+      };
+      replay.push({
+        decision: {
+          action,
+          move: action,
+          trace: {
+            legalActionSummary: legalSummary,
+            policyCoverage: {
+              totalLegalActions: Number(legalSummary.total || 0),
+              mappedPolicyActions: options.unmappedLegalActions
+                ? Math.max(0, Number(legalSummary.total || 0) - Number(options.unmappedLegalActions || 0))
+                : Number(legalSummary.total || 0),
+              unmappedLegalActions: Number(options.unmappedLegalActions || 0),
+            },
+            fastPath: {
+              fallbackUsed: options.fallbackUsed === true,
+            },
+          },
+        },
+      });
+    });
+    return {
+      id: options.id || `diag-${Math.random().toString(16).slice(2)}`,
+      phase: options.phase || 'selfplay',
+      whiteGeneration: Number.isFinite(options.whiteGeneration) ? options.whiteGeneration : 0,
+      blackGeneration: Number.isFinite(options.blackGeneration) ? options.blackGeneration : 0,
+      replay,
+    };
+  }
+
   function createLegacyIdentityBundle(seed = 1601) {
     const legacyBundle = createLegacyDefaultModelBundle({ seed });
     legacyBundle.identity.network.outputSize = 4;
@@ -415,10 +532,11 @@ describeMlWorkflow('ML runtime', () => {
     const modelBundle = createDefaultModelBundle({ seed: 2201 });
 
     expect(modelBundle.family).toBe('shared_encoder_belief_ismcts_v1');
-    expect(modelBundle.encoder.network.hiddenSizes).toEqual([512, 512, 256]);
-    expect(modelBundle.policy.network.hiddenSizes).toEqual([256]);
-    expect(modelBundle.value.network.hiddenSizes).toEqual([128]);
-    expect(modelBundle.identity.network.hiddenSizes).toEqual([256]);
+    expect(modelBundle.architecture?.presetId).toBe('65k');
+    expect(modelBundle.encoder.network.hiddenSizes).toEqual([28, 24, 24]);
+    expect(modelBundle.policy.network.hiddenSizes).toEqual([24]);
+    expect(modelBundle.value.network.hiddenSizes).toEqual([8]);
+    expect(modelBundle.identity.network.hiddenSizes).toEqual([40]);
   });
 
   test('continuous runs promote generations and expose replay by generation pair', async () => {
@@ -476,40 +594,42 @@ describeMlWorkflow('ML runtime', () => {
     }));
 
     const workbench = await runtime.getWorkbench();
-    const expectedDefaults = await runtime.getRecommendedRunConfigDefaults();
     expect(workbench.defaults).toBeTruthy();
     expect(workbench.defaults).toMatchObject({
-      numSelfplayWorkers: getExpectedDefaultNumSelfplayWorkers(),
-      parallelGameWorkers: getExpectedDefaultParallelGameWorkers(),
-      numMctsSimulationsPerMove: 512,
-      maxDepth: 64,
-      hypothesisCount: 4,
-      riskBias: 0,
-      exploration: 1.5,
-      replayBufferMaxPositions: 100000,
-      batchSize: expectedDefaults.batchSize,
-      learningRate: 0.0005,
-      weightDecay: 0.0001,
-      gradientClipNorm: 1,
-      trainingStepsPerCycle: expectedDefaults.trainingStepsPerCycle,
-      parallelTrainingHeadWorkers: 3,
-      trainingBackend: 'auto',
-      trainingDevicePreference: 'auto',
-      checkpointInterval: 200,
-      evalGamesPerCheckpoint: 40,
-      promotionWinrateThreshold: 0.6,
-      modelRefreshIntervalForWorkers: 5,
-      generationComparisonStride: 5,
-      olderGenerationSampleProbability: 0.1,
-      stopOnMaxGenerations: false,
-      maxGenerations: 200,
-      stopOnMaxSelfPlayGames: false,
-      maxSelfPlayGames: 10000,
-      stopOnMaxTrainingSteps: false,
-      maxTrainingSteps: 200000,
-      stopOnMaxFailedPromotions: true,
-      maxFailedPromotions: 50,
+      modelSizePreset: started.run.config.modelSizePreset,
+      maxLogicalProcessors: started.run.config.maxLogicalProcessors,
+      numSelfplayWorkers: started.run.config.numSelfplayWorkers,
+      curriculumCadence: started.run.config.curriculumCadence,
+      parallelGameWorkers: started.run.config.parallelGameWorkers,
+      numMctsSimulationsPerMove: started.run.config.numMctsSimulationsPerMove,
+      maxDepth: started.run.config.maxDepth,
+      hypothesisCount: started.run.config.hypothesisCount,
+      riskBias: started.run.config.riskBias,
+      exploration: started.run.config.exploration,
+      replayBufferMaxPositions: started.run.config.replayBufferMaxPositions,
+      batchSize: started.run.config.batchSize,
+      learningRate: started.run.config.learningRate,
+      weightDecay: started.run.config.weightDecay,
+      gradientClipNorm: started.run.config.gradientClipNorm,
+      trainingStepsPerCycle: started.run.config.trainingStepsPerCycle,
+      trainingBackend: started.run.config.trainingBackend,
+      trainingDevicePreference: started.run.config.trainingDevicePreference,
+      checkpointInterval: started.run.config.checkpointInterval,
+      evalGamesPerCheckpoint: started.run.config.evalGamesPerCheckpoint,
+      promotionWinrateThreshold: started.run.config.promotionWinrateThreshold,
+      modelRefreshIntervalForWorkers: started.run.config.modelRefreshIntervalForWorkers,
+      generationComparisonStride: started.run.config.generationComparisonStride,
+      olderGenerationSampleProbability: started.run.config.olderGenerationSampleProbability,
+      stopOnMaxGenerations: started.run.config.stopOnMaxGenerations,
+      maxGenerations: started.run.config.maxGenerations,
+      stopOnMaxSelfPlayGames: started.run.config.stopOnMaxSelfPlayGames,
+      maxSelfPlayGames: started.run.config.maxSelfPlayGames,
+      stopOnMaxTrainingSteps: started.run.config.stopOnMaxTrainingSteps,
+      maxTrainingSteps: started.run.config.maxTrainingSteps,
+      stopOnMaxFailedPromotions: started.run.config.stopOnMaxFailedPromotions,
+      maxFailedPromotions: started.run.config.maxFailedPromotions,
     });
+    expect(Array.isArray(workbench.defaults.modelSizePresetOptions)).toBe(true);
     expect(Array.isArray(workbench.runs.items)).toBe(true);
     expect(workbench.runs.items.some((run) => run.id === started.run.id)).toBe(true);
     expect(workbench.live.resourceTelemetry).toBeTruthy();
@@ -549,12 +669,131 @@ describeMlWorkflow('ML runtime', () => {
     });
 
     expect(started.run.config).toMatchObject({
+      maxLogicalProcessors: runtime.getRunConfigDefaults().maxLogicalProcessors,
       parallelGameWorkers: 12,
       numSelfplayWorkers: 24,
+      curriculumCadence: 100,
       batchSize: 1024,
       trainingStepsPerCycle: 64,
     });
     runtime.getRunById(started.run.id).status = 'stopped';
+  });
+
+  test('startRun caps worker defaults and overrides by max logical processors', async () => {
+    await runtime.ensureLoaded();
+    jest.spyOn(runtime, 'runContinuousPipeline').mockImplementation(async () => {});
+
+    const started = await runtime.startRun({
+      label: 'capped-cpu-budget-run',
+      maxLogicalProcessors: 6,
+      numSelfplayWorkers: 20,
+      parallelGameWorkers: 10,
+    });
+
+    expect(started.run.config).toMatchObject({
+      maxLogicalProcessors: 6,
+      parallelGameWorkers: 6,
+      numSelfplayWorkers: 20,
+    });
+    runtime.getRunById(started.run.id).status = 'stopped';
+  });
+
+  test('curriculum start states shift from advanced endgames toward setup-heavy openings', () => {
+    const earlySummaries = [];
+    const lateSummaries = [];
+
+    for (let seed = 5000; seed < 5120; seed += 1) {
+      earlySummaries.push(createInitialState({
+        seed,
+        maxPlies: 80,
+        curriculum: { progress: 0 },
+      }).curriculum);
+      lateSummaries.push(createInitialState({
+        seed,
+        maxPlies: 80,
+        curriculum: { progress: 1 },
+      }).curriculum);
+    }
+
+    const average = (items, key) => (
+      items.reduce((sum, item) => sum + Number(item?.[key] || 0), 0) / items.length
+    );
+
+    expect(average(earlySummaries, 'whiteBoardPieces')).toBeLessThan(2);
+    expect(average(earlySummaries, 'blackBoardPieces')).toBeLessThan(2);
+    expect(average(earlySummaries, 'advanceDepth')).toBeGreaterThan(3);
+    expect(average(earlySummaries, 'totalDaggers')).toBeGreaterThan(3);
+
+    expect(average(lateSummaries, 'whiteBoardPieces')).toBeGreaterThan(4);
+    expect(average(lateSummaries, 'blackBoardPieces')).toBeGreaterThan(4);
+    expect(average(lateSummaries, 'advanceDepth')).toBeLessThan(1);
+    expect(average(lateSummaries, 'totalDaggers')).toBeLessThan(1);
+  });
+
+  test('curriculum states keep captured pieces public, reserves intact, and placements inside the allowed ranks', () => {
+    const state = createInitialState({
+      seed: 6401,
+      maxPlies: 80,
+      curriculum: { progress: 0.45 },
+    });
+    const summary = summarizeCurriculumState(state);
+
+    expect(state.curriculum).toBeTruthy();
+    expect(state.curriculum.mode).toBe('selfplay-curriculum');
+    expect(summary.boardCounts[WHITE]).toBe(state.curriculum.whiteBoardPieces);
+    expect(summary.boardCounts[BLACK]).toBe(state.curriculum.blackBoardPieces);
+    expect(summary.capturedCounts[BLACK]).toBe(5 - state.curriculum.whiteBoardPieces);
+    expect(summary.capturedCounts[WHITE]).toBe(5 - state.curriculum.blackBoardPieces);
+    expect(state.stashes[WHITE]).toHaveLength(2);
+    expect(state.stashes[BLACK]).toHaveLength(2);
+    expect(state.onDecks[WHITE]).toBeTruthy();
+    expect(state.onDecks[BLACK]).toBeTruthy();
+    expect(summary.daggers[WHITE] + summary.daggers[BLACK]).toBe(state.curriculum.totalDaggers);
+    expect(summary.daggers[WHITE]).toBeLessThanOrEqual(2);
+    expect(summary.daggers[BLACK]).toBeLessThanOrEqual(2);
+    expect(Math.max(...summary.boardRelativeRanks[WHITE])).toBeLessThanOrEqual(state.curriculum.advanceDepth);
+    expect(Math.max(...summary.boardRelativeRanks[BLACK])).toBeLessThanOrEqual(state.curriculum.advanceDepth);
+
+    state.captured[WHITE].forEach((pieceId) => {
+      expect(state.pieces[pieceId].capturedBy).toBe(WHITE);
+      expect(state.pieces[pieceId].alive).toBe(false);
+      expect(state.revealedIdentities[pieceId]).toBe(state.pieces[pieceId].identity);
+    });
+    state.captured[BLACK].forEach((pieceId) => {
+      expect(state.pieces[pieceId].capturedBy).toBe(BLACK);
+      expect(state.pieces[pieceId].alive).toBe(false);
+      expect(state.revealedIdentities[pieceId]).toBe(state.pieces[pieceId].identity);
+    });
+  });
+
+  test('self-play task payloads include curriculum progression while evaluation stays on the default setup path', async () => {
+    await runtime.ensureLoaded();
+    const run = runtime.createRunRecord({
+      label: 'curriculum-payload-run',
+      config: createSmallRunConfig({
+        curriculumCadence: 25,
+      }),
+    });
+    run.stats.totalSelfPlayGames = 40;
+
+    const selfPlayTask = runtime.buildRunGameTaskPayload(run, {
+      phase: 'selfplay',
+      whiteGeneration: 0,
+      blackGeneration: 0,
+      curriculumGameIndex: 42,
+    });
+    const evaluationTask = runtime.buildRunGameTaskPayload(run, {
+      phase: 'evaluation',
+      whiteGeneration: 0,
+      blackGeneration: 0,
+      curriculumGameIndex: 42,
+    });
+
+    expect(selfPlayTask.options.curriculum).toEqual({
+      cadence: 25,
+      gameIndex: 42,
+    });
+    expect(evaluationTask.options.curriculum).toBeNull();
   });
 
   test('bootstrap seeding upgrades legacy root baselines to the preferred modern snapshot', async () => {
@@ -576,10 +815,11 @@ describeMlWorkflow('ML runtime', () => {
     expect(bootstrapSnapshot.id).not.toBe('snapshot-legacy-bootstrap');
     expect(bootstrapSnapshot.bootstrapKey).toBe('modern-default-v1');
     expect(bootstrapSnapshot.modelBundle.family).toBe('shared_encoder_belief_ismcts_v1');
-    expect(bootstrapSnapshot.modelBundle.encoder.network.hiddenSizes).toEqual([512, 512, 256]);
-    expect(bootstrapSnapshot.modelBundle.policy.network.hiddenSizes).toEqual([256]);
-    expect(bootstrapSnapshot.modelBundle.value.network.hiddenSizes).toEqual([128]);
-    expect(bootstrapSnapshot.modelBundle.identity.network.hiddenSizes).toEqual([256]);
+    expect(bootstrapSnapshot.modelBundle.architecture?.presetId).toBe('65k');
+    expect(bootstrapSnapshot.modelBundle.encoder.network.hiddenSizes).toEqual([28, 24, 24]);
+    expect(bootstrapSnapshot.modelBundle.policy.network.hiddenSizes).toEqual([24]);
+    expect(bootstrapSnapshot.modelBundle.value.network.hiddenSizes).toEqual([8]);
+    expect(bootstrapSnapshot.modelBundle.identity.network.hiddenSizes).toEqual([40]);
 
     const seed = runtime.resolveRunSeedBundle({
       seedMode: 'bootstrap',
@@ -587,6 +827,36 @@ describeMlWorkflow('ML runtime', () => {
     });
     expect(seed.seedSource).toBe(`bootstrap:${bootstrapSnapshot.id}`);
     expect(seed.seedBundle.family).toBe('shared_encoder_belief_ismcts_v1');
+  });
+
+  test('bootstrap seeding replaces stale keyed bootstrap snapshots with the preferred 65k baseline', async () => {
+    await runtime.ensureLoaded();
+    runtime.state.snapshots = [
+      runtime.createSnapshotRecord({
+        id: 'snapshot-stale-bootstrap',
+        label: 'Bootstrap Shared-Encoder MLP (1.6M params)',
+        generation: 0,
+        parentSnapshotId: null,
+        modelBundle: createDefaultModelBundle({ seed: 7331, modelSizePreset: '512k' }),
+        notes: 'Old preferred bootstrap snapshot',
+        bootstrapKey: 'modern-default-v1',
+      }),
+    ];
+
+    const bootstrapSnapshot = runtime.getBootstrapSnapshot();
+
+    expect(bootstrapSnapshot.id).not.toBe('snapshot-stale-bootstrap');
+    expect(bootstrapSnapshot.bootstrapKey).toBe('modern-default-v1');
+    expect(bootstrapSnapshot.modelBundle.architecture?.presetId).toBe('65k');
+
+    const seed = runtime.resolveRunSeedBundle({
+      seedMode: 'bootstrap',
+      modelSizePreset: '65k',
+      seedSnapshotId: null,
+    });
+
+    expect(seed.seedSource).toBe(`bootstrap:${bootstrapSnapshot.id}`);
+    expect(seed.seedBundle.architecture?.presetId).toBe('65k');
   });
 
   test('new runs can seed from an existing promoted generation and workbench lists it', async () => {
@@ -1067,6 +1337,63 @@ describeMlWorkflow('ML runtime', () => {
       .toHaveLength(INFERRED_IDENTITIES.length);
   });
 
+  test('startRun persists latest kickoff config as workbench defaults across reloads', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-ml-runtime-'));
+    const dataFilePath = path.join(tempDir, 'runtime.json');
+    const runtimeA = new MlRuntime({
+      dataFilePath,
+      persist: true,
+      useMongoSimulations: false,
+      useMongoRuns: false,
+    });
+
+    try {
+      jest.spyOn(runtimeA, 'runContinuousPipeline').mockImplementation(async () => {});
+      const started = await runtimeA.startRun(createSmallRunConfig({
+        modelSizePreset: '32k',
+        replayBufferMaxPositions: 24000,
+        batchSize: 64,
+        learningRate: 0.001,
+        numSelfplayWorkers: 3,
+        parallelGameWorkers: 2,
+      }));
+
+      const savedState = JSON.parse(fs.readFileSync(dataFilePath, 'utf8'));
+      expect(savedState.runConfigDefaults).toMatchObject({
+        modelSizePreset: started.run.config.modelSizePreset,
+        replayBufferMaxPositions: 24000,
+        batchSize: 64,
+        learningRate: 0.001,
+        numSelfplayWorkers: 3,
+        parallelGameWorkers: 2,
+      });
+
+      const runtimeB = new MlRuntime({
+        dataFilePath,
+        persist: true,
+        useMongoSimulations: false,
+        useMongoRuns: false,
+      });
+      try {
+        const workbench = await runtimeB.getWorkbench();
+        expect(workbench.defaults).toMatchObject({
+          modelSizePreset: started.run.config.modelSizePreset,
+          replayBufferMaxPositions: 24000,
+          batchSize: 64,
+          learningRate: 0.001,
+          numSelfplayWorkers: 3,
+          parallelGameWorkers: 2,
+        });
+        expect(Array.isArray(workbench.defaults.modelSizePresetOptions)).toBe(true);
+      } finally {
+        await runtimeB.dispose();
+      }
+    } finally {
+      await runtimeA.dispose();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test('ensureLoaded refreshes persisted state when the data file changed externally', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-ml-refresh-'));
     const dataFilePath = path.join(tempDir, 'runtime.json');
@@ -1142,16 +1469,64 @@ describeMlWorkflow('ML runtime', () => {
     run.status = 'completed';
     run.stats.averageSelfPlayGameDurationMs = 2400;
     run.stats.averageEvaluationGameDurationMs = 3100;
+    run.stats.averageTrainingStepDurationMs = 420;
 
     const summary = runtime.summarizeRun(run);
     const livePayload = runtime.buildRunProgressPayload(run, 'complete');
 
     expect(summary.averageSelfPlayGameDurationMs).toBe(2400);
     expect(summary.averageEvaluationGameDurationMs).toBe(3100);
+    expect(summary.averageTrainingStepDurationMs).toBe(420);
     expect(summary.elapsedMs).toBe(300000);
     expect(livePayload.averageSelfPlayGameDurationMs).toBe(2400);
     expect(livePayload.averageEvaluationGameDurationMs).toBe(3100);
+    expect(livePayload.averageTrainingStepDurationMs).toBe(420);
     expect(livePayload.elapsedMs).toBe(300000);
+  });
+
+  test('run live payload includes overlapping self-play and training progress', () => {
+    const run = runtime.createRunRecord({
+      label: 'overlap-live-run',
+      config: createSmallRunConfig(),
+    });
+    run.working.selfPlayProgress = {
+      active: true,
+      cycle: 3,
+      workerGeneration: 0,
+      opponentGeneration: 0,
+      completedGames: 2,
+      targetGames: 8,
+      latestGameId: 'game-1',
+      activeGames: 4,
+      averageMctsSearchDurationMs: 55,
+      averageForwardPassDurationMs: 4,
+    };
+    run.working.trainingProgress = {
+      active: true,
+      cycle: 3,
+      completedSteps: 1,
+      targetSteps: 4,
+      checkpointIndex: 0,
+      background: true,
+      trainingBackend: 'python',
+      trainingDevice: 'cuda',
+    };
+
+    const payload = runtime.buildRunProgressPayload(run, 'selfplay');
+
+    expect(payload.selfPlayProgress).toMatchObject({
+      active: true,
+      completedGames: 2,
+      activeGames: 4,
+    });
+    expect(payload.trainingProgress).toMatchObject({
+      active: true,
+      completedSteps: 1,
+      targetSteps: 4,
+      background: true,
+      trainingBackend: 'python',
+      trainingDevice: 'cuda',
+    });
   });
 
   test('run summaries and live payloads expose lastError details', () => {
@@ -1242,6 +1617,134 @@ describeMlWorkflow('ML runtime', () => {
     expect(run.replayBuffer.identitySamples).toHaveLength(1);
   });
 
+  test('appendRunReplayBuffer accepts shared-family stateInput samples', () => {
+    const run = runtime.createRunRecord({
+      label: 'shared-replay-buffer-filter',
+      config: createSmallRunConfig(),
+    });
+
+    runtime.appendRunReplayBuffer(run, {
+      policySamples: [
+        {
+          stateInput: [1, 2, 3],
+          target: [0.2, 0.8],
+          selectedActionKey: 'shared-ok',
+        },
+        {
+          stateInput: [],
+          target: [1],
+          selectedActionKey: 'shared-empty',
+        },
+      ],
+      valueSamples: [
+        { stateInput: [4, 5, 6], target: 1 },
+        { stateInput: [], target: -1 },
+      ],
+      identitySamples: [
+        { stateInput: [7, 8, 9], pieceSlot: 0, trueIdentityIndex: 1 },
+        { stateInput: [7, 8, 9], pieceSlot: null, trueIdentityIndex: 1 },
+      ],
+    }, {
+      generation: 0,
+      createdAt: '2026-03-16T09:40:00.000Z',
+    });
+
+    expect(run.replayBuffer.policySamples).toHaveLength(1);
+    expect(run.replayBuffer.policySamples[0].selectedActionKey).toBe('shared-ok');
+    expect(run.replayBuffer.valueSamples).toHaveLength(1);
+    expect(run.replayBuffer.identitySamples).toHaveLength(1);
+  });
+
+  test('appendRunReplayBuffer accepts shared-model self-play samples emitted by runFastGame', async () => {
+    const modelBundle = createDefaultModelBundle({ seed: 1, modelSizePreset: '32k' });
+    const participant = {
+      id: 'generation:test:0',
+      type: 'generation',
+      label: 'G0',
+      generation: 0,
+      runId: 'test',
+      modelBundle,
+    };
+    const game = await runFastGame({
+      whiteParticipant: participant,
+      blackParticipant: participant,
+      maxTurns: 8,
+      mlTrainingMode: true,
+      mctsConfig: {
+        numSimulations: 8,
+        maxDepth: 6,
+        hypothesisCount: 2,
+      },
+    });
+    const run = runtime.createRunRecord({
+      label: 'shared-replay-buffer-live-game',
+      config: createSmallRunConfig(),
+    });
+    const filtered = runtime.filterRunTrainingSamplesByGeneration(game.training, 0);
+
+    expect(filtered.policySamples.length).toBeGreaterThan(0);
+
+    runtime.appendRunReplayBuffer(run, filtered, {
+      generation: 0,
+      createdAt: '2026-03-16T09:45:00.000Z',
+    });
+
+    expect(run.replayBuffer.policySamples.length).toBeGreaterThan(0);
+    expect(run.replayBuffer.valueSamples.length).toBeGreaterThan(0);
+    expect(run.replayBuffer.identitySamples.length).toBeGreaterThan(0);
+  });
+
+  test('sampleReplayBufferSamples includes combined shared samples for the active shared-family path', async () => {
+    const modelBundle = createDefaultModelBundle({ seed: 21, modelSizePreset: '32k' });
+    const participant = {
+      id: 'generation:test:0',
+      type: 'generation',
+      label: 'G0',
+      generation: 0,
+      runId: 'test',
+      modelBundle,
+    };
+    const game = await runFastGame({
+      gameId: 'shared-sample-batch',
+      phase: 'selfplay',
+      whiteParticipant: participant,
+      blackParticipant: participant,
+      seed: 7000,
+      iterations: 8,
+      maxDepth: 6,
+      hypothesisCount: 2,
+      riskBias: 0,
+      exploration: 1.25,
+      maxPlies: 16,
+      adaptiveSearch: true,
+    });
+    const run = runtime.createRunRecord({
+      label: 'shared-replay-buffer-combined-batch',
+      config: createSmallRunConfig({
+        batchSize: 4,
+      }),
+    });
+
+    expect(game.training.identitySamples.length).toBeGreaterThan(0);
+
+    runtime.appendRunReplayBuffer(run, game.training, {
+      generation: 0,
+      createdAt: game.createdAt,
+    });
+
+    const batch = runtime.sampleReplayBufferSamples(run);
+
+    expect(run.replayBuffer.valueSamples.length).toBeGreaterThan(0);
+    expect(run.replayBuffer.identitySamples.length).toBeGreaterThan(0);
+    expect(batch.policySamples.length).toBeGreaterThan(0);
+    expect(batch.valueSamples.length).toBeGreaterThan(0);
+    expect(batch.identitySamples.length).toBeGreaterThan(0);
+    expect(batch.sharedSamples.length).toBeGreaterThan(0);
+    expect(batch.sharedSamples[0].stateInput.length).toBeGreaterThan(0);
+    expect(batch.sharedSamples.some((sample) => Number.isFinite(sample.valueTarget))).toBe(true);
+    expect(batch.sharedSamples.some((sample) => Array.isArray(sample.identityTargets) && sample.identityTargets.length > 0)).toBe(true);
+  });
+
   test('sampleReplayBufferSamples sanitizes legacy malformed replay entries without misaligning values', () => {
     const run = runtime.createRunRecord({
       label: 'replay-buffer-sanitize',
@@ -1289,7 +1792,7 @@ describeMlWorkflow('ML runtime', () => {
     expect(run.replayBuffer.valueSamples.map((sample) => sample.target)).toEqual([11, 33]);
   });
 
-  test('listRunGames only returns retained evaluation games for replay', async () => {
+  test('listRunGames separates retained evaluation and simulation games for replay', async () => {
     await runtime.ensureLoaded();
 
     const run = runtime.createRunRecord({
@@ -1308,6 +1811,13 @@ describeMlWorkflow('ML runtime', () => {
         winner: WHITE,
         winReason: null,
         plies: 20,
+        curriculum: {
+          whiteBoardPieces: 2,
+          blackBoardPieces: 3,
+          totalBoardPieces: 5,
+          advanceDepth: 3,
+          totalDaggers: 3,
+        },
       },
       {
         id: 'eval-1',
@@ -1326,17 +1836,272 @@ describeMlWorkflow('ML runtime', () => {
 
     const games = await runtime.listRunGames(run.id);
     const gamesViaNullFilter = await runtime.listRunGames(run.id, null, null);
+    const simulationGames = await runtime.listRunGames(run.id, null, null, { replayType: 'simulation' });
 
     expect(games).toHaveLength(1);
     expect(games[0].id).toBe('eval-1');
     expect(games[0].phase).toBe('evaluation');
     expect(gamesViaNullFilter).toHaveLength(1);
     expect(gamesViaNullFilter[0].id).toBe('eval-1');
+    expect(simulationGames).toHaveLength(1);
+    expect(simulationGames[0].id).toBe('selfplay-1');
+    expect(simulationGames[0].phase).toBe('selfplay');
+    expect(simulationGames[0].curriculum).toEqual({
+      progress: null,
+      whiteBoardPieces: 2,
+      blackBoardPieces: 3,
+      totalBoardPieces: 5,
+      advanceDepth: 3,
+      totalDaggers: 3,
+    });
 
     const detail = await runtime.getRun(run.id);
     expect(Array.isArray(detail.recentReplayGames)).toBe(true);
     expect(detail.recentReplayGames).toHaveLength(1);
     expect(detail.recentReplayGames[0].id).toBe('eval-1');
+    expect(Array.isArray(detail.recentSimulationGames)).toBe(true);
+    expect(detail.recentSimulationGames).toHaveLength(1);
+    expect(detail.recentSimulationGames[0].id).toBe('selfplay-1');
+  });
+
+  test('getRunReplayGameCatalog returns null when the run is missing', async () => {
+    await runtime.ensureLoaded();
+
+    const catalog = await runtime.getRunReplayGameCatalog('missing-run', {
+      replayType: 'simulation',
+      limit: 10,
+    });
+
+    expect(catalog).toBeNull();
+  });
+
+  test('getRunReplayGameCatalog pages retained games and exposes replay filters', async () => {
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      label: 'paged-replay-catalog',
+      config: createSmallRunConfig(),
+    });
+    run.retainedGames = [
+      {
+        id: 'eval-1',
+        createdAt: '2026-03-12T00:01:00.000Z',
+        phase: 'evaluation',
+        whiteGeneration: 0,
+        blackGeneration: 1,
+        whiteParticipantLabel: 'G0',
+        blackParticipantLabel: 'G1',
+        winner: WHITE,
+        plies: 20,
+      },
+      {
+        id: 'eval-2',
+        createdAt: '2026-03-12T00:02:00.000Z',
+        phase: 'evaluation',
+        whiteGeneration: 1,
+        blackGeneration: 2,
+        whiteParticipantLabel: 'G1',
+        blackParticipantLabel: 'G2',
+        winner: BLACK,
+        plies: 22,
+      },
+      {
+        id: 'selfplay-1',
+        createdAt: '2026-03-12T00:03:00.000Z',
+        phase: 'selfplay',
+        whiteGeneration: 2,
+        blackGeneration: 2,
+        whiteParticipantLabel: 'G2',
+        blackParticipantLabel: 'G2',
+        winner: WHITE,
+        plies: 18,
+        curriculum: {
+          whiteBoardPieces: 2,
+          blackBoardPieces: 3,
+          totalBoardPieces: 5,
+          advanceDepth: 3,
+        },
+      },
+      {
+        id: 'selfplay-2',
+        createdAt: '2026-03-12T00:04:00.000Z',
+        phase: 'selfplay',
+        whiteGeneration: 3,
+        blackGeneration: 3,
+        whiteParticipantLabel: 'G3',
+        blackParticipantLabel: 'G3',
+        winner: BLACK,
+        plies: 24,
+        curriculum: {
+          whiteBoardPieces: 3,
+          blackBoardPieces: 3,
+          totalBoardPieces: 6,
+          advanceDepth: 4,
+        },
+      },
+    ];
+    runtime.state.runs.push(run);
+
+    const evalCatalog = await runtime.getRunReplayGameCatalog(run.id, {
+      replayType: 'evaluation',
+      limit: 1,
+    });
+
+    expect(evalCatalog.items).toHaveLength(1);
+    expect(evalCatalog.items[0].id).toBe('eval-2');
+    expect(evalCatalog.pageInfo).toMatchObject({
+      limit: 1,
+      hasMore: true,
+      nextBeforeId: 'eval-2',
+      matchingCount: 2,
+      totalAvailableCount: 2,
+    });
+    expect(evalCatalog.filters.generationOptions).toEqual([0, 1, 2]);
+
+    const nextEvalCatalog = await runtime.getRunReplayGameCatalog(run.id, {
+      replayType: 'evaluation',
+      limit: 1,
+      beforeId: 'eval-2',
+    });
+    expect(nextEvalCatalog.items).toHaveLength(1);
+    expect(nextEvalCatalog.items[0].id).toBe('eval-1');
+
+    const simulationCatalog = await runtime.getRunReplayGameCatalog(run.id, {
+      replayType: 'simulation',
+      limit: 5,
+      boardPieces: 5,
+    });
+    expect(simulationCatalog.items).toHaveLength(1);
+    expect(simulationCatalog.items[0].id).toBe('selfplay-1');
+    expect(simulationCatalog.pageInfo).toMatchObject({
+      matchingCount: 1,
+      totalAvailableCount: 2,
+      hasMore: false,
+    });
+    expect(simulationCatalog.filters.boardPiecesOptions).toEqual([5, 6]);
+    expect(simulationCatalog.filters.advanceDepthOptions).toEqual([3, 4]);
+  });
+
+  test('getRunReplayGameCatalog normalizes legacy simulation replay phases', async () => {
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      label: 'legacy-simulation-replay-phases',
+      config: createSmallRunConfig(),
+    });
+    run.retainedGames = [
+      {
+        id: 'legacy-sim-1',
+        createdAt: '2026-03-12T00:01:00.000Z',
+        phase: 'simulation',
+        whiteGeneration: 1,
+        blackGeneration: 1,
+        whiteParticipantLabel: 'G1',
+        blackParticipantLabel: 'G1',
+        winner: WHITE,
+        plies: 16,
+        curriculum: {
+          whiteBoardPieces: 2,
+          blackBoardPieces: 3,
+          totalBoardPieces: 5,
+          advanceDepth: 3,
+        },
+      },
+      {
+        id: 'legacy-sim-2',
+        createdAt: '2026-03-12T00:02:00.000Z',
+        whiteGeneration: 2,
+        blackGeneration: 2,
+        whiteParticipantLabel: 'G2',
+        blackParticipantLabel: 'G2',
+        winner: BLACK,
+        plies: 18,
+        curriculum: {
+          whiteBoardPieces: 3,
+          blackBoardPieces: 3,
+          totalBoardPieces: 6,
+          advanceDepth: 4,
+        },
+      },
+      {
+        id: 'legacy-eval-1',
+        createdAt: '2026-03-12T00:03:00.000Z',
+        phase: 'promotion',
+        whiteGeneration: 3,
+        blackGeneration: 2,
+        whiteParticipantLabel: 'G3',
+        blackParticipantLabel: 'G2',
+        winner: WHITE,
+        plies: 22,
+      },
+    ];
+    runtime.state.runs.push(run);
+
+    const simulationCatalog = await runtime.getRunReplayGameCatalog(run.id, {
+      replayType: 'simulation',
+      limit: 10,
+    });
+    const evaluationCatalog = await runtime.getRunReplayGameCatalog(run.id, {
+      replayType: 'evaluation',
+      limit: 10,
+    });
+    const detail = await runtime.getRun(run.id);
+
+    expect(simulationCatalog.items.map((game) => game.id)).toEqual(['legacy-sim-1', 'legacy-sim-2']);
+    expect(simulationCatalog.items.map((game) => game.phase)).toEqual(['selfplay', 'selfplay']);
+    expect(simulationCatalog.filters.boardPiecesOptions).toEqual([5, 6]);
+    expect(simulationCatalog.filters.advanceDepthOptions).toEqual([3, 4]);
+    expect(evaluationCatalog.items.map((game) => game.id)).toEqual(['legacy-eval-1']);
+    expect(detail.recentSimulationGames.map((game) => game.id)).toEqual(['legacy-sim-2', 'legacy-sim-1']);
+    expect(detail.recentSimulationGames.map((game) => game.phase)).toEqual(['selfplay', 'selfplay']);
+  });
+
+  test('listRunGames repairs duplicate retained game ids from older runs', async () => {
+    await runtime.ensureLoaded();
+
+    const run = runtime.createRunRecord({
+      label: 'duplicate-retained-game-ids',
+      config: createSmallRunConfig(),
+    });
+    runtime.state.counters.game = 100000;
+    run.retainedGames = [
+      {
+        id: 'game-100000',
+        createdAt: '2026-03-12T00:00:00.000Z',
+        phase: 'selfplay',
+        whiteGeneration: 0,
+        blackGeneration: 0,
+        whiteParticipantLabel: 'G0',
+        blackParticipantLabel: 'G0',
+        winner: WHITE,
+        plies: 10,
+        replay: [{ ply: 0, board: [] }, { ply: 1, board: [] }],
+      },
+      {
+        id: 'game-100000',
+        createdAt: '2026-03-12T00:01:00.000Z',
+        phase: 'selfplay',
+        whiteGeneration: 0,
+        blackGeneration: 0,
+        whiteParticipantLabel: 'G0',
+        blackParticipantLabel: 'G0',
+        winner: BLACK,
+        plies: 12,
+        replay: [{ ply: 0, board: [{ duplicate: true }] }, { ply: 1, board: [] }],
+      },
+    ];
+    runtime.state.runs.push(run);
+
+    const games = await runtime.listRunGames(run.id, null, null, { replayType: 'simulation' });
+
+    expect(games).toHaveLength(2);
+    expect(new Set(games.map((game) => game.id)).size).toBe(2);
+    expect(games.map((game) => game.id)).toContain('game-100000');
+    expect(games.map((game) => game.id)).toContain('game-100001');
+
+    const repairedReplay = await runtime.getRunReplay(run.id, 'game-100001');
+    expect(repairedReplay).toBeTruthy();
+    expect(repairedReplay.game.winner).toBe(BLACK);
   });
 
   test('active runs use in-memory retained games for replay reads', async () => {
@@ -1716,7 +2481,7 @@ describeMlWorkflow('ML runtime', () => {
     expect(runtime.getRunById(first.run.id).status).toBe('stopping');
   });
 
-  test('evaluation uses staged promotion gates against prior promoted generations', async () => {
+  test('evaluation uses a baseline gate before ordered prior-promotion tests', async () => {
     const run = runtime.createRunRecord({
       label: 'gate-run',
       config: createSmallRunConfig({
@@ -1750,8 +2515,7 @@ describeMlWorkflow('ML runtime', () => {
     });
 
     const stagedPools = {
-      baseline: { wins: 35, losses: 15 },
-      prePromotion: { wins: 6, losses: 4 },
+      baseline: { wins: 7, losses: 3 },
       promotion5: { wins: 12, losses: 8 },
       promotion4: { wins: 12, losses: 8 },
       promotion3: { wins: 12, losses: 8 },
@@ -1787,9 +2551,6 @@ describeMlWorkflow('ML runtime', () => {
         return consumeGames('baseline', options.gameCount, 0);
       }
       if (options.blackGeneration === 5) {
-        if ((stagedPools.prePromotion.wins + stagedPools.prePromotion.losses) > 0) {
-          return consumeGames('prePromotion', options.gameCount, 5);
-        }
         return consumeGames('promotion5', options.gameCount, 5);
       }
       if (options.blackGeneration === 4) {
@@ -1803,28 +2564,214 @@ describeMlWorkflow('ML runtime', () => {
 
     expect(playSpy.mock.calls.length).toBeGreaterThan(5);
     expect(evaluation.gen0Info.generation).toBe(0);
-    expect(evaluation.gen0Info.games).toBe(50);
+    expect(evaluation.gen0Info.games).toBe(10);
     expect(evaluation.gen0Info.winRate).toBe(0.7);
+    expect(evaluation.baselinePassed).toBe(true);
     expect(evaluation.targetGeneration).toBe(0);
     expect(evaluation.targetAdvanced).toBe(false);
-    expect(evaluation.prePromotionTest.generation).toBe(5);
-    expect(evaluation.prePromotionTest.games).toBe(10);
-    expect(evaluation.prePromotionTest.winRate).toBe(0.6);
-    expect(evaluation.prePromotionPassed).toBe(true);
+    expect(evaluation.prePromotionTest).toBeNull();
     expect(evaluation.promotionTests).toHaveLength(3);
     expect(evaluation.promotionTests.map((entry) => entry.generation)).toEqual([5, 4, 3]);
     expect(evaluation.promotionTests.every((entry) => entry.games === 20)).toBe(true);
     expect(evaluation.promotionTests.every((entry) => entry.winRate === 0.6)).toBe(true);
     expect(evaluation.promotionTests.every((entry) => entry.passed)).toBe(true);
     expect(evaluation.promoted).toBe(true);
+    expect(evaluation.againstBest?.generation).toBe(5);
     expect(Array.isArray(evaluation.tooltipSections)).toBe(true);
-    expect(evaluation.tooltipSections).toHaveLength(5);
+    expect(evaluation.tooltipSections).toHaveLength(4);
   });
 
-  test('baseline target advances after three consecutive perfect sweeps and is reused on the next evaluation', async () => {
+  test('evaluation stops promotion testing after the first failed promotion opponent', async () => {
+    const run = runtime.createRunRecord({
+      label: 'promotion-short-circuit',
+      config: createSmallRunConfig({
+        prePromotionTestGames: 10,
+        prePromotionTestWinRate: 0.55,
+        promotionTestGames: 20,
+        promotionTestWinRate: 0.55,
+        promotionTestPriorGenerations: 3,
+      }),
+    });
+    for (let generation = 1; generation <= 5; generation += 1) {
+      run.generations.push(runtime.createRunGenerationRecord(run, {
+        generation,
+        label: `G${generation}`,
+        source: generation === 5 ? 'promoted' : 'selfplay',
+        approved: true,
+        isBest: generation === 5,
+        modelBundle: createDefaultModelBundle({ seed: 300 + generation }),
+      }));
+    }
+    run.bestGeneration = 5;
+    run.workerGeneration = 5;
+    run.evaluationTargetGeneration = 0;
+
+    const candidateGeneration = runtime.createRunGenerationRecord(run, {
+      generation: 6,
+      label: 'G6',
+      source: 'candidate',
+      approved: false,
+      modelBundle: createDefaultModelBundle({ seed: 456 }),
+    });
+
+    const stagedPools = {
+      baseline: { wins: 7, losses: 3, calls: 0 },
+      promotion5: { wins: 8, losses: 12, calls: 0 },
+      promotion4: { wins: 12, losses: 8, calls: 0 },
+      promotion3: { wins: 12, losses: 8, calls: 0 },
+    };
+    const consumeGames = (poolKey, count, blackGeneration) => {
+      const pool = stagedPools[poolKey];
+      pool.calls += 1;
+      const games = [];
+      const winsToTake = Math.min(pool.wins, count);
+      for (let index = 0; index < winsToTake; index += 1) {
+        games.push({
+          id: `${poolKey}-win-${pool.calls}-${index}`,
+          winner: WHITE,
+          whiteGeneration: 6,
+          blackGeneration,
+        });
+      }
+      pool.wins -= winsToTake;
+      const lossesToTake = Math.min(pool.losses, count - winsToTake);
+      for (let index = 0; index < lossesToTake; index += 1) {
+        games.push({
+          id: `${poolKey}-loss-${pool.calls}-${index}`,
+          winner: BLACK,
+          whiteGeneration: 6,
+          blackGeneration,
+        });
+      }
+      pool.losses -= lossesToTake;
+      return games;
+    };
+
+    jest.spyOn(runtime, 'playRunGenerationGames').mockImplementation(async (_run, options) => {
+      expect(options.whiteGeneration).toBe(6);
+      if (options.blackGeneration === 0) {
+        return consumeGames('baseline', options.gameCount, 0);
+      }
+      if (options.blackGeneration === 5) {
+        return consumeGames('promotion5', options.gameCount, 5);
+      }
+      if (options.blackGeneration === 4) {
+        return consumeGames('promotion4', options.gameCount, 4);
+      }
+      return consumeGames('promotion3', options.gameCount, 3);
+    });
+    jest.spyOn(runtime, 'retainRunGames').mockImplementation(() => {});
+
+    const evaluation = await runtime.evaluateRunGeneration(run, candidateGeneration, { cancelRequested: false });
+
+    expect(evaluation.baselinePassed).toBe(true);
+    expect(evaluation.promoted).toBe(false);
+    expect(evaluation.promotionTests).toHaveLength(1);
+    expect(evaluation.promotionTests[0]).toMatchObject({
+      generation: 5,
+      games: 20,
+      winRate: 0.4,
+      passed: false,
+    });
+    expect(stagedPools.promotion5.calls).toBeGreaterThan(0);
+    expect(stagedPools.promotion4.calls).toBe(0);
+    expect(stagedPools.promotion3.calls).toBe(0);
+  });
+
+  test('promotion tests fall back to the baseline generation when the promoted lineage is too short', async () => {
+    const run = runtime.createRunRecord({
+      label: 'promotion-baseline-fallback',
+      config: createSmallRunConfig({
+        prePromotionTestGames: 10,
+        prePromotionTestWinRate: 0.55,
+        promotionTestGames: 10,
+        promotionTestWinRate: 0.55,
+        promotionTestPriorGenerations: 3,
+      }),
+    });
+    for (let generation = 1; generation <= 2; generation += 1) {
+      run.generations.push(runtime.createRunGenerationRecord(run, {
+        generation,
+        label: `G${generation}`,
+        source: 'promoted',
+        approved: true,
+        isBest: generation === 2,
+        modelBundle: createDefaultModelBundle({ seed: 200 + generation }),
+      }));
+    }
+    run.bestGeneration = 2;
+    run.workerGeneration = 2;
+    run.evaluationTargetGeneration = 0;
+
+    const playSpy = jest.spyOn(runtime, 'playRunGenerationGames').mockImplementation(async (_run, options) => {
+      if (options.whiteGeneration === 3 && options.blackGeneration === 0) {
+        return Array.from({ length: options.gameCount }, (_, index) => ({
+          id: `baseline-g3-${options.gameCount}-${index}`,
+          winner: WHITE,
+          whiteGeneration: 3,
+          blackGeneration: 0,
+        }));
+      }
+      if (options.whiteGeneration === 3 && options.blackGeneration === 2) {
+        return Array.from({ length: options.gameCount }, (_, index) => ({
+          id: `promotion-g2-${options.gameCount}-${index}`,
+          winner: WHITE,
+          whiteGeneration: 3,
+          blackGeneration: 2,
+        }));
+      }
+      if (options.whiteGeneration === 3 && options.blackGeneration === 1) {
+        return Array.from({ length: options.gameCount }, (_, index) => ({
+          id: `promotion-g1-${options.gameCount}-${index}`,
+          winner: WHITE,
+          whiteGeneration: 3,
+          blackGeneration: 1,
+        }));
+      }
+      if (options.whiteGeneration === 3 && options.blackGeneration === 0) {
+        return Array.from({ length: options.gameCount }, (_, index) => ({
+          id: `fallback-g0-${options.gameCount}-${index}`,
+          winner: WHITE,
+          whiteGeneration: 3,
+          blackGeneration: 0,
+        }));
+      }
+      throw new Error(`unexpected matchup ${options.whiteGeneration}-${options.blackGeneration}`);
+    });
+    jest.spyOn(runtime, 'retainRunGames').mockImplementation(() => {});
+
+    const candidateGeneration3 = runtime.createRunGenerationRecord(run, {
+      generation: 3,
+      label: 'G3',
+      source: 'candidate',
+      approved: false,
+      modelBundle: createDefaultModelBundle({ seed: 303 }),
+    });
+    const evaluation = await runtime.evaluateRunGeneration(run, candidateGeneration3, { cancelRequested: false });
+
+    expect(evaluation.baselinePassed).toBe(true);
+    expect(evaluation.promoted).toBe(true);
+    expect(evaluation.promotionTests.map((entry) => entry.generation)).toEqual([2, 1, 0]);
+    expect(evaluation.promotionTests[0].isBaselineFallback).toBe(false);
+    expect(evaluation.promotionTests[1].isBaselineFallback).toBe(false);
+    expect(evaluation.promotionTests[2].isBaselineFallback).toBe(true);
+    expect(evaluation.promotionTests.slice(2).map((entry) => entry.chartLabel)).toEqual([
+      'promotion fallback 3 vs G0',
+    ]);
+    expect(playSpy).toHaveBeenCalledWith(run, expect.objectContaining({
+      whiteGeneration: 3,
+      blackGeneration: 2,
+    }));
+  });
+
+  test('baseline target advances to the newly promoted generation after a perfect baseline sweep', async () => {
     const run = runtime.createRunRecord({
       label: 'baseline-advance',
       config: createSmallRunConfig({
+        prePromotionTestGames: 10,
+        prePromotionTestWinRate: 0.55,
+        promotionTestGames: 10,
+        promotionTestWinRate: 0.55,
         promotionTestPriorGenerations: 1,
       }),
     });
@@ -1841,46 +2788,6 @@ describeMlWorkflow('ML runtime', () => {
     run.bestGeneration = 3;
     run.workerGeneration = 3;
     run.evaluationTargetGeneration = 0;
-    run.evaluationHistory.push(
-      {
-        targetGeneration: 0,
-        baselineInfo: {
-          generation: 0,
-          games: 50,
-          wins: 50,
-          losses: 0,
-          draws: 0,
-          winRate: 1,
-        },
-        againstTarget: {
-          generation: 0,
-          games: 50,
-          wins: 50,
-          losses: 0,
-          draws: 0,
-          winRate: 1,
-        },
-      },
-      {
-        targetGeneration: 0,
-        baselineInfo: {
-          generation: 0,
-          games: 50,
-          wins: 50,
-          losses: 0,
-          draws: 0,
-          winRate: 1,
-        },
-        againstTarget: {
-          generation: 0,
-          games: 50,
-          wins: 50,
-          losses: 0,
-          draws: 0,
-          winRate: 1,
-        },
-      },
-    );
 
     const playSpy = jest.spyOn(runtime, 'playRunGenerationGames').mockImplementation(async (_run, options) => {
       if (options.whiteGeneration === 4 && options.blackGeneration === 0) {
@@ -1891,20 +2798,31 @@ describeMlWorkflow('ML runtime', () => {
           blackGeneration: 0,
         }));
       }
-      if (options.whiteGeneration === 5 && options.blackGeneration === 1) {
+      if (options.whiteGeneration === 4 && options.blackGeneration === 3) {
+        return Array.from({ length: options.gameCount }, (_, index) => ({
+          id: `promotion-g3-${options.gameCount}-${index}`,
+          winner: WHITE,
+          whiteGeneration: 4,
+          blackGeneration: 3,
+        }));
+      }
+      if (options.whiteGeneration === 5 && options.blackGeneration === 4) {
         return Array.from({ length: options.gameCount }, (_, index) => ({
           id: `baseline-g5-${options.gameCount}-${index}`,
           winner: WHITE,
           whiteGeneration: 5,
-          blackGeneration: 1,
+          blackGeneration: 4,
         }));
       }
-      return [{
-        id: `eval-${options.whiteGeneration}-${options.blackGeneration}`,
-        winner: WHITE,
-        whiteGeneration: options.whiteGeneration,
-        blackGeneration: options.blackGeneration,
-      }];
+      if (options.whiteGeneration === 5 && options.blackGeneration === 3) {
+        return Array.from({ length: options.gameCount }, (_, index) => ({
+          id: `promotion-g5-${options.gameCount}-${index}`,
+          winner: WHITE,
+          whiteGeneration: 5,
+          blackGeneration: 3,
+        }));
+      }
+      throw new Error(`unexpected matchup ${options.whiteGeneration}-${options.blackGeneration}`);
     });
     jest.spyOn(runtime, 'retainRunGames').mockImplementation(() => {});
 
@@ -1916,16 +2834,18 @@ describeMlWorkflow('ML runtime', () => {
       modelBundle: createDefaultModelBundle({ seed: 304 }),
     });
     const evaluation4 = await runtime.evaluateRunGeneration(run, candidateGeneration4, { cancelRequested: false });
-    run.evaluationHistory.push(evaluation4);
+    runtime.applyRunGenerationEvaluation(run, candidateGeneration4, evaluation4);
 
     expect(evaluation4.gen0Info.generation).toBe(0);
-    expect(evaluation4.gen0Info.games).toBe(50);
+    expect(evaluation4.gen0Info.games).toBe(10);
     expect(evaluation4.gen0Info.winRate).toBe(1);
+    expect(evaluation4.baselinePassed).toBe(true);
+    expect(evaluation4.promoted).toBe(true);
     expect(evaluation4.targetGeneration).toBe(0);
-    expect(evaluation4.targetPerfectSweepStreak).toBe(3);
+    expect(evaluation4.targetPerfectSweepStreak).toBe(1);
     expect(evaluation4.targetAdvanced).toBe(true);
-    expect(evaluation4.targetAdvancedToGeneration).toBe(1);
-    expect(run.evaluationTargetGeneration).toBe(1);
+    expect(evaluation4.targetAdvancedToGeneration).toBe(4);
+    expect(run.evaluationTargetGeneration).toBe(4);
 
     const candidateGeneration5 = runtime.createRunGenerationRecord(run, {
       generation: 5,
@@ -1936,22 +2856,23 @@ describeMlWorkflow('ML runtime', () => {
     });
     const evaluation5 = await runtime.evaluateRunGeneration(run, candidateGeneration5, { cancelRequested: false });
 
-    expect(evaluation5.gen0Info.generation).toBe(1);
-    expect(evaluation5.gen0Info.games).toBe(50);
-    expect(evaluation5.targetGeneration).toBe(1);
+    expect(evaluation5.gen0Info.generation).toBe(4);
+    expect(evaluation5.gen0Info.games).toBe(10);
+    expect(evaluation5.targetGeneration).toBe(4);
     expect(playSpy).toHaveBeenCalledWith(run, expect.objectContaining({
       whiteGeneration: 5,
-      blackGeneration: 1,
+      blackGeneration: 4,
     }));
   });
 
-  test('evaluation emits partial progress updates while chunking long stage batches', async () => {
+  test('evaluation emits partial progress updates while chunking the baseline and promotion batches', async () => {
     const run = runtime.createRunRecord({
       label: 'progress-run',
       config: createSmallRunConfig({
         prePromotionTestGames: 5,
         prePromotionTestWinRate: 1,
         promotionTestGames: 5,
+        promotionTestWinRate: 1,
         promotionTestPriorGenerations: 1,
       }),
     });
@@ -1985,7 +2906,7 @@ describeMlWorkflow('ML runtime', () => {
     jest.spyOn(runtime, 'retainRunGames').mockImplementation(() => {});
     jest.spyOn(runtime, 'maybeSaveRunState').mockResolvedValue(false);
     jest.spyOn(runtime, 'playRunGenerationGames').mockImplementation(async (_run, options) => {
-      const winner = options.blackGeneration === 2 ? BLACK : WHITE;
+      const winner = options.blackGeneration === 0 ? WHITE : BLACK;
       return Array.from({ length: options.gameCount }, (_, index) => ({
         id: `progress-${options.whiteGeneration}-${options.blackGeneration}-${index}`,
         winner,
@@ -2001,9 +2922,10 @@ describeMlWorkflow('ML runtime', () => {
       .filter(([_, phase, overrides]) => phase === 'evaluation' && overrides?.evaluationProgress?.active);
     expect(progressCalls.length).toBeGreaterThanOrEqual(3);
     expect(progressCalls[0][2].evaluationProgress.stage).toBe('baseline');
-    expect(progressCalls.some(([, , overrides]) => overrides?.evaluationProgress?.stage === 'pre_promotion')).toBe(true);
+    expect(progressCalls.some(([, , overrides]) => overrides?.evaluationProgress?.stage === 'promotion')).toBe(true);
     expect(run.working.evaluationProgress).toBeNull();
-    expect(evaluation.prePromotionPassed).toBe(false);
+    expect(evaluation.baselinePassed).toBe(true);
+    expect(evaluation.promoted).toBe(false);
   });
 
   test('continuous self-play emits partial progress updates while chunking long batches', async () => {
@@ -2042,14 +2964,155 @@ describeMlWorkflow('ML runtime', () => {
 
     const progressCalls = emitSpy.mock.calls
       .filter(([_, phase, overrides]) => phase === 'selfplay' && overrides?.selfPlayProgress?.active);
+    const completedCalls = progressCalls
+      .filter(([_, __, overrides]) => Number(overrides?.selfPlayProgress?.completedGames || 0) > 0);
     expect(progressCalls.length).toBeGreaterThanOrEqual(2);
-    expect(progressCalls[0][2].selfPlayProgress.completedGames).toBe(4);
-    expect(progressCalls[0][2].selfPlayProgress.targetGames).toBe(5);
-    expect(progressCalls[progressCalls.length - 1][2].selfPlayProgress.completedGames).toBe(5);
+    expect(completedCalls[0][2].selfPlayProgress.completedGames).toBe(4);
+    expect(completedCalls[0][2].selfPlayProgress.targetGames).toBe(5);
+    expect(completedCalls[completedCalls.length - 1][2].selfPlayProgress.completedGames).toBe(5);
     expect(runtime.getRunById(started.run.id).working?.selfPlayProgress ?? null).toBeNull();
   });
 
-  test('evaluation series separates staged opponents and uses circle diamond star markers', () => {
+  test('playRunGenerationGamesChunked can stream self-play chunks without retaining completed games', async () => {
+    const run = runtime.createRunRecord({
+      label: 'chunked-selfplay-streaming',
+      config: createSmallRunConfig({
+        parallelGameWorkers: 2,
+      }),
+    });
+    const completedCounts = [];
+
+    jest.spyOn(runtime, 'playRunGenerationGames').mockImplementation(async (_run, options) => (
+      Array.from({ length: options.gameCount }, (_, index) => ({
+        id: `stream-${options.gameIndexOffset || 0}-${index}`,
+        createdAt: `2026-03-19T00:00:0${index}.000Z`,
+        training: {
+          policySamples: [{ sampleKey: `ply:${options.gameIndexOffset || 0}:${index}`, stateInput: [1], target: [1] }],
+          valueSamples: [{ sampleKey: `ply:${options.gameIndexOffset || 0}:${index}`, stateInput: [1], target: 1 }],
+          identitySamples: [{ sampleKey: `ply:${options.gameIndexOffset || 0}:${index}`, stateInput: [1], pieceSlot: 0, trueIdentityIndex: 0 }],
+        },
+      }))
+    ));
+
+    const games = await runtime.playRunGenerationGamesChunked(run, {
+      phase: 'selfplay',
+      collectGames: false,
+      gameCount: 5,
+      onChunk: async (_chunkGames, progress) => {
+        completedCounts.push(progress.completedGames);
+      },
+    });
+
+    expect(games).toEqual([]);
+    expect(completedCounts).toEqual([2, 4, 5]);
+  });
+
+  test('continuous runs can overlap background training with the next self-play cycle', async () => {
+    const run = runtime.createRunRecord({
+      label: 'concurrent-training-run',
+      config: createSmallRunConfig({
+        batchSize: 1,
+        checkpointInterval: 1000,
+        stopOnMaxGenerations: false,
+        stopOnMaxTrainingSteps: false,
+        stopOnMaxSelfPlayGames: true,
+        maxSelfPlayGames: 2,
+        trainingBackend: 'auto',
+        trainingDevicePreference: 'auto',
+      }),
+    });
+    run.replayBuffer.summary = {
+      positions: 1,
+      maxPositions: run.config.replayBufferMaxPositions,
+      totalPositionsSeen: 1,
+      oldestGeneration: 0,
+      newestGeneration: 0,
+      freshness: 0,
+      oldestAt: '2026-03-16T00:00:00.000Z',
+      newestAt: '2026-03-16T00:00:00.000Z',
+    };
+    runtime.state.runs = [run];
+    const taskState = {
+      id: run.id,
+      cancelRequested: false,
+      killRequested: false,
+      token: 1,
+    };
+    runtime.runTasks.set(run.id, taskState);
+    const sequence = [];
+    let selfPlayCalls = 0;
+
+    jest.spyOn(runtime, 'canRunTrainingConcurrently').mockResolvedValue(true);
+    jest.spyOn(runtime, 'playRunGenerationGamesChunked').mockImplementation(async (runRecord, options = {}) => {
+      if (options.phase !== 'selfplay') {
+        throw new Error(`unexpected phase ${options.phase}`);
+      }
+      selfPlayCalls += 1;
+      sequence.push(taskState.trainingPromise ? `selfplay_${selfPlayCalls}_during_training` : `selfplay_${selfPlayCalls}`);
+      runRecord.stats.totalSelfPlayGames = Number(runRecord.stats.totalSelfPlayGames || 0) + 1;
+      if (typeof options.onChunk === 'function') {
+        await options.onChunk([], {
+          completedGames: 1,
+          targetGames: 1,
+        });
+      }
+      if (selfPlayCalls >= 2) {
+        runRecord.status = 'stopping';
+        taskState.cancelRequested = true;
+      }
+      return [];
+    });
+    jest.spyOn(runtime, 'trainRunWorkingModel').mockImplementation(async (runRecord, currentTaskState, options = {}) => {
+      sequence.push(options.deferEvaluation === true ? 'training_background_started' : 'training_inline_started');
+      await runtime.updateRunTrainingProgress(runRecord, {
+        cycle: Number(runRecord.stats?.cycle || 0),
+        completedSteps: 0,
+        targetSteps: 1,
+        checkpointIndex: Number(runRecord.working?.checkpointIndex || 0),
+        background: options.deferEvaluation === true,
+        trainingBackend: 'python',
+        trainingDevice: 'cuda',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      if (runtime.shouldAbortRunTask(runRecord.id, currentTaskState)) {
+        return [];
+      }
+      const loss = {
+        step: Number(runRecord.stats.totalTrainingSteps || 0) + 1,
+        policyLoss: 1,
+        valueLoss: 1,
+        identityLoss: 0,
+        identityAccuracy: 0,
+        trainingBackend: 'python',
+        trainingDevice: 'cuda',
+      };
+      runRecord.working.lastLoss = loss;
+      runRecord.stats.totalTrainingSteps = Number(runRecord.stats.totalTrainingSteps || 0) + 1;
+      await runtime.updateRunTrainingProgress(runRecord, {
+        cycle: Number(runRecord.stats?.cycle || 0),
+        completedSteps: 1,
+        targetSteps: 1,
+        checkpointIndex: Number(runRecord.working?.checkpointIndex || 0),
+        background: options.deferEvaluation === true,
+        trainingBackend: 'python',
+        trainingDevice: 'cuda',
+        latestLoss: loss,
+      });
+      runtime.clearRunTrainingProgress(runRecord);
+      sequence.push('training_finished');
+      return [loss];
+    });
+
+    await runtime.runContinuousPipeline(run, taskState);
+
+    expect(sequence).toContain('training_background_started');
+    expect(sequence).toContain('selfplay_2_during_training');
+    expect(run.stats.totalTrainingSteps).toBe(1);
+    expect(run.working.trainingProgress).toBeNull();
+    runtime.runTasks.delete(run.id);
+  });
+
+  test('evaluation series separates baseline and promotion opponents and uses circle diamond star markers', () => {
     const run = runtime.createRunRecord({
       label: 'series-shapes',
       config: createSmallRunConfig({
@@ -2069,15 +3132,7 @@ describeMlWorkflow('ML runtime', () => {
           draws: 0,
           winRate: 1,
         },
-        prePromotionTest: {
-          generation: 3,
-          games: 40,
-          wins: 20,
-          losses: 20,
-          draws: 0,
-          winRate: 0.5,
-        },
-        prePromotionPassed: false,
+        baselinePassed: false,
         promotionTests: [],
       },
       {
@@ -2091,15 +3146,7 @@ describeMlWorkflow('ML runtime', () => {
           draws: 0,
           winRate: 1,
         },
-        prePromotionTest: {
-          generation: 4,
-          games: 40,
-          wins: 28,
-          losses: 12,
-          draws: 0,
-          winRate: 0.7,
-        },
-        prePromotionPassed: true,
+        baselinePassed: true,
         promotionTests: [
           {
             generation: 4,
@@ -2109,6 +3156,8 @@ describeMlWorkflow('ML runtime', () => {
             draws: 0,
             winRate: 0.54,
             passed: false,
+            chartLabel: 'promotion vs G4',
+            seriesKey: 'promotion:4',
           },
           {
             generation: 3,
@@ -2118,6 +3167,8 @@ describeMlWorkflow('ML runtime', () => {
             draws: 0,
             winRate: 0.6,
             passed: true,
+            chartLabel: 'promotion vs G3',
+            seriesKey: 'promotion:3',
           },
         ],
       },
@@ -2132,15 +3183,7 @@ describeMlWorkflow('ML runtime', () => {
           draws: 0,
           winRate: 1,
         },
-        prePromotionTest: {
-          generation: 5,
-          games: 40,
-          wins: 30,
-          losses: 10,
-          draws: 0,
-          winRate: 0.75,
-        },
-        prePromotionPassed: true,
+        baselinePassed: true,
         promotionTests: [
           {
             generation: 5,
@@ -2150,6 +3193,8 @@ describeMlWorkflow('ML runtime', () => {
             draws: 0,
             winRate: 0.8,
             passed: true,
+            chartLabel: 'promotion vs G5',
+            seriesKey: 'promotion:5',
           },
           {
             generation: 4,
@@ -2159,6 +3204,8 @@ describeMlWorkflow('ML runtime', () => {
             draws: 0,
             winRate: 0.76,
             passed: true,
+            chartLabel: 'promotion vs G4',
+            seriesKey: 'promotion:4',
           },
         ],
       }
@@ -2172,19 +3219,13 @@ describeMlWorkflow('ML runtime', () => {
       'promotion vs G3',
       'promotion vs G4',
       'promotion vs G5',
-      'pre-promo gate',
     ]);
-    expect(series.find((entry) => entry.label === 'pre-promo gate')).toMatchObject({
-      color: '#7fd2de',
-      lineStyle: 'solid',
-    });
     expect(series.find((entry) => entry.label === 'promotion vs G4')).toMatchObject({
       color: '#7fd2de',
       lineStyle: 'none',
     });
     expect(series.find((entry) => entry.label === 'baseline vs G0').points[0].markerShape).toBe('circle');
-    expect(series.find((entry) => entry.label === 'pre-promo gate').points.map((point) => point.markerShape)).toEqual([
-      'circle',
+    expect(series.find((entry) => entry.label === 'baseline vs G1').points.map((point) => point.markerShape)).toEqual([
       'diamond',
       'star',
     ]);
@@ -2290,7 +3331,320 @@ describeMlWorkflow('ML runtime', () => {
       expect(firstDecisionFrame?.decision?.trace?.fastPath).toMatchObject({
         adaptiveSearchApplied: true,
       });
+      expect(firstDecisionFrame?.decision?.trace?.legalActionSummary?.total).toBeGreaterThan(0);
+      expect(firstDecisionFrame?.decision?.trace?.policyCoverage).toMatchObject({
+        totalLegalActions: expect.any(Number),
+        mappedPolicyActions: expect.any(Number),
+        unmappedLegalActions: expect.any(Number),
+      });
     });
+  });
+
+  test('playRunGenerationGames keeps unique ids after the game counter passes 100000', async () => {
+    const run = runtime.createRunRecord({
+      label: 'parallel-games-high-counter',
+      config: createSmallRunConfig({
+        numSelfplayWorkers: 2,
+        parallelGameWorkers: 2,
+      }),
+    });
+    runtime.state.counters.game = 100000;
+
+    const games = await runtime.playRunGenerationGames(run, {
+      phase: 'selfplay',
+      whiteGeneration: 0,
+      blackGeneration: 0,
+      gameCount: 2,
+      checkpointIndex: 0,
+    });
+
+    expect(games).toHaveLength(2);
+    expect(games.map((game) => game.id)).toEqual(['game-100000', 'game-100001']);
+    expect(new Set(games.map((game) => game.id)).size).toBe(2);
+  });
+
+  test('playRunGenerationGames preserves evaluation phase and keeps root sampling deterministic', async () => {
+    const run = runtime.createRunRecord({
+      label: 'evaluation-phase-games',
+      config: createSmallRunConfig({
+        numSelfplayWorkers: 2,
+        parallelGameWorkers: 2,
+      }),
+    });
+
+    const games = await runtime.playRunGenerationGames(run, {
+      phase: 'evaluation',
+      whiteGeneration: 0,
+      blackGeneration: 0,
+      gameCount: 2,
+      checkpointIndex: 0,
+    });
+
+    expect(games).toHaveLength(2);
+    games.forEach((game) => {
+      expect(game.phase).toBe('evaluation');
+      const firstDecisionFrame = game.replay.find((frame) => frame?.decision?.trace?.fastPath);
+      expect(firstDecisionFrame?.decision?.trace?.fastPath?.stochasticRoot).toBe(false);
+    });
+  });
+
+  test('playRunGenerationGames falls back to sequential execution after a worker timeout', async () => {
+    const run = runtime.createRunRecord({
+      label: 'timeout-fallback-games',
+      config: createSmallRunConfig({
+        numSelfplayWorkers: 2,
+        parallelGameWorkers: 2,
+      }),
+    });
+
+    const timeoutError = new Error('Parallel worker task timed out after 1000ms (playGame:game-timeout)');
+    timeoutError.code = 'ML_WORKER_TASK_TIMEOUT';
+    jest.spyOn(runtime.parallelTaskPool, 'runTasks').mockRejectedValueOnce(timeoutError);
+    const runSingleGameFastSpy = jest.spyOn(runtime, 'runSingleGameFast').mockImplementation(async (options = {}) => ({
+      id: options.gameId || 'game-timeout-fallback',
+      createdAt: new Date().toISOString(),
+      durationMs: 5,
+      seed: options.seed,
+      phase: options.phase || 'evaluation',
+      setupMode: 'engine-fast',
+      whiteParticipantId: 'generation:test:0',
+      blackParticipantId: 'generation:test:0',
+      whiteParticipantLabel: 'G0',
+      blackParticipantLabel: 'G0',
+      winner: null,
+      winReason: null,
+      plies: 2,
+      replay: [{ ply: 0, board: [] }, { ply: 1, board: [] }],
+      decisions: [],
+      training: {
+        policySamples: [],
+        valueSamples: [],
+        identitySamples: [],
+      },
+      actionHistory: [],
+      moveHistory: [],
+    }));
+
+    const games = await runtime.playRunGenerationGames(run, {
+      phase: 'evaluation',
+      whiteGeneration: 0,
+      blackGeneration: 0,
+      gameCount: 2,
+      checkpointIndex: 0,
+    });
+
+    expect(games).toHaveLength(2);
+    expect(runSingleGameFastSpy).toHaveBeenCalledTimes(2);
+    games.forEach((game) => {
+      expect(game.phase).toBe('evaluation');
+      expect(game.setupMode).toBe('engine-fast');
+    });
+  });
+
+  test('self-play fast games vary openings across seeds', async () => {
+    const modelBundle = createDefaultModelBundle({ seed: 51, modelSizePreset: '32k' });
+    const participant = {
+      id: 'generation:test:0',
+      type: 'generation',
+      label: 'G0',
+      generation: 0,
+      runId: 'test',
+      modelBundle,
+    };
+    const games = [];
+    for (let index = 0; index < 5; index += 1) {
+      games.push(await runFastGame({
+        gameId: `seed-variation-${index}`,
+        phase: 'selfplay',
+        whiteParticipant: participant,
+        blackParticipant: participant,
+        seed: 7000 + index,
+        iterations: 8,
+        maxDepth: 6,
+        hypothesisCount: 2,
+        riskBias: 0,
+        exploration: 1.25,
+        maxPlies: 16,
+        adaptiveSearch: true,
+      }));
+    }
+
+    const openingBoards = new Set(games.map((game) => JSON.stringify(game.replay?.[0]?.board || [])));
+    const openingActions = new Set(games.map((game) => game.decisions?.[0]?.action?._key || null));
+
+    expect(openingBoards.size).toBeGreaterThan(1);
+    expect(openingActions.size).toBeGreaterThan(1);
+    games.forEach((game) => {
+      expect(game.phase).toBe('selfplay');
+      expect(game.decisions?.[0]?.trace?.rootSelection?.stochastic).toBe(true);
+    });
+  });
+
+  test('run diagnostics flag repeated setups and opening prefixes', () => {
+    const run = runtime.createRunRecord({
+      label: 'diagnostic-repetition',
+      config: createSmallRunConfig(),
+    });
+    run.bestGeneration = 1;
+    run.retainedGames = Array.from({ length: 10 }, (_, index) => createDiagnosticRetainedGame({
+      id: `repeat-${index}`,
+      setupIndex: 0,
+      whiteGeneration: 1,
+      blackGeneration: 1,
+      sequence: [
+        { type: 'MOVE', declaration: IDENTITIES.ROOK },
+        { type: 'MOVE', declaration: IDENTITIES.BISHOP },
+      ],
+      legalSummaries: [
+        { total: 3, move: 1, challenge: 1, bomb: 1 },
+        { total: 2, move: 1, challenge: 1 },
+      ],
+    }));
+
+    const diagnostics = runtime.summarizeRunDiagnostics(run);
+    const codes = diagnostics.checks.map((check) => check.code);
+
+    expect(diagnostics.openings.uniqueStartingSetups).toBe(1);
+    expect(diagnostics.openings.uniqueFirstMoves).toBe(1);
+    expect(codes).toEqual(expect.arrayContaining([
+      'low_setup_variety',
+      'low_first_move_variety',
+      'repeated_opening_prefix',
+      'repeated_full_sequences',
+    ]));
+  });
+
+  test('run diagnostics count simple-action legal and chosen coverage', () => {
+    const run = runtime.createRunRecord({
+      label: 'diagnostic-simple-actions',
+      config: createSmallRunConfig(),
+    });
+    run.retainedGames = [
+      createDiagnosticRetainedGame({
+        id: 'diag-challenge',
+        setupIndex: 0,
+        sequence: [{ type: 'CHALLENGE' }],
+        legalSummaries: [{ total: 2, challenge: 1, move: 1 }],
+      }),
+      createDiagnosticRetainedGame({
+        id: 'diag-bomb',
+        setupIndex: 1,
+        sequence: [{ type: 'BOMB' }],
+        legalSummaries: [{ total: 2, challenge: 1, bomb: 1 }],
+      }),
+      createDiagnosticRetainedGame({
+        id: 'diag-pass',
+        setupIndex: 2,
+        sequence: [{ type: 'PASS' }],
+        legalSummaries: [{ total: 2, challenge: 1, pass: 1 }],
+      }),
+      createDiagnosticRetainedGame({
+        id: 'diag-ondeck',
+        setupIndex: 3,
+        sequence: [{ type: 'ON_DECK', identity: IDENTITIES.BISHOP, player: WHITE }],
+        legalSummaries: [{ total: 1, onDeck: 1 }],
+      }),
+    ];
+
+    const diagnostics = runtime.summarizeRunDiagnostics(run);
+
+    expect(diagnostics.actions.legalCounts.challenge).toBe(3);
+    expect(diagnostics.actions.legalCounts.bomb).toBe(1);
+    expect(diagnostics.actions.legalCounts.pass).toBe(1);
+    expect(diagnostics.actions.legalCounts.onDeck).toBe(1);
+    expect(diagnostics.actions.chosenCounts.challenge).toBe(1);
+    expect(diagnostics.actions.chosenCounts.bomb).toBe(1);
+    expect(diagnostics.actions.chosenCounts.pass).toBe(1);
+    expect(diagnostics.actions.chosenCounts.onDeck).toBe(1);
+    expect(diagnostics.actions.choiceRatesWhenLegal.bomb).toBeCloseTo(1, 8);
+    expect(diagnostics.actions.choiceRatesWhenLegal.pass).toBeCloseTo(1, 8);
+    expect(diagnostics.actions.choiceRatesWhenLegal.onDeck).toBeCloseTo(1, 8);
+    expect(diagnostics.actions.policyCoverage.unmappedLegalActions).toBe(0);
+  });
+
+  test('run diagnostics flag missing replay and batch value samples', () => {
+    const run = runtime.createRunRecord({
+      label: 'diagnostic-missing-value',
+      config: createSmallRunConfig(),
+    });
+    run.replayBuffer.policySamples = Array.from({ length: 12 }, (_, index) => ({ sampleKey: `p-${index}` }));
+    run.replayBuffer.valueSamples = [];
+    run.replayBuffer.identitySamples = Array.from({ length: 3 }, (_, index) => ({ sampleKey: `i-${index}` }));
+    run.working.lastLoss = {
+      policyLoss: 1.5,
+      valueLoss: 0,
+      identityLoss: 0.5,
+      policySamples: 4,
+      valueSamples: 0,
+      identitySamples: 2,
+    };
+
+    const diagnostics = runtime.summarizeRunDiagnostics(run);
+    const codes = diagnostics.checks.map((check) => check.code);
+
+    expect(codes).toEqual(expect.arrayContaining([
+      'missing_value_targets',
+      'latest_batch_missing_value_samples',
+    ]));
+  });
+
+  test('run diagnostics treat compacted terminal replay counts as unknown instead of missing', () => {
+    const run = runtime.createRunRecord({
+      label: 'diagnostic-compacted-replay',
+      config: createSmallRunConfig(),
+    });
+    run.status = 'completed';
+    run.replayBuffer = {
+      maxPositions: 32,
+      totalPositionsSeen: 12,
+      evictedPositions: 0,
+      summary: {
+        positions: 12,
+        maxPositions: 32,
+        totalPositionsSeen: 12,
+      },
+      policySamples: [],
+      valueSamples: [],
+      identitySamples: [],
+    };
+
+    const diagnostics = runtime.summarizeRunDiagnostics(run);
+    const codes = diagnostics.checks.map((check) => check.code);
+
+    expect(diagnostics.replayTargets.countsCompacted).toBe(true);
+    expect(diagnostics.replayTargets.policySamples).toBe(12);
+    expect(diagnostics.replayTargets.valueSamples).toBeNull();
+    expect(codes).not.toContain('missing_value_targets');
+  });
+
+  test('shared policy slots cover challenge, bomb, pass, and on-deck actions', () => {
+    const challengeState = createPendingChallengeState(IDENTITIES.ROOK);
+    const challengeLegal = getLegalActions(challengeState, WHITE);
+    const challengeAction = challengeLegal.find((action) => action.type === 'CHALLENGE');
+    const bombAction = challengeLegal.find((action) => action.type === 'BOMB');
+
+    expect(challengeAction).toBeTruthy();
+    expect(bombAction).toBeTruthy();
+    expect(Number.isFinite(getPolicySlotForAction(challengeState, WHITE, challengeAction))).toBe(true);
+    expect(Number.isFinite(getPolicySlotForAction(challengeState, WHITE, bombAction))).toBe(true);
+
+    const bombState = applyAction(challengeState, bombAction);
+    const bombResponder = bombState.playerTurn;
+    const bombResponseLegal = getLegalActions(bombState, bombResponder);
+    const passAction = bombResponseLegal.find((action) => action.type === 'PASS');
+
+    expect(passAction).toBeTruthy();
+    expect(Number.isFinite(getPolicySlotForAction(bombState, bombResponder, passAction))).toBe(true);
+
+    const onDeckState = createInitialState({ seed: 2337, maxPlies: 60 });
+    onDeckState.onDeckingPlayer = WHITE;
+    onDeckState.playerTurn = WHITE;
+    onDeckState.toMove = WHITE;
+    const onDeckLegal = getLegalActions(onDeckState, WHITE);
+
+    expect(onDeckLegal.every((action) => action.type === 'ON_DECK')).toBe(true);
+    expect(mapLegalActionsToPolicySlots(onDeckState, WHITE, onDeckLegal)).toHaveLength(onDeckLegal.length);
+    expect(Number.isFinite(getPolicySlotForAction(onDeckState, WHITE, onDeckLegal[0]))).toBe(true);
   });
 
   test('fast self-play reuses shared ISMCTS trees per participant across plies', async () => {
@@ -2318,31 +3672,40 @@ describeMlWorkflow('ML runtime', () => {
     expect(totalNodeCounts.some((count, index) => index > 0 && count >= totalNodeCounts[index - 1])).toBe(true);
   });
 
-  test('trainRunWorkingModel supports parallel training head workers', async () => {
+  test('trainRunWorkingModel advances a shared-family CPU training step when Python is not used', async () => {
     const run = runtime.createRunRecord({
-      label: 'parallel-training',
+      label: 'cpu-training-step',
       config: createSmallRunConfig({
-        parallelTrainingHeadWorkers: 3,
+        checkpointInterval: 100,
       }),
     });
-
-    const game = await runtime.runSingleGame({
-      whiteParticipant: runtime.createGenerationParticipant(run, 0),
-      blackParticipant: runtime.createGenerationParticipant(run, 0),
-      seed: 4242,
-      iterations: 4,
-      maxDepth: 4,
-      hypothesisCount: 2,
-      riskBias: 0,
-      exploration: 1.5,
-      maxPlies: 40,
+    const participant = runtime.createGenerationParticipant(run, 0);
+    const game = await runFastGame({
+      whiteParticipant: participant,
+      blackParticipant: participant,
+      maxTurns: 8,
+      mlTrainingMode: true,
+      mctsConfig: {
+        numSimulations: 8,
+        maxDepth: 6,
+        hypothesisCount: 2,
+      },
     });
-    runtime.appendRunReplayBuffer(run, game.training, {
+
+    const filteredTraining = runtime.filterRunTrainingSamplesByGeneration(game.training, 0);
+    runtime.appendRunReplayBuffer(run, filteredTraining, {
       generation: 0,
       createdAt: game.createdAt,
     });
 
-    const losses = await runtime.trainRunWorkingModel(run, { cancelRequested: false });
+    const taskState = {
+      id: run.id,
+      cancelRequested: false,
+      killRequested: false,
+    };
+    runtime.runTasks.set(run.id, taskState);
+    const losses = await runtime.trainRunWorkingModel(run, taskState);
+    runtime.runTasks.delete(run.id);
 
     expect(losses).toHaveLength(1);
     expect(run.stats.totalTrainingSteps).toBe(1);

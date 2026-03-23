@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../../models/User');
 const ensureUser = require('../../utils/ensureUser');
+const { DEFAULT_DEV_PORT } = require('../../config/defaults');
 const { buildAuthCookieOptions } = require('../../utils/authCookies');
 const {
   createAuthToken,
@@ -113,7 +114,7 @@ function resolveRedirectUri(req) {
   if (origin) {
     return `${origin}/api/auth/google/callback`;
   }
-  const port = process.env.PORT || 3000;
+  const port = Number(process.env.PORT || DEFAULT_DEV_PORT);
   return `http://localhost:${port}/api/auth/google/callback`;
 }
 

@@ -194,6 +194,268 @@ function toPieceView(piece) {
   };
 }
 
+const CURRICULUM_BINOMIAL_WEIGHTS = Object.freeze([1, 4, 6, 4, 1]);
+const CURRICULUM_MAX_RUNG = CURRICULUM_BINOMIAL_WEIGHTS.length - 1;
+const CURRICULUM_EXPLORATION_WEIGHT = 0.1;
+
+function normalizeCurriculumProgress(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function normalizeCurriculumGameIndex(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function normalizeCurriculumCadence(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function resolveCurriculumProgress(curriculum = null) {
+  if (!curriculum || typeof curriculum !== 'object') return null;
+  const directProgress = normalizeCurriculumProgress(curriculum.progress);
+  if (directProgress !== null) {
+    return {
+      progress: directProgress,
+      gameIndex: normalizeCurriculumGameIndex(curriculum.gameIndex),
+      cadence: normalizeCurriculumCadence(curriculum.cadence),
+    };
+  }
+  const gameIndex = normalizeCurriculumGameIndex(curriculum.gameIndex);
+  const cadence = normalizeCurriculumCadence(curriculum.cadence);
+  if (gameIndex === null || cadence === null) return null;
+  return {
+    progress: Math.max(0, Math.min(1, gameIndex / (cadence * CURRICULUM_MAX_RUNG))),
+    gameIndex,
+    cadence,
+  };
+}
+
+function sampleWeightedIndex(weights, rng) {
+  const normalizedWeights = Array.isArray(weights) ? weights : [];
+  const total = normalizedWeights.reduce((sum, weight) => {
+    const numericWeight = Number(weight);
+    return numericWeight > 0 ? sum + numericWeight : sum;
+  }, 0);
+  if (total <= 0) {
+    return randomInt(rng, 0, Math.max(0, normalizedWeights.length - 1));
+  }
+  let remaining = rng() * total;
+  for (let index = 0; index < normalizedWeights.length; index += 1) {
+    const weight = Number(normalizedWeights[index]);
+    if (!(weight > 0)) continue;
+    remaining -= weight;
+    if (remaining <= 0) return index;
+  }
+  return Math.max(0, normalizedWeights.length - 1);
+}
+
+function sampleCurriculumRung(rng, progress) {
+  const safeProgress = normalizeCurriculumProgress(progress);
+  if (safeProgress === null) {
+    return randomInt(rng, 0, CURRICULUM_MAX_RUNG);
+  }
+  const weights = CURRICULUM_BINOMIAL_WEIGHTS.map((coefficient, rung) => {
+    const binomialWeight = coefficient
+      * (safeProgress ** rung)
+      * ((1 - safeProgress) ** (CURRICULUM_MAX_RUNG - rung));
+    return ((1 - CURRICULUM_EXPLORATION_WEIGHT) * binomialWeight)
+      + (CURRICULUM_EXPLORATION_WEIGHT / CURRICULUM_BINOMIAL_WEIGHTS.length);
+  });
+  return sampleWeightedIndex(weights, rng);
+}
+
+function getCurriculumRow(color, relativeRank) {
+  return color === WHITE
+    ? relativeRank
+    : (RANKS - 1 - relativeRank);
+}
+
+function listCurriculumPlacementSquares(color, advanceDepth) {
+  const maxRelativeRank = Math.max(0, Math.min(CURRICULUM_MAX_RUNG, Math.floor(advanceDepth)));
+  const squares = [];
+  for (let relativeRank = 0; relativeRank <= maxRelativeRank; relativeRank += 1) {
+    const row = getCurriculumRow(color, relativeRank);
+    for (let col = 0; col < FILES; col += 1) {
+      squares.push({ row, col });
+    }
+  }
+  return squares;
+}
+
+function setBoardPiece(board, pieces, pieceId, square) {
+  const piece = pieces[pieceId];
+  if (!piece || !square) return;
+  board[square.row][square.col] = pieceId;
+  piece.zone = 'board';
+  piece.row = square.row;
+  piece.col = square.col;
+}
+
+function setCapturedPiece(pieces, captured, revealedIdentities, pieceId, captorColor) {
+  const piece = pieces[pieceId];
+  if (!piece) return;
+  piece.alive = false;
+  piece.zone = 'captured';
+  piece.row = -1;
+  piece.col = -1;
+  piece.capturedBy = captorColor;
+  captured[captorColor].push(pieceId);
+  revealedIdentities[pieceId] = piece.identity;
+}
+
+function setOnDeckPiece(pieces, onDecks, color, pieceId) {
+  if (!pieceId) return;
+  const piece = pieces[pieceId];
+  if (!piece) return;
+  onDecks[color] = pieceId;
+  piece.zone = 'onDeck';
+  piece.row = -1;
+  piece.col = -1;
+}
+
+function setStashPiece(pieces, stashes, color, pieceId) {
+  const piece = pieces[pieceId];
+  if (!piece) return;
+  stashes[color].push(pieceId);
+  piece.zone = 'stash';
+  piece.row = -1;
+  piece.col = -1;
+}
+
+function buildStartingIdsForColor(color, pieces, moveHistoryByPiece) {
+  return PIECE_POOL_BY_COLOR.map((identity, idx) => {
+    const id = `${color === WHITE ? 'w' : 'b'}-${idx}`;
+    pieces[id] = createPiece(id, color, identity);
+    moveHistoryByPiece[id] = [];
+    return id;
+  });
+}
+
+function createDefaultStartingArrangement({
+  rng,
+  board,
+  pieces,
+  stashes,
+  onDecks,
+  moveHistoryByPiece,
+}) {
+  const columns = Array.from({ length: FILES }, (_, idx) => idx);
+  [WHITE, BLACK].forEach((color) => {
+    const ids = buildStartingIdsForColor(color, pieces, moveHistoryByPiece);
+    const kingId = ids.find((id) => pieces[id].identity === IDENTITIES.KING);
+    const nonKingIds = ids.filter((id) => id !== kingId);
+    const shuffledOthers = shuffle(nonKingIds, rng);
+    const boardIds = [kingId, ...shuffledOthers.slice(0, 4)];
+    const reserves = shuffledOthers.slice(4);
+    const onDeckId = reserves[0] || null;
+    const stashIds = reserves.slice(1);
+    const homeRow = color === WHITE ? 0 : (RANKS - 1);
+    const shuffledCols = shuffle(columns, rng);
+
+    boardIds.forEach((pieceId, index) => {
+      setBoardPiece(board, pieces, pieceId, {
+        row: homeRow,
+        col: shuffledCols[index],
+      });
+    });
+    setOnDeckPiece(pieces, onDecks, color, onDeckId);
+    stashIds.forEach((pieceId) => setStashPiece(pieces, stashes, color, pieceId));
+  });
+  return null;
+}
+
+function chooseCurriculumDaggers(rng, totalDaggers) {
+  const safeTotalDaggers = Math.max(0, Math.min(CURRICULUM_MAX_RUNG, Math.floor(totalDaggers)));
+  const allocations = [];
+  for (let whiteDaggers = 0; whiteDaggers <= 2; whiteDaggers += 1) {
+    const blackDaggers = safeTotalDaggers - whiteDaggers;
+    if (blackDaggers < 0 || blackDaggers > 2) continue;
+    allocations.push([whiteDaggers, blackDaggers]);
+  }
+  if (!allocations.length) return [0, 0];
+  return allocations[randomInt(rng, 0, allocations.length - 1)];
+}
+
+function createCurriculumStartingArrangement({
+  rng,
+  board,
+  pieces,
+  stashes,
+  onDecks,
+  captured,
+  revealedIdentities,
+  moveHistoryByPiece,
+  curriculum,
+}) {
+  const resolvedProgress = resolveCurriculumProgress(curriculum);
+  if (!resolvedProgress) {
+    return createDefaultStartingArrangement({
+      rng,
+      board,
+      pieces,
+      stashes,
+      onDecks,
+      moveHistoryByPiece,
+    });
+  }
+
+  const blackBoardPieces = 1 + sampleCurriculumRung(rng, resolvedProgress.progress);
+  const whiteBoardPieces = 1 + sampleCurriculumRung(rng, resolvedProgress.progress);
+  const advanceDepth = CURRICULUM_MAX_RUNG - sampleCurriculumRung(rng, resolvedProgress.progress);
+  const totalDaggers = CURRICULUM_MAX_RUNG - sampleCurriculumRung(rng, resolvedProgress.progress);
+  const daggers = chooseCurriculumDaggers(rng, totalDaggers);
+
+  [WHITE, BLACK].forEach((color) => {
+    const boardPieceCount = color === WHITE ? whiteBoardPieces : blackBoardPieces;
+    const ids = buildStartingIdsForColor(color, pieces, moveHistoryByPiece);
+    const kingId = ids.find((id) => pieces[id].identity === IDENTITIES.KING);
+    const nonKingIds = shuffle(ids.filter((id) => id !== kingId), rng);
+    const boardIds = [kingId, ...nonKingIds.slice(0, Math.max(0, boardPieceCount - 1))];
+    const remainingIds = nonKingIds.slice(Math.max(0, boardPieceCount - 1));
+    const capturedCount = Math.max(0, 5 - boardPieceCount);
+    const capturedIds = remainingIds.slice(0, capturedCount);
+    const hiddenReserveIds = remainingIds.slice(capturedCount);
+    const onDeckId = hiddenReserveIds[0] || null;
+    const stashIds = hiddenReserveIds.slice(1);
+
+    const availableSquares = shuffle(
+      listCurriculumPlacementSquares(color, advanceDepth)
+        .filter((square) => board[square.row][square.col] === null),
+      rng,
+    );
+    boardIds.forEach((pieceId, index) => {
+      setBoardPiece(board, pieces, pieceId, availableSquares[index]);
+    });
+    capturedIds.forEach((pieceId) => setCapturedPiece(
+      pieces,
+      captured,
+      revealedIdentities,
+      pieceId,
+      otherColor(color),
+    ));
+    setOnDeckPiece(pieces, onDecks, color, onDeckId);
+    stashIds.forEach((pieceId) => setStashPiece(pieces, stashes, color, pieceId));
+  });
+
+  return {
+    mode: 'selfplay-curriculum',
+    progress: resolvedProgress.progress,
+    gameIndex: resolvedProgress.gameIndex,
+    cadence: resolvedProgress.cadence,
+    blackBoardPieces,
+    whiteBoardPieces,
+    advanceDepth,
+    totalDaggers,
+    daggers,
+  };
+}
+
 function createInitialState(options = {}) {
   const seed = Number.isFinite(options.seed) ? options.seed : Date.now();
   const maxPlies = Number.isFinite(options.maxPlies) && options.maxPlies > 0
@@ -205,48 +467,19 @@ function createInitialState(options = {}) {
   const pieces = {};
   const stashes = [[], []];
   const onDecks = [null, null];
+  const captured = [[], []];
   const moveHistoryByPiece = {};
   const revealedIdentities = {};
-  const columns = Array.from({ length: FILES }, (_, idx) => idx);
-
-  [WHITE, BLACK].forEach((color) => {
-    const ids = PIECE_POOL_BY_COLOR.map((identity, idx) => {
-      const id = `${color === WHITE ? 'w' : 'b'}-${idx}`;
-      pieces[id] = createPiece(id, color, identity);
-      moveHistoryByPiece[id] = [];
-      return id;
-    });
-
-    const kingId = ids.find((id) => pieces[id].identity === IDENTITIES.KING);
-    const nonKingIds = ids.filter((id) => id !== kingId);
-    const shuffledOthers = shuffle(nonKingIds, rng);
-    const boardIds = [kingId, ...shuffledOthers.slice(0, 4)];
-    const reserves = shuffledOthers.slice(4);
-    const onDeckId = reserves[0] || null;
-    const stashIds = reserves.slice(1);
-
-    const homeRow = color === WHITE ? 0 : (RANKS - 1);
-    const shuffledCols = shuffle(columns, rng);
-    boardIds.forEach((pieceId, index) => {
-      const col = shuffledCols[index];
-      board[homeRow][col] = pieceId;
-      const piece = pieces[pieceId];
-      piece.zone = 'board';
-      piece.row = homeRow;
-      piece.col = col;
-    });
-
-    if (onDeckId) {
-      onDecks[color] = onDeckId;
-      pieces[onDeckId].zone = 'onDeck';
-      pieces[onDeckId].row = -1;
-      pieces[onDeckId].col = -1;
-    }
-
-    stashIds.forEach((pieceId) => {
-      stashes[color].push(pieceId);
-      pieces[pieceId].zone = 'stash';
-    });
+  const curriculumState = createCurriculumStartingArrangement({
+    rng,
+    board,
+    pieces,
+    stashes,
+    onDecks,
+    captured,
+    revealedIdentities,
+    moveHistoryByPiece,
+    curriculum: options.curriculum,
   });
 
   return {
@@ -254,10 +487,10 @@ function createInitialState(options = {}) {
     pieces,
     stashes,
     onDecks,
-    captured: [[], []],
+    captured,
     moves: [],
     actions: [],
-    daggers: [0, 0],
+    daggers: Array.isArray(curriculumState?.daggers) ? curriculumState.daggers.slice() : [0, 0],
     movesSinceAction: 0,
     setupComplete: [true, true],
     playersReady: [true, true],
@@ -270,6 +503,7 @@ function createInitialState(options = {}) {
     ply: 0,
     maxPlies,
     seed,
+    curriculum: curriculumState ? { ...curriculumState, daggers: curriculumState.daggers.slice() } : null,
     moveHistoryByPiece,
     revealedIdentities,
   };
@@ -285,6 +519,14 @@ function cloneState(state) {
     ...state,
     board,
     pieces,
+    curriculum: state.curriculum
+      ? {
+        ...state.curriculum,
+        daggers: Array.isArray(state.curriculum.daggers)
+          ? state.curriculum.daggers.slice()
+          : state.curriculum.daggers,
+      }
+      : null,
     stashes: (state.stashes || [[], []]).map((stash) => stash.slice()),
     onDecks: (state.onDecks || [null, null]).slice(),
     captured: (state.captured || [[], []]).map((arr) => arr.slice()),

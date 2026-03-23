@@ -5,7 +5,7 @@
 2. `src/server.js` validates required production secrets, enables `trust proxy`, mounts API routes and static HTML/assets, and initializes Socket.IO.
 3. `connectToDatabase()` runs before the server starts accepting traffic.
 4. After a successful DB connection, startup initializes `ServerConfig`, clears lobby queue state from the previous process, and starts the hourly guest cleanup task.
-5. The HTTP server then listens and starts the internal bot clients.
+5. The HTTP server then listens. Internal bot clients only start after a successful DB connection; if Mongo is down in development, the server stays up in degraded mode and logs local recovery steps instead.
 
 ## MongoDB Connection Behavior
 - Development uses `process.env.MONGODB_URI` or falls back to `mongodb://localhost:27017/cloaks-gambit`.

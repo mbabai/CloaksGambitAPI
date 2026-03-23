@@ -263,6 +263,15 @@ export function createReplayWorkbench(elements = {}) {
     ensureRenderer();
     if (!state.renderer?.gameView || !frame || !Array.isArray(frame.board)) {
       clearBubbles();
+      if (elements.boardLayer) {
+        elements.boardLayer.innerHTML = '';
+      }
+      if (elements.topBar) {
+        elements.topBar.innerHTML = '';
+      }
+      if (elements.bottomBar) {
+        elements.bottomBar.innerHTML = '';
+      }
       renderDeckCard(elements.whiteDeck, 'White On-Deck', null);
       renderDeckCard(elements.blackDeck, 'Black On-Deck', null);
       if (elements.stashLayer) {

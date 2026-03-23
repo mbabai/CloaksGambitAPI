@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const { spawn } = require('child_process');
@@ -16,6 +17,31 @@ const BRIDGE_TRAIN_BATCH_BASE_TIMEOUT_MS = 120000;
 const BRIDGE_TRAIN_BATCH_PER_EPOCH_TIMEOUT_MS = 45000;
 const BRIDGE_TRAIN_BATCH_PER_SAMPLE_TIMEOUT_MS = 10;
 const BRIDGE_MAX_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
+
+function getSystemParallelism() {
+  if (typeof os.availableParallelism === 'function') {
+    return Math.max(1, Math.floor(os.availableParallelism()));
+  }
+  return Math.max(1, Math.floor((Array.isArray(os.cpus()) ? os.cpus().length : 1) || 1));
+}
+
+function getInteractiveCpuHeadroom(systemParallelism = getSystemParallelism()) {
+  const cpuCount = Math.max(1, Math.floor(systemParallelism || 1));
+  if (cpuCount <= 2) return 0;
+  if (cpuCount <= 4) return 1;
+  return Math.min(cpuCount - 1, Math.max(2, Math.ceil(cpuCount * 0.25)));
+}
+
+function buildTorchThreadEnvironment() {
+  const cpuCount = getSystemParallelism();
+  const headroom = getInteractiveCpuHeadroom(cpuCount);
+  const torchThreads = Math.max(1, cpuCount - headroom);
+  const interopThreads = Math.max(1, Math.min(4, Math.ceil(torchThreads / 4)));
+  return {
+    ML_TRAINING_TORCH_THREADS: String(torchThreads),
+    ML_TRAINING_TORCH_INTEROP_THREADS: String(interopThreads),
+  };
+}
 
 function isFilesystemPath(value) {
   return typeof value === 'string' && /[\\/]/.test(value);
@@ -51,9 +77,11 @@ function resolveBridgeScript(explicitScript = null) {
 function summarizeTrainBatchPayload(payload = {}) {
   const modelBundle = payload.modelBundle || {};
   const samples = payload.samples || {};
+  const sharedSamples = Array.isArray(payload.sharedSamples) ? payload.sharedSamples : [];
   const inferredIdentities = modelBundle?.identity?.inferredIdentities || payload.inferredIdentities || [];
   return {
-    command: 'train_batch',
+    command: String(payload.command || 'train_batch'),
+    sessionId: payload.sessionId || null,
     devicePreference: payload.devicePreference || 'auto',
     epochs: Number(payload.epochs || 1),
     trainingOptions: {
@@ -61,11 +89,13 @@ function summarizeTrainBatchPayload(payload = {}) {
       batchSize: Number(payload?.trainingOptions?.batchSize || 0),
       weightDecay: Number(payload?.trainingOptions?.weightDecay || 0),
       gradientClipNorm: Number(payload?.trainingOptions?.gradientClipNorm || 0),
+      maxLogicalProcessors: Number(payload?.trainingOptions?.maxLogicalProcessors || 0),
     },
     sampleCounts: {
       policy: Array.isArray(samples.policySamples) ? samples.policySamples.length : 0,
       value: Array.isArray(samples.valueSamples) ? samples.valueSamples.length : 0,
       identity: Array.isArray(samples.identitySamples) ? samples.identitySamples.length : 0,
+      shared: sharedSamples.length,
     },
     model: {
       family: modelBundle?.family || 'legacy',
@@ -82,8 +112,14 @@ function summarizeTrainBatchPayload(payload = {}) {
 
 function summarizePayload(payload = {}) {
   const command = String(payload.command || '').trim().toLowerCase();
-  if (command === 'train_batch') {
+  if (command === 'train_batch' || command === 'train_session_batch') {
     return summarizeTrainBatchPayload(payload);
+  }
+  if (command === 'close_training_session' || command === 'export_training_session') {
+    return {
+      command,
+      sessionId: payload.sessionId || null,
+    };
   }
   return {
     command: command || 'unknown',
@@ -91,6 +127,9 @@ function summarizePayload(payload = {}) {
 }
 
 function countTrainBatchSamples(payload = {}) {
+  if (Array.isArray(payload?.sharedSamples) && payload.sharedSamples.length) {
+    return payload.sharedSamples.length;
+  }
   return (
     (Array.isArray(payload?.samples?.policySamples) ? payload.samples.policySamples.length : 0)
     + (Array.isArray(payload?.samples?.valueSamples) ? payload.samples.valueSamples.length : 0)
@@ -176,6 +215,7 @@ class PythonTrainingBridge {
       env: {
         ...process.env,
         PYTHONUNBUFFERED: '1',
+        ...buildTorchThreadEnvironment(),
       },
     });
 
@@ -388,6 +428,28 @@ class PythonTrainingBridge {
       command: 'train_batch',
       ...payload,
     });
+  }
+
+  async trainSessionBatch(payload = {}, options = {}) {
+    return this.sendPayload({
+      command: 'train_session_batch',
+      ...payload,
+    }, options);
+  }
+
+  async exportTrainingSession(sessionId, options = {}) {
+    return this.sendPayload({
+      command: 'export_training_session',
+      sessionId,
+      includeOptimizerState: options.includeOptimizerState !== false,
+    }, options);
+  }
+
+  async closeTrainingSession(sessionId, options = {}) {
+    return this.sendPayload({
+      command: 'close_training_session',
+      sessionId,
+    }, options);
   }
 
   async close() {

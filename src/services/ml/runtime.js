@@ -20,6 +20,7 @@ const {
   cloneModelBundle,
   createOptimizerState,
   describeModelBundle,
+  getSharedModelSizePresetOptions,
   normalizeModelBundle,
   trainSharedModelBundleBatch,
   trainPolicyModel,
@@ -78,6 +79,7 @@ const LIVE_STATUS_RETENTION_MS = 30000;
 const SAVE_RENAME_RETRY_DELAYS_MS = [25, 75, 150];
 const FILE_ACCESS_RETRY_DELAYS_MS = [25, 75, 150, 300, 750];
 const DEFAULT_RUN_CHECKPOINT_INTERVAL = 200;
+const DEFAULT_RUN_CURRICULUM_CADENCE = 100;
 const DEFAULT_RUN_MAX_REPLAY_GAMES = 240;
 const RUN_LOOP_YIELD_EVERY_GAMES = 1;
 const RUN_PROGRESS_EMIT_MIN_INTERVAL_MS = 750;
@@ -91,6 +93,9 @@ const RUN_PERSISTENCE_LAYOUT_VERSION = 1;
 const RUN_CHECKPOINT_HISTORY_LIMIT = 12;
 const RUN_REPLAY_ACTION_STATS_LIMIT = 8;
 const RUN_REPLAY_PARITY_MISMATCH_LIMIT = 8;
+const RUN_DIAGNOSTIC_SELFPLAY_WINDOW_GAMES = 64;
+const RUN_DIAGNOSTIC_EVALUATION_WINDOW_GAMES = 32;
+const RUN_DIAGNOSTIC_OPENING_PREFIX_PLIES = 4;
 const RUN_EVAL_BASELINE_GAMES = 50;
 const RUN_EVAL_BASELINE_ADVANCE_STREAK = 3;
 const RUN_EVAL_PROGRESS_MAX_CHUNK_GAMES = 16;
@@ -101,6 +106,7 @@ const RUN_JOURNAL_TAIL_READ_MAX_BYTES = 8 * 1024 * 1024;
 const MAX_PARALLEL_WORKER_TASK_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_PARALLEL_WORKER_TASK_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_RUN_BATCH_SIZE_CPU = 256;
+const MAX_RUN_BATCH_SIZE = 65536;
 const DEFAULT_RUN_BATCH_SIZE_PYTHON_CPU = 512;
 const DEFAULT_RUN_BATCH_SIZE_CUDA_SMALL = 512;
 const DEFAULT_RUN_BATCH_SIZE_CUDA_MEDIUM = 1024;
@@ -133,9 +139,10 @@ const LIVE_TEST_SIDE_PREFERENCES = Object.freeze({
   WHITE: 'white',
   BLACK: 'black',
 });
+const DEFAULT_RUN_MODEL_SIZE_PRESET = '32k';
 const PREFERRED_BOOTSTRAP_BASELINE_KEY = 'modern-default-v1';
 const PREFERRED_BOOTSTRAP_BASELINE_SEED = 20260314;
-const PREFERRED_BOOTSTRAP_NOTES = 'Preferred larger baseline model bundle for future runs';
+const PREFERRED_BOOTSTRAP_NOTES = 'Preferred shared-encoder bootstrap baseline for future runs';
 
 function buildModelDescriptorLabel(baseLabel, modelBundle) {
   const prefix = String(baseLabel || '').trim();
@@ -194,16 +201,31 @@ function getSystemParallelism() {
   return Math.max(1, Math.floor((Array.isArray(os.cpus()) ? os.cpus().length : 1) || 1));
 }
 
-function defaultParallelGameWorkers() {
-  return Math.max(1, getSystemParallelism());
+function getInteractiveCpuHeadroom(systemParallelism = getSystemParallelism()) {
+  const cpuCount = Math.max(1, Math.floor(systemParallelism || 1));
+  if (cpuCount <= 2) return 0;
+  if (cpuCount <= 4) return 1;
+  return Math.min(cpuCount - 1, Math.max(2, Math.ceil(cpuCount * 0.25)));
 }
 
-function defaultNumSelfplayWorkers() {
-  return Math.max(8, Math.min(128, defaultParallelGameWorkers() * 2));
+function defaultMaxLogicalProcessors(systemParallelism = getSystemParallelism()) {
+  const cpuCount = Math.max(1, Math.floor(systemParallelism || 1));
+  return Math.max(1, cpuCount - getInteractiveCpuHeadroom(cpuCount));
 }
 
-function defaultParallelTrainingHeadWorkers() {
-  return Math.max(1, Math.min(3, getSystemParallelism()));
+function normalizeMaxLogicalProcessors(value, fallback = defaultMaxLogicalProcessors()) {
+  return clampPositiveInt(value, fallback, 1, Math.max(1, getSystemParallelism()));
+}
+
+function defaultParallelGameWorkers(maxLogicalProcessors = null) {
+  return Math.max(1, normalizeMaxLogicalProcessors(
+    maxLogicalProcessors,
+    defaultMaxLogicalProcessors(),
+  ));
+}
+
+function defaultNumSelfplayWorkers(maxLogicalProcessors = null) {
+  return Math.max(8, Math.min(128, defaultParallelGameWorkers(maxLogicalProcessors) * 2));
 }
 
 function hasOwnDefinedValue(object, key) {
@@ -223,6 +245,7 @@ function getLargestTrainingSampleCount(samples = {}) {
     return 0;
   };
   return Math.max(
+    getSampleCount(samples?.sharedSamples ?? samples?.sharedSampleCount),
     getSampleCount(samples?.policySamples ?? samples?.policySampleCount),
     getSampleCount(samples?.valueSamples ?? samples?.valueSampleCount),
     getSampleCount(samples?.identitySamples ?? samples?.identitySampleCount),
@@ -253,9 +276,9 @@ function recommendCudaTrainingStepsPerCycle(capabilities = null) {
   return DEFAULT_RUN_TRAINING_STEPS_CPU;
 }
 
-function resolveRecommendedTrainingBatchSize(requestedBatchSize, backendResolution = null, samples = {}) {
+function resolveRecommendedTrainingBatchSize(requestedBatchSize, backendResolution = null, samples = {}, options = {}) {
   const availableSampleCount = getLargestTrainingSampleCount(samples);
-  const maxBatchSize = Math.max(1, Math.min(4096, availableSampleCount));
+  const maxBatchSize = Math.max(1, Math.min(MAX_RUN_BATCH_SIZE, availableSampleCount));
   if (Number.isFinite(Number(requestedBatchSize)) && Number(requestedBatchSize) > 0) {
     return clampPositiveInt(requestedBatchSize, maxBatchSize, 1, maxBatchSize);
   }
@@ -264,7 +287,10 @@ function resolveRecommendedTrainingBatchSize(requestedBatchSize, backendResoluti
   if (backendResolution?.backend === TRAINING_BACKENDS.PYTHON) {
     recommended = backendResolution?.device === TRAINING_DEVICE_PREFERENCES.CUDA
       ? recommendCudaBatchSize(backendResolution?.capabilities || null)
-      : recommendPythonCpuBatchSize(getSystemParallelism());
+      : recommendPythonCpuBatchSize(normalizeMaxLogicalProcessors(
+        options.maxLogicalProcessors,
+        defaultMaxLogicalProcessors(),
+      ));
   }
   return Math.max(1, Math.min(maxBatchSize, recommended));
 }
@@ -338,12 +364,12 @@ function withAsyncTimeout(promiseOrFactory, timeoutMs, message) {
   });
 }
 
-function resolveParallelGameWorkers(requestedWorkers, taskCount) {
-  const maxWorkers = Math.max(1, getSystemParallelism());
+function resolveParallelGameWorkers(requestedWorkers, taskCount, maxLogicalProcessors = null) {
+  const maxWorkers = Math.max(1, defaultParallelGameWorkers(maxLogicalProcessors));
   const cappedTaskCount = clampPositiveInt(taskCount, 1, 1, maxWorkers);
   const configuredWorkers = Number.isFinite(Number(requestedWorkers))
     ? clampPositiveInt(requestedWorkers, cappedTaskCount, 1, maxWorkers)
-    : clampPositiveInt(defaultParallelGameWorkers(), cappedTaskCount, 1, maxWorkers);
+    : clampPositiveInt(defaultParallelGameWorkers(maxLogicalProcessors), cappedTaskCount, 1, maxWorkers);
   return Math.max(1, Math.min(cappedTaskCount, configuredWorkers));
 }
 
@@ -490,9 +516,18 @@ class ParallelTaskPool {
 
     worker.on('message', (message = {}) => {
       const pending = workerInfo.pending;
+      if (!pending) return;
+      if (message.progress === true) {
+        if (typeof pending.onProgress === 'function') {
+          pending.onProgress(message.result);
+        }
+        if (typeof pending.refreshTimeout === 'function') {
+          pending.refreshTimeout();
+        }
+        return;
+      }
       workerInfo.pending = null;
       workerInfo.busy = false;
-      if (!pending) return;
       if (pending.timeoutHandle) {
         clearTimeout(pending.timeoutHandle);
       }
@@ -556,8 +591,19 @@ class ParallelTaskPool {
         resolve,
         reject,
         timeoutHandle: null,
+        onProgress: typeof options.onTaskProgress === 'function'
+          ? (progress) => options.onTaskProgress(task, progress)
+          : null,
+        refreshTimeout: null,
       };
-      if (timeoutMs > 0) {
+      const armTimeout = () => {
+        if (pending.timeoutHandle) {
+          clearTimeout(pending.timeoutHandle);
+        }
+        if (!(timeoutMs > 0)) {
+          pending.timeoutHandle = null;
+          return;
+        }
         pending.timeoutHandle = setTimeout(() => {
           if (workerInfo.pending !== pending) return;
           workerInfo.pending = null;
@@ -571,7 +617,9 @@ class ParallelTaskPool {
         if (typeof pending.timeoutHandle?.unref === 'function') {
           pending.timeoutHandle.unref();
         }
-      }
+      };
+      pending.refreshTimeout = armTimeout;
+      armTimeout();
       workerInfo.pending = pending;
       workerInfo.worker.postMessage({
         requestId,
@@ -707,7 +755,14 @@ async function runParallelWorkerTasks(taskPayloads = [], workerCount = 1, option
       activeTasks += 1;
       workerInfo.activeTaskIndex = taskIndex;
       const timeoutMs = resolveParallelWorkerTaskTimeoutMs(tasks[taskIndex], options);
-      if (timeoutMs > 0) {
+      const armActiveTimeout = () => {
+        if (workerInfo.activeTaskTimeout) {
+          clearTimeout(workerInfo.activeTaskTimeout);
+          workerInfo.activeTaskTimeout = null;
+        }
+        if (!(timeoutMs > 0)) {
+          return;
+        }
         workerInfo.activeTaskTimeout = setTimeout(() => {
           if (resolved || stopping || workerInfo.activeTaskIndex !== taskIndex) return;
           stopping = true;
@@ -721,7 +776,9 @@ async function runParallelWorkerTasks(taskPayloads = [], workerCount = 1, option
         if (typeof workerInfo.activeTaskTimeout?.unref === 'function') {
           workerInfo.activeTaskTimeout.unref();
         }
-      }
+      };
+      armActiveTimeout();
+      workerInfo.refreshActiveTaskTimeout = armActiveTimeout;
       workerInfo.worker.postMessage({
         requestId: taskIndex,
         task: tasks[taskIndex],
@@ -739,6 +796,18 @@ async function runParallelWorkerTasks(taskPayloads = [], workerCount = 1, option
 
       worker.on('message', (message = {}) => {
         if (resolved || stopping) return;
+        if (message.progress === true) {
+          if (typeof workerInfo.refreshActiveTaskTimeout === 'function') {
+            workerInfo.refreshActiveTaskTimeout();
+          }
+          if (typeof options.onTaskProgress === 'function') {
+            const taskIndex = Number.isInteger(message.requestId)
+              ? message.requestId
+              : workerInfo.activeTaskIndex;
+            options.onTaskProgress(tasks[taskIndex], message.result, taskIndex);
+          }
+          return;
+        }
         if (workerInfo.activeTaskTimeout) {
           clearTimeout(workerInfo.activeTaskTimeout);
           workerInfo.activeTaskTimeout = null;
@@ -1356,6 +1425,9 @@ function compactDecisionTraceForReplay(trace = {}) {
     evaluationCacheHits: Number(trace?.evaluationCacheHits || 0),
     evaluationCount: Number(trace?.evaluationCount || 0),
     nodeCount: Number(trace?.nodeCount || 0),
+    searchDurationMs: Number(trace?.searchDurationMs || 0),
+    forwardPassCount: Number(trace?.forwardPassCount || 0),
+    forwardPassDurationMs: Number(trace?.forwardPassDurationMs || 0),
     sampledHypothesisCounts: Array.isArray(trace?.sampledHypothesisCounts)
       ? trace.sampledHypothesisCounts
         .slice(0, RUN_REPLAY_ACTION_STATS_LIMIT)
@@ -1370,6 +1442,31 @@ function compactDecisionTraceForReplay(trace = {}) {
       : null,
     actionStats,
     moveStats: actionStats,
+    legalActionSummary: trace?.legalActionSummary && typeof trace.legalActionSummary === 'object'
+      ? {
+          total: Number(trace.legalActionSummary.total || 0),
+          move: Number(trace.legalActionSummary.move || 0),
+          challenge: Number(trace.legalActionSummary.challenge || 0),
+          bomb: Number(trace.legalActionSummary.bomb || 0),
+          pass: Number(trace.legalActionSummary.pass || 0),
+          onDeck: Number(trace.legalActionSummary.onDeck || 0),
+          resign: Number(trace.legalActionSummary.resign || 0),
+          other: Number(trace.legalActionSummary.other || 0),
+        }
+      : null,
+    policyCoverage: trace?.policyCoverage && typeof trace.policyCoverage === 'object'
+      ? {
+          totalLegalActions: Number.isFinite(Number(trace.policyCoverage.totalLegalActions))
+            ? Number(trace.policyCoverage.totalLegalActions)
+            : null,
+          mappedPolicyActions: Number.isFinite(Number(trace.policyCoverage.mappedPolicyActions))
+            ? Number(trace.policyCoverage.mappedPolicyActions)
+            : null,
+          unmappedLegalActions: Number.isFinite(Number(trace.policyCoverage.unmappedLegalActions))
+            ? Number(trace.policyCoverage.unmappedLegalActions)
+            : null,
+        }
+      : null,
     fastPath: trace?.fastPath && typeof trace.fastPath === 'object'
       ? {
           fallbackUsed: Boolean(trace.fastPath.fallbackUsed),
@@ -1448,11 +1545,25 @@ function compactReplayFrameForRun(frame = null) {
   };
 }
 
+function normalizeRetainedReplayPhase(game = null) {
+  const rawPhase = String(game?.phase || '').trim().toLowerCase();
+  if (rawPhase === 'selfplay' || rawPhase === 'self-play' || rawPhase === 'simulation') {
+    return 'selfplay';
+  }
+  if (rawPhase) {
+    return 'evaluation';
+  }
+  return game?.curriculum && typeof game.curriculum === 'object'
+    ? 'selfplay'
+    : 'evaluation';
+}
+
 function compactRunRetainedGame(game = null) {
   if (!game || typeof game !== 'object') return null;
   return {
     id: game.id,
     createdAt: game.createdAt || nowIso(),
+    durationMs: Number.isFinite(game?.durationMs) ? Number(game.durationMs) : 0,
     seed: game.seed,
     setupMode: game.setupMode || 'live-route',
     whiteParticipantId: game.whiteParticipantId || null,
@@ -1462,7 +1573,7 @@ function compactRunRetainedGame(game = null) {
     winner: Number.isFinite(game?.winner) ? Number(game.winner) : null,
     winReason: game?.winReason ?? null,
     plies: Number.isFinite(game?.plies) ? Number(game.plies) : 0,
-    phase: game.phase || 'selfplay',
+    phase: normalizeRetainedReplayPhase(game),
     checkpointIndex: Number(game.checkpointIndex || 0),
     whiteGeneration: Number.isFinite(game?.whiteGeneration) ? Number(game.whiteGeneration) : null,
     blackGeneration: Number.isFinite(game?.blackGeneration) ? Number(game.blackGeneration) : null,
@@ -1473,16 +1584,37 @@ function compactRunRetainedGame(game = null) {
       ? game.replay.map((frame) => compactReplayFrameForRun(frame)).filter(Boolean)
       : [],
     result: game?.result ? deepClone(game.result) : null,
+    curriculum: game?.curriculum ? deepClone(game.curriculum) : null,
   };
 }
 
 function summarizeRunReplayGame(game = null) {
   if (!game || typeof game !== 'object') return null;
+  const curriculum = game?.curriculum && typeof game.curriculum === 'object'
+    ? {
+      progress: Number.isFinite(game.curriculum.progress) ? Number(game.curriculum.progress) : null,
+      whiteBoardPieces: Number.isFinite(game.curriculum.whiteBoardPieces)
+        ? Number(game.curriculum.whiteBoardPieces)
+        : null,
+      blackBoardPieces: Number.isFinite(game.curriculum.blackBoardPieces)
+        ? Number(game.curriculum.blackBoardPieces)
+        : null,
+      totalBoardPieces: Number.isFinite(game.curriculum.totalBoardPieces)
+        ? Number(game.curriculum.totalBoardPieces)
+        : (
+          Number.isFinite(game.curriculum.whiteBoardPieces) && Number.isFinite(game.curriculum.blackBoardPieces)
+            ? Number(game.curriculum.whiteBoardPieces) + Number(game.curriculum.blackBoardPieces)
+            : null
+        ),
+      advanceDepth: Number.isFinite(game.curriculum.advanceDepth) ? Number(game.curriculum.advanceDepth) : null,
+      totalDaggers: Number.isFinite(game.curriculum.totalDaggers) ? Number(game.curriculum.totalDaggers) : null,
+    }
+    : null;
   return {
     id: game.id,
     createdAt: game.createdAt || nowIso(),
     durationMs: Number(game.durationMs || 0),
-    phase: game.phase || 'selfplay',
+    phase: normalizeRetainedReplayPhase(game),
     whiteGeneration: Number.isFinite(game?.whiteGeneration) ? Number(game.whiteGeneration) : 0,
     blackGeneration: Number.isFinite(game?.blackGeneration) ? Number(game.blackGeneration) : 0,
     whiteParticipantLabel: game.whiteParticipantLabel || `G${game.whiteGeneration}`,
@@ -1502,7 +1634,89 @@ function summarizeRunReplayGame(game = null) {
     winReason: game.winReason ?? null,
     plies: Number(game.plies || 0),
     replayFrameCount: Array.isArray(game?.replay) ? game.replay.length : 0,
+    curriculum,
   };
+}
+
+function normalizeRunReplayType(value) {
+  return String(value || 'evaluation').trim().toLowerCase() === 'simulation'
+    ? 'simulation'
+    : 'evaluation';
+}
+
+function normalizeOptionalReplayFilterNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function doesRetainedGameMatchReplayType(game, replayType = 'evaluation') {
+  const normalizedType = normalizeRunReplayType(replayType);
+  const phase = normalizeRetainedReplayPhase(game);
+  if (normalizedType === 'simulation') {
+    return phase === 'selfplay';
+  }
+  return phase === 'evaluation';
+}
+
+function getRetainedGameTotalBoardPieces(game) {
+  const explicitTotal = normalizeOptionalReplayFilterNumber(game?.curriculum?.totalBoardPieces);
+  if (Number.isFinite(explicitTotal)) {
+    return explicitTotal;
+  }
+  const whiteBoardPieces = normalizeOptionalReplayFilterNumber(game?.curriculum?.whiteBoardPieces);
+  const blackBoardPieces = normalizeOptionalReplayFilterNumber(game?.curriculum?.blackBoardPieces);
+  return Number.isFinite(whiteBoardPieces) && Number.isFinite(blackBoardPieces)
+    ? whiteBoardPieces + blackBoardPieces
+    : null;
+}
+
+function doesRetainedGameMatchReplayFilters(game, options = {}) {
+  const replayType = normalizeRunReplayType(options.replayType);
+  if (!doesRetainedGameMatchReplayType(game, replayType)) {
+    return false;
+  }
+
+  if (replayType === 'simulation') {
+    const boardPieces = normalizeOptionalReplayFilterNumber(options.boardPieces);
+    const advanceDepth = normalizeOptionalReplayFilterNumber(options.advanceDepth);
+    const totalBoardPieces = getRetainedGameTotalBoardPieces(game);
+    const gameAdvanceDepth = normalizeOptionalReplayFilterNumber(game?.curriculum?.advanceDepth);
+    if (Number.isFinite(boardPieces) && totalBoardPieces !== boardPieces) {
+      return false;
+    }
+    if (Number.isFinite(advanceDepth) && gameAdvanceDepth !== advanceDepth) {
+      return false;
+    }
+    return true;
+  }
+
+  const generation = normalizeOptionalReplayFilterNumber(options.generation);
+  if (Number.isFinite(generation)) {
+    const whiteGeneration = normalizeOptionalReplayFilterNumber(game?.whiteGeneration);
+    const blackGeneration = normalizeOptionalReplayFilterNumber(game?.blackGeneration);
+    if (whiteGeneration !== generation && blackGeneration !== generation) {
+      return false;
+    }
+  }
+
+  const hasGenerationPairFilter = options.generationA !== null
+    && options.generationA !== undefined
+    && options.generationB !== null
+    && options.generationB !== undefined;
+  if (!hasGenerationPairFilter) {
+    return true;
+  }
+
+  const left = normalizeOptionalReplayFilterNumber(options.generationA);
+  const right = normalizeOptionalReplayFilterNumber(options.generationB);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return true;
+  }
+  return buildGenerationPairKey(game?.whiteGeneration, game?.blackGeneration) === buildGenerationPairKey(left, right);
+}
+
+function hasValidRetainedGameId(game) {
+  return typeof game?.id === 'string' && game.id.trim().length > 0;
 }
 
 function createEmptyState() {
@@ -1519,6 +1733,7 @@ function createEmptyState() {
     simulations: [],
     trainingRuns: [],
     runs: [],
+    runConfigDefaults: null,
     promotedBots: {
       enabledIds: [],
     },
@@ -1533,6 +1748,13 @@ function normalizePromotedBotState(state) {
   return {
     enabledIds: uniqueStrings(state?.enabledIds || []),
   };
+}
+
+function normalizeStoredRunConfigDefaults(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return null;
+  }
+  return normalizeRunConfig(config);
 }
 
 function isBootstrapSnapshotLabel(label) {
@@ -1605,7 +1827,9 @@ function isPreferredBootstrapModelBundle(modelBundle) {
 
 function isPreferredBootstrapSnapshotRecord(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return false;
-  if (snapshot.bootstrapKey === PREFERRED_BOOTSTRAP_BASELINE_KEY) return true;
+  if (snapshot.bootstrapKey === PREFERRED_BOOTSTRAP_BASELINE_KEY) {
+    return isPreferredBootstrapModelBundle(snapshot.modelBundle);
+  }
   return snapshot.parentSnapshotId == null
     && isBootstrapSnapshotLabel(snapshot.label)
     && isPreferredBootstrapModelBundle(snapshot.modelBundle);
@@ -1667,28 +1891,30 @@ function createDefaultRunConfig() {
     seedRunId: null,
     seedGeneration: null,
     seed: null,
+    modelSizePreset: DEFAULT_RUN_MODEL_SIZE_PRESET,
+    maxLogicalProcessors: defaultMaxLogicalProcessors(),
     numSelfplayWorkers: defaultNumSelfplayWorkers(),
     parallelGameWorkers: defaultParallelGameWorkers(),
-    numMctsSimulationsPerMove: 512,
-    maxDepth: 64,
+    curriculumCadence: DEFAULT_RUN_CURRICULUM_CADENCE,
+    numMctsSimulationsPerMove: 64,
+    maxDepth: 16,
     hypothesisCount: 4,
     riskBias: 0,
     exploration: 1.5,
-    replayBufferMaxPositions: 100000,
-    batchSize: 256,
+    replayBufferMaxPositions: 10000,
+    batchSize: 4096,
     learningRate: 0.0005,
     weightDecay: 0.0001,
     gradientClipNorm: 1,
     trainingStepsPerCycle: 32,
-    parallelTrainingHeadWorkers: 3,
     trainingBackend: TRAINING_BACKENDS.AUTO,
     trainingDevicePreference: TRAINING_DEVICE_PREFERENCES.AUTO,
     checkpointInterval: DEFAULT_RUN_CHECKPOINT_INTERVAL,
     evalGamesPerCheckpoint: 40,
     promotionWinrateThreshold: 0.6,
-    prePromotionTestGames: 40,
-    prePromotionTestWinRate: 0.6,
-    promotionTestGames: 100,
+    prePromotionTestGames: 50,
+    prePromotionTestWinRate: 0.55,
+    promotionTestGames: 50,
     promotionTestWinRate: 0.55,
     promotionTestPriorGenerations: 3,
     modelRefreshIntervalForWorkers: 5,
@@ -1713,6 +1939,10 @@ function normalizeRunLabel(input) {
 
 function normalizeRunConfig(options = {}) {
   const defaults = createDefaultRunConfig();
+  const maxLogicalProcessors = normalizeMaxLogicalProcessors(
+    options.maxLogicalProcessors,
+    defaults.maxLogicalProcessors,
+  );
   const prePromotionTestGames = clampPositiveInt(
     options.prePromotionTestGames ?? options.evalGamesPerCheckpoint,
     defaults.prePromotionTestGames,
@@ -1790,12 +2020,25 @@ function normalizeRunConfig(options = {}) {
     seedRunId,
     seedGeneration,
     seed,
-    numSelfplayWorkers: clampPositiveInt(options.numSelfplayWorkers, defaults.numSelfplayWorkers, 1, 128),
+    modelSizePreset: String(options.modelSizePreset || defaults.modelSizePreset || DEFAULT_RUN_MODEL_SIZE_PRESET).trim().toLowerCase() || DEFAULT_RUN_MODEL_SIZE_PRESET,
+    maxLogicalProcessors,
+    numSelfplayWorkers: clampPositiveInt(
+      options.numSelfplayWorkers,
+      defaultNumSelfplayWorkers(maxLogicalProcessors),
+      1,
+      128,
+    ),
     parallelGameWorkers: clampPositiveInt(
       options.parallelGameWorkers,
-      defaultParallelGameWorkers(),
+      defaultParallelGameWorkers(maxLogicalProcessors),
       1,
-      Math.max(1, getSystemParallelism()),
+      Math.max(1, defaultParallelGameWorkers(maxLogicalProcessors)),
+    ),
+    curriculumCadence: clampPositiveInt(
+      options.curriculumCadence,
+      defaults.curriculumCadence,
+      1,
+      100000000,
     ),
     numMctsSimulationsPerMove: clampPositiveInt(
       options.numMctsSimulationsPerMove,
@@ -1813,17 +2056,11 @@ function normalizeRunConfig(options = {}) {
       16,
       500000,
     ),
-    batchSize: clampPositiveInt(options.batchSize, defaults.batchSize, 1, 4096),
+    batchSize: clampPositiveInt(options.batchSize, defaults.batchSize, 1, MAX_RUN_BATCH_SIZE),
     learningRate: normalizeFloat(options.learningRate, defaults.learningRate, 0.00001, 1),
     weightDecay: normalizeFloat(options.weightDecay, defaults.weightDecay, 0, 1),
     gradientClipNorm: normalizeFloat(options.gradientClipNorm, defaults.gradientClipNorm, 0, 100),
     trainingStepsPerCycle: clampPositiveInt(options.trainingStepsPerCycle, defaults.trainingStepsPerCycle, 1, 5000),
-    parallelTrainingHeadWorkers: clampPositiveInt(
-      options.parallelTrainingHeadWorkers,
-      defaults.parallelTrainingHeadWorkers,
-      1,
-      3,
-    ),
     trainingBackend: normalizeTrainingBackend(options.trainingBackend, defaults.trainingBackend),
     trainingDevicePreference: normalizeTrainingDevicePreference(
       options.trainingDevicePreference,
@@ -1877,6 +2114,7 @@ function applyRecommendedRunConfigDefaults(config = {}, rawOptions = {}, recomme
     ...config,
   };
   [
+    'maxLogicalProcessors',
     'parallelGameWorkers',
     'numSelfplayWorkers',
     'batchSize',
@@ -1904,6 +2142,166 @@ function averageNumbers(values = []) {
   return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
 }
 
+function safeRatio(numerator, denominator) {
+  const parsedDenominator = Number(denominator);
+  if (!Number.isFinite(parsedDenominator) || parsedDenominator <= 0) return 0;
+  const parsedNumerator = Number(numerator);
+  if (!Number.isFinite(parsedNumerator) || parsedNumerator <= 0) return 0;
+  return parsedNumerator / parsedDenominator;
+}
+
+function normalizeDiagnosticActionFamily(type) {
+  const normalized = String(type || '').trim().toUpperCase();
+  if (normalized === 'MOVE' || normalized.startsWith('M:')) return 'move';
+  if (normalized === 'CHALLENGE' || normalized === 'C' || normalized === 'A:CHALLENGE') return 'challenge';
+  if (normalized === 'BOMB' || normalized === 'B' || normalized === 'A:BOMB') return 'bomb';
+  if (normalized === 'PASS' || normalized === 'P' || normalized === 'A:PASS') return 'pass';
+  if (normalized === 'ON_DECK' || normalized.startsWith('O:')) return 'onDeck';
+  if (normalized === 'RESIGN' || normalized === 'A:RESIGN') return 'resign';
+  return 'other';
+}
+
+function createDiagnosticActionCounter() {
+  return {
+    total: 0,
+    move: 0,
+    challenge: 0,
+    bomb: 0,
+    pass: 0,
+    onDeck: 0,
+    resign: 0,
+    other: 0,
+  };
+}
+
+function incrementDiagnosticActionCounter(counter, family, amount = 1) {
+  if (!counter || typeof counter !== 'object') return;
+  const safeAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0;
+  if (!safeAmount) return;
+  counter.total = Number(counter.total || 0) + safeAmount;
+  if (Object.prototype.hasOwnProperty.call(counter, family)) {
+    counter[family] = Number(counter[family] || 0) + safeAmount;
+    return;
+  }
+  counter.other = Number(counter.other || 0) + safeAmount;
+}
+
+function addDiagnosticActionCounter(target, source = null) {
+  const next = target || createDiagnosticActionCounter();
+  if (!source || typeof source !== 'object') {
+    return next;
+  }
+  [
+    'move',
+    'challenge',
+    'bomb',
+    'pass',
+    'onDeck',
+    'resign',
+    'other',
+  ].forEach((family) => {
+    incrementDiagnosticActionCounter(next, family, Number(source?.[family] || 0));
+  });
+  return next;
+}
+
+function normalizeDecisionLegalActionSummary(summary = null) {
+  const normalized = createDiagnosticActionCounter();
+  if (!summary || typeof summary !== 'object') {
+    return normalized;
+  }
+  [
+    'move',
+    'challenge',
+    'bomb',
+    'pass',
+    'onDeck',
+    'resign',
+    'other',
+  ].forEach((family) => {
+    incrementDiagnosticActionCounter(normalized, family, Number(summary?.[family] || 0));
+  });
+  if (Number.isFinite(Number(summary?.total)) && Number(summary.total) > Number(normalized.total || 0)) {
+    normalized.total = Number(summary.total);
+  }
+  return normalized;
+}
+
+function buildSemanticActionSignature(action = null) {
+  if (!action || typeof action !== 'object') return '';
+  const type = normalizeDiagnosticActionFamily(action?.type);
+  if (type === 'move') {
+    const from = action?.from || {};
+    const to = action?.to || {};
+    const declaration = Number.isFinite(Number(action?.declaration)) ? Number(action.declaration) : 'x';
+    return `M:${from.row},${from.col}>${to.row},${to.col}:${declaration}`;
+  }
+  if (type === 'onDeck') {
+    const identity = Number.isFinite(Number(action?.identity)) ? Number(action.identity) : 'x';
+    return `O:${identity}`;
+  }
+  if (type === 'challenge') return 'C';
+  if (type === 'bomb') return 'B';
+  if (type === 'pass') return 'P';
+  if (type === 'resign') return 'R';
+  return actionKey(action);
+}
+
+function buildReplaySetupSignature(frame = null) {
+  const boardRows = Array.isArray(frame?.board) ? frame.board : [];
+  const boardSignature = boardRows.map((row) => (
+    (Array.isArray(row) ? row : []).map((piece) => {
+      if (!piece) return '.';
+      const colorKey = Number(piece?.color) === BLACK ? 'b' : 'w';
+      const identity = Number.isFinite(Number(piece?.identity)) ? Number(piece.identity) : 'x';
+      return `${colorKey}${identity}`;
+    }).join('')
+  )).join('/');
+  const onDeckSignature = (Array.isArray(frame?.onDecks) ? frame.onDecks : [])
+    .map((piece) => (Number.isFinite(Number(piece?.identity)) ? Number(piece.identity) : 'x'))
+    .join(',');
+  return `${boardSignature}|od:${onDeckSignature}`;
+}
+
+function collectRetainedGameDecisionFrames(game = null) {
+  return (Array.isArray(game?.replay) ? game.replay : []).filter((frame) => frame?.decision);
+}
+
+function incrementCountMap(map, key) {
+  if (!map || !key) return;
+  map.set(key, Number(map.get(key) || 0) + 1);
+}
+
+function summarizeMostCommonCount(map, total) {
+  const entries = Array.from(map?.entries?.() || []);
+  if (!entries.length) {
+    return {
+      key: null,
+      count: 0,
+      share: 0,
+    };
+  }
+  entries.sort((left, right) => {
+    if (right[1] !== left[1]) return right[1] - left[1];
+    return String(left[0]).localeCompare(String(right[0]));
+  });
+  const [key, count] = entries[0];
+  return {
+    key,
+    count: Number(count || 0),
+    share: safeRatio(count, total),
+  };
+}
+
+function buildDiagnosticCheck(code, severity, message, details = null) {
+  return {
+    code,
+    severity: String(severity || 'info').trim().toLowerCase() || 'info',
+    message: String(message || '').trim(),
+    details: details && typeof details === 'object' ? deepClone(details) : null,
+  };
+}
+
 function pickUniqueRandomIndices(totalCount, sampleCount, rng) {
   const total = clampPositiveInt(totalCount, 0, 0, Number.MAX_SAFE_INTEGER);
   const count = clampPositiveInt(sampleCount, 0, 0, total);
@@ -1919,21 +2317,128 @@ function pickUniqueRandomIndices(totalCount, sampleCount, rng) {
 }
 
 function isValidPolicyTrainingSample(sample) {
-  if (!sample || !Array.isArray(sample.features) || !Array.isArray(sample.target)) {
+  if (!sample || !Array.isArray(sample.target)) {
     return false;
   }
-  if (!sample.features.length || sample.target.length !== sample.features.length) {
+  if (Array.isArray(sample.stateInput) && sample.stateInput.length > 0 && sample.target.length > 0) {
+    return true;
+  }
+  if (Array.isArray(sample.features)) {
+    if (!sample.features.length || sample.target.length !== sample.features.length) {
+      return false;
+    }
+    return sample.features.every((vector) => Array.isArray(vector) && vector.length > 0);
+  }
+  return false;
+}
+
+function hasCompactSharedReplayCorrelation(sample) {
+  const sampleKey = typeof sample?.sampleKey === 'string' ? sample.sampleKey.trim() : '';
+  const createdAt = typeof sample?.createdAt === 'string' ? sample.createdAt.trim() : '';
+  return Boolean(sampleKey || createdAt);
+}
+
+function isValidValueTrainingSample(sample, options = {}) {
+  if (!sample || !Number.isFinite(Number(sample?.target))) {
     return false;
   }
-  return sample.features.every((vector) => Array.isArray(vector) && vector.length > 0);
+  if (
+    (Array.isArray(sample.features) && sample.features.length > 0)
+    || (Array.isArray(sample.stateInput) && sample.stateInput.length > 0)
+  ) {
+    return true;
+  }
+  return options.sharedFamily === true && hasCompactSharedReplayCorrelation(sample);
 }
 
-function isValidValueTrainingSample(sample) {
-  return Boolean(sample && Array.isArray(sample.features) && sample.features.length > 0);
+function isValidIdentityTrainingSample(sample, options = {}) {
+  if (!sample) {
+    return false;
+  }
+  if (Array.isArray(sample.pieceFeatures) && sample.pieceFeatures.length > 0) {
+    return true;
+  }
+  const hasTargetIndices = (
+    sample.pieceSlot !== null
+    && sample.pieceSlot !== undefined
+    && sample.trueIdentityIndex !== null
+    && sample.trueIdentityIndex !== undefined
+    && Number.isFinite(Number(sample.pieceSlot))
+    && Number.isFinite(Number(sample.trueIdentityIndex))
+  );
+  if (Array.isArray(sample.stateInput) && sample.stateInput.length > 0 && hasTargetIndices) {
+    return true;
+  }
+  return options.sharedFamily === true && hasTargetIndices && hasCompactSharedReplayCorrelation(sample);
 }
 
-function isValidIdentityTrainingSample(sample) {
-  return Boolean(sample && Array.isArray(sample.pieceFeatures) && sample.pieceFeatures.length > 0);
+function compactReplayPolicySample(sample, options = {}) {
+  if (!sample) return null;
+  const sharedFamily = options.sharedFamily === true;
+  const generation = Number.isFinite(sample?.generation)
+    ? Number(sample.generation)
+    : (Number.isFinite(options.generation) ? Number(options.generation) : null);
+  const createdAt = sample?.createdAt || options.createdAt || null;
+  if (!sharedFamily) {
+    return {
+      ...deepClone(sample),
+      generation,
+      createdAt,
+    };
+  }
+  return {
+    sampleKey: typeof sample?.sampleKey === 'string' ? sample.sampleKey : null,
+    generation,
+    createdAt,
+    stateInput: Array.isArray(sample?.stateInput) ? sample.stateInput.slice() : [],
+    target: Array.isArray(sample?.target) ? sample.target.slice() : [],
+  };
+}
+
+function compactReplayValueSample(sample, options = {}) {
+  if (!sample) return null;
+  if (!Number.isFinite(Number(sample?.target))) return null;
+  const sharedFamily = options.sharedFamily === true;
+  const generation = Number.isFinite(sample?.generation)
+    ? Number(sample.generation)
+    : (Number.isFinite(options.generation) ? Number(options.generation) : null);
+  const createdAt = sample?.createdAt || options.createdAt || null;
+  if (!sharedFamily) {
+    return {
+      ...deepClone(sample),
+      generation,
+      createdAt,
+    };
+  }
+  return {
+    sampleKey: typeof sample?.sampleKey === 'string' ? sample.sampleKey : null,
+    generation,
+    createdAt,
+    target: Number(sample.target),
+  };
+}
+
+function compactReplayIdentitySample(sample, options = {}) {
+  if (!sample) return null;
+  const sharedFamily = options.sharedFamily === true;
+  const generation = Number.isFinite(sample?.generation)
+    ? Number(sample.generation)
+    : (Number.isFinite(options.generation) ? Number(options.generation) : null);
+  const createdAt = sample?.createdAt || options.createdAt || null;
+  if (!sharedFamily) {
+    return {
+      ...deepClone(sample),
+      generation,
+      createdAt,
+    };
+  }
+  return {
+    sampleKey: typeof sample?.sampleKey === 'string' ? sample.sampleKey : null,
+    generation,
+    createdAt,
+    pieceSlot: Number.isFinite(sample?.pieceSlot) ? Number(sample.pieceSlot) : null,
+    trueIdentityIndex: Number.isFinite(sample?.trueIdentityIndex) ? Number(sample.trueIdentityIndex) : null,
+  };
 }
 
 function normalizeElapsedMs(value) {
@@ -2047,6 +2552,89 @@ function summarizeError(err) {
     stack: typeof err?.stack === 'string' ? err.stack : null,
     details: err?.details || null,
   };
+}
+
+function isSharedFamilyModelBundle(modelBundle) {
+  return String(modelBundle?.family || '').trim().toLowerCase() === SHARED_MODEL_FAMILY;
+}
+
+function getTrainingSampleCorrelationKey(sample, fallbackPrefix, index) {
+  const sampleKey = typeof sample?.sampleKey === 'string' ? sample.sampleKey.trim() : '';
+  if (sampleKey) return sampleKey;
+  const createdAt = typeof sample?.createdAt === 'string' ? sample.createdAt.trim() : '';
+  if (createdAt) return `t:${createdAt}`;
+  return `${fallbackPrefix}:${index}`;
+}
+
+function hasTrainingSampleCorrelationKey(sample) {
+  return typeof sample?.sampleKey === 'string' && sample.sampleKey.trim().length > 0;
+}
+
+function buildSharedTrainingSamples(samples = {}) {
+  const combined = new Map();
+
+  const ensureEntry = (sample, key) => {
+    const existing = combined.get(key);
+    const stateInput = Array.isArray(sample?.stateInput)
+      ? sample.stateInput
+      : (Array.isArray(sample?.features) ? sample.features : []);
+    if (existing) {
+      if ((!Array.isArray(existing.stateInput) || !existing.stateInput.length) && Array.isArray(stateInput) && stateInput.length) {
+        existing.stateInput = stateInput.slice();
+      }
+      return existing;
+    }
+    const entry = {
+      stateInput: Array.isArray(stateInput) ? stateInput.slice() : [],
+      policyTarget: null,
+      valueTarget: null,
+      identityTargets: [],
+      sampleKey: key,
+    };
+    combined.set(key, entry);
+    return entry;
+  };
+
+  const policySamples = Array.isArray(samples.policySamples) ? samples.policySamples : [];
+  const valueSamples = Array.isArray(samples.valueSamples) ? samples.valueSamples : [];
+  const identitySamples = Array.isArray(samples.identitySamples) ? samples.identitySamples : [];
+  const pairedCount = Math.max(policySamples.length, valueSamples.length);
+
+  for (let index = 0; index < pairedCount; index += 1) {
+    const policySample = policySamples[index] || null;
+    const valueSample = valueSamples[index] || null;
+    const sample = policySample || valueSample;
+    if (!sample) continue;
+    const key = getTrainingSampleCorrelationKey(sample, 'paired', index);
+    const entry = ensureEntry(sample, key);
+    if (Array.isArray(policySample?.target) && policySample.target.length) {
+      entry.policyTarget = policySample.target.slice();
+    }
+    if (Number.isFinite(valueSample?.target)) {
+      entry.valueTarget = Number(valueSample.target);
+    }
+  }
+
+  identitySamples.forEach((sample, index) => {
+    const key = getTrainingSampleCorrelationKey(sample, 'identity', index);
+    const entry = ensureEntry(sample, key);
+    if (Number.isFinite(sample?.pieceSlot) && Number.isFinite(sample?.trueIdentityIndex)) {
+      entry.identityTargets.push({
+        pieceSlot: Number(sample.pieceSlot),
+        truthIndex: Number(sample.trueIdentityIndex),
+      });
+    }
+  });
+
+  return Array.from(combined.values()).filter((sample) => (
+    Array.isArray(sample.stateInput)
+    && sample.stateInput.length
+    && (
+      (Array.isArray(sample.policyTarget) && sample.policyTarget.length)
+      || Number.isFinite(sample.valueTarget)
+      || (Array.isArray(sample.identityTargets) && sample.identityTargets.length)
+    )
+  ));
 }
 
 function summarizePolicySamplesForDebug(policySamples = [], expectedInputSize = 0, options = {}) {
@@ -2167,7 +2755,8 @@ function buildTrainingBatchDebugSummary(options = {}, backendResolution = null) 
       batchSize: Number(options.batchSize || 0),
       weightDecay: Number(options.weightDecay || 0),
       gradientClipNorm: Number(options.gradientClipNorm || 0),
-      parallelTrainingHeadWorkers: Number(options.parallelTrainingHeadWorkers || 0),
+      sharedSamples: Array.isArray(options?.samples?.sharedSamples) ? options.samples.sharedSamples.length : 0,
+      trainingSessionId: options.trainingSessionId || null,
     },
     model: {
       family: family || 'legacy',
@@ -3312,6 +3901,7 @@ class MlRuntime {
       },
     };
     this.state.promotedBots = normalizePromotedBotState(this.state.promotedBots);
+    this.state.runConfigDefaults = normalizeStoredRunConfigDefaults(this.state.runConfigDefaults);
     if (Array.isArray(this.state.snapshots)) {
       this.state.snapshots = this.state.snapshots
         .map((snapshot) => this.normalizeStoredSnapshotRecord(snapshot))
@@ -3450,9 +4040,36 @@ class MlRuntime {
           : prefix === 'run'
             ? 'run'
             : 'training';
-    const current = clampPositiveInt(this.state.counters[key], 1);
+    const parsed = Number(this.state.counters[key]);
+    const current = Number.isFinite(parsed) && parsed >= 1
+      ? Math.floor(parsed)
+      : 1;
     this.state.counters[key] = current + 1;
     return `${prefix}-${String(current).padStart(4, '0')}`;
+  }
+
+  ensureUniqueRunRetainedGameIds(run) {
+    if (!run || !Array.isArray(run.retainedGames) || !run.retainedGames.length) {
+      return;
+    }
+    const seenIds = new Set();
+    run.retainedGames.forEach((game) => {
+      if (!game || typeof game !== 'object') {
+        return;
+      }
+      const currentId = hasValidRetainedGameId(game) ? game.id.trim() : '';
+      if (currentId && !seenIds.has(currentId)) {
+        seenIds.add(currentId);
+        game.id = currentId;
+        return;
+      }
+      let replacementId = this.nextId('game');
+      while (seenIds.has(replacementId)) {
+        replacementId = this.nextId('game');
+      }
+      game.id = replacementId;
+      seenIds.add(replacementId);
+    });
   }
 
   createSnapshotRecord(options = {}) {
@@ -3690,6 +4307,8 @@ class MlRuntime {
       baseGeneration: Number(run?.working?.baseGeneration || run?.bestGeneration || 0),
       checkpointIndex: Number(run?.working?.checkpointIndex || 0),
       lastLoss: run?.working?.lastLoss ? deepClone(run.working.lastLoss) : null,
+      pendingEvaluation: run?.working?.pendingEvaluation ? deepClone(run.working.pendingEvaluation) : null,
+      trainingProgress: null,
       modelBundle: null,
       optimizerState: null,
     };
@@ -3698,6 +4317,9 @@ class MlRuntime {
 
   normalizeStoredRunRecord(run) {
     if (!run || typeof run !== 'object') return null;
+    const pendingEvaluationGeneration = Number.isFinite(run?.working?.pendingEvaluation?.generation)
+      ? Number(run.working.pendingEvaluation.generation)
+      : null;
     const normalized = {
       ...run,
       status: run.status || 'completed',
@@ -3706,16 +4328,24 @@ class MlRuntime {
       evaluationTargetGeneration: Number.isFinite(run?.evaluationTargetGeneration)
         ? Number(run.evaluationTargetGeneration)
         : 0,
-      generations: Array.isArray(run.generations) ? run.generations.map((generation) => ({
-        ...generation,
-        approved: generation?.approved !== false,
-        stats: generation?.stats || {},
-        latestLoss: generation?.latestLoss || null,
-        promotionEvaluation: generation?.promotionEvaluation || null,
-        modelBundle: generation?.approved === false
-          ? null
-          : (generation?.modelBundle ? normalizeModelBundleForStorage(generation.modelBundle) : null),
-      })) : [],
+      generations: Array.isArray(run.generations) ? run.generations.map((generation) => {
+        const generationNumber = Number.isFinite(generation?.generation) ? Number(generation.generation) : 0;
+        const preservePendingEvaluationModelBundle = (
+          generation?.approved === false
+          && Number.isFinite(pendingEvaluationGeneration)
+          && generationNumber === pendingEvaluationGeneration
+        );
+        return {
+          ...generation,
+          approved: generation?.approved !== false,
+          stats: generation?.stats || {},
+          latestLoss: generation?.latestLoss || null,
+          promotionEvaluation: generation?.promotionEvaluation || null,
+          modelBundle: (generation?.approved === false && !preservePendingEvaluationModelBundle)
+            ? null
+            : (generation?.modelBundle ? normalizeModelBundleForStorage(generation.modelBundle) : null),
+        };
+      }) : [],
       replayBuffer: {
         maxPositions: Number(run?.replayBuffer?.maxPositions || run?.config?.replayBufferMaxPositions || 0),
         totalPositionsSeen: Number(run?.replayBuffer?.totalPositionsSeen || 0),
@@ -3736,6 +4366,8 @@ class MlRuntime {
         baseGeneration: Number(run?.working?.baseGeneration || run?.bestGeneration || 0),
         checkpointIndex: Number(run?.working?.checkpointIndex || 0),
         lastLoss: run?.working?.lastLoss || null,
+        pendingEvaluation: run?.working?.pendingEvaluation ? deepClone(run.working.pendingEvaluation) : null,
+        trainingProgress: null,
       },
     };
     const normalizedStatus = normalizeRunStatus(normalized.status);
@@ -3759,13 +4391,20 @@ class MlRuntime {
       finalizeRunTiming(normalized, normalized.updatedAt || normalized.createdAt || nowIso());
       this.compactTerminalRunState(normalized);
     }
+    this.sanitizeRunReplayBuffer(normalized);
+    this.ensureUniqueRunRetainedGameIds(normalized);
     return normalized;
   }
 
   compactRunForPersistence(run, options = {}) {
     if (!run || typeof run !== 'object') return null;
     const isTerminal = !isRunStatusResumable(run.status);
+    const pendingEvaluationGeneration = Number.isFinite(run?.working?.pendingEvaluation?.generation)
+      ? Number(run.working.pendingEvaluation.generation)
+      : null;
     const replayBufferSummary = this.summarizeRunReplayBuffer(run);
+    const includeApprovedGenerationModelBundles = options.includeApprovedGenerationModelBundles !== false;
+    const includePendingEvaluationGenerationModelBundle = options.includePendingEvaluationGenerationModelBundle !== false;
     const replayPositionLimit = clampNonNegativeInt(
       options.replayPositionLimit,
       RUN_STATE_PERSIST_REPLAY_POSITION_LIMIT,
@@ -3820,22 +4459,37 @@ class MlRuntime {
       workerGeneration: Number(run.workerGeneration || 0),
       pendingWorkerGeneration: Number.isFinite(run.pendingWorkerGeneration) ? Number(run.pendingWorkerGeneration) : null,
       cyclesSinceWorkerRefresh: Number(run.cyclesSinceWorkerRefresh || 0),
-      generations: (run.generations || []).map((generation) => ({
-        id: generation.id,
-        generation: Number(generation.generation || 0),
-        label: generation.label || `G${Number(generation.generation || 0)}`,
-        createdAt: generation.createdAt || null,
-        updatedAt: generation.updatedAt || generation.createdAt || null,
-        promotedAt: generation.promotedAt || null,
-        parentGeneration: Number.isFinite(generation.parentGeneration) ? Number(generation.parentGeneration) : null,
-        isBest: Boolean(generation.isBest),
-        approved: generation.approved !== false,
-        source: generation.source || 'promoted',
-        modelBundle: generation.approved === false ? null : (generation.modelBundle ? cloneModelBundle(generation.modelBundle) : null),
-        stats: deepClone(generation.stats || {}),
-        latestLoss: generation.latestLoss ? deepClone(generation.latestLoss) : null,
-        promotionEvaluation: generation.promotionEvaluation ? deepClone(generation.promotionEvaluation) : null,
-      })),
+      generations: (run.generations || []).map((generation) => {
+        const generationNumber = Number(generation?.generation || 0);
+        const isPendingEvaluationGeneration = (
+          Number.isFinite(pendingEvaluationGeneration)
+          && generationNumber === pendingEvaluationGeneration
+        );
+        const shouldPersistModelBundle = (
+          (generation?.approved !== false && includeApprovedGenerationModelBundles)
+          || (generation?.approved === false
+            && isPendingEvaluationGeneration
+            && includePendingEvaluationGenerationModelBundle)
+        );
+        return {
+          id: generation.id,
+          generation: generationNumber,
+          label: generation.label || `G${generationNumber}`,
+          createdAt: generation.createdAt || null,
+          updatedAt: generation.updatedAt || generation.createdAt || null,
+          promotedAt: generation.promotedAt || null,
+          parentGeneration: Number.isFinite(generation.parentGeneration) ? Number(generation.parentGeneration) : null,
+          isBest: Boolean(generation.isBest),
+          approved: generation.approved !== false,
+          source: generation.source || 'promoted',
+          modelBundle: shouldPersistModelBundle && generation?.modelBundle
+            ? cloneModelBundle(generation.modelBundle)
+            : null,
+          stats: deepClone(generation.stats || {}),
+          latestLoss: generation.latestLoss ? deepClone(generation.latestLoss) : null,
+          promotionEvaluation: generation.promotionEvaluation ? deepClone(generation.promotionEvaluation) : null,
+        };
+      }),
       replayBuffer: {
         maxPositions: Number(run?.replayBuffer?.maxPositions || run?.config?.replayBufferMaxPositions || 0),
         totalPositionsSeen: Number(run?.replayBuffer?.totalPositionsSeen || 0),
@@ -3852,6 +4506,8 @@ class MlRuntime {
         baseGeneration: Number(run?.working?.baseGeneration || run?.bestGeneration || 0),
         checkpointIndex: Number(run?.working?.checkpointIndex || 0),
         lastLoss: run?.working?.lastLoss ? deepClone(run.working.lastLoss) : null,
+        pendingEvaluation: isTerminal ? null : (run?.working?.pendingEvaluation ? deepClone(run.working.pendingEvaluation) : null),
+        trainingProgress: null,
         modelBundle: isTerminal ? null : (run?.working?.modelBundle ? cloneModelBundle(run.working.modelBundle) : null),
         optimizerState: isTerminal ? null : (run?.working?.optimizerState ? deepClone(run.working.optimizerState) : null),
       },
@@ -3870,6 +4526,7 @@ class MlRuntime {
       simulations: (this.state.simulations || []).map((simulation) => compactSimulationForState(simulation)),
       trainingRuns: this.state.trainingRuns || [],
       runs: persistedRunRefs,
+      runConfigDefaults: normalizeStoredRunConfigDefaults(this.state.runConfigDefaults),
       promotedBots: normalizePromotedBotState(this.state.promotedBots),
       activeJobs: this.state.activeJobs || {},
     });
@@ -3961,7 +4618,37 @@ class MlRuntime {
     if (!this.loaded) {
       await this.ensureLoaded();
     }
+    for (const [runId, taskState] of this.runTasks.entries()) {
+      const run = this.getRunById(runId);
+      if (!run) continue;
+      const exported = await this.exportSharedTrainingSession(taskState, {
+        includeOptimizerState: true,
+        force: true,
+      }).catch(() => null);
+      if (exported?.modelBundle) {
+        run.working.modelBundle = cloneModelBundle(exported.modelBundle);
+        run.working.optimizerState = deepClone(exported.optimizerState || null);
+        run.updatedAt = nowIso();
+      }
+    }
+    const activeTrainingJob = this.state.activeJobs?.training || null;
+    if (activeTrainingJob?.taskId) {
+      const taskState = this.trainingTasks.get(activeTrainingJob.taskId);
+      const exported = await this.exportSharedTrainingSession(taskState, {
+        includeOptimizerState: true,
+        force: true,
+      }).catch(() => null);
+      if (exported?.modelBundle) {
+        activeTrainingJob.checkpoint = {
+          ...(activeTrainingJob.checkpoint || {}),
+          modelBundle: cloneModelBundle(exported.modelBundle),
+          optimizerState: deepClone(exported.optimizerState || null),
+          checkpointedAt: nowIso(),
+        };
+      }
+    }
     await this.save();
+    await getPythonTrainingBridge().close().catch(() => {});
   }
 
   async ensureResumedJobs() {
@@ -4295,6 +4982,7 @@ class MlRuntime {
     return this.buildRunCheckpointPayload(run, {
       replayPositionLimit: RUN_STATE_JOURNAL_REPLAY_POSITION_LIMIT,
       replayIdentityLimit: RUN_STATE_JOURNAL_REPLAY_POSITION_LIMIT * RUN_STATE_JOURNAL_REPLAY_IDENTITY_MULTIPLIER,
+      includeApprovedGenerationModelBundles: false,
     });
   }
 
@@ -4718,6 +5406,74 @@ class MlRuntime {
     };
   }
 
+  mergeJournalRunWithCheckpointRun(journalRun, checkpointRun) {
+    if (!journalRun || typeof journalRun !== 'object') return checkpointRun || null;
+    if (!checkpointRun || typeof checkpointRun !== 'object') return journalRun;
+
+    const merged = deepClone(journalRun);
+    const pendingEvaluationGeneration = Number.isFinite(merged?.working?.pendingEvaluation?.generation)
+      ? Number(merged.working.pendingEvaluation.generation)
+      : null;
+    const generationsByNumber = new Map();
+
+    (checkpointRun.generations || []).forEach((generation) => {
+      const generationNumber = Number(generation?.generation);
+      if (!Number.isFinite(generationNumber)) return;
+      generationsByNumber.set(generationNumber, deepClone(generation));
+    });
+
+    (merged.generations || []).forEach((generation) => {
+      const generationNumber = Number(generation?.generation);
+      if (!Number.isFinite(generationNumber)) return;
+      const checkpointGeneration = generationsByNumber.get(generationNumber) || null;
+      const preservePendingEvaluationModelBundle = (
+        generation?.approved === false
+        && Number.isFinite(pendingEvaluationGeneration)
+        && generationNumber === pendingEvaluationGeneration
+      );
+      const nextGeneration = {
+        ...(checkpointGeneration || {}),
+        ...deepClone(generation),
+        stats: deepClone(generation?.stats || checkpointGeneration?.stats || {}),
+        latestLoss: generation?.latestLoss
+          ? deepClone(generation.latestLoss)
+          : (checkpointGeneration?.latestLoss ? deepClone(checkpointGeneration.latestLoss) : null),
+        promotionEvaluation: generation?.promotionEvaluation
+          ? deepClone(generation.promotionEvaluation)
+          : (checkpointGeneration?.promotionEvaluation
+            ? deepClone(checkpointGeneration.promotionEvaluation)
+            : null),
+      };
+      if (!nextGeneration.modelBundle) {
+        if ((generation?.approved !== false || preservePendingEvaluationModelBundle) && checkpointGeneration?.modelBundle) {
+          nextGeneration.modelBundle = cloneModelBundle(checkpointGeneration.modelBundle);
+        } else {
+          nextGeneration.modelBundle = null;
+        }
+      }
+      generationsByNumber.set(generationNumber, nextGeneration);
+    });
+
+    merged.generations = Array.from(generationsByNumber.values())
+      .sort((left, right) => Number(left?.generation || 0) - Number(right?.generation || 0));
+
+    if (Number.isFinite(pendingEvaluationGeneration) && merged?.working?.modelBundle) {
+      const pendingGeneration = this.getRunGeneration(merged, pendingEvaluationGeneration);
+      if (pendingGeneration && !pendingGeneration.modelBundle) {
+        pendingGeneration.modelBundle = cloneModelBundle(merged.working.modelBundle);
+      }
+    }
+
+    if ((!Array.isArray(merged.metricsHistory) || !merged.metricsHistory.length) && Array.isArray(checkpointRun.metricsHistory)) {
+      merged.metricsHistory = deepClone(checkpointRun.metricsHistory);
+    }
+    if ((!Array.isArray(merged.evaluationHistory) || !merged.evaluationHistory.length) && Array.isArray(checkpointRun.evaluationHistory)) {
+      merged.evaluationHistory = deepClone(checkpointRun.evaluationHistory);
+    }
+
+    return this.normalizeStoredRunRecord(merged) || journalRun;
+  }
+
   async loadPersistedRunFromReference(entry) {
     if (!entry || typeof entry !== 'object') return null;
     const manifestRelativePath = entry.manifestPath || entry?.persistence?.manifestPath || null;
@@ -4754,7 +5510,9 @@ class MlRuntime {
       return checkpointRun;
     }
     const journalRun = await this.hydrateRunFromJournalEvent(journalEvent, manifestRecord);
-    return journalRun || checkpointRun;
+    return journalRun
+      ? this.mergeJournalRunWithCheckpointRun(journalRun, checkpointRun)
+      : checkpointRun;
   }
 
   async loadPersistedRuns(entries = []) {
@@ -7517,7 +8275,7 @@ class MlRuntime {
       : (job.trainingBackend === TRAINING_BACKENDS.NODE ? createOptimizerState(trainedBundle) : null);
     let completedEpochs = Number(job?.checkpoint?.completedEpochs || trainingRun.history.length || 0);
     const batchSize = Number.isFinite(Number(job?.batchSize)) && Number(job.batchSize) > 0
-      ? clampPositiveInt(job.batchSize, 256, 1, 4096)
+      ? clampPositiveInt(job.batchSize, 256, 1, MAX_RUN_BATCH_SIZE)
       : await this.resolveTrainingBatchSize({
         batchSize: null,
         trainingBackend: job.trainingBackend,
@@ -7527,6 +8285,9 @@ class MlRuntime {
       });
     job.batchSize = batchSize;
     trainingRun.batchSize = batchSize;
+    const sessionId = isSharedFamilyModelBundle(trainedBundle)
+      ? this.ensureSharedTrainingSession(taskState, `training-job:${job.trainingRunId || job.taskId}`)
+      : null;
 
     this.emitTrainingJobProgress(job, completedEpochs > 0 ? 'epoch' : 'start', {
       epoch: completedEpochs,
@@ -7548,7 +8309,10 @@ class MlRuntime {
           epochs: 1,
           trainingBackend: job.trainingBackend,
           trainingDevicePreference: job.trainingDevicePreference,
-          parallelTrainingHeadWorkers: 1,
+          trainingSessionId: sessionId,
+          resetTrainingSession: taskState?.trainingSessionNeedsReset === true,
+          exportTrainingState: true,
+          includeOptimizerState: true,
           debugContext: {
             trainingRunId: trainingRun.id,
             taskId: job.taskId,
@@ -7557,7 +8321,11 @@ class MlRuntime {
             source: 'background_training_job',
           },
         });
-        trainedBundle = trainingResult.modelBundle;
+        if (sessionId) {
+          taskState.trainingSessionNeedsReset = false;
+          taskState.trainingSessionDirty = trainingResult.stateExported !== true;
+        }
+        trainedBundle = trainingResult.modelBundle || trainedBundle;
         optimizerState = trainingResult.optimizerState || optimizerState;
         const latestMetrics = Array.isArray(trainingResult.history) && trainingResult.history.length
           ? trainingResult.history[trainingResult.history.length - 1]
@@ -7693,6 +8461,10 @@ class MlRuntime {
       });
       throw err;
     } finally {
+      await this.exportSharedTrainingSession(taskState, {
+        includeOptimizerState: true,
+        close: true,
+      }).catch(() => {});
       this.trainingTasks.delete(taskState?.id);
     }
   }
@@ -7778,6 +8550,10 @@ class MlRuntime {
       sourceGames: samples.sourceGames,
       sourceSimulations: samples.sourceSimulations,
     });
+    const trainingTaskState = { id: taskId };
+    const trainingSessionId = isSharedFamilyModelBundle(baseSnapshot.modelBundle)
+      ? this.ensureSharedTrainingSession(trainingTaskState, `train-snapshot:${taskId}`)
+      : null;
 
     try {
       let trainedBundle = cloneModelBundle(baseSnapshot.modelBundle);
@@ -7787,6 +8563,7 @@ class MlRuntime {
       const lossEntries = [];
 
       for (let epoch = 0; epoch < epochs; epoch += 1) {
+        const shouldExportAfterEpoch = Boolean(trainingSessionId) ? epoch === (epochs - 1) : true;
         const trainingResult = await this.trainModelBundleBatch({
           modelBundle: trainedBundle,
           optimizerState,
@@ -7798,7 +8575,10 @@ class MlRuntime {
           epochs: 1,
           trainingBackend,
           trainingDevicePreference,
-          parallelTrainingHeadWorkers: 1,
+          trainingSessionId: trainingSessionId,
+          resetTrainingSession: trainingTaskState.trainingSessionNeedsReset === true,
+          exportTrainingState: shouldExportAfterEpoch,
+          includeOptimizerState: true,
           debugContext: {
             taskId,
             snapshotId: baseSnapshot.id,
@@ -7806,8 +8586,14 @@ class MlRuntime {
             source: 'train_snapshot',
           },
         });
-        trainedBundle = trainingResult.modelBundle || trainedBundle;
-        optimizerState = trainingResult.optimizerState || optimizerState;
+        if (trainingSessionId) {
+          trainingTaskState.trainingSessionNeedsReset = false;
+          trainingTaskState.trainingSessionDirty = trainingResult.stateExported !== true;
+        }
+        if (trainingResult.stateExported === true || !trainingSessionId) {
+          trainedBundle = trainingResult.modelBundle || trainedBundle;
+          optimizerState = trainingResult.optimizerState || optimizerState;
+        }
         const latestMetrics = Array.isArray(trainingResult.history) && trainingResult.history.length
           ? trainingResult.history[trainingResult.history.length - 1]
           : {};
@@ -7829,6 +8615,16 @@ class MlRuntime {
           totalEpochs: epochs,
           loss: epochLoss,
         });
+      }
+
+      if (trainingSessionId && trainingTaskState.trainingSessionDirty === true) {
+        const exported = await this.exportSharedTrainingSession(trainingTaskState, {
+          includeOptimizerState: true,
+        });
+        if (exported?.modelBundle) {
+          trainedBundle = cloneModelBundle(exported.modelBundle);
+          optimizerState = deepClone(exported.optimizerState || null);
+        }
       }
 
       const latestLoss = lossEntries[lossEntries.length - 1];
@@ -7924,6 +8720,11 @@ class MlRuntime {
         error: summarizeError(err),
       });
       throw err;
+    } finally {
+      await this.exportSharedTrainingSession(trainingTaskState, {
+        includeOptimizerState: true,
+        close: true,
+      }).catch(() => {});
     }
   }
 
@@ -8632,6 +9433,376 @@ class MlRuntime {
     };
   }
 
+  getRunDiagnosticGameWindows(run) {
+    const retainedGames = Array.isArray(run?.retainedGames) ? run.retainedGames : [];
+    const selfPlayGames = retainedGames
+      .filter((game) => normalizeRetainedReplayPhase(game) === 'selfplay')
+      .slice(-RUN_DIAGNOSTIC_SELFPLAY_WINDOW_GAMES);
+    const evaluationGames = retainedGames
+      .filter((game) => normalizeRetainedReplayPhase(game) === 'evaluation')
+      .slice(-RUN_DIAGNOSTIC_EVALUATION_WINDOW_GAMES);
+    const diagnosticGames = selfPlayGames.length ? selfPlayGames : evaluationGames;
+    return {
+      selfPlayGames,
+      evaluationGames,
+      diagnosticGames,
+      sourcePhase: selfPlayGames.length ? 'selfplay' : 'evaluation',
+    };
+  }
+
+  summarizeRunDiagnostics(run) {
+    if (!run) return null;
+    const windows = this.getRunDiagnosticGameWindows(run);
+    const diagnosticGames = Array.isArray(windows.diagnosticGames) ? windows.diagnosticGames : [];
+    const setupCounts = new Map();
+    const firstMoveCounts = new Map();
+    const openingTwoPlyCounts = new Map();
+    const openingPrefixCounts = new Map();
+    const fullSequenceCounts = new Map();
+    const pairCounts = new Map();
+    const legalCounts = createDiagnosticActionCounter();
+    const chosenCounts = createDiagnosticActionCounter();
+    let decisionCount = 0;
+    let fallbackCount = 0;
+    let decisionsWithPolicyCoverage = 0;
+    let totalLegalActionsWithCoverage = 0;
+    let totalMappedPolicyActions = 0;
+    let totalUnmappedLegalActions = 0;
+    let olderGenerationGames = 0;
+    let sameGenerationGames = 0;
+
+    diagnosticGames.forEach((game) => {
+      const openingFrame = Array.isArray(game?.replay) && game.replay.length ? game.replay[0] : null;
+      if (openingFrame) {
+        incrementCountMap(setupCounts, buildReplaySetupSignature(openingFrame));
+      }
+
+      const decisionFrames = collectRetainedGameDecisionFrames(game);
+      const actionSequence = decisionFrames
+        .map((frame) => buildSemanticActionSignature(frame?.decision?.action || frame?.decision?.move || null))
+        .filter(Boolean);
+
+      if (actionSequence.length) {
+        incrementCountMap(firstMoveCounts, actionSequence[0]);
+        incrementCountMap(openingTwoPlyCounts, actionSequence.slice(0, 2).join('>'));
+        incrementCountMap(
+          openingPrefixCounts,
+          actionSequence.slice(0, RUN_DIAGNOSTIC_OPENING_PREFIX_PLIES).join('>'),
+        );
+        incrementCountMap(fullSequenceCounts, actionSequence.join('>'));
+      }
+
+      if (Number.isFinite(game?.whiteGeneration) && Number.isFinite(game?.blackGeneration)) {
+        incrementCountMap(pairCounts, buildGenerationPairKey(game.whiteGeneration, game.blackGeneration));
+        if (Number(game.whiteGeneration) === Number(game.blackGeneration)) {
+          sameGenerationGames += 1;
+        } else {
+          olderGenerationGames += 1;
+        }
+      }
+
+      decisionFrames.forEach((frame) => {
+        const decision = frame?.decision || null;
+        if (!decision) return;
+        decisionCount += 1;
+        incrementDiagnosticActionCounter(
+          chosenCounts,
+          normalizeDiagnosticActionFamily(decision?.action?.type || decision?.move?.type),
+        );
+        addDiagnosticActionCounter(
+          legalCounts,
+          normalizeDecisionLegalActionSummary(decision?.trace?.legalActionSummary),
+        );
+        if (decision?.trace?.fastPath?.fallbackUsed) {
+          fallbackCount += 1;
+        }
+        const totalLegalActions = Number(decision?.trace?.policyCoverage?.totalLegalActions);
+        const mappedPolicyActions = Number(decision?.trace?.policyCoverage?.mappedPolicyActions);
+        const unmappedLegalActions = Number(decision?.trace?.policyCoverage?.unmappedLegalActions);
+        if (Number.isFinite(totalLegalActions) && Number.isFinite(mappedPolicyActions)) {
+          decisionsWithPolicyCoverage += 1;
+          totalLegalActionsWithCoverage += totalLegalActions;
+          totalMappedPolicyActions += mappedPolicyActions;
+          totalUnmappedLegalActions += Number.isFinite(unmappedLegalActions)
+            ? unmappedLegalActions
+            : Math.max(0, totalLegalActions - mappedPolicyActions);
+        }
+      });
+    });
+
+    const replayBuffer = run?.replayBuffer || {};
+    const replaySummary = this.summarizeRunReplayBuffer(run);
+    const replayPolicySamplesRaw = Array.isArray(replayBuffer.policySamples) ? replayBuffer.policySamples.length : 0;
+    const replayValueSamplesRaw = Array.isArray(replayBuffer.valueSamples) ? replayBuffer.valueSamples.length : 0;
+    const replayIdentitySamplesRaw = Array.isArray(replayBuffer.identitySamples) ? replayBuffer.identitySamples.length : 0;
+    const replaySamplesCompacted = !isRunStatusActive(run?.status)
+      && Number(replaySummary?.positions || 0) > 0
+      && replayPolicySamplesRaw === 0
+      && replayValueSamplesRaw === 0
+      && replayIdentitySamplesRaw === 0;
+    const replayPolicySamples = replaySamplesCompacted
+      ? Number(replaySummary?.positions || 0)
+      : replayPolicySamplesRaw;
+    const replayValueSamples = replaySamplesCompacted ? null : replayValueSamplesRaw;
+    const replayIdentitySamples = replaySamplesCompacted ? null : replayIdentitySamplesRaw;
+    const latestLoss = run?.working?.lastLoss
+      ? deepClone(run.working.lastLoss)
+      : (Array.isArray(run?.metricsHistory) && run.metricsHistory.length
+        ? deepClone(run.metricsHistory[run.metricsHistory.length - 1]?.latestLoss || null)
+        : null);
+    const latestEvaluation = Array.isArray(run?.evaluationHistory) && run.evaluationHistory.length
+      ? run.evaluationHistory[run.evaluationHistory.length - 1]
+      : null;
+    const primaryEvaluation = latestEvaluation?.againstBest
+      || this.getEvaluationBaselineInfo(latestEvaluation)
+      || latestEvaluation?.againstTarget
+      || latestEvaluation?.prePromotionTest
+      || null;
+
+    const openings = {
+      sampleGames: diagnosticGames.length,
+      uniqueStartingSetups: setupCounts.size,
+      uniqueFirstMoves: firstMoveCounts.size,
+      uniqueOpeningTwoPlyPrefixes: openingTwoPlyCounts.size,
+      uniqueOpeningPrefixes: openingPrefixCounts.size,
+      uniqueFullSequences: fullSequenceCounts.size,
+      mostCommonStartingSetup: summarizeMostCommonCount(setupCounts, diagnosticGames.length),
+      mostCommonFirstMove: summarizeMostCommonCount(firstMoveCounts, diagnosticGames.length),
+      mostCommonOpeningPrefix: summarizeMostCommonCount(openingPrefixCounts, diagnosticGames.length),
+      mostCommonFullSequence: summarizeMostCommonCount(fullSequenceCounts, diagnosticGames.length),
+    };
+
+    const actions = {
+      decisions: decisionCount,
+      legalCounts,
+      chosenCounts,
+      choiceRatesWhenLegal: {
+        challenge: safeRatio(chosenCounts.challenge, legalCounts.challenge),
+        bomb: safeRatio(chosenCounts.bomb, legalCounts.bomb),
+        pass: safeRatio(chosenCounts.pass, legalCounts.pass),
+        onDeck: safeRatio(chosenCounts.onDeck, legalCounts.onDeck),
+      },
+      fallbackCount,
+      fallbackRate: safeRatio(fallbackCount, decisionCount),
+      policyCoverage: {
+        decisions: decisionsWithPolicyCoverage,
+        totalLegalActions: totalLegalActionsWithCoverage,
+        mappedPolicyActions: totalMappedPolicyActions,
+        unmappedLegalActions: totalUnmappedLegalActions,
+        mappedActionShare: safeRatio(totalMappedPolicyActions, totalLegalActionsWithCoverage),
+      },
+    };
+
+    const replayTargets = {
+      policySamples: replayPolicySamples,
+      valueSamples: replayValueSamples,
+      identitySamples: replayIdentitySamples,
+      countsCompacted: replaySamplesCompacted,
+      valueToPolicyRatio: replayValueSamples === null ? null : safeRatio(replayValueSamples, replayPolicySamples),
+      identityToPolicyRatio: replayIdentitySamples === null ? null : safeRatio(replayIdentitySamples, replayPolicySamples),
+      latestBatch: latestLoss ? {
+        policySamples: Number(latestLoss?.policySamples || 0),
+        valueSamples: Number(latestLoss?.valueSamples || 0),
+        identitySamples: Number(latestLoss?.identitySamples || 0),
+        policyLoss: Number(latestLoss?.policyLoss || 0),
+        valueLoss: Number(latestLoss?.valueLoss || 0),
+        identityLoss: Number(latestLoss?.identityLoss || 0),
+      } : null,
+    };
+
+    const opponents = {
+      sampleGames: diagnosticGames.length,
+      uniqueGenerationPairs: pairCounts.size,
+      olderGenerationGames,
+      olderGenerationShare: safeRatio(olderGenerationGames, diagnosticGames.length),
+      sameGenerationGames,
+      sameGenerationShare: safeRatio(sameGenerationGames, diagnosticGames.length),
+    };
+
+    const evaluation = {
+      latestGames: Number(primaryEvaluation?.games || 0),
+      latestWinRate: Number(primaryEvaluation?.winRate || 0),
+      hasLatestEvaluation: Boolean(primaryEvaluation),
+    };
+
+    const checks = [];
+    if (diagnosticGames.length >= 8 && openings.mostCommonStartingSetup.share >= 0.5) {
+      checks.push(buildDiagnosticCheck(
+        'low_setup_variety',
+        'warn',
+        'Recent retained games repeat the same starting setup too often.',
+        {
+          share: openings.mostCommonStartingSetup.share,
+          sampleGames: diagnosticGames.length,
+        },
+      ));
+    }
+    if (diagnosticGames.length >= 8 && openings.mostCommonFirstMove.share >= 0.6) {
+      checks.push(buildDiagnosticCheck(
+        'low_first_move_variety',
+        'warn',
+        'Recent retained games over-concentrate on one first move.',
+        {
+          share: openings.mostCommonFirstMove.share,
+          sampleGames: diagnosticGames.length,
+        },
+      ));
+    }
+    if (diagnosticGames.length >= 8 && openings.mostCommonOpeningPrefix.share >= 0.45) {
+      checks.push(buildDiagnosticCheck(
+        'repeated_opening_prefix',
+        'warn',
+        'Recent retained games are repeating the same opening prefix.',
+        {
+          share: openings.mostCommonOpeningPrefix.share,
+          sampleGames: diagnosticGames.length,
+        },
+      ));
+    }
+    if (diagnosticGames.length >= 6 && openings.mostCommonFullSequence.share >= 0.25) {
+      checks.push(buildDiagnosticCheck(
+        'repeated_full_sequences',
+        'warn',
+        'Recent retained games are replaying the same full action sequence too often.',
+        {
+          share: openings.mostCommonFullSequence.share,
+          sampleGames: diagnosticGames.length,
+        },
+      ));
+    }
+    if (actions.decisions >= 12 && actions.legalCounts.challenge === 0) {
+      checks.push(buildDiagnosticCheck(
+        'challenge_never_legal',
+        'error',
+        'Challenge never appears as a legal action in the recent diagnostic window.',
+        {
+          decisions: actions.decisions,
+        },
+      ));
+    }
+    if (actions.legalCounts.challenge >= 6 && actions.chosenCounts.challenge === 0) {
+      checks.push(buildDiagnosticCheck(
+        'challenge_never_chosen',
+        'warn',
+        'Challenge is legal in recent games but is never selected.',
+        {
+          legalCount: actions.legalCounts.challenge,
+        },
+      ));
+    }
+    if (actions.fallbackCount > 0) {
+      checks.push(buildDiagnosticCheck(
+        'fallback_actions_used',
+        'error',
+        'Some search outputs fell back to a different legal action before execution.',
+        {
+          fallbackCount: actions.fallbackCount,
+        },
+      ));
+    }
+    if (actions.policyCoverage.unmappedLegalActions > 0) {
+      checks.push(buildDiagnosticCheck(
+        'policy_mapping_gaps',
+        'error',
+        'Some legal actions are not covered by the policy-slot mapping.',
+        {
+          unmappedLegalActions: actions.policyCoverage.unmappedLegalActions,
+        },
+      ));
+    }
+    if (!replayTargets.countsCompacted && replayTargets.policySamples > 0 && replayTargets.valueSamples === 0) {
+      checks.push(buildDiagnosticCheck(
+        'missing_value_targets',
+        'error',
+        'The replay buffer has policy samples but no value samples.',
+        {
+          policySamples: replayTargets.policySamples,
+        },
+      ));
+    }
+    if (
+      !replayTargets.countsCompacted
+      && replayTargets.policySamples >= Math.max(8, Number(run?.config?.batchSize || 0))
+      && replayTargets.identitySamples === 0
+    ) {
+      checks.push(buildDiagnosticCheck(
+        'missing_identity_targets',
+        'warn',
+        'The replay buffer has policy samples but no identity samples.',
+        {
+          policySamples: replayTargets.policySamples,
+        },
+      ));
+    }
+    if (
+      replayTargets.latestBatch
+      && replayTargets.latestBatch.policySamples > 0
+      && replayTargets.latestBatch.valueSamples === 0
+    ) {
+      checks.push(buildDiagnosticCheck(
+        'latest_batch_missing_value_samples',
+        'error',
+        'The latest training batch reported policy samples but zero value samples.',
+        {
+          policySamples: replayTargets.latestBatch.policySamples,
+        },
+      ));
+    }
+    if (
+      replayTargets.latestBatch
+      && replayTargets.latestBatch.policySamples > 0
+      && replayTargets.latestBatch.identitySamples === 0
+    ) {
+      checks.push(buildDiagnosticCheck(
+        'latest_batch_missing_identity_samples',
+        'warn',
+        'The latest training batch reported policy samples but zero identity samples.',
+        {
+          policySamples: replayTargets.latestBatch.policySamples,
+        },
+      ));
+    }
+    if (evaluation.hasLatestEvaluation && evaluation.latestGames > 0 && evaluation.latestGames < 10) {
+      checks.push(buildDiagnosticCheck(
+        'evaluation_sample_too_small',
+        'warn',
+        'The latest evaluation sample is small enough to be noisy.',
+        {
+          games: evaluation.latestGames,
+        },
+      ));
+    }
+    if (
+      diagnosticGames.length >= 12
+      && Number(run?.bestGeneration || 0) > 0
+      && opponents.uniqueGenerationPairs <= 1
+    ) {
+      checks.push(buildDiagnosticCheck(
+        'low_opponent_diversity',
+        'info',
+        'Recent retained self-play uses only one generation pairing.',
+        {
+          sampleGames: diagnosticGames.length,
+        },
+      ));
+    }
+
+    return {
+      sampleWindow: {
+        selfPlayGames: windows.selfPlayGames.length,
+        evaluationGames: windows.evaluationGames.length,
+        analyzedGames: diagnosticGames.length,
+        sourcePhase: windows.sourcePhase,
+      },
+      openings,
+      actions,
+      replayTargets,
+      opponents,
+      evaluation,
+      checks,
+    };
+  }
+
   summarizeRun(run) {
     if (!run) return null;
     const elapsedMs = computeRunElapsedMs(run);
@@ -8641,6 +9812,7 @@ class MlRuntime {
     const latestMetrics = Array.isArray(run.metricsHistory) && run.metricsHistory.length
       ? run.metricsHistory[run.metricsHistory.length - 1]
       : null;
+    const diagnostics = this.summarizeRunDiagnostics(run);
     return {
       id: run.id,
       label: run.label,
@@ -8660,6 +9832,13 @@ class MlRuntime {
       totalEvaluationGames: Number(run.stats?.totalEvaluationGames || 0),
       averageSelfPlayGameDurationMs: Number(run.stats?.averageSelfPlayGameDurationMs || 0),
       averageEvaluationGameDurationMs: Number(run.stats?.averageEvaluationGameDurationMs || 0),
+      averageSelfPlayConcurrency: Number(run.stats?.averageSelfPlayConcurrency || 0),
+      averageEvaluationConcurrency: Number(run.stats?.averageEvaluationConcurrency || 0),
+      averageSelfPlayNetDurationMs: Number(run.stats?.averageSelfPlayNetDurationMs || 0),
+      averageEvaluationNetDurationMs: Number(run.stats?.averageEvaluationNetDurationMs || 0),
+      averageTrainingStepDurationMs: Number(run.stats?.averageTrainingStepDurationMs || 0),
+      averageMctsSearchDurationMs: Number(run.stats?.averageMctsSearchDurationMs || 0),
+      averageForwardPassDurationMs: Number(run.stats?.averageForwardPassDurationMs || 0),
       elapsedMs,
       totalTrainingSteps: Number(run.stats?.totalTrainingSteps || 0),
       totalPromotions: Number(run.stats?.totalPromotions || 0),
@@ -8668,6 +9847,7 @@ class MlRuntime {
       replayBuffer: this.summarizeRunReplayBuffer(run),
       latestLoss: latestMetrics?.latestLoss || run.working?.lastLoss || null,
       latestEvaluation: latestEvaluation ? deepClone(latestEvaluation) : null,
+      diagnostics,
       generations: generations.map((generation) => ({
         id: generation.id,
         generation: generation.generation,
@@ -8686,12 +9866,14 @@ class MlRuntime {
   buildRunEvaluationSeries(run) {
     const hasStagedEvaluations = (run?.evaluationHistory || []).some((evaluation) => (
       this.getEvaluationBaselineInfo(evaluation)
+      || evaluation?.baselinePassed !== undefined
       || evaluation?.prePromotionTest
       || Array.isArray(evaluation?.promotionTests)
     ));
     if (hasStagedEvaluations) {
       const markerShapeForEvaluation = (evaluation, stage = 'baseline') => {
         if (evaluation?.promoted) return 'star';
+        if (stage === 'baseline' && evaluation?.baselinePassed) return 'diamond';
         if (stage === 'pre-promotion' && evaluation?.prePromotionPassed) return 'diamond';
         return 'circle';
       };
@@ -8704,7 +9886,7 @@ class MlRuntime {
         lineStyle: 'solid',
         points: [],
       };
-      const promotionSeriesByGeneration = new Map();
+      const promotionSeriesByKey = new Map();
 
       (run?.evaluationHistory || []).forEach((evaluation) => {
         const candidateGeneration = Number.isFinite(evaluation?.candidateGeneration)
@@ -8741,7 +9923,7 @@ class MlRuntime {
             tooltipSections,
           });
         }
-        if (evaluation?.prePromotionTest) {
+        if (evaluation?.prePromotionTest && evaluation?.baselinePassed === undefined) {
           prePromotionSeries.points.push({
             candidateGeneration,
             checkpointIndex: Number(evaluation?.checkpointIndex || 0),
@@ -8759,17 +9941,18 @@ class MlRuntime {
         (evaluation?.promotionTests || []).forEach((entry) => {
           const opponentGeneration = Number(entry?.generation);
           if (!Number.isFinite(opponentGeneration)) return;
-          if (!promotionSeriesByGeneration.has(opponentGeneration)) {
-            promotionSeriesByGeneration.set(opponentGeneration, {
-              key: `promotion:${opponentGeneration}`,
+          const seriesKey = String(entry?.seriesKey || `promotion:${opponentGeneration}`);
+          if (!promotionSeriesByKey.has(seriesKey)) {
+            promotionSeriesByKey.set(seriesKey, {
+              key: seriesKey,
               opponentGeneration,
-              label: `promotion vs G${opponentGeneration}`,
+              label: entry?.chartLabel || `promotion vs G${opponentGeneration}`,
               color: '#7fd2de',
               lineStyle: 'none',
               points: [],
             });
           }
-          promotionSeriesByGeneration.get(opponentGeneration).points.push({
+          promotionSeriesByKey.get(seriesKey).points.push({
             candidateGeneration,
             checkpointIndex: Number(evaluation?.checkpointIndex || 0),
             generation: opponentGeneration,
@@ -8788,7 +9971,7 @@ class MlRuntime {
 
       return [
         ...Array.from(baselineSeriesByGeneration.values()),
-        ...Array.from(promotionSeriesByGeneration.values()),
+        ...Array.from(promotionSeriesByKey.values()),
         prePromotionSeries,
       ]
         .map((series) => ({
@@ -8851,7 +10034,27 @@ class MlRuntime {
   }
 
   getRunConfigDefaults() {
-    return deepClone(createDefaultRunConfig());
+    return {
+      ...deepClone(createDefaultRunConfig()),
+      modelSizePresetOptions: getSharedModelSizePresetOptions(),
+    };
+  }
+
+  buildWorkbenchRunConfigDefaults(recommendedDefaults = null) {
+    const baseDefaults = recommendedDefaults && typeof recommendedDefaults === 'object'
+      ? deepClone(recommendedDefaults)
+      : this.getRunConfigDefaults();
+    const savedDefaults = normalizeStoredRunConfigDefaults(this.state?.runConfigDefaults);
+    if (!savedDefaults) {
+      return baseDefaults;
+    }
+    return {
+      ...baseDefaults,
+      ...deepClone(savedDefaults),
+      modelSizePresetOptions: Array.isArray(baseDefaults.modelSizePresetOptions)
+        ? deepClone(baseDefaults.modelSizePresetOptions)
+        : getSharedModelSizePresetOptions(),
+    };
   }
 
   createRunRecord(options = {}) {
@@ -8861,6 +10064,7 @@ class MlRuntime {
     const createdAt = nowIso();
     const seedBundle = options.seedBundle || createDefaultModelBundle({
       seed: Number.isFinite(config.seed) ? config.seed : Date.now(),
+      modelSizePreset: config.modelSizePreset,
     });
     const generation0 = this.createRunGenerationRecord({
       id,
@@ -8905,6 +10109,8 @@ class MlRuntime {
         baseGeneration: 0,
         checkpointIndex: 0,
         lastLoss: null,
+        pendingEvaluation: null,
+        trainingProgress: null,
       },
       stats: {
         totalSelfPlayGames: 0,
@@ -8913,14 +10119,30 @@ class MlRuntime {
         timedEvaluationGames: 0,
         totalSelfPlayGameDurationMs: 0,
         totalEvaluationGameDurationMs: 0,
+        totalSelfPlayGameWallDurationMs: 0,
+        totalEvaluationGameWallDurationMs: 0,
         averageSelfPlayGameDurationMs: 0,
         averageEvaluationGameDurationMs: 0,
+        averageSelfPlayConcurrency: 0,
+        averageEvaluationConcurrency: 0,
+        averageSelfPlayNetDurationMs: 0,
+        averageEvaluationNetDurationMs: 0,
+        timedTrainingSteps: 0,
+        totalTrainingStepDurationMs: 0,
+        averageTrainingStepDurationMs: 0,
+        timedMctsSearches: 0,
+        totalMctsSearchDurationMs: 0,
+        averageMctsSearchDurationMs: 0,
+        totalForwardPasses: 0,
+        totalForwardPassDurationMs: 0,
+        averageForwardPassDurationMs: 0,
         totalTrainingSteps: 0,
         totalPromotions: 0,
         failedPromotions: 0,
         averageGameLength: 0,
         policyEntropy: 0,
         moveDiversity: 0,
+        latestDiagnostics: null,
       },
       timing: {
         elapsedMs: 0,
@@ -8943,6 +10165,7 @@ class MlRuntime {
     const rawPolicySamples = Array.isArray(replayBuffer.policySamples) ? replayBuffer.policySamples : [];
     const rawValueSamples = Array.isArray(replayBuffer.valueSamples) ? replayBuffer.valueSamples : [];
     const rawIdentitySamples = Array.isArray(replayBuffer.identitySamples) ? replayBuffer.identitySamples : [];
+    const sharedFamily = this.isSharedFamilyRun(run);
     const policySamples = [];
     const valueSamples = [];
     const pairedCount = Math.max(rawPolicySamples.length, rawValueSamples.length);
@@ -8952,14 +10175,22 @@ class MlRuntime {
       if (!isValidPolicyTrainingSample(policySample)) {
         continue;
       }
-      policySamples.push(policySample);
+      policySamples.push(compactReplayPolicySample(policySample, {
+        sharedFamily,
+      }));
       const valueSample = rawValueSamples[index];
-      if (isValidValueTrainingSample(valueSample)) {
-        valueSamples.push(valueSample);
+      if (isValidValueTrainingSample(valueSample, { sharedFamily })) {
+        valueSamples.push(compactReplayValueSample(valueSample, {
+          sharedFamily,
+        }));
       }
     }
 
-    const identitySamples = rawIdentitySamples.filter(isValidIdentityTrainingSample);
+    const identitySamples = rawIdentitySamples
+      .filter((sample) => isValidIdentityTrainingSample(sample, { sharedFamily }))
+      .map((sample) => compactReplayIdentitySample(sample, {
+        sharedFamily,
+      }));
     replayBuffer.policySamples = policySamples;
     replayBuffer.valueSamples = valueSamples;
     replayBuffer.identitySamples = identitySamples;
@@ -8982,6 +10213,7 @@ class MlRuntime {
     replayBuffer.identitySamples = Array.isArray(replayBuffer.identitySamples) ? replayBuffer.identitySamples : [];
     replayBuffer.totalPositionsSeen = Number(replayBuffer.totalPositionsSeen || 0);
     replayBuffer.evictedPositions = Number(replayBuffer.evictedPositions || 0);
+    const sharedFamily = this.isSharedFamilyRun(run);
 
     const generation = Number.isFinite(options.generation) ? Number(options.generation) : null;
     const createdAt = options.createdAt || nowIso();
@@ -8997,22 +10229,28 @@ class MlRuntime {
       }
       policySamples.push(policySample);
       const valueSample = rawValueSamples[index];
-      if (isValidValueTrainingSample(valueSample)) {
+      if (isValidValueTrainingSample(valueSample, { sharedFamily })) {
         valueSamples.push(valueSample);
       }
     }
     const identitySamples = (Array.isArray(samples.identitySamples) ? samples.identitySamples : [])
-      .filter(isValidIdentityTrainingSample);
+      .filter((sample) => isValidIdentityTrainingSample(sample, { sharedFamily }));
 
-    const normalizeSample = (sample) => ({
-      ...deepClone(sample),
-      generation: Number.isFinite(sample?.generation) ? Number(sample.generation) : generation,
+    replayBuffer.policySamples.push(...policySamples.map((sample) => compactReplayPolicySample(sample, {
+      sharedFamily,
+      generation,
       createdAt,
-    });
-
-    replayBuffer.policySamples.push(...policySamples.map(normalizeSample));
-    replayBuffer.valueSamples.push(...valueSamples.map(normalizeSample));
-    replayBuffer.identitySamples.push(...identitySamples.map(normalizeSample));
+    })));
+    replayBuffer.valueSamples.push(...valueSamples.map((sample) => compactReplayValueSample(sample, {
+      sharedFamily,
+      generation,
+      createdAt,
+    })));
+    replayBuffer.identitySamples.push(...identitySamples.map((sample) => compactReplayIdentitySample(sample, {
+      sharedFamily,
+      generation,
+      createdAt,
+    })));
     replayBuffer.totalPositionsSeen += policySamples.length;
 
     const maxPositions = Math.max(1, Number(replayBuffer.maxPositions || 1));
@@ -9042,7 +10280,7 @@ class MlRuntime {
     const policySamples = Array.isArray(replayBuffer.policySamples) ? replayBuffer.policySamples : [];
     const valueSamples = Array.isArray(replayBuffer.valueSamples) ? replayBuffer.valueSamples : [];
     const identitySamples = Array.isArray(replayBuffer.identitySamples) ? replayBuffer.identitySamples : [];
-    const batchSize = clampPositiveInt(run?.config?.batchSize, 32, 1, 4096);
+    const batchSize = clampPositiveInt(run?.config?.batchSize, 32, 1, MAX_RUN_BATCH_SIZE);
     const sampleCount = Math.min(batchSize, policySamples.length);
     if (!sampleCount) {
       return {
@@ -9055,23 +10293,35 @@ class MlRuntime {
     const rng = createRng(Date.now() + sampleCount + Number(run?.stats?.totalTrainingSteps || 0));
     const sampleIndices = pickUniqueRandomIndices(policySamples.length, sampleCount, rng);
     const selectedTimes = new Set();
+    const selectedKeys = new Set();
     const selectedPolicy = sampleIndices.map((index) => {
       const sample = deepClone(policySamples[index]);
       if (sample?.createdAt) selectedTimes.add(String(sample.createdAt));
+      selectedKeys.add(getTrainingSampleCorrelationKey(sample, 'policy', index));
       return sample;
     });
-    const selectedValue = sampleIndices
-      .map((index) => deepClone(valueSamples[index] || null))
-      .filter(Boolean);
+    const selectedValueByPolicy = sampleIndices
+      .map((index) => deepClone(valueSamples[index] || null));
+    const selectedValue = selectedValueByPolicy.filter(Boolean);
     const selectedIdentity = identitySamples
-      .filter((sample) => selectedTimes.has(String(sample?.createdAt || '')))
+      .filter((sample, index) => (
+        hasTrainingSampleCorrelationKey(sample)
+          ? selectedKeys.has(getTrainingSampleCorrelationKey(sample, 'identity', index))
+          : selectedTimes.has(String(sample?.createdAt || ''))
+      ))
       .slice(0, Math.max(sampleCount * 3, sampleCount))
       .map((sample) => deepClone(sample));
+    const sharedSamples = buildSharedTrainingSamples({
+      policySamples: selectedPolicy,
+      valueSamples: selectedValueByPolicy,
+      identitySamples: selectedIdentity,
+    });
 
     return {
       policySamples: selectedPolicy,
       valueSamples: selectedValue,
       identitySamples: selectedIdentity,
+      sharedSamples,
     };
   }
 
@@ -9096,23 +10346,113 @@ class MlRuntime {
     run.stats[averageKey] = nextCount > 0 ? (nextTotalDuration / nextCount) : 0;
   }
 
-  computeRunSelfPlayMetrics(games = []) {
-    const plies = games.map((game) => Number(game?.plies || 0));
-    const policySamples = games.flatMap((game) => game?.training?.policySamples || []);
-    const entropy = averageNumbers(policySamples.map((sample) => computeEntropy(sample?.target || [])));
-    const diversity = policySamples.length
-      ? (new Set(policySamples.map((sample) => sample?.selectedActionKey || sample?.selectedMoveKey || '')).size / policySamples.length)
+  recordRunGamePhaseWallTime(run, phase = 'selfplay', wallDurationMs = 0, gameCount = 0) {
+    if (!run) return;
+    const normalizedWallDurationMs = Number(wallDurationMs);
+    const normalizedGameCount = Number(gameCount);
+    if (!Number.isFinite(normalizedWallDurationMs) || normalizedWallDurationMs < 0) return;
+    if (!Number.isFinite(normalizedGameCount) || normalizedGameCount <= 0) return;
+
+    const isEvaluation = String(phase || '').toLowerCase() === 'evaluation';
+    const totalGameDurationKey = isEvaluation ? 'totalEvaluationGameDurationMs' : 'totalSelfPlayGameDurationMs';
+    const totalWallDurationKey = isEvaluation ? 'totalEvaluationGameWallDurationMs' : 'totalSelfPlayGameWallDurationMs';
+    const averageKey = isEvaluation ? 'averageEvaluationGameDurationMs' : 'averageSelfPlayGameDurationMs';
+    const averageConcurrencyKey = isEvaluation ? 'averageEvaluationConcurrency' : 'averageSelfPlayConcurrency';
+    const averageNetKey = isEvaluation ? 'averageEvaluationNetDurationMs' : 'averageSelfPlayNetDurationMs';
+
+    const totalGameDurationMs = Number(run.stats?.[totalGameDurationKey] || 0);
+    const nextWallDurationMs = Number(run.stats?.[totalWallDurationKey] || 0) + normalizedWallDurationMs;
+    const timedGameCount = Number(run.stats?.[isEvaluation ? 'timedEvaluationGames' : 'timedSelfPlayGames'] || 0);
+
+    run.stats[totalWallDurationKey] = nextWallDurationMs;
+    run.stats[averageConcurrencyKey] = nextWallDurationMs > 0
+      ? (totalGameDurationMs / nextWallDurationMs)
       : 0;
+    run.stats[averageNetKey] = timedGameCount > 0
+      ? (nextWallDurationMs / timedGameCount)
+      : (Number(run.stats?.[averageKey] || 0) / Math.max(1, Number(run.stats?.[averageConcurrencyKey] || 1)));
+  }
+
+  createRunSelfPlayMetricsAccumulator() {
     return {
-      averageGameLength: averageNumbers(plies),
-      policyEntropy: entropy,
-      moveDiversity: diversity,
+      gameCount: 0,
+      totalPlies: 0,
+      policySampleCount: 0,
+      totalPolicyEntropy: 0,
+      selectedActionKeys: new Set(),
+      timedMctsSearches: 0,
+      totalMctsSearchDurationMs: 0,
+      totalForwardPassDurationMs: 0,
+      totalForwardPassCount: 0,
     };
+  }
+
+  accumulateRunSelfPlayMetrics(accumulator, games = []) {
+    const summary = accumulator || this.createRunSelfPlayMetricsAccumulator();
+    (Array.isArray(games) ? games : []).forEach((game) => {
+      summary.gameCount += 1;
+      summary.totalPlies += Number(game?.plies || 0);
+      (game?.training?.policySamples || []).forEach((sample) => {
+        summary.policySampleCount += 1;
+        summary.totalPolicyEntropy += computeEntropy(sample?.target || []);
+        const actionKey = sample?.selectedActionKey || sample?.selectedMoveKey || '';
+        if (actionKey) {
+          summary.selectedActionKeys.add(actionKey);
+        }
+      });
+      if (Array.isArray(game?.decisions)) {
+        game.decisions.forEach((decision) => {
+          const trace = decision?.trace || null;
+          const searchDurationMs = Number(trace?.searchDurationMs || 0);
+          if (Number.isFinite(searchDurationMs) && searchDurationMs > 0) {
+            summary.timedMctsSearches += 1;
+            summary.totalMctsSearchDurationMs += searchDurationMs;
+          }
+          summary.totalForwardPassDurationMs += Number(trace?.forwardPassDurationMs || 0);
+          summary.totalForwardPassCount += Number(trace?.forwardPassCount || 0);
+        });
+      }
+    });
+    return summary;
+  }
+
+  finalizeRunSelfPlayMetrics(accumulator = null) {
+    const summary = accumulator || this.createRunSelfPlayMetricsAccumulator();
+    return {
+      gameCount: Number(summary.gameCount || 0),
+      averageGameLength: Number(summary.gameCount || 0) > 0
+        ? (Number(summary.totalPlies || 0) / Number(summary.gameCount || 1))
+        : 0,
+      policyEntropy: Number(summary.policySampleCount || 0) > 0
+        ? (Number(summary.totalPolicyEntropy || 0) / Number(summary.policySampleCount || 1))
+        : 0,
+      moveDiversity: Number(summary.policySampleCount || 0) > 0
+        ? (Number(summary.selectedActionKeys?.size || 0) / Number(summary.policySampleCount || 1))
+        : 0,
+      timedMctsSearches: Number(summary.timedMctsSearches || 0),
+      totalMctsSearchDurationMs: Number(summary.totalMctsSearchDurationMs || 0),
+      averageMctsSearchDurationMs: Number(summary.timedMctsSearches || 0) > 0
+        ? (Number(summary.totalMctsSearchDurationMs || 0) / Number(summary.timedMctsSearches || 1))
+        : 0,
+      totalForwardPassDurationMs: Number(summary.totalForwardPassDurationMs || 0),
+      totalForwardPassCount: Number(summary.totalForwardPassCount || 0),
+      averageForwardPassDurationMs: Number(summary.totalForwardPassCount || 0) > 0
+        ? (Number(summary.totalForwardPassDurationMs || 0) / Number(summary.totalForwardPassCount || 1))
+        : 0,
+    };
+  }
+
+  computeRunSelfPlayMetrics(games = []) {
+    return this.finalizeRunSelfPlayMetrics(this.accumulateRunSelfPlayMetrics(
+      this.createRunSelfPlayMetricsAccumulator(),
+      games,
+    ));
   }
 
   retainRunGames(run, games = []) {
     if (!run) return;
     const retainedGames = Array.isArray(run.retainedGames) ? run.retainedGames : [];
+    this.ensureUniqueRunRetainedGameIds(run);
     games.forEach((game) => {
       const compactGame = compactRunRetainedGame(game);
       if (compactGame) {
@@ -9130,6 +10470,7 @@ class MlRuntime {
       retainedGames.splice(0, overflowCount);
     }
     run.retainedGames = retainedGames;
+    this.ensureUniqueRunRetainedGameIds(run);
   }
 
   listRunGenerationPairs(run) {
@@ -9158,14 +10499,19 @@ class MlRuntime {
 
   listRunReplayGameSummaries(run, generationA, generationB, options = {}) {
     if (!run) return [];
+    this.ensureUniqueRunRetainedGameIds(run);
     const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.floor(Number(options.limit))) : null;
+    const replayType = normalizeRunReplayType(options.replayType);
     const hasGenerationFilter = generationA !== null
       && generationA !== undefined
       && generationB !== null
       && generationB !== undefined;
     const items = (run.retainedGames || [])
-      .filter((game) => String(game?.phase || '').toLowerCase() === 'evaluation')
+      .filter((game) => doesRetainedGameMatchReplayType(game, replayType))
       .filter((game) => {
+        if (replayType !== 'evaluation') {
+          return true;
+        }
         if (!hasGenerationFilter) {
           return true;
         }
@@ -9182,11 +10528,115 @@ class MlRuntime {
     return Number.isFinite(limit) ? items.slice(0, limit) : items;
   }
 
+  buildRunReplayGameCatalog(run, options = {}) {
+    if (!run) {
+      return {
+        items: [],
+        pageInfo: {
+          limit: clampPositiveInt(options.limit, 80, 1, 250),
+          beforeId: typeof options.beforeId === 'string' ? options.beforeId.trim() : '',
+          nextBeforeId: '',
+          hasMore: false,
+          matchingCount: 0,
+          totalAvailableCount: 0,
+        },
+        filters: {
+          generationOptions: [],
+          boardPiecesOptions: [],
+          advanceDepthOptions: [],
+        },
+      };
+    }
+    this.ensureUniqueRunRetainedGameIds(run);
+
+    const replayType = normalizeRunReplayType(options.replayType);
+    const limit = clampPositiveInt(options.limit, 80, 1, 250);
+    const beforeId = typeof options.beforeId === 'string' ? options.beforeId.trim() : '';
+    const generationOptions = new Set();
+    const boardPiecesOptions = new Set();
+    const advanceDepthOptions = new Set();
+    const pageItemsDescending = [];
+    let matchingCount = 0;
+    let totalAvailableCount = 0;
+    let collectingPage = !beforeId;
+    let hasMore = false;
+
+    for (let index = (run.retainedGames || []).length - 1; index >= 0; index -= 1) {
+      const game = run.retainedGames[index];
+      if (!doesRetainedGameMatchReplayType(game, replayType)) {
+        continue;
+      }
+
+      totalAvailableCount += 1;
+      if (replayType === 'simulation') {
+        const totalBoardPieces = getRetainedGameTotalBoardPieces(game);
+        const advanceDepth = normalizeOptionalReplayFilterNumber(game?.curriculum?.advanceDepth);
+        if (Number.isFinite(totalBoardPieces)) {
+          boardPiecesOptions.add(totalBoardPieces);
+        }
+        if (Number.isFinite(advanceDepth)) {
+          advanceDepthOptions.add(advanceDepth);
+        }
+      } else {
+        const whiteGeneration = normalizeOptionalReplayFilterNumber(game?.whiteGeneration);
+        const blackGeneration = normalizeOptionalReplayFilterNumber(game?.blackGeneration);
+        if (Number.isFinite(whiteGeneration)) {
+          generationOptions.add(whiteGeneration);
+        }
+        if (Number.isFinite(blackGeneration)) {
+          generationOptions.add(blackGeneration);
+        }
+      }
+
+      const matchesCurrentFilters = doesRetainedGameMatchReplayFilters(game, options);
+      if (!matchesCurrentFilters) {
+        continue;
+      }
+
+      matchingCount += 1;
+      if (!collectingPage) {
+        if (game?.id === beforeId) {
+          collectingPage = true;
+        }
+        continue;
+      }
+
+      if (pageItemsDescending.length < limit) {
+        const summary = summarizeRunReplayGame(game);
+        if (summary) {
+          pageItemsDescending.push(summary);
+        }
+        continue;
+      }
+
+      hasMore = true;
+    }
+
+    const items = pageItemsDescending.reverse();
+    return {
+      items,
+      pageInfo: {
+        limit,
+        beforeId,
+        nextBeforeId: hasMore && items.length ? items[0].id : '',
+        hasMore,
+        matchingCount,
+        totalAvailableCount,
+      },
+      filters: {
+        generationOptions: [...generationOptions].sort((left, right) => left - right),
+        boardPiecesOptions: [...boardPiecesOptions].sort((left, right) => left - right),
+        advanceDepthOptions: [...advanceDepthOptions].sort((left, right) => left - right),
+      },
+    };
+  }
+
   async getWorkbench() {
     await this.ensureLoaded();
     await this.ensureFreshResourceTelemetry();
     this.prunePromotedBotSelections();
-    const defaults = await this.getRecommendedRunConfigDefaults();
+    const recommendedDefaults = await this.getRecommendedRunConfigDefaults();
+    const defaults = this.buildWorkbenchRunConfigDefaults(recommendedDefaults);
     const runs = (this.state.runs || []).map((run) => this.summarizeRun(run));
     const activeRuns = runs.filter((run) => isRunStatusActive(run?.status));
     const totalGames = runs.reduce((sum, run) => (
@@ -9247,6 +10697,7 @@ class MlRuntime {
   async getRun(runId) {
     const run = await this.resolveRunForRead(runId);
     if (!run) return null;
+    this.ensureUniqueRunRetainedGameIds(run);
     const summary = this.summarizeRun(run);
     return {
       ...summary,
@@ -9254,18 +10705,32 @@ class MlRuntime {
       metricsHistory: deepClone(run.metricsHistory || []),
       generationPairs: this.listRunGenerationPairs(run),
       recentReplayGames: this.listRunReplayGameSummaries(run, null, null, { limit: 60 }),
+      recentSimulationGames: this.listRunReplayGameSummaries(run, null, null, {
+        limit: 60,
+        replayType: 'simulation',
+      }),
     };
   }
 
-  async listRunGames(runId, generationA, generationB) {
+  async listRunGames(runId, generationA, generationB, options = {}) {
     const run = await this.resolveRunForRead(runId);
     if (!run) return [];
-    return this.listRunReplayGameSummaries(run, generationA, generationB);
+    this.ensureUniqueRunRetainedGameIds(run);
+    return this.listRunReplayGameSummaries(run, generationA, generationB, options);
+  }
+
+  async getRunReplayGameCatalog(runId, options = {}) {
+    const run = await this.resolveRunForRead(runId);
+    if (!run) {
+      return null;
+    }
+    return this.buildRunReplayGameCatalog(run, options);
   }
 
   async getRunReplay(runId, gameId) {
     const run = await this.resolveRunForRead(runId);
     if (!run) return null;
+    this.ensureUniqueRunRetainedGameIds(run);
     const game = (run.retainedGames || []).find((entry) => entry.id === gameId) || null;
     if (!game) return null;
     return {
@@ -9281,6 +10746,7 @@ class MlRuntime {
     const latestEvaluation = Array.isArray(run.evaluationHistory) && run.evaluationHistory.length
       ? run.evaluationHistory[run.evaluationHistory.length - 1]
       : null;
+    const diagnostics = this.summarizeRunDiagnostics(run);
     const payload = {
       phase: phase || overrides.phase || run.live?.phase || 'running',
       runId: run.id,
@@ -9296,6 +10762,13 @@ class MlRuntime {
       totalEvaluationGames: Number(run.stats?.totalEvaluationGames || 0),
       averageSelfPlayGameDurationMs: Number(run.stats?.averageSelfPlayGameDurationMs || 0),
       averageEvaluationGameDurationMs: Number(run.stats?.averageEvaluationGameDurationMs || 0),
+      averageSelfPlayConcurrency: Number(run.stats?.averageSelfPlayConcurrency || 0),
+      averageEvaluationConcurrency: Number(run.stats?.averageEvaluationConcurrency || 0),
+      averageSelfPlayNetDurationMs: Number(run.stats?.averageSelfPlayNetDurationMs || 0),
+      averageEvaluationNetDurationMs: Number(run.stats?.averageEvaluationNetDurationMs || 0),
+      averageTrainingStepDurationMs: Number(run.stats?.averageTrainingStepDurationMs || 0),
+      averageMctsSearchDurationMs: Number(run.working?.selfPlayProgress?.averageMctsSearchDurationMs || run.stats?.averageMctsSearchDurationMs || 0),
+      averageForwardPassDurationMs: Number(run.working?.selfPlayProgress?.averageForwardPassDurationMs || run.stats?.averageForwardPassDurationMs || 0),
       elapsedMs,
       totalPromotions: Number(run.stats?.totalPromotions || 0),
       failedPromotions: Number(run.stats?.failedPromotions || 0),
@@ -9304,9 +10777,11 @@ class MlRuntime {
       latestEvaluation: latestEvaluation ? deepClone(latestEvaluation) : null,
       selfPlayProgress: run.working?.selfPlayProgress ? deepClone(run.working.selfPlayProgress) : null,
       evaluationProgress: run.working?.evaluationProgress ? deepClone(run.working.evaluationProgress) : null,
+      trainingProgress: run.working?.trainingProgress ? deepClone(run.working.trainingProgress) : null,
       averageGameLength: Number(run.stats?.averageGameLength || 0),
       policyEntropy: Number(run.stats?.policyEntropy || 0),
       moveDiversity: Number(run.stats?.moveDiversity || 0),
+      diagnostics,
       stopReason: run.stopReason || null,
       lastError: run?.lastError ? summarizeError(run.lastError) : null,
       timestamp: nowIso(),
@@ -9357,6 +10832,118 @@ class MlRuntime {
   shouldAbortRunTask(runId, taskState) {
     if (!runId || !taskState) return false;
     return Boolean(taskState.killRequested) || !this.isCurrentRunTask(runId, taskState);
+  }
+
+  async getRunTaskTrainingExecutionProfile(run, taskState) {
+    if (!run?.id) {
+      return {
+        backend: TRAINING_BACKENDS.NODE,
+        device: TRAINING_DEVICE_PREFERENCES.CPU,
+      };
+    }
+    if (taskState?.trainingExecutionProfile) {
+      return taskState.trainingExecutionProfile;
+    }
+    const profile = await this.getTrainingExecutionProfile(
+      run?.config?.trainingBackend,
+      run?.config?.trainingDevicePreference,
+      { fallbackToNode: true },
+    );
+    if (this.isCurrentRunTask(run.id, taskState)) {
+      taskState.trainingExecutionProfile = profile;
+    }
+    return profile;
+  }
+
+  async canRunTrainingConcurrently(run, taskState) {
+    const profile = await this.getRunTaskTrainingExecutionProfile(run, taskState);
+    return profile?.backend === TRAINING_BACKENDS.PYTHON
+      && profile?.device === TRAINING_DEVICE_PREFERENCES.CUDA;
+  }
+
+  hasRunBackgroundTraining(taskState) {
+    return Boolean(taskState?.trainingPromise);
+  }
+
+  startRunBackgroundTraining(run, taskState, options = {}) {
+    if (!run?.id || !taskState) return null;
+    if (taskState.trainingPromise) return taskState.trainingPromise;
+    taskState.trainingError = null;
+    const promise = Promise.resolve()
+      .then(() => this.trainRunWorkingModel(run, taskState, {
+        ...options,
+        deferEvaluation: true,
+      }))
+      .catch((err) => {
+        taskState.trainingError = err;
+        return null;
+      })
+      .finally(() => {
+        if (taskState.trainingPromise === promise) {
+          taskState.trainingPromise = null;
+        }
+      });
+    taskState.trainingPromise = promise;
+    return promise;
+  }
+
+  async awaitRunBackgroundTraining(run, taskState) {
+    if (!taskState?.trainingPromise) {
+      if (taskState?.trainingError) {
+        const err = taskState.trainingError;
+        taskState.trainingError = null;
+        throw err;
+      }
+      return null;
+    }
+    const promise = taskState.trainingPromise;
+    await promise;
+    if (taskState?.trainingError) {
+      const err = taskState.trainingError;
+      taskState.trainingError = null;
+      throw err;
+    }
+    return null;
+  }
+
+  ensureSharedTrainingSession(taskState, fallbackId = 'training') {
+    if (!taskState) return null;
+    if (taskState.trainingSessionId) return taskState.trainingSessionId;
+    const normalizedFallback = String(fallbackId || taskState.id || 'training')
+      .trim()
+      .replace(/[^a-z0-9:_-]/gi, '_');
+    taskState.trainingSessionId = `shared:${normalizedFallback}`;
+    taskState.trainingSessionNeedsReset = true;
+    taskState.trainingSessionDirty = false;
+    return taskState.trainingSessionId;
+  }
+
+  async exportSharedTrainingSession(taskState, options = {}) {
+    const sessionId = typeof taskState?.trainingSessionId === 'string'
+      ? taskState.trainingSessionId.trim()
+      : '';
+    if (!sessionId) return null;
+    const shouldExport = options.force === true || taskState?.trainingSessionDirty === true;
+    let exported = null;
+    if (shouldExport) {
+      const bridge = getPythonTrainingBridge();
+      exported = await bridge.exportTrainingSession(sessionId, {
+        includeOptimizerState: options.includeOptimizerState !== false,
+      });
+      if (taskState) {
+        taskState.trainingSessionDirty = false;
+      }
+    }
+    if (options.close === true) {
+      const bridge = getPythonTrainingBridge();
+      await bridge.closeTrainingSession(sessionId).catch(() => {});
+      if (taskState) {
+        taskState.trainingSessionId = null;
+        taskState.trainingSessionNeedsReset = false;
+        taskState.trainingSessionDirty = false;
+      }
+    }
+    return exported;
   }
 
   async maybeSaveRunState(run, options = {}) {
@@ -9514,6 +11101,7 @@ class MlRuntime {
     if (config.seedMode === RUN_SEED_MODES.RANDOM) {
       const seedBundle = createDefaultModelBundle({
         seed: Number.isFinite(config.seed) ? config.seed : Date.now(),
+        modelSizePreset: config.modelSizePreset,
       });
       return buildModelDescriptorLabel('Random', seedBundle);
     }
@@ -9526,6 +11114,12 @@ class MlRuntime {
       return buildModelDescriptorLabel('Promoted', createDefaultModelBundle());
     }
     const bootstrapSnapshot = this.getBootstrapSnapshot();
+    if (config.modelSizePreset && String(config.modelSizePreset).trim().toLowerCase() !== DEFAULT_RUN_MODEL_SIZE_PRESET) {
+      return buildModelDescriptorLabel('Bootstrap', createDefaultModelBundle({
+        seed: PREFERRED_BOOTSTRAP_BASELINE_SEED,
+        modelSizePreset: config.modelSizePreset,
+      }));
+    }
     return bootstrapSnapshot
       ? buildModelDescriptorLabel('Bootstrap', bootstrapSnapshot.modelBundle)
       : buildModelDescriptorLabel('Bootstrap', createDefaultModelBundle());
@@ -9577,6 +11171,7 @@ class MlRuntime {
       return {
         seedBundle: createDefaultModelBundle({
           seed: Number.isFinite(config.seed) ? config.seed : Date.now(),
+          modelSizePreset: config.modelSizePreset,
         }),
         seedSource: RUN_SEED_MODES.RANDOM,
       };
@@ -9603,12 +11198,23 @@ class MlRuntime {
       };
     }
 
+    if (config.modelSizePreset && String(config.modelSizePreset).trim().toLowerCase() !== DEFAULT_RUN_MODEL_SIZE_PRESET && !config.seedSnapshotId) {
+      return {
+        seedBundle: createDefaultModelBundle({
+          seed: Number.isFinite(config.seed) ? config.seed : PREFERRED_BOOTSTRAP_BASELINE_SEED,
+          modelSizePreset: config.modelSizePreset,
+        }),
+        seedSource: `bootstrap:preset:${String(config.modelSizePreset).trim().toLowerCase()}`,
+      };
+    }
+
     const snapshot = config.seedSnapshotId
       ? this.resolveSnapshot(config.seedSnapshotId)
       : this.getBootstrapSnapshot();
     return {
       seedBundle: snapshot?.modelBundle ? cloneModelBundle(snapshot.modelBundle) : createDefaultModelBundle({
         seed: Number.isFinite(config.seed) ? config.seed : Date.now(),
+        modelSizePreset: config.modelSizePreset,
       }),
       seedSource: snapshot?.id ? `bootstrap:${snapshot.id}` : RUN_SEED_MODES.BOOTSTRAP,
     };
@@ -9739,11 +11345,14 @@ class MlRuntime {
         logErrors: false,
         fallbackToNode: true,
       });
-      defaults.batchSize = resolveRecommendedTrainingBatchSize(null, backendResolution, {
+      defaults.batchSize = Math.max(defaults.batchSize, resolveRecommendedTrainingBatchSize(null, backendResolution, {
         policySampleCount: defaults.replayBufferMaxPositions,
-      });
+      }, {
+        maxLogicalProcessors: defaults.maxLogicalProcessors,
+      }));
       defaults.trainingStepsPerCycle = resolveRecommendedRunTrainingStepsPerCycle(backendResolution);
     } catch (_) {}
+    defaults.modelSizePresetOptions = getSharedModelSizePresetOptions();
     return defaults;
   }
 
@@ -9760,6 +11369,9 @@ class MlRuntime {
       options.batchSize,
       backendResolution,
       options.samples || {},
+      {
+        maxLogicalProcessors: options.maxLogicalProcessors,
+      },
     );
   }
 
@@ -9773,11 +11385,20 @@ class MlRuntime {
   async trainModelBundleBatch(options = {}) {
     const modelBundle = options.modelBundle || createDefaultModelBundle();
     const samples = options.samples || {};
+    const sharedFamily = isSharedFamilyModelBundle(modelBundle);
+    const sharedSamples = sharedFamily
+      ? (
+        Array.isArray(samples.sharedSamples) && samples.sharedSamples.length
+          ? samples.sharedSamples
+          : buildSharedTrainingSamples(samples)
+      )
+      : [];
     const trainingOptions = {
       learningRate: options.learningRate,
       batchSize: options.batchSize,
       weightDecay: options.weightDecay,
       gradientClipNorm: options.gradientClipNorm,
+      maxLogicalProcessors: options.maxLogicalProcessors,
     };
     const preflightSummary = buildTrainingBatchDebugSummary({
       ...options,
@@ -9835,6 +11456,10 @@ class MlRuntime {
     const effectiveTrainingOptions = {
       ...trainingOptions,
       batchSize: resolveRecommendedTrainingBatchSize(trainingOptions.batchSize, backendResolution, samples),
+      maxLogicalProcessors: normalizeMaxLogicalProcessors(
+        trainingOptions.maxLogicalProcessors,
+        defaultMaxLogicalProcessors(),
+      ),
     };
     const debugSummary = buildTrainingBatchDebugSummary({
       ...options,
@@ -9858,6 +11483,59 @@ class MlRuntime {
         inferredIdentities: INFERRED_IDENTITIES.slice(),
       };
       try {
+        if (sharedFamily && options.trainingSessionId) {
+          const buildSessionPayload = (resetSession) => ({
+            sessionId: String(options.trainingSessionId),
+            devicePreference: backendResolution.device,
+            epochs: Math.max(1, Number(options.epochs || 1)),
+            trainingOptions: deepClone(effectiveTrainingOptions),
+            inferredIdentities: INFERRED_IDENTITIES.slice(),
+            sharedSamples,
+            enableAmp: options.enableAmp !== false,
+            enableCompile: options.enableCompile !== false,
+            resetSession,
+            ...(resetSession ? {
+              modelBundle: payloadBundle,
+              optimizerState: deepClone(options.optimizerState || null),
+            } : {}),
+          });
+          let sessionPayload = buildSessionPayload(options.resetTrainingSession === true);
+          let result;
+          try {
+            result = await bridge.trainSessionBatch(sessionPayload);
+          } catch (err) {
+            if (sessionPayload.resetSession === true) {
+              throw err;
+            }
+            sessionPayload = buildSessionPayload(true);
+            result = await bridge.trainSessionBatch(sessionPayload);
+          }
+          let exportedState = null;
+          if (options.exportTrainingState === true || options.closeTrainingSession === true) {
+            exportedState = await bridge.exportTrainingSession(sessionPayload.sessionId, {
+              includeOptimizerState: options.includeOptimizerState !== false,
+            });
+          }
+          if (options.closeTrainingSession === true) {
+            await bridge.closeTrainingSession(sessionPayload.sessionId).catch(() => {});
+          }
+          return {
+            backend: TRAINING_BACKENDS.PYTHON,
+            device: result.device || backendResolution.device,
+            modelBundle: exportedState?.modelBundle
+              ? cloneModelBundle(exportedState.modelBundle)
+              : cloneModelBundle(modelBundle),
+            optimizerState: exportedState?.optimizerState
+              ? deepClone(exportedState.optimizerState)
+              : (options.optimizerState ? deepClone(options.optimizerState) : null),
+            history: Array.isArray(result.history) ? result.history.map((entry) => deepClone(entry)) : [],
+            capabilities: backendResolution.capabilities || null,
+            trainingSessionId: sessionPayload.sessionId,
+            stateExported: Boolean(exportedState?.modelBundle),
+            ampEnabled: result.ampEnabled === true,
+            compileEnabled: result.compileEnabled === true,
+          };
+        }
         const result = await bridge.trainBatch({
           devicePreference: backendResolution.device,
           epochs: Math.max(1, Number(options.epochs || 1)),
@@ -9865,11 +11543,14 @@ class MlRuntime {
           optimizerState: deepClone(options.optimizerState || null),
           trainingOptions: deepClone(effectiveTrainingOptions),
           inferredIdentities: INFERRED_IDENTITIES.slice(),
-          samples: {
-            policySamples: deepClone(samples.policySamples || []),
-            valueSamples: deepClone(samples.valueSamples || []),
-            identitySamples: deepClone(samples.identitySamples || []),
-          },
+          sharedSamples,
+          samples: sharedFamily
+            ? {}
+            : {
+              policySamples: deepClone(samples.policySamples || []),
+              valueSamples: deepClone(samples.valueSamples || []),
+              identitySamples: deepClone(samples.identitySamples || []),
+            },
         });
         return {
           backend: TRAINING_BACKENDS.PYTHON,
@@ -9878,6 +11559,9 @@ class MlRuntime {
           optimizerState: result.optimizerState ? deepClone(result.optimizerState) : null,
           history: Array.isArray(result.history) ? result.history.map((entry) => deepClone(entry)) : [],
           capabilities: backendResolution.capabilities || null,
+          stateExported: true,
+          ampEnabled: result.ampEnabled === true,
+          compileEnabled: result.compileEnabled === true,
         };
       } catch (err) {
         this.logMlEvent('training_batch_python_error', {
@@ -9901,11 +11585,12 @@ class MlRuntime {
       }
     }
 
-    if (String(modelBundle?.family || '').trim().toLowerCase() === SHARED_MODEL_FAMILY) {
+    if (sharedFamily) {
       const result = trainSharedModelBundleBatch(modelBundle, {
         policySamples: deepClone(samples.policySamples || []),
         valueSamples: deepClone(samples.valueSamples || []),
         identitySamples: deepClone(samples.identitySamples || []),
+        sharedSamples,
       }, {
         ...effectiveTrainingOptions,
         epochs: Math.max(1, Number(options.epochs || 1)),
@@ -9917,6 +11602,7 @@ class MlRuntime {
         modelBundle: cloneModelBundle(result.modelBundle || modelBundle),
         optimizerState: deepClone(result.optimizerState || null),
         history: Array.isArray(result.history) ? result.history.map((entry) => deepClone(entry)) : [],
+        stateExported: true,
       };
     }
 
@@ -9969,7 +11655,7 @@ class MlRuntime {
 
     const headResults = await runParallelWorkerTasks(
       headTaskPayloads,
-      clampPositiveInt(options.parallelTrainingHeadWorkers, 1, 1, 3),
+      Math.max(1, Math.min(headTaskPayloads.length || 1, 3)),
       {
         preferWorkerExecution: true,
         runTask: async (taskPayload) => {
@@ -10070,15 +11756,25 @@ class MlRuntime {
   buildRunGameTaskPayload(run, options = {}) {
     const whiteGeneration = Number(options.whiteGeneration);
     const blackGeneration = Number(options.blackGeneration);
+    const phase = options.phase || 'selfplay';
     const whiteParticipant = this.createGenerationParticipant(run, whiteGeneration);
     const blackParticipant = this.createGenerationParticipant(run, blackGeneration);
     if (!whiteParticipant || !blackParticipant) {
       throw new Error(`Missing generation participant for replay/evaluation game ${whiteGeneration} vs ${blackGeneration}`);
     }
+    const curriculum = phase === 'selfplay'
+      && Number.isFinite(Number(options.curriculumGameIndex))
+      && Number.isFinite(Number(run?.config?.curriculumCadence))
+      ? {
+        cadence: Number(run.config.curriculumCadence),
+        gameIndex: Number(options.curriculumGameIndex),
+      }
+      : null;
     return {
       type: 'playGame',
       options: {
         gameId: options.gameId || this.nextId('game'),
+        phase,
         whiteParticipant,
         blackParticipant,
         seed: options.seed,
@@ -10089,6 +11785,7 @@ class MlRuntime {
         riskBias: options.riskBias,
         exploration: options.exploration,
         adaptiveSearch: options.adaptiveSearch !== false,
+        curriculum,
       },
       meta: {
         whiteGeneration,
@@ -10103,9 +11800,13 @@ class MlRuntime {
     const baseSeed = Number.isFinite(options.seed) ? Math.floor(options.seed) : Date.now();
     const checkpointIndex = Number(options.checkpointIndex || 0);
     const gameIndexOffset = clampPositiveInt(options.gameIndexOffset, 0, 0, 1000000);
+    const curriculumBaseGameIndex = phase === 'selfplay'
+      ? Math.max(0, Math.floor(Number(run?.stats?.totalSelfPlayGames || 0)))
+      : null;
     const taskState = options.taskState || null;
     const maxPlies = run?.config?.maxDepth ? Math.max(60, run.config.maxDepth * 8) : 120;
     const taskPayloads = [];
+    const taskTelemetryByGameId = new Map();
 
     for (let index = 0; index < gameCount; index += 1) {
       if (taskState?.cancelRequested) break;
@@ -10115,8 +11816,12 @@ class MlRuntime {
       const blackGeneration = shouldSwap ? Number(options.whiteGeneration) : Number(options.blackGeneration);
       taskPayloads.push(this.buildRunGameTaskPayload(run, {
         gameId: this.nextId('game'),
+        phase,
         whiteGeneration,
         blackGeneration,
+        curriculumGameIndex: phase === 'selfplay'
+          ? (curriculumBaseGameIndex + gameIndex)
+          : null,
         seed: baseSeed + (gameIndex * 7919),
         maxPlies,
         iterations: run?.config?.numMctsSimulationsPerMove,
@@ -10131,18 +11836,80 @@ class MlRuntime {
     const workerCount = resolveParallelGameWorkers(
       run?.config?.parallelGameWorkers,
       taskPayloads.length || gameCount,
+      run?.config?.maxLogicalProcessors,
     );
     const workerPool = this.runTasks.size <= 1 ? this.parallelTaskPool : null;
-
-    const games = await runParallelWorkerTasks(taskPayloads, workerCount, {
+    const taskExecutionOptions = {
       shouldStop: () => Boolean(taskState?.cancelRequested),
       preferWorkerExecution: true,
       workerPool,
+      onTaskProgress: (taskPayload, progress, taskIndex) => {
+        const gameId = taskPayload?.options?.gameId || taskPayloads[taskIndex]?.options?.gameId || null;
+        if (gameId) {
+          taskTelemetryByGameId.set(gameId, {
+            totalSearchDurationMs: Number(progress?.totalSearchDurationMs || 0),
+            timedSearches: Number(progress?.timedSearches || 0),
+            totalForwardPassDurationMs: Number(progress?.totalForwardPassDurationMs || 0),
+            totalForwardPassCount: Number(progress?.totalForwardPassCount || 0),
+          });
+        }
+        if (typeof options.onTaskProgress === 'function') {
+          const totals = Array.from(taskTelemetryByGameId.values()).reduce((acc, entry) => ({
+            totalSearchDurationMs: acc.totalSearchDurationMs + Number(entry?.totalSearchDurationMs || 0),
+            timedSearches: acc.timedSearches + Number(entry?.timedSearches || 0),
+            totalForwardPassDurationMs: acc.totalForwardPassDurationMs + Number(entry?.totalForwardPassDurationMs || 0),
+            totalForwardPassCount: acc.totalForwardPassCount + Number(entry?.totalForwardPassCount || 0),
+          }), {
+            totalSearchDurationMs: 0,
+            timedSearches: 0,
+            totalForwardPassDurationMs: 0,
+            totalForwardPassCount: 0,
+          });
+          options.onTaskProgress({
+            activeGames: taskTelemetryByGameId.size,
+            totalSearchDurationMs: totals.totalSearchDurationMs,
+            timedSearches: totals.timedSearches,
+            averageMctsSearchDurationMs: totals.timedSearches > 0 ? (totals.totalSearchDurationMs / totals.timedSearches) : 0,
+            totalForwardPassDurationMs: totals.totalForwardPassDurationMs,
+            totalForwardPassCount: totals.totalForwardPassCount,
+            averageForwardPassDurationMs: totals.totalForwardPassCount > 0
+              ? (totals.totalForwardPassDurationMs / totals.totalForwardPassCount)
+              : 0,
+          });
+        }
+      },
       runTask: async (taskPayload) => {
         if (taskState?.cancelRequested) return null;
         return this.runSingleGameFast(taskPayload.options || {});
       },
-    });
+    };
+    let games;
+    try {
+      games = await runParallelWorkerTasks(taskPayloads, workerCount, taskExecutionOptions);
+    } catch (err) {
+      const timedOut = String(err?.code || '').trim().toUpperCase() === 'ML_WORKER_TASK_TIMEOUT';
+      if (!timedOut || workerCount <= 1 || !taskPayloads.length) {
+        throw err;
+      }
+      console.warn('[ml-runtime] parallel game batch timed out; retrying sequentially', {
+        runId: run?.id || null,
+        phase,
+        gameCount: taskPayloads.length,
+        workerCount,
+        error: err?.message || String(err || 'unknown'),
+      });
+      this.logRunEvent(run, 'run_game_batch_timeout_retry', {
+        phase,
+        gameCount: taskPayloads.length,
+        workerCount,
+        error: summarizeError(err),
+      });
+      games = await runParallelWorkerTasks(taskPayloads, 1, {
+        ...taskExecutionOptions,
+        preferWorkerExecution: false,
+        workerPool: null,
+      });
+    }
 
     return games
       .map((game, index) => (game ? this.buildRunGameRecord(game, {
@@ -10156,14 +11923,22 @@ class MlRuntime {
 
   getRunEvaluationChunkSize(run, gameCount) {
     const totalGames = clampPositiveInt(gameCount, 1, 1, 400);
-    const workerCount = resolveParallelGameWorkers(run?.config?.parallelGameWorkers, totalGames);
+    const workerCount = resolveParallelGameWorkers(
+      run?.config?.parallelGameWorkers,
+      totalGames,
+      run?.config?.maxLogicalProcessors,
+    );
     const chunkSize = Math.max(workerCount, Math.min(RUN_EVAL_PROGRESS_MAX_CHUNK_GAMES, workerCount * 4));
     return Math.min(totalGames, chunkSize);
   }
 
   getRunSelfPlayChunkSize(run, gameCount) {
     const totalGames = clampPositiveInt(gameCount, 1, 1, 400);
-    const workerCount = resolveParallelGameWorkers(run?.config?.parallelGameWorkers, totalGames);
+    const workerCount = resolveParallelGameWorkers(
+      run?.config?.parallelGameWorkers,
+      totalGames,
+      run?.config?.maxLogicalProcessors,
+    );
     return Math.min(totalGames, workerCount);
   }
 
@@ -10173,28 +11948,40 @@ class MlRuntime {
     const chunkSize = phase === 'selfplay'
       ? this.getRunSelfPlayChunkSize(run, totalGames)
       : this.getRunEvaluationChunkSize(run, totalGames);
-    const allGames = [];
+    const collectGames = options.collectGames !== false;
+    const allGames = collectGames ? [] : null;
+    let completedGameCount = 0;
     for (let completedGames = 0; completedGames < totalGames; completedGames += chunkSize) {
       if (options?.taskState?.cancelRequested) break;
       const nextChunkSize = Math.min(chunkSize, totalGames - completedGames);
+      const chunkStartedAt = Date.now();
       const chunkGames = await this.playRunGenerationGames(run, {
         ...options,
         gameCount: nextChunkSize,
         gameIndexOffset: completedGames,
       });
       if (Array.isArray(chunkGames) && chunkGames.length) {
-        allGames.push(...chunkGames);
+        completedGameCount += chunkGames.length;
+        if (collectGames) {
+          allGames.push(...chunkGames);
+        }
       }
       if (typeof options.onChunk === 'function') {
         await options.onChunk(chunkGames, {
-          completedGames: allGames.length,
+          completedGames: completedGameCount,
           targetGames: totalGames,
           chunkSize: nextChunkSize,
         });
       }
+      this.recordRunGamePhaseWallTime(
+        run,
+        phase,
+        Math.max(0, Date.now() - chunkStartedAt),
+        Array.isArray(chunkGames) ? chunkGames.length : 0,
+      );
       await new Promise((resolve) => setImmediate(resolve));
     }
-    return allGames;
+    return collectGames ? allGames : [];
   }
 
   summarizeGenerationMatchup(games, candidateGeneration, opponentGeneration) {
@@ -10286,9 +12073,40 @@ class MlRuntime {
   }
 
   listRunPromotionOpponents(run, candidateGeneration, limit) {
-    return this.listRunPromotedGenerations(run)
-      .filter((generation) => Number(generation.generation) < Number(candidateGeneration || 0))
-      .slice(0, clampPositiveInt(limit, 3, 1, 10));
+    const baselineGeneration = this.getRunEvaluationTargetGeneration(run);
+    const opponentLimit = clampPositiveInt(limit, 3, 1, 10);
+    const promotedGenerations = this.listRunPromotedGenerations(run)
+      .filter((generation) => (
+        Number(generation.generation) > 0
+        && Number(generation.generation) < Number(candidateGeneration || 0)
+      ));
+    const opponents = [];
+
+    for (let index = 0; index < opponentLimit; index += 1) {
+      const promotedOpponent = promotedGenerations[index] || null;
+      if (promotedOpponent) {
+        opponents.push({
+          generation: Number(promotedOpponent.generation),
+          label: promotedOpponent.label || `G${promotedOpponent.generation}`,
+          chartLabel: `promotion vs G${Number(promotedOpponent.generation)}`,
+          seriesKey: `promotion:${Number(promotedOpponent.generation)}`,
+          isBaselineFallback: false,
+          sequenceIndex: index + 1,
+        });
+        continue;
+      }
+
+      opponents.push({
+        generation: Number(baselineGeneration || 0),
+        label: `G${Number(baselineGeneration || 0)}`,
+        chartLabel: `promotion fallback ${index + 1} vs G${Number(baselineGeneration || 0)}`,
+        seriesKey: `promotion_fallback:${Number(baselineGeneration || 0)}:${index + 1}`,
+        isBaselineFallback: true,
+        sequenceIndex: index + 1,
+      });
+    }
+
+    return opponents;
   }
 
   recordRunEvaluationGames(run, candidateGenerationRecord, games = []) {
@@ -10336,6 +12154,22 @@ class MlRuntime {
       completedGames: Number(options.completedGames || 0),
       targetGames: Number(options.targetGames || 0),
       latestGameId: options.latestGameId || null,
+      activeGames: Number(options.activeGames || 0),
+      averageMctsSearchDurationMs: Number(options.averageMctsSearchDurationMs || 0),
+      averageForwardPassDurationMs: Number(options.averageForwardPassDurationMs || 0),
+    };
+  }
+
+  buildRunTrainingProgress(options = {}) {
+    return {
+      active: options.active !== false,
+      cycle: Number(options.cycle || 0),
+      completedSteps: Number(options.completedSteps || 0),
+      targetSteps: Number(options.targetSteps || 0),
+      checkpointIndex: Number(options.checkpointIndex || 0),
+      background: options.background === true,
+      trainingBackend: options.trainingBackend || null,
+      trainingDevice: options.trainingDevice || null,
     };
   }
 
@@ -10349,7 +12183,6 @@ class MlRuntime {
       latestGameId: options.latestGameId || null,
       replayBuffer: options.replayBuffer || this.summarizeRunReplayBuffer(run),
     });
-    await this.maybeSaveRunState(run);
     return progress;
   }
 
@@ -10366,13 +12199,37 @@ class MlRuntime {
     this.emitRunProgress(run, 'evaluation', {
       evaluationProgress: progress,
     });
-    await this.maybeSaveRunState(run);
     return progress;
   }
 
   clearRunEvaluationProgress(run) {
     if (!run?.working) return;
     run.working.evaluationProgress = null;
+  }
+
+  isSharedFamilyRun(run) {
+    if (!run || typeof run !== 'object') return false;
+    if (isSharedFamilyModelBundle(run?.working?.modelBundle)) {
+      return true;
+    }
+    return (run?.generations || []).some((generation) => isSharedFamilyModelBundle(generation?.modelBundle));
+  }
+
+  async updateRunTrainingProgress(run, options = {}) {
+    if (!run?.working) run.working = {};
+    const progress = this.buildRunTrainingProgress(options);
+    run.working.trainingProgress = progress;
+    run.updatedAt = nowIso();
+    this.emitRunProgress(run, 'training', {
+      trainingProgress: progress,
+      latestLoss: options.latestLoss ? deepClone(options.latestLoss) : run.working?.lastLoss || null,
+    });
+    return progress;
+  }
+
+  clearRunTrainingProgress(run) {
+    if (!run?.working) return;
+    run.working.trainingProgress = null;
   }
 
   createEvaluationTooltipSections(evaluation) {
@@ -10392,13 +12249,18 @@ class MlRuntime {
       });
     };
 
-    appendSection('Baseline', this.getEvaluationBaselineInfo(evaluation));
-    appendSection('Pre-promotion', evaluation?.prePromotionTest, {
-      passed: evaluation?.prePromotionPassed,
-      requiredWinRate: evaluation?.prePromotionRequiredWinRate,
+    appendSection('Baseline', this.getEvaluationBaselineInfo(evaluation), {
+      passed: evaluation?.baselinePassed,
+      requiredWinRate: evaluation?.baselineRequiredWinRate,
     });
+    if (evaluation?.prePromotionTest && evaluation?.baselinePassed === undefined) {
+      appendSection('Pre-promotion', evaluation.prePromotionTest, {
+        passed: evaluation?.prePromotionPassed,
+        requiredWinRate: evaluation?.prePromotionRequiredWinRate,
+      });
+    }
     (evaluation?.promotionTests || []).forEach((entry) => {
-      appendSection('Promotion', entry, {
+      appendSection(entry?.title || 'Promotion', entry, {
         passed: entry?.passed,
         requiredWinRate: evaluation?.promotionTestRequiredWinRate,
       });
@@ -10406,21 +12268,72 @@ class MlRuntime {
     return sections;
   }
 
+  applyRunGenerationEvaluation(run, candidateGeneration, evaluation) {
+    if (!run || !candidateGeneration || !evaluation) return;
+    candidateGeneration.pendingEvaluation = false;
+    candidateGeneration.promotionEvaluation = deepClone(evaluation);
+    run.evaluationHistory.push(deepClone(evaluation));
+    if (run.evaluationHistory.length > 500) {
+      run.evaluationHistory.shift();
+    }
+    if (evaluation.promoted) {
+      candidateGeneration.approved = true;
+      candidateGeneration.isBest = true;
+      candidateGeneration.source = 'promoted';
+      candidateGeneration.promotedAt = nowIso();
+      this.markRunBestGeneration(run, candidateGeneration.generation);
+      run.working.baseGeneration = candidateGeneration.generation;
+      run.stats.totalPromotions = Number(run.stats.totalPromotions || 0) + 1;
+      run.stats.failedPromotions = 0;
+      this.refreshRunWorkerGeneration(run);
+      this.emitRunProgress(run, 'promotion', {
+        latestEvaluation: evaluation,
+        promotedGeneration: candidateGeneration.generation,
+      });
+      return;
+    }
+    candidateGeneration.modelBundle = null;
+    run.stats.failedPromotions = Number(run.stats.failedPromotions || 0) + 1;
+    this.emitRunProgress(run, 'evaluation', {
+      latestEvaluation: evaluation,
+    });
+  }
+
+  async evaluatePendingRunGeneration(run, taskState) {
+    const pendingEvaluation = run?.working?.pendingEvaluation || null;
+    if (!pendingEvaluation) return null;
+    const candidateGeneration = this.getRunGeneration(run, Number(pendingEvaluation.generation));
+    run.working.pendingEvaluation = null;
+    if (!candidateGeneration) {
+      return null;
+    }
+    const evaluation = await this.evaluateRunGeneration(run, candidateGeneration, taskState);
+    if (this.shouldAbortRunTask(run.id, taskState)) {
+      return null;
+    }
+    this.applyRunGenerationEvaluation(run, candidateGeneration, evaluation);
+    run.updatedAt = nowIso();
+    await this.appendRunJournalSnapshot(run, 'training_evaluation_step', {
+      includeRetainedGames: true,
+      includeWorkingState: true,
+    });
+    await this.maybeSaveRunState(run);
+    return evaluation;
+  }
+
   async evaluateRunGeneration(run, candidateGenerationRecord, taskState) {
     const bestGeneration = Math.max(0, Number(run.bestGeneration || 0));
     const candidateGeneration = Number(candidateGenerationRecord?.generation || 0);
     const baselineTargetGeneration = this.getRunEvaluationTargetGeneration(run);
-    const prePromotionGamesRequired = clampPositiveInt(run?.config?.prePromotionTestGames, 50, 1, 400);
-    const prePromotionWinRateRequired = normalizeFloat(run?.config?.prePromotionTestWinRate, 0.55, 0, 1);
-    const promotionTestGamesRequired = clampPositiveInt(run?.config?.promotionTestGames, 100, 1, 400);
+    const baselineGamesRequired = clampPositiveInt(run?.config?.prePromotionTestGames, 50, 1, 400);
+    const baselineWinRateRequired = normalizeFloat(run?.config?.prePromotionTestWinRate, 0.55, 0, 1);
+    const promotionTestGamesRequired = clampPositiveInt(run?.config?.promotionTestGames, 50, 1, 400);
     const promotionTestWinRateRequired = normalizeFloat(run?.config?.promotionTestWinRate, 0.55, 0, 1);
     const promotionOpponentLimit = clampPositiveInt(run?.config?.promotionTestPriorGenerations, 3, 1, 10);
     const checkpointIndex = Number(run.working?.checkpointIndex || 0);
     const baselineGames = [];
-    const prePromotionGames = [];
     let baselineInfo = null;
-    let prePromotionTest = null;
-    let prePromotionPassed = false;
+    let baselinePassed = false;
     let targetPerfectSweepStreak = 0;
     let targetAdvanced = false;
     let nextEvaluationTargetGeneration = baselineTargetGeneration;
@@ -10431,7 +12344,7 @@ class MlRuntime {
         phase: 'evaluation',
         whiteGeneration: candidateGeneration,
         blackGeneration: baselineTargetGeneration,
-        gameCount: RUN_EVAL_BASELINE_GAMES,
+        gameCount: baselineGamesRequired,
         checkpointIndex,
         taskState,
         onChunk: async (chunkGames, progressState) => {
@@ -10451,6 +12364,7 @@ class MlRuntime {
             opponentLabel: `G${baselineTargetGeneration}`,
             completedGames: progressState.completedGames,
             targetGames: progressState.targetGames,
+            requiredWinRate: baselineWinRateRequired,
             summary,
           });
         },
@@ -10460,59 +12374,13 @@ class MlRuntime {
         candidateGeneration,
         baselineTargetGeneration,
       );
-      const previousPerfectSweepStreak = this.countRunBaselinePerfectSweepStreak(run, baselineTargetGeneration);
-      targetPerfectSweepStreak = Number(baselineInfo?.winRate || 0) >= 1
-        ? previousPerfectSweepStreak + 1
-        : 0;
-      nextEvaluationTargetGeneration = targetPerfectSweepStreak >= RUN_EVAL_BASELINE_ADVANCE_STREAK
-        ? this.advanceRunEvaluationTargetGeneration(run, baselineTargetGeneration)
-        : baselineTargetGeneration;
-      targetAdvanced = Number(nextEvaluationTargetGeneration) !== baselineTargetGeneration;
-      if (!targetAdvanced) {
-        run.evaluationTargetGeneration = baselineTargetGeneration;
-      }
-
-      const playedPrePromotionGames = await this.playRunGenerationGamesChunked(run, {
-        phase: 'evaluation',
-        whiteGeneration: candidateGeneration,
-        blackGeneration: bestGeneration,
-        gameCount: prePromotionGamesRequired,
-        checkpointIndex,
-        taskState,
-        onChunk: async (chunkGames, progressState) => {
-          prePromotionGames.push(...(Array.isArray(chunkGames) ? chunkGames : []));
-          this.recordRunEvaluationGames(run, candidateGenerationRecord, chunkGames);
-          const summary = this.summarizeGenerationMatchup(
-            prePromotionGames,
-            candidateGeneration,
-            bestGeneration,
-          );
-          await this.updateRunEvaluationProgress(run, {
-            checkpointIndex,
-            candidateGeneration,
-            stage: 'pre_promotion',
-            stageLabel: 'Pre-promotion',
-            opponentGeneration: bestGeneration,
-            opponentLabel: `G${bestGeneration}`,
-            completedGames: progressState.completedGames,
-            targetGames: progressState.targetGames,
-            requiredWinRate: prePromotionWinRateRequired,
-            summary,
-          });
-        },
-      });
-      prePromotionTest = this.summarizeGenerationMatchup(
-        playedPrePromotionGames,
-        candidateGeneration,
-        bestGeneration,
-      );
-      prePromotionPassed = Boolean(
-        prePromotionTest
-        && Number(prePromotionTest.winRate || 0) >= prePromotionWinRateRequired
+      baselinePassed = Boolean(
+        baselineInfo
+        && Number(baselineInfo.winRate || 0) >= baselineWinRateRequired
       );
 
       const promotionOpponents = this.listRunPromotionOpponents(run, candidateGeneration, promotionOpponentLimit);
-      if (prePromotionPassed && !taskState?.cancelRequested) {
+      if (baselinePassed && !taskState?.cancelRequested) {
         for (const opponent of promotionOpponents) {
           const promotionGames = [];
           const opponentGeneration = Number(opponent.generation);
@@ -10536,7 +12404,9 @@ class MlRuntime {
                 checkpointIndex,
                 candidateGeneration,
                 stage: 'promotion',
-                stageLabel: 'Promotion',
+                stageLabel: opponent.isBaselineFallback
+                  ? `Promotion Fallback ${Number(opponent.sequenceIndex || 1)}`
+                  : 'Promotion',
                 opponentGeneration,
                 opponentLabel,
                 completedGames: progressState.completedGames,
@@ -10554,22 +12424,38 @@ class MlRuntime {
           promotionTests.push({
             ...summary,
             label: opponentLabel,
+            title: opponent.isBaselineFallback
+              ? `Promotion Fallback ${Number(opponent.sequenceIndex || 1)}`
+              : 'Promotion',
+            chartLabel: opponent.chartLabel || `promotion vs G${opponentGeneration}`,
+            seriesKey: opponent.seriesKey || `promotion:${opponentGeneration}`,
+            isBaselineFallback: opponent.isBaselineFallback === true,
+            sequenceIndex: Number(opponent.sequenceIndex || promotionTests.length + 1),
             passed: Boolean(summary && Number(summary.winRate || 0) >= promotionTestWinRateRequired),
           });
+          if (!promotionTests[promotionTests.length - 1]?.passed) {
+            break;
+          }
         }
       }
 
       const promoted = Boolean(
-        prePromotionPassed
-        && promotionTests.length > 0
+        baselinePassed
+        && promotionTests.length === promotionOpponentLimit
         && promotionTests.every((entry) => entry?.passed)
       );
+      const baselinePerfectSweep = Number(baselineInfo?.winRate || 0) >= 1;
+      targetAdvanced = Boolean(promoted && baselinePerfectSweep);
+      targetPerfectSweepStreak = targetAdvanced ? 1 : 0;
+      nextEvaluationTargetGeneration = targetAdvanced
+        ? candidateGeneration
+        : baselineTargetGeneration;
+      run.evaluationTargetGeneration = nextEvaluationTargetGeneration;
       const tooltipSections = this.createEvaluationTooltipSections({
         baselineInfo,
         gen0Info: baselineInfo,
-        prePromotionTest,
-        prePromotionPassed,
-        prePromotionRequiredWinRate: prePromotionWinRateRequired,
+        baselinePassed,
+        baselineRequiredWinRate: baselineWinRateRequired,
         promotionTests,
         promotionTestRequiredWinRate: promotionTestWinRateRequired,
       });
@@ -10583,27 +12469,24 @@ class MlRuntime {
         promoted,
         baselineInfo,
         gen0Info: baselineInfo,
-        prePromotionTest: prePromotionTest
-          ? {
-            ...prePromotionTest,
-            passed: prePromotionPassed,
-          }
-          : null,
-        prePromotionPassed,
-        prePromotionRequiredWinRate: prePromotionWinRateRequired,
+        baselinePassed,
+        baselineRequiredWinRate: baselineWinRateRequired,
+        prePromotionTest: null,
+        prePromotionPassed: null,
+        prePromotionRequiredWinRate: null,
         promotionTests,
         promotionTestGames: promotionTestGamesRequired,
         promotionTestRequiredWinRate: promotionTestWinRateRequired,
         promotionOpponentLimit,
-        againstBest: prePromotionTest,
+        againstBest: promotionTests[0] || null,
         againstTarget: baselineInfo,
         againstGenerations: promotionTests,
         targetGeneration: baselineTargetGeneration,
-        targetWinRateThreshold: null,
+        targetWinRateThreshold: baselineWinRateRequired,
         targetAdvanced,
         targetAdvancedToGeneration: targetAdvanced ? nextEvaluationTargetGeneration : baselineTargetGeneration,
         targetPerfectSweepStreak,
-        targetPerfectSweepRequired: RUN_EVAL_BASELINE_ADVANCE_STREAK,
+        targetPerfectSweepRequired: 1,
         tooltipSections,
         loss: candidateGenerationRecord.latestLoss ? deepClone(candidateGenerationRecord.latestLoss) : null,
       };
@@ -10612,117 +12495,190 @@ class MlRuntime {
     }
   }
 
-  async trainRunWorkingModel(run, taskState) {
+  async trainRunWorkingModel(run, taskState, options = {}) {
     const steps = clampPositiveInt(run?.config?.trainingStepsPerCycle, 1, 1, 5000);
     const losses = [];
-    for (let stepIndex = 0; stepIndex < steps; stepIndex += 1) {
-      if (taskState?.cancelRequested) break;
-      const batch = this.sampleReplayBufferSamples(run);
-      if (!batch.policySamples.length && !batch.valueSamples.length && !batch.identitySamples.length) {
-        break;
-      }
-      const trainingOptions = {
-        learningRate: run?.config?.learningRate,
-        batchSize: run?.config?.batchSize,
-        weightDecay: run?.config?.weightDecay,
-        gradientClipNorm: run?.config?.gradientClipNorm,
-      };
-      const trainingResult = await this.trainModelBundleBatch({
-        modelBundle: run.working.modelBundle,
-        optimizerState: run.working.optimizerState,
-        samples: batch,
-        ...trainingOptions,
-        epochs: 1,
-        trainingBackend: run?.config?.trainingBackend,
-        trainingDevicePreference: run?.config?.trainingDevicePreference,
-        parallelTrainingHeadWorkers: run?.config?.parallelTrainingHeadWorkers,
-        debugContext: {
-          runId: run.id,
-          cycle: Number(run.stats?.cycle || 0),
-          step: Number(run.stats?.totalTrainingSteps || 0) + 1,
-          checkpointIndex: Number(run.working?.checkpointIndex || 0),
-          source: 'continuous_run_training',
-        },
+    const checkpointInterval = clampPositiveInt(
+      run.config?.checkpointInterval,
+      DEFAULT_RUN_CHECKPOINT_INTERVAL,
+      1,
+      100000,
+    );
+    const sessionId = isSharedFamilyModelBundle(run?.working?.modelBundle)
+      ? this.ensureSharedTrainingSession(taskState, `run:${run?.id || taskState?.id || 'unknown'}`)
+      : null;
+    let exportedSessionState = null;
+    try {
+      await this.updateRunTrainingProgress(run, {
+        cycle: Number(run.stats?.cycle || 0),
+        completedSteps: 0,
+        targetSteps: steps,
+        checkpointIndex: Number(run.working?.checkpointIndex || 0),
+        background: options.deferEvaluation === true,
+        trainingBackend: null,
+        trainingDevice: null,
       });
-      if (this.shouldAbortRunTask(run.id, taskState)) {
-        return losses;
-      }
-      run.working.modelBundle = trainingResult.modelBundle;
-      run.working.optimizerState = trainingResult.optimizerState || run.working.optimizerState;
-      const latestMetrics = Array.isArray(trainingResult.history) && trainingResult.history.length
-        ? trainingResult.history[trainingResult.history.length - 1]
-        : {};
-
-      const lossEntry = {
-        step: Number(run.stats?.totalTrainingSteps || 0) + 1,
-        policyLoss: Number(latestMetrics.policyLoss || 0),
-        valueLoss: Number(latestMetrics.valueLoss || 0),
-        identityLoss: Number(latestMetrics.identityLoss || 0),
-        identityAccuracy: Number(latestMetrics.identityAccuracy || 0),
-        policySamples: Number(latestMetrics.policySamples || 0),
-        valueSamples: Number(latestMetrics.valueSamples || 0),
-        identitySamples: Number(latestMetrics.identitySamples || 0),
-        trainingBackend: trainingResult.backend || TRAINING_BACKENDS.NODE,
-        trainingDevice: trainingResult.device || TRAINING_DEVICE_PREFERENCES.CPU,
-      };
-      run.working.lastLoss = deepClone(lossEntry);
-      run.stats.totalTrainingSteps = Number(run.stats.totalTrainingSteps || 0) + 1;
-      losses.push(lossEntry);
-      this.emitRunProgress(run, 'training', {
-        latestLoss: lossEntry,
-      });
-      let didEvaluateThisStep = false;
-      if ((run.stats.totalTrainingSteps % clampPositiveInt(run.config?.checkpointInterval, DEFAULT_RUN_CHECKPOINT_INTERVAL, 1, 100000)) === 0) {
-        run.working.checkpointIndex = Number(run.working.checkpointIndex || 0) + 1;
-        const candidateGeneration = this.createRunGenerationRecord(run, {
-          generation: this.getNextRunGenerationNumber(run),
-          label: `G${this.getNextRunGenerationNumber(run)}`,
-          source: 'candidate',
+      for (let stepIndex = 0; stepIndex < steps; stepIndex += 1) {
+        if (taskState?.cancelRequested) break;
+        const batch = this.sampleReplayBufferSamples(run);
+        if (!batch.policySamples.length && !batch.valueSamples.length && !batch.identitySamples.length) {
+          break;
+        }
+        const trainingOptions = {
+          learningRate: run?.config?.learningRate,
+          batchSize: run?.config?.batchSize,
+          weightDecay: run?.config?.weightDecay,
+          gradientClipNorm: run?.config?.gradientClipNorm,
+          maxLogicalProcessors: run?.config?.maxLogicalProcessors,
+        };
+        const nextTrainingStepNumber = Number(run.stats?.totalTrainingSteps || 0) + 1;
+        const shouldCheckpointThisStep = (nextTrainingStepNumber % checkpointInterval) === 0;
+        const shouldExportAfterStep = Boolean(sessionId) && (
+          shouldCheckpointThisStep
+          || stepIndex === (steps - 1)
+        );
+        const trainingStepStartedAt = Date.now();
+        const trainingResult = await this.trainModelBundleBatch({
           modelBundle: run.working.modelBundle,
-          parentGeneration: run.bestGeneration,
-          approved: false,
-          isBest: false,
-          latestLoss: lossEntry,
+          optimizerState: run.working.optimizerState,
+          samples: batch,
+          ...trainingOptions,
+          epochs: 1,
+          trainingBackend: run?.config?.trainingBackend,
+          trainingDevicePreference: run?.config?.trainingDevicePreference,
+          trainingSessionId: sessionId,
+          resetTrainingSession: taskState?.trainingSessionNeedsReset === true,
+          exportTrainingState: shouldExportAfterStep,
+          includeOptimizerState: true,
+          debugContext: {
+            runId: run.id,
+            cycle: Number(run.stats?.cycle || 0),
+            step: nextTrainingStepNumber,
+            checkpointIndex: Number(run.working?.checkpointIndex || 0),
+            source: options.deferEvaluation === true
+              ? 'continuous_run_background_training'
+              : 'continuous_run_training',
+          },
         });
-        run.generations.push(candidateGeneration);
-        const evaluation = await this.evaluateRunGeneration(run, candidateGeneration, taskState);
+        const trainingStepDurationMs = Math.max(0, Date.now() - parseTimeValue(trainingStepStartedAt));
+        if (sessionId) {
+          taskState.trainingSessionNeedsReset = false;
+          taskState.trainingSessionDirty = trainingResult.stateExported !== true;
+        }
         if (this.shouldAbortRunTask(run.id, taskState)) {
           return losses;
         }
-        didEvaluateThisStep = true;
-        candidateGeneration.promotionEvaluation = deepClone(evaluation);
-        run.evaluationHistory.push(deepClone(evaluation));
-        if (run.evaluationHistory.length > 500) {
-          run.evaluationHistory.shift();
+        if (trainingResult.stateExported === true) {
+          exportedSessionState = {
+            modelBundle: cloneModelBundle(trainingResult.modelBundle),
+            optimizerState: deepClone(trainingResult.optimizerState || null),
+          };
+          run.working.modelBundle = exportedSessionState.modelBundle;
+          run.working.optimizerState = exportedSessionState.optimizerState;
+        } else if (!sessionId) {
+          run.working.modelBundle = trainingResult.modelBundle;
+          run.working.optimizerState = trainingResult.optimizerState || run.working.optimizerState;
         }
-        if (evaluation.promoted) {
-          candidateGeneration.approved = true;
-          candidateGeneration.isBest = true;
-          candidateGeneration.source = 'promoted';
-          candidateGeneration.promotedAt = nowIso();
-          this.markRunBestGeneration(run, candidateGeneration.generation);
-          run.working.baseGeneration = candidateGeneration.generation;
-          run.stats.totalPromotions = Number(run.stats.totalPromotions || 0) + 1;
-          run.stats.failedPromotions = 0;
-          this.refreshRunWorkerGeneration(run);
-          this.emitRunProgress(run, 'promotion', {
-            latestEvaluation: evaluation,
-            promotedGeneration: candidateGeneration.generation,
+        const latestMetrics = Array.isArray(trainingResult.history) && trainingResult.history.length
+          ? trainingResult.history[trainingResult.history.length - 1]
+          : {};
+
+        const lossEntry = {
+          step: Number(run.stats?.totalTrainingSteps || 0) + 1,
+          policyLoss: Number(latestMetrics.policyLoss || 0),
+          valueLoss: Number(latestMetrics.valueLoss || 0),
+          identityLoss: Number(latestMetrics.identityLoss || 0),
+          identityAccuracy: Number(latestMetrics.identityAccuracy || 0),
+          policySamples: Number(latestMetrics.policySamples || 0),
+          valueSamples: Number(latestMetrics.valueSamples || 0),
+          identitySamples: Number(latestMetrics.identitySamples || 0),
+          trainingBackend: trainingResult.backend || TRAINING_BACKENDS.NODE,
+          trainingDevice: trainingResult.device || TRAINING_DEVICE_PREFERENCES.CPU,
+        };
+        run.working.lastLoss = deepClone(lossEntry);
+        run.stats.totalTrainingSteps = Number(run.stats.totalTrainingSteps || 0) + 1;
+        run.stats.timedTrainingSteps = Number(run.stats.timedTrainingSteps || 0) + 1;
+        run.stats.totalTrainingStepDurationMs = Number(run.stats.totalTrainingStepDurationMs || 0) + trainingStepDurationMs;
+        run.stats.averageTrainingStepDurationMs = Number(run.stats.timedTrainingSteps || 0) > 0
+          ? (Number(run.stats.totalTrainingStepDurationMs || 0) / Number(run.stats.timedTrainingSteps || 1))
+          : 0;
+        losses.push(lossEntry);
+        await this.updateRunTrainingProgress(run, {
+          cycle: Number(run.stats?.cycle || 0),
+          completedSteps: stepIndex + 1,
+          targetSteps: steps,
+          checkpointIndex: Number(run.working?.checkpointIndex || 0),
+          background: options.deferEvaluation === true,
+          trainingBackend: lossEntry.trainingBackend,
+          trainingDevice: lossEntry.trainingDevice,
+          latestLoss: lossEntry,
+        });
+        let didEvaluateThisStep = false;
+        if (shouldCheckpointThisStep) {
+          if (sessionId && trainingResult.stateExported !== true) {
+            const exported = await this.exportSharedTrainingSession(taskState, {
+              includeOptimizerState: true,
+            });
+            if (exported?.modelBundle) {
+              exportedSessionState = {
+                modelBundle: cloneModelBundle(exported.modelBundle),
+                optimizerState: deepClone(exported.optimizerState || null),
+              };
+              run.working.modelBundle = exportedSessionState.modelBundle;
+              run.working.optimizerState = exportedSessionState.optimizerState;
+            }
+          }
+          run.working.checkpointIndex = Number(run.working.checkpointIndex || 0) + 1;
+          const nextGenerationNumber = this.getNextRunGenerationNumber(run);
+          const candidateGeneration = this.createRunGenerationRecord(run, {
+            generation: nextGenerationNumber,
+            label: `G${nextGenerationNumber}`,
+            source: 'candidate',
+            modelBundle: run.working.modelBundle,
+            parentGeneration: run.bestGeneration,
+            approved: false,
+            isBest: false,
+            latestLoss: lossEntry,
           });
-        } else {
-          candidateGeneration.modelBundle = null;
-          run.stats.failedPromotions = Number(run.stats.failedPromotions || 0) + 1;
-          this.emitRunProgress(run, 'evaluation', {
-            latestEvaluation: evaluation,
-          });
+          candidateGeneration.pendingEvaluation = options.deferEvaluation === true;
+          run.generations.push(candidateGeneration);
+          if (options.deferEvaluation === true) {
+            run.working.pendingEvaluation = {
+              generation: Number(candidateGeneration.generation || 0),
+              checkpointIndex: Number(run.working.checkpointIndex || 0),
+              queuedAt: nowIso(),
+            };
+            run.updatedAt = nowIso();
+            await this.appendRunJournalSnapshot(run, 'training_checkpoint_pending_evaluation', {
+              includeWorkingState: true,
+            });
+            break;
+          }
+          const evaluation = await this.evaluateRunGeneration(run, candidateGeneration, taskState);
+          if (this.shouldAbortRunTask(run.id, taskState)) {
+            return losses;
+          }
+          didEvaluateThisStep = true;
+          this.applyRunGenerationEvaluation(run, candidateGeneration, evaluation);
+        }
+        run.updatedAt = nowIso();
+        await this.appendRunJournalSnapshot(run, didEvaluateThisStep ? 'training_evaluation_step' : 'training_step', {
+          includeRetainedGames: didEvaluateThisStep,
+          includeWorkingState: true,
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    } finally {
+      if (sessionId && taskState && taskState.trainingSessionDirty === true) {
+        const exported = await this.exportSharedTrainingSession(taskState, {
+          includeOptimizerState: true,
+        }).catch(() => null);
+        if (exported?.modelBundle) {
+          run.working.modelBundle = cloneModelBundle(exported.modelBundle);
+          run.working.optimizerState = deepClone(exported.optimizerState || null);
         }
       }
-      run.updatedAt = nowIso();
-      await this.appendRunJournalSnapshot(run, didEvaluateThisStep ? 'training_evaluation_step' : 'training_step', {
-        includeRetainedGames: didEvaluateThisStep,
-        includeWorkingState: true,
-      });
-      await new Promise((resolve) => setImmediate(resolve));
+      this.clearRunTrainingProgress(run);
     }
     return losses;
   }
@@ -10758,20 +12714,37 @@ class MlRuntime {
     return null;
   }
 
-  recordRunMetrics(run, selfPlayGames = []) {
+  recordRunMetrics(run, selfPlayMetricsOrGames = [], options = {}) {
     if (!run) return;
-    const selfPlayMetrics = this.computeRunSelfPlayMetrics(selfPlayGames);
+    const selfPlayMetrics = Array.isArray(selfPlayMetricsOrGames)
+      ? this.computeRunSelfPlayMetrics(selfPlayMetricsOrGames)
+      : this.finalizeRunSelfPlayMetrics(selfPlayMetricsOrGames);
+    const selfPlayGameCount = Array.isArray(selfPlayMetricsOrGames)
+      ? selfPlayMetricsOrGames.length
+      : Number(options.gameCount || selfPlayMetrics?.gameCount || 0);
     const previousSelfPlayGames = Number(run.stats.totalSelfPlayGames || 0);
-    const nextSelfPlayGames = previousSelfPlayGames + selfPlayGames.length;
+    const nextSelfPlayGames = previousSelfPlayGames + selfPlayGameCount;
     run.stats.averageGameLength = nextSelfPlayGames > 0
       ? (
         ((Number(run.stats.averageGameLength || 0) * previousSelfPlayGames)
-        + (selfPlayMetrics.averageGameLength * selfPlayGames.length))
+        + (selfPlayMetrics.averageGameLength * selfPlayGameCount))
         / nextSelfPlayGames
       )
       : 0;
     run.stats.policyEntropy = selfPlayMetrics.policyEntropy || Number(run.stats.policyEntropy || 0);
     run.stats.moveDiversity = selfPlayMetrics.moveDiversity || Number(run.stats.moveDiversity || 0);
+    run.stats.timedMctsSearches = Number(run.stats.timedMctsSearches || 0) + Number(selfPlayMetrics.timedMctsSearches || 0);
+    run.stats.totalMctsSearchDurationMs = Number(run.stats.totalMctsSearchDurationMs || 0) + Number(selfPlayMetrics.totalMctsSearchDurationMs || 0);
+    run.stats.averageMctsSearchDurationMs = Number(run.stats.timedMctsSearches || 0) > 0
+      ? (Number(run.stats.totalMctsSearchDurationMs || 0) / Number(run.stats.timedMctsSearches || 1))
+      : 0;
+    run.stats.totalForwardPasses = Number(run.stats.totalForwardPasses || 0) + Number(selfPlayMetrics.totalForwardPassCount || 0);
+    run.stats.totalForwardPassDurationMs = Number(run.stats.totalForwardPassDurationMs || 0) + Number(selfPlayMetrics.totalForwardPassDurationMs || 0);
+    run.stats.averageForwardPassDurationMs = Number(run.stats.totalForwardPasses || 0) > 0
+      ? (Number(run.stats.totalForwardPassDurationMs || 0) / Number(run.stats.totalForwardPasses || 1))
+      : 0;
+    const diagnostics = this.summarizeRunDiagnostics(run);
+    run.stats.latestDiagnostics = diagnostics ? deepClone(diagnostics) : null;
     const entry = {
       timestamp: nowIso(),
       cycle: Number(run.stats?.cycle || 0),
@@ -10786,10 +12759,18 @@ class MlRuntime {
         : null,
       averageSelfPlayGameDurationMs: Number(run.stats?.averageSelfPlayGameDurationMs || 0),
       averageEvaluationGameDurationMs: Number(run.stats?.averageEvaluationGameDurationMs || 0),
+      averageSelfPlayConcurrency: Number(run.stats?.averageSelfPlayConcurrency || 0),
+      averageEvaluationConcurrency: Number(run.stats?.averageEvaluationConcurrency || 0),
+      averageSelfPlayNetDurationMs: Number(run.stats?.averageSelfPlayNetDurationMs || 0),
+      averageEvaluationNetDurationMs: Number(run.stats?.averageEvaluationNetDurationMs || 0),
+      averageTrainingStepDurationMs: Number(run.stats?.averageTrainingStepDurationMs || 0),
+      averageMctsSearchDurationMs: Number(run.stats?.averageMctsSearchDurationMs || 0),
+      averageForwardPassDurationMs: Number(run.stats?.averageForwardPassDurationMs || 0),
       elapsedMs: computeRunElapsedMs(run),
       averageGameLength: Number(run.stats.averageGameLength || 0),
       policyEntropy: Number(run.stats.policyEntropy || 0),
       moveDiversity: Number(run.stats.moveDiversity || 0),
+      diagnostics: diagnostics ? deepClone(diagnostics) : null,
     };
     run.metricsHistory = Array.isArray(run.metricsHistory) ? run.metricsHistory : [];
     run.metricsHistory.push(entry);
@@ -10814,8 +12795,21 @@ class MlRuntime {
       if (this.shouldAbortRunTask(run.id, taskState)) {
         return;
       }
+      if (run?.working?.pendingEvaluation) {
+        await this.awaitRunBackgroundTraining(run, taskState);
+        if (this.shouldAbortRunTask(run.id, taskState)) {
+          return;
+        }
+        await this.evaluatePendingRunGeneration(run, taskState);
+        if (this.shouldAbortRunTask(run.id, taskState)) {
+          return;
+        }
+      } else if (!this.hasRunBackgroundTraining(taskState) && taskState?.trainingError) {
+        await this.awaitRunBackgroundTraining(run, taskState);
+      }
       const stopReasonBeforeCycle = this.determineRunStopReason(run, taskState);
       if (stopReasonBeforeCycle) {
+        taskState.cancelRequested = true;
         run.stopReason = stopReasonBeforeCycle;
         run.status = (stopReasonBeforeCycle === 'manual_stop' || stopReasonBeforeCycle === 'manual_kill')
           ? 'stopped'
@@ -10833,9 +12827,23 @@ class MlRuntime {
       this.refreshRunWorkerGeneration(run);
       const workerGeneration = Number(run.workerGeneration || run.bestGeneration || 0);
       const opponentGeneration = this.chooseRunSelfPlayOpponentGeneration(run, rng);
-      const selfPlayGames = [];
+      let selfPlayGameCount = 0;
+      const selfPlayMetrics = this.createRunSelfPlayMetricsAccumulator();
+      await this.updateRunSelfPlayProgress(run, {
+        cycle: Number(run.stats.cycle || 0),
+        workerGeneration,
+        opponentGeneration,
+        completedGames: 0,
+        targetGames: Number(run.config?.numSelfplayWorkers || 0),
+        latestGameId: null,
+        activeGames: 0,
+        averageMctsSearchDurationMs: 0,
+        averageForwardPassDurationMs: 0,
+        replayBuffer: this.summarizeRunReplayBuffer(run),
+      });
       await this.playRunGenerationGamesChunked(run, {
         phase: 'selfplay',
+        collectGames: false,
         whiteGeneration: workerGeneration,
         blackGeneration: opponentGeneration,
         gameCount: run.config?.numSelfplayWorkers,
@@ -10843,10 +12851,25 @@ class MlRuntime {
         taskState,
         alternateColors: true,
         seed: (Number(run.config?.seed) || Date.now()) + (Number(run.stats?.cycle || 0) * 10007),
+        onTaskProgress: async (taskProgress) => {
+          await this.updateRunSelfPlayProgress(run, {
+            cycle: Number(run.stats.cycle || 0),
+            workerGeneration,
+            opponentGeneration,
+            completedGames: Number(selfPlayGameCount || 0),
+            targetGames: Number(run.config?.numSelfplayWorkers || 0),
+            latestGameId: null,
+            activeGames: Number(taskProgress?.activeGames || 0),
+            averageMctsSearchDurationMs: Number(taskProgress?.averageMctsSearchDurationMs || 0),
+            averageForwardPassDurationMs: Number(taskProgress?.averageForwardPassDurationMs || 0),
+            replayBuffer: this.summarizeRunReplayBuffer(run),
+          });
+        },
         onChunk: async (chunkGames, progressState) => {
           const normalizedChunkGames = Array.isArray(chunkGames) ? chunkGames : [];
           if (normalizedChunkGames.length) {
-            selfPlayGames.push(...normalizedChunkGames);
+            selfPlayGameCount += normalizedChunkGames.length;
+            this.accumulateRunSelfPlayMetrics(selfPlayMetrics, normalizedChunkGames);
             this.retainRunGames(run, normalizedChunkGames);
             this.recordRunGameDurations(run, normalizedChunkGames, 'selfplay');
             run.stats.totalSelfPlayGames = Number(run.stats.totalSelfPlayGames || 0) + normalizedChunkGames.length;
@@ -10875,6 +12898,9 @@ class MlRuntime {
             completedGames: Number(progressState?.completedGames || 0),
             targetGames: Number(progressState?.targetGames || run.config?.numSelfplayWorkers || 0),
             latestGameId: normalizedChunkGames.length ? normalizedChunkGames[normalizedChunkGames.length - 1].id : null,
+            activeGames: 0,
+            averageMctsSearchDurationMs: Number(run.stats?.averageMctsSearchDurationMs || 0),
+            averageForwardPassDurationMs: Number(run.stats?.averageForwardPassDurationMs || 0),
             replayBuffer: replayBufferSummary,
           });
         },
@@ -10885,7 +12911,7 @@ class MlRuntime {
       this.clearRunSelfPlayProgress(run);
       this.logRunEvent(run, 'run_selfplay_batch_completed', {
         cycle: Number(run.stats.cycle || 0),
-        gameCount: selfPlayGames.length,
+        gameCount: selfPlayGameCount,
         workerGeneration,
         opponentGeneration,
         replayBufferBeforeTraining: this.summarizeRunReplayBuffer(run),
@@ -10896,23 +12922,51 @@ class MlRuntime {
         includeRetainedGames: true,
       });
 
-      if (this.summarizeRunReplayBuffer(run).positions >= Number(run.config?.batchSize || 0)) {
-        await this.trainRunWorkingModel(run, taskState);
+      if (run?.working?.pendingEvaluation) {
+        await this.awaitRunBackgroundTraining(run, taskState);
+        if (this.shouldAbortRunTask(run.id, taskState)) {
+          return;
+        }
+        await this.evaluatePendingRunGeneration(run, taskState);
         if (this.shouldAbortRunTask(run.id, taskState)) {
           return;
         }
       }
 
-      this.recordRunMetrics(run, selfPlayGames);
+      if (this.summarizeRunReplayBuffer(run).positions >= Number(run.config?.batchSize || 0)) {
+        if (!run?.working?.pendingEvaluation && !this.hasRunBackgroundTraining(taskState)) {
+          if (await this.canRunTrainingConcurrently(run, taskState)) {
+            this.startRunBackgroundTraining(run, taskState);
+          } else {
+            await this.trainRunWorkingModel(run, taskState);
+            if (this.shouldAbortRunTask(run.id, taskState)) {
+              return;
+            }
+          }
+        }
+      }
+
+      this.recordRunMetrics(run, selfPlayMetrics, {
+        gameCount: selfPlayGameCount,
+      });
       run.updatedAt = nowIso();
       await this.appendRunJournalSnapshot(run, 'cycle_metrics');
       await this.maybeSaveRunState(run);
       await new Promise((resolve) => setImmediate(resolve));
     }
+    if (this.hasRunBackgroundTraining(taskState) && !taskState?.killRequested) {
+      await this.awaitRunBackgroundTraining(run, taskState);
+    }
+    if (run?.working?.pendingEvaluation && !taskState?.cancelRequested && !taskState?.killRequested) {
+      await this.evaluatePendingRunGeneration(run, taskState);
+    }
     if (this.shouldAbortRunTask(run.id, taskState)) {
       return;
     }
     if (!isRunStatusActive(run.status)) {
+      this.clearRunSelfPlayProgress(run);
+      this.clearRunEvaluationProgress(run);
+      this.clearRunTrainingProgress(run);
       finalizeRunTiming(run, run.updatedAt || nowIso());
       this.compactTerminalRunState(run);
     }
@@ -10984,7 +13038,16 @@ class MlRuntime {
           lastError: run.lastError,
         });
       })
-      .finally(() => {
+      .finally(async () => {
+        const exported = await this.exportSharedTrainingSession(taskState, {
+          includeOptimizerState: true,
+          force: true,
+          close: true,
+        }).catch(() => null);
+        if (exported?.modelBundle) {
+          run.working.modelBundle = cloneModelBundle(exported.modelBundle);
+          run.working.optimizerState = deepClone(exported.optimizerState || null);
+        }
         if (this.isCurrentRunTask(run.id, taskState)) {
           this.runTasks.delete(run.id);
         }
@@ -11013,6 +13076,7 @@ class MlRuntime {
     const config = applyRecommendedRunConfigDefaults(genericConfig, options, recommendedDefaults);
     const { seedBundle, seedSource } = this.resolveRunSeedBundle(config);
     const runLabel = await this.buildUniqueRunLabel(this.getRunSeedLabel(config));
+    this.state.runConfigDefaults = deepClone(config);
 
     const run = this.createRunRecord({
       label: runLabel,
@@ -11079,6 +13143,7 @@ class MlRuntime {
     finalizeRunTiming(run, run.updatedAt);
     this.clearRunSelfPlayProgress(run);
     this.clearRunEvaluationProgress(run);
+    this.clearRunTrainingProgress(run);
     run.live = this.buildRunProgressPayload(run, 'killed', {
       status: 'stopped',
       stopReason: 'manual_kill',

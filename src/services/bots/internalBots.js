@@ -1,5 +1,6 @@
 const { startBotClient } = require('../../../shared/bots');
 const { normalizeDifficulty } = require('./registry');
+const { DEFAULT_DEV_PORT } = require('../../config/defaults');
 
 let started = false;
 let startPromise = null;
@@ -31,7 +32,7 @@ function parseDifficulties() {
 function resolveServerUrl(port) {
   if (process.env.BOT_SERVER_URL) return process.env.BOT_SERVER_URL;
   if (process.env.BOT_INTERNAL_SERVER_URL) return process.env.BOT_INTERNAL_SERVER_URL;
-  const targetPort = Number(process.env.PORT || port || 3000);
+  const targetPort = Number(process.env.PORT || port || DEFAULT_DEV_PORT);
   return `http://127.0.0.1:${targetPort}`;
 }
 

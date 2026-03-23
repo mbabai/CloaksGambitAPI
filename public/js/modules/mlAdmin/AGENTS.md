@@ -10,6 +10,8 @@
 - Inputs come from `GET /api/v1/ml/workbench`, `GET /api/v1/ml/live`, `GET /api/v1/ml/runs/:runId`, `GET /api/v1/ml/runs/:runId/games`, and `GET /api/v1/ml/runs/:runId/replay/:gameId`.
 - Replays are god-view by design. Keep decision traces, action logs, and both sides' identities readable without relying on live-game masking rules.
 - Canvas sizing, DOM ids, and replay layer containers must stay aligned with `public/ml-admin.html` and the selectors in `public/ml-admin.js`.
+- The config panel now includes the self-play `curriculumCadence` control; if you rename or move that field, keep the DOM id, selector map, and selected-run config rendering in sync.
+- The replay selector now also depends on `replayTypeSelect`, `replayGenerationFilterGroup`, `replayBoardPiecesFilterGroup`, and `replayAdvanceDepthFilterGroup`. Evaluation mode keeps the generation filter; simulation mode swaps in the curriculum filters and expects `curriculum.totalBoardPieces` plus `curriculum.advanceDepth` in retained game summaries.
 
 ## Editing Guidance
 - Prefer moving chart/replay presentation logic into this subtree instead of growing `public/ml-admin.js`.

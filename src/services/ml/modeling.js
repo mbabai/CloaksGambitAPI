@@ -130,10 +130,49 @@ const DEFAULT_TRAINING_OPTIONS = Object.freeze({
   weightDecay: 0.0001,
   gradientClipNorm: 5,
 });
-const SHARED_ENCODER_HIDDEN_SIZES = Object.freeze([512, 512, 256]);
-const SHARED_POLICY_HIDDEN_SIZES = Object.freeze([256]);
-const SHARED_VALUE_HIDDEN_SIZES = Object.freeze([128]);
-const SHARED_IDENTITY_HIDDEN_SIZES = Object.freeze([256]);
+const DEFAULT_SHARED_MODEL_SIZE_PRESET = '32k';
+const SHARED_MODEL_SIZE_PRESETS = Object.freeze([
+  Object.freeze({
+    id: '32k',
+    label: '32K',
+    encoderHiddenSizes: Object.freeze([16, 16, 12]),
+    policyHiddenSizes: Object.freeze([8]),
+    valueHiddenSizes: Object.freeze([12]),
+    identityHiddenSizes: Object.freeze([8]),
+  }),
+  Object.freeze({
+    id: '65k',
+    label: '65K',
+    encoderHiddenSizes: Object.freeze([28, 24, 24]),
+    policyHiddenSizes: Object.freeze([24]),
+    valueHiddenSizes: Object.freeze([8]),
+    identityHiddenSizes: Object.freeze([40]),
+  }),
+  Object.freeze({
+    id: '126k',
+    label: '126K',
+    encoderHiddenSizes: Object.freeze([64, 40, 28]),
+    policyHiddenSizes: Object.freeze([28]),
+    valueHiddenSizes: Object.freeze([12]),
+    identityHiddenSizes: Object.freeze([40]),
+  }),
+  Object.freeze({
+    id: '256k',
+    label: '256K',
+    encoderHiddenSizes: Object.freeze([96, 96, 56]),
+    policyHiddenSizes: Object.freeze([112]),
+    valueHiddenSizes: Object.freeze([28]),
+    identityHiddenSizes: Object.freeze([80]),
+  }),
+  Object.freeze({
+    id: '512k',
+    label: '512K',
+    encoderHiddenSizes: Object.freeze([160, 144, 144]),
+    policyHiddenSizes: Object.freeze([224]),
+    valueHiddenSizes: Object.freeze([144]),
+    identityHiddenSizes: Object.freeze([72]),
+  }),
+]);
 
 function softmax(scores, temperature = 1) {
   const values = Array.isArray(scores) ? scores : [];
@@ -182,6 +221,77 @@ function normalizeTrainingOptions(optionsOrLearningRate, overrides = {}) {
       || DEFAULT_TRAINING_OPTIONS.gradientClipNorm
     )),
   };
+}
+
+function cloneSizePresetDefinition(definition) {
+  return {
+    ...definition,
+    encoderHiddenSizes: definition.encoderHiddenSizes.slice(),
+    policyHiddenSizes: definition.policyHiddenSizes.slice(),
+    valueHiddenSizes: definition.valueHiddenSizes.slice(),
+    identityHiddenSizes: definition.identityHiddenSizes.slice(),
+  };
+}
+
+function getSharedModelSizePresetDefinition(value) {
+  const normalized = String(value || DEFAULT_SHARED_MODEL_SIZE_PRESET).trim().toLowerCase();
+  return SHARED_MODEL_SIZE_PRESETS.find((preset) => preset.id === normalized)
+    || SHARED_MODEL_SIZE_PRESETS.find((preset) => preset.id === DEFAULT_SHARED_MODEL_SIZE_PRESET)
+    || SHARED_MODEL_SIZE_PRESETS[0];
+}
+
+function normalizeSharedModelCreationOptions(options = {}) {
+  if (Number.isFinite(options)) {
+    return {
+      seed: Number(options),
+      preset: cloneSizePresetDefinition(getSharedModelSizePresetDefinition(DEFAULT_SHARED_MODEL_SIZE_PRESET)),
+    };
+  }
+  const source = options || {};
+  return {
+    seed: Number.isFinite(source.seed) ? Number(source.seed) : Date.now(),
+    preset: cloneSizePresetDefinition(getSharedModelSizePresetDefinition(
+      source.modelSizePreset || source.sizePreset || source.presetId,
+    )),
+  };
+}
+
+function inferSharedModelSizePresetId(modelBundle) {
+  const encoderHiddenSizes = Array.isArray(modelBundle?.encoder?.network?.hiddenSizes)
+    ? modelBundle.encoder.network.hiddenSizes.map((size) => Number(size || 0))
+    : [];
+  const policyHiddenSizes = Array.isArray(modelBundle?.policy?.network?.hiddenSizes)
+    ? modelBundle.policy.network.hiddenSizes.map((size) => Number(size || 0))
+    : [];
+  const valueHiddenSizes = Array.isArray(modelBundle?.value?.network?.hiddenSizes)
+    ? modelBundle.value.network.hiddenSizes.map((size) => Number(size || 0))
+    : [];
+  const identityHiddenSizes = Array.isArray(modelBundle?.identity?.network?.hiddenSizes)
+    ? modelBundle.identity.network.hiddenSizes.map((size) => Number(size || 0))
+    : [];
+  const matched = SHARED_MODEL_SIZE_PRESETS.find((preset) => (
+    JSON.stringify(preset.encoderHiddenSizes) === JSON.stringify(encoderHiddenSizes)
+    && JSON.stringify(preset.policyHiddenSizes) === JSON.stringify(policyHiddenSizes)
+    && JSON.stringify(preset.valueHiddenSizes) === JSON.stringify(valueHiddenSizes)
+    && JSON.stringify(preset.identityHiddenSizes) === JSON.stringify(identityHiddenSizes)
+  ));
+  return matched?.id || null;
+}
+
+function getSharedModelSizePresetOptions() {
+  return SHARED_MODEL_SIZE_PRESETS.map((preset) => {
+    const bundle = createSharedDefaultModelBundle({
+      seed: 1,
+      modelSizePreset: preset.id,
+    });
+    return {
+      id: preset.id,
+      value: preset.id,
+      label: preset.label,
+      descriptor: describeModelBundle(bundle),
+      parameterCount: countModelBundleParameters(bundle),
+    };
+  });
 }
 
 function createPolicyNetwork(seed = Date.now()) {
@@ -395,38 +505,42 @@ function createLegacyDefaultModelBundle(options = {}) {
   });
 }
 
-function createSharedEncoderNetwork(seed = Date.now()) {
+function createSharedEncoderNetwork(options = {}) {
+  const { seed, preset } = normalizeSharedModelCreationOptions(options);
   return createMlp({
     inputSize: getSharedModelInterfaceSpec().stateInputSize,
-    hiddenSizes: SHARED_ENCODER_HIDDEN_SIZES,
-    outputSize: SHARED_ENCODER_HIDDEN_SIZES[SHARED_ENCODER_HIDDEN_SIZES.length - 1],
+    hiddenSizes: preset.encoderHiddenSizes,
+    outputSize: preset.encoderHiddenSizes[preset.encoderHiddenSizes.length - 1],
     seed,
   });
 }
 
-function createSharedPolicyHead(seed = Date.now()) {
+function createSharedPolicyHead(options = {}) {
+  const { seed, preset } = normalizeSharedModelCreationOptions(options);
   return createMlp({
-    inputSize: SHARED_ENCODER_HIDDEN_SIZES[SHARED_ENCODER_HIDDEN_SIZES.length - 1],
-    hiddenSizes: SHARED_POLICY_HIDDEN_SIZES,
+    inputSize: preset.encoderHiddenSizes[preset.encoderHiddenSizes.length - 1],
+    hiddenSizes: preset.policyHiddenSizes,
     outputSize: getSharedModelInterfaceSpec().policyActionVocabularySize,
     seed,
   });
 }
 
-function createSharedValueHead(seed = Date.now()) {
+function createSharedValueHead(options = {}) {
+  const { seed, preset } = normalizeSharedModelCreationOptions(options);
   return createMlp({
-    inputSize: SHARED_ENCODER_HIDDEN_SIZES[SHARED_ENCODER_HIDDEN_SIZES.length - 1],
-    hiddenSizes: SHARED_VALUE_HIDDEN_SIZES,
+    inputSize: preset.encoderHiddenSizes[preset.encoderHiddenSizes.length - 1],
+    hiddenSizes: preset.valueHiddenSizes,
     outputSize: 1,
     seed,
   });
 }
 
-function createSharedIdentityHead(seed = Date.now()) {
+function createSharedIdentityHead(options = {}) {
+  const { seed, preset } = normalizeSharedModelCreationOptions(options);
   const spec = getSharedModelInterfaceSpec();
   return createMlp({
-    inputSize: SHARED_ENCODER_HIDDEN_SIZES[SHARED_ENCODER_HIDDEN_SIZES.length - 1],
-    hiddenSizes: SHARED_IDENTITY_HIDDEN_SIZES,
+    inputSize: preset.encoderHiddenSizes[preset.encoderHiddenSizes.length - 1],
+    hiddenSizes: preset.identityHiddenSizes,
     outputSize: spec.beliefPieceSlotsPerPerspective * spec.beliefIdentityCount,
     seed,
   });
@@ -436,7 +550,11 @@ function ensureSharedEncoderModel(model = {}) {
   model.version = SHARED_MODEL_VERSION;
   model.network = (model.network && Array.isArray(model.network.layers) && model.network.layers.length)
     ? cloneNetwork(model.network)
-    : createSharedEncoderNetwork(Date.now());
+    : createSharedEncoderNetwork({
+      seed: Date.now(),
+      modelSizePreset: model.modelSizePreset,
+    });
+  delete model.modelSizePreset;
   return model;
 }
 
@@ -446,7 +564,11 @@ function ensureSharedPolicyHead(model = {}) {
   model.vocabularyVersion = 'shared_policy_v1';
   model.network = (model.network && Array.isArray(model.network.layers) && model.network.layers.length)
     ? cloneNetwork(model.network)
-    : createSharedPolicyHead(Date.now());
+    : createSharedPolicyHead({
+      seed: Date.now(),
+      modelSizePreset: model.modelSizePreset,
+    });
+  delete model.modelSizePreset;
   return model;
 }
 
@@ -454,7 +576,11 @@ function ensureSharedValueHead(model = {}) {
   model.version = SHARED_MODEL_VERSION;
   model.network = (model.network && Array.isArray(model.network.layers) && model.network.layers.length)
     ? cloneNetwork(model.network)
-    : createSharedValueHead(Date.now());
+    : createSharedValueHead({
+      seed: Date.now(),
+      modelSizePreset: model.modelSizePreset,
+    });
+  delete model.modelSizePreset;
   return model;
 }
 
@@ -466,7 +592,11 @@ function ensureSharedIdentityHead(model = {}) {
   model.beliefSlotCount = getSharedModelInterfaceSpec().beliefPieceSlotsPerPerspective;
   model.network = (model.network && Array.isArray(model.network.layers) && model.network.layers.length)
     ? cloneNetwork(model.network)
-    : createSharedIdentityHead(Date.now());
+    : createSharedIdentityHead({
+      seed: Date.now(),
+      modelSizePreset: model.modelSizePreset,
+    });
+  delete model.modelSizePreset;
   return model;
 }
 
@@ -476,16 +606,25 @@ function isSharedEncoderModelBundle(modelBundle) {
 
 function normalizeSharedModelBundle(modelBundle) {
   const source = modelBundle || {};
+  const inferredPresetId = inferSharedModelSizePresetId(source)
+    || String(source?.architecture?.presetId || source?.modelSizePreset || '').trim().toLowerCase()
+    || DEFAULT_SHARED_MODEL_SIZE_PRESET;
   source.version = SHARED_MODEL_VERSION;
   source.family = SHARED_MODEL_FAMILY;
   source.interface = {
     ...getSharedModelInterfaceSpec(),
     ...(source.interface || {}),
   };
-  source.encoder = ensureSharedEncoderModel(source.encoder || {});
-  source.policy = ensureSharedPolicyHead(source.policy || {});
-  source.value = ensureSharedValueHead(source.value || {});
-  source.identity = ensureSharedIdentityHead(source.identity || {});
+  source.architecture = {
+    type: 'shared_encoder_mlp',
+    presetId: inferSharedModelSizePresetId(source) || null,
+    ...((source.architecture && typeof source.architecture === 'object') ? source.architecture : {}),
+  };
+  source.encoder = ensureSharedEncoderModel({ ...(source.encoder || {}), modelSizePreset: inferredPresetId });
+  source.policy = ensureSharedPolicyHead({ ...(source.policy || {}), modelSizePreset: inferredPresetId });
+  source.value = ensureSharedValueHead({ ...(source.value || {}), modelSizePreset: inferredPresetId });
+  source.identity = ensureSharedIdentityHead({ ...(source.identity || {}), modelSizePreset: inferredPresetId });
+  source.architecture.presetId = inferSharedModelSizePresetId(source) || inferredPresetId || null;
   return source;
 }
 
@@ -497,24 +636,37 @@ function normalizeModelBundle(modelBundle) {
 }
 
 function createSharedDefaultModelBundle(options = {}) {
-  const seed = Number.isFinite(options.seed) ? options.seed : Date.now();
+  const { seed, preset } = normalizeSharedModelCreationOptions(options);
   return normalizeSharedModelBundle({
     version: SHARED_MODEL_VERSION,
     family: SHARED_MODEL_FAMILY,
     interface: getSharedModelInterfaceSpec(),
+    architecture: {
+      type: 'shared_encoder_mlp',
+      presetId: preset.id,
+    },
     encoder: {
       version: SHARED_MODEL_VERSION,
-      network: createSharedEncoderNetwork(seed + 11),
+      network: createSharedEncoderNetwork({
+        seed: seed + 11,
+        modelSizePreset: preset.id,
+      }),
     },
     policy: {
       version: SHARED_MODEL_VERSION,
       temperature: 1,
       vocabularyVersion: 'shared_policy_v1',
-      network: createSharedPolicyHead(seed + 29),
+      network: createSharedPolicyHead({
+        seed: seed + 29,
+        modelSizePreset: preset.id,
+      }),
     },
     value: {
       version: SHARED_MODEL_VERSION,
-      network: createSharedValueHead(seed + 47),
+      network: createSharedValueHead({
+        seed: seed + 47,
+        modelSizePreset: preset.id,
+      }),
     },
     identity: {
       version: SHARED_MODEL_VERSION,
@@ -522,7 +674,10 @@ function createSharedDefaultModelBundle(options = {}) {
       beamWidth: 24,
       inferredIdentities: SHARED_BELIEF_IDENTITIES.slice(),
       beliefSlotCount: getSharedModelInterfaceSpec().beliefPieceSlotsPerPerspective,
-      network: createSharedIdentityHead(seed + 71),
+      network: createSharedIdentityHead({
+        seed: seed + 71,
+        modelSizePreset: preset.id,
+      }),
     },
   });
 }
@@ -541,6 +696,9 @@ function cloneModelBundle(modelBundle) {
         ...getSharedModelInterfaceSpec(),
         ...(normalized.interface || {}),
       },
+      architecture: normalized.architecture && typeof normalized.architecture === 'object'
+        ? { ...normalized.architecture }
+        : null,
       encoder: {
         version: SHARED_MODEL_VERSION,
         network: cloneNetwork(normalized.encoder.network),
@@ -614,13 +772,17 @@ function countModelBundleParameters(modelBundle) {
 
 function formatCompactParameterCount(value) {
   const count = Math.max(0, Number(value || 0));
+  const formatCompactUnit = (unitValue, suffix) => {
+    const fixed = Number(unitValue || 0).toFixed(1)
+      .replace(/\.0$/, '')
+      .replace(/(\.\d*[1-9])0+$/, '$1');
+    return `${fixed}${suffix}`;
+  };
   if (count >= 1000000) {
-    const millions = count / 1000000;
-    return `${millions >= 10 ? millions.toFixed(0) : millions.toFixed(1)}M`;
+    return formatCompactUnit(count / 1000000, 'M');
   }
   if (count >= 1000) {
-    const thousands = count / 1000;
-    return `${thousands >= 10 ? thousands.toFixed(0) : thousands.toFixed(1)}K`;
+    return formatCompactUnit(count / 1000, 'K');
   }
   return String(Math.round(count));
 }
@@ -1631,15 +1793,166 @@ function createOptimizerState(modelBundle) {
   };
 }
 
+function isAdamStateLayerCompatible(stateLayer, networkLayer) {
+  const inputSize = Number(networkLayer?.inputSize || 0);
+  const outputSize = Number(networkLayer?.outputSize || 0);
+  if (!stateLayer || typeof stateLayer !== 'object') return false;
+  if (!Array.isArray(stateLayer.mWeights) || stateLayer.mWeights.length !== outputSize) return false;
+  if (!Array.isArray(stateLayer.vWeights) || stateLayer.vWeights.length !== outputSize) return false;
+  if (!Array.isArray(stateLayer.mBiases) || stateLayer.mBiases.length !== outputSize) return false;
+  if (!Array.isArray(stateLayer.vBiases) || stateLayer.vBiases.length !== outputSize) return false;
+  if (stateLayer.mWeights.some((row) => !Array.isArray(row) || row.length !== inputSize)) return false;
+  if (stateLayer.vWeights.some((row) => !Array.isArray(row) || row.length !== inputSize)) return false;
+  return true;
+}
+
+function isAdamOptimizerStateCompatible(state, network) {
+  if (!state || typeof state !== 'object') return false;
+  if (!Number.isFinite(Number(state.step))) return false;
+  if (!Array.isArray(state.layers)) return false;
+  const layers = Array.isArray(network?.layers) ? network.layers : [];
+  if (state.layers.length !== layers.length) return false;
+  return layers.every((layer, layerIndex) => isAdamStateLayerCompatible(state.layers[layerIndex], layer));
+}
+
 function resolveSharedOptimizerState(modelBundle, optimizerState = null) {
   const normalizedBundle = normalizeSharedModelBundle(modelBundle);
   const fallback = createOptimizerState(normalizedBundle);
+  const resolveHeadState = (headKey, network) => (
+    isAdamOptimizerStateCompatible(optimizerState?.[headKey], network)
+      ? optimizerState[headKey]
+      : fallback[headKey]
+  );
   return {
-    encoder: optimizerState?.encoder || fallback.encoder,
-    policy: optimizerState?.policy || fallback.policy,
-    value: optimizerState?.value || fallback.value,
-    identity: optimizerState?.identity || fallback.identity,
+    encoder: resolveHeadState('encoder', normalizedBundle.encoder.network),
+    policy: resolveHeadState('policy', normalizedBundle.policy.network),
+    value: resolveHeadState('value', normalizedBundle.value.network),
+    identity: resolveHeadState('identity', normalizedBundle.identity.network),
   };
+}
+
+function addGradientBundleInto(targetBundle, sourceBundle) {
+  const targetLayers = Array.isArray(targetBundle?.layers) ? targetBundle.layers : [];
+  const sourceLayers = Array.isArray(sourceBundle?.layers) ? sourceBundle.layers : [];
+  targetLayers.forEach((targetLayer, layerIndex) => {
+    const sourceLayer = sourceLayers[layerIndex];
+    if (!targetLayer || !sourceLayer) return;
+    const targetWeights = Array.isArray(targetLayer.weightGradients) ? targetLayer.weightGradients : [];
+    const sourceWeights = Array.isArray(sourceLayer.weightGradients) ? sourceLayer.weightGradients : [];
+    targetWeights.forEach((row, rowIndex) => {
+      const sourceRow = sourceWeights[rowIndex];
+      if (!Array.isArray(row) || !Array.isArray(sourceRow)) return;
+      row.forEach((_, colIndex) => {
+        row[colIndex] += Number(sourceRow[colIndex] || 0);
+      });
+    });
+    const targetBiases = Array.isArray(targetLayer.biasGradients) ? targetLayer.biasGradients : [];
+    const sourceBiases = Array.isArray(sourceLayer.biasGradients) ? sourceLayer.biasGradients : [];
+    targetBiases.forEach((_, biasIndex) => {
+      targetBiases[biasIndex] += Number(sourceBiases[biasIndex] || 0);
+    });
+  });
+  return targetBundle;
+}
+
+function buildSharedTrainingSamples(samples = {}) {
+  if (Array.isArray(samples?.sharedSamples) && samples.sharedSamples.length) {
+    return samples.sharedSamples
+      .filter((sample) => sample && typeof sample === 'object')
+      .map((sample) => ({
+        stateInput: Array.isArray(sample.stateInput) ? sample.stateInput.slice() : [],
+        policyTarget: Array.isArray(sample.policyTarget) ? sample.policyTarget.slice() : null,
+        valueTarget: Number.isFinite(sample.valueTarget) ? Number(sample.valueTarget) : null,
+        identityTargets: Array.isArray(sample.identityTargets)
+          ? sample.identityTargets
+            .filter((identityTarget) => Number.isFinite(identityTarget?.pieceSlot) && Number.isFinite(identityTarget?.truthIndex))
+            .map((identityTarget) => ({
+              pieceSlot: Number(identityTarget.pieceSlot),
+              truthIndex: Number(identityTarget.truthIndex),
+            }))
+          : [],
+      }))
+      .filter((sample) => (
+        Array.isArray(sample.stateInput)
+        && sample.stateInput.length
+        && (
+          (Array.isArray(sample.policyTarget) && sample.policyTarget.length)
+          || Number.isFinite(sample.valueTarget)
+          || sample.identityTargets.length
+        )
+      ));
+  }
+  const combined = new Map();
+
+  const ensureEntry = (sample, key) => {
+    const stateInput = Array.isArray(sample?.stateInput)
+      ? sample.stateInput
+      : (Array.isArray(sample?.features) ? sample.features : []);
+    const existing = combined.get(key);
+    if (existing) {
+      if ((!Array.isArray(existing.stateInput) || !existing.stateInput.length) && stateInput.length) {
+        existing.stateInput = stateInput.slice();
+      }
+      return existing;
+    }
+    const entry = {
+      stateInput: stateInput.slice(),
+      policyTarget: null,
+      valueTarget: null,
+      identityTargets: [],
+    };
+    combined.set(key, entry);
+    return entry;
+  };
+
+  const getKey = (sample, prefix, index) => {
+    const sampleKey = typeof sample?.sampleKey === 'string' ? sample.sampleKey.trim() : '';
+    if (sampleKey) return sampleKey;
+    const createdAt = typeof sample?.createdAt === 'string' ? sample.createdAt.trim() : '';
+    if (createdAt) return `t:${createdAt}`;
+    return `${prefix}:${index}`;
+  };
+
+  const policySamples = Array.isArray(samples.policySamples) ? samples.policySamples : [];
+  const valueSamples = Array.isArray(samples.valueSamples) ? samples.valueSamples : [];
+  const pairedCount = Math.max(policySamples.length, valueSamples.length);
+  for (let index = 0; index < pairedCount; index += 1) {
+    const policySample = policySamples[index] || null;
+    const valueSample = valueSamples[index] || null;
+    const sample = policySample || valueSample;
+    if (!sample) continue;
+    const entry = ensureEntry(sample, getKey(sample, 'paired', index));
+    if (Array.isArray(policySample?.target) && policySample.target.length) {
+      entry.policyTarget = policySample.target.slice();
+    }
+    if (Number.isFinite(valueSample?.target)) {
+      entry.valueTarget = Number(valueSample.target);
+    }
+  }
+
+  (Array.isArray(samples.identitySamples) ? samples.identitySamples : []).forEach((sample, index) => {
+    const entry = ensureEntry(sample, getKey(sample, 'identity', index));
+    const pieceSlot = Number.isFinite(sample?.pieceSlot) ? Number(sample.pieceSlot) : -1;
+    const truthIndex = Number.isFinite(sample?.trueIdentityIndex)
+      ? Number(sample.trueIdentityIndex)
+      : SHARED_BELIEF_IDENTITIES.indexOf(sample?.trueIdentity);
+    if (pieceSlot >= 0 && truthIndex >= 0) {
+      entry.identityTargets.push({
+        pieceSlot,
+        truthIndex,
+      });
+    }
+  });
+
+  return Array.from(combined.values()).filter((sample) => (
+    Array.isArray(sample.stateInput)
+    && sample.stateInput.length
+    && (
+      (Array.isArray(sample.policyTarget) && sample.policyTarget.length)
+      || Number.isFinite(sample.valueTarget)
+      || (Array.isArray(sample.identityTargets) && sample.identityTargets.length)
+    )
+  ));
 }
 
 function trainSharedPolicyHead(modelBundle, policySamples, optionsOrLearningRate = 0.01) {
@@ -1870,34 +2183,186 @@ function trainSharedIdentityHead(modelBundle, identitySamples, optionsOrLearning
 function trainSharedModelBundleBatch(modelBundle, samples = {}, options = {}) {
   const normalizedBundle = normalizeSharedModelBundle(modelBundle);
   const epochs = Math.max(1, Math.floor(Number(options.epochs || 1)));
-  let optimizerState = resolveSharedOptimizerState(normalizedBundle, options.optimizerState);
+  const normalizedSamples = Array.isArray(samples?.sharedSamples) && samples.sharedSamples.length
+    ? buildSharedTrainingSamples({ sharedSamples: samples.sharedSamples })
+    : buildSharedTrainingSamples(samples);
+  const trainingOptions = normalizeTrainingOptions(options, {
+    learningRate: Number.isFinite(options?.learningRate) ? options.learningRate : undefined,
+    batchSize: 24,
+  });
+  let optimizerState = resolveSharedOptimizerState(normalizedBundle, trainingOptions.optimizerState || options.optimizerState);
   const history = [];
+  const beliefWidth = SHARED_BELIEF_IDENTITIES.length;
+
+  if (!normalizedSamples.length) {
+    return {
+      modelBundle: normalizedBundle,
+      optimizerState,
+      history: [{
+        epoch: 1,
+        policyLoss: 0,
+        valueLoss: 0,
+        identityLoss: 0,
+        identityAccuracy: 0,
+        policySamples: 0,
+        valueSamples: 0,
+        identitySamples: 0,
+      }],
+    };
+  }
 
   for (let epoch = 0; epoch < epochs; epoch += 1) {
-    const policy = trainSharedPolicyHead(normalizedBundle, samples.policySamples || [], {
-      ...options,
-      optimizerState,
-    });
-    optimizerState = policy.optimizerState || optimizerState;
-    const value = trainSharedValueHead(normalizedBundle, samples.valueSamples || [], {
-      ...options,
-      optimizerState,
-    });
-    optimizerState = value.optimizerState || optimizerState;
-    const identity = trainSharedIdentityHead(normalizedBundle, samples.identitySamples || [], {
-      ...options,
-      optimizerState,
-    });
-    optimizerState = identity.optimizerState || optimizerState;
+    const shuffled = shuffleInPlace(normalizedSamples.slice(), createRng(Date.now() + (epoch * 8191) + normalizedSamples.length));
+    let policyLossTotal = 0;
+    let valueLossTotal = 0;
+    let identityLossTotal = 0;
+    let policySampleCount = 0;
+    let valueSampleCount = 0;
+    let identitySampleCount = 0;
+    let identityCorrect = 0;
+
+    for (let start = 0; start < shuffled.length; start += trainingOptions.batchSize) {
+      const batch = shuffled.slice(start, start + trainingOptions.batchSize);
+      const encoderGradients = zeroGradientBundle(createGradientBundle(normalizedBundle.encoder.network));
+      const encoderPolicyGradients = zeroGradientBundle(createGradientBundle(normalizedBundle.encoder.network));
+      const encoderValueGradients = zeroGradientBundle(createGradientBundle(normalizedBundle.encoder.network));
+      const encoderIdentityGradients = zeroGradientBundle(createGradientBundle(normalizedBundle.encoder.network));
+      const policyGradients = zeroGradientBundle(createGradientBundle(normalizedBundle.policy.network));
+      const valueGradients = zeroGradientBundle(createGradientBundle(normalizedBundle.value.network));
+      const identityGradients = zeroGradientBundle(createGradientBundle(normalizedBundle.identity.network));
+      let batchPolicySamples = 0;
+      let batchValueSamples = 0;
+      let batchIdentitySamples = 0;
+
+      batch.forEach((sample) => {
+        if (!Array.isArray(sample?.stateInput) || !sample.stateInput.length) return;
+        const forward = runSharedModelForward(normalizedBundle, null, WHITE, null, {
+          stateInput: sample.stateInput,
+          keepCache: true,
+        });
+
+        if (Array.isArray(sample.policyTarget) && sample.policyTarget.length === Number(normalizedBundle.policy?.network?.outputSize || 0)) {
+          const probs = softmax(forward.policyLogits, normalizedBundle.policy.temperature || 1);
+          let sampleLoss = 0;
+          for (let index = 0; index < probs.length; index += 1) {
+            const truth = sample.policyTarget[index] || 0;
+            if (truth > 0) {
+              sampleLoss += -truth * Math.log(Math.max(probs[index], 1e-9));
+            }
+          }
+          const policyDelta = probs.map((value, index) => value - (sample.policyTarget[index] || 0));
+          const latentGradient = backpropagateInto(
+            normalizedBundle.policy.network,
+            forward.caches.policy,
+            policyDelta,
+            policyGradients,
+          );
+          backpropagateInto(normalizedBundle.encoder.network, forward.caches.encoder, latentGradient, encoderPolicyGradients);
+          policyLossTotal += sampleLoss;
+          policySampleCount += 1;
+          batchPolicySamples += 1;
+        }
+
+        if (Number.isFinite(sample.valueTarget)) {
+          const pred = tanh(forward.valueRaw);
+          const error = pred - Number(sample.valueTarget);
+          const valueDelta = [2 * error * (1 - (pred * pred))];
+          const latentGradient = backpropagateInto(
+            normalizedBundle.value.network,
+            forward.caches.value,
+            valueDelta,
+            valueGradients,
+          );
+          backpropagateInto(normalizedBundle.encoder.network, forward.caches.encoder, latentGradient, encoderValueGradients);
+          valueLossTotal += error * error;
+          valueSampleCount += 1;
+          batchValueSamples += 1;
+        }
+
+        if (Array.isArray(sample.identityTargets) && sample.identityTargets.length) {
+          const identityDelta = new Array(forward.beliefLogits.length).fill(0);
+          let sampleIdentityCount = 0;
+          sample.identityTargets.forEach((identityTarget) => {
+            const pieceSlot = Number(identityTarget?.pieceSlot);
+            const truthIndex = Number(identityTarget?.truthIndex);
+            if (!Number.isFinite(pieceSlot) || !Number.isFinite(truthIndex) || pieceSlot < 0 || truthIndex < 0 || truthIndex >= beliefWidth) {
+              return;
+            }
+            const startIndex = pieceSlot * beliefWidth;
+            const slotLogits = forward.beliefLogits.slice(startIndex, startIndex + beliefWidth);
+            if (slotLogits.length !== beliefWidth) return;
+            const probs = softmax(slotLogits, normalizedBundle.identity.temperature || 1);
+            const predictedIndex = probs.reduce((bestIdx, value, index, values) => (
+              value > values[bestIdx] ? index : bestIdx
+            ), 0);
+            if (predictedIndex === truthIndex) {
+              identityCorrect += 1;
+            }
+            identityLossTotal += -Math.log(Math.max(probs[truthIndex] || 0, 1e-9));
+            for (let index = 0; index < beliefWidth; index += 1) {
+              identityDelta[startIndex + index] += probs[index] - (index === truthIndex ? 1 : 0);
+            }
+            identitySampleCount += 1;
+            batchIdentitySamples += 1;
+            sampleIdentityCount += 1;
+          });
+          if (sampleIdentityCount > 0) {
+            const latentGradient = backpropagateInto(
+              normalizedBundle.identity.network,
+              forward.caches.identity,
+              identityDelta,
+              identityGradients,
+            );
+            backpropagateInto(normalizedBundle.encoder.network, forward.caches.encoder, latentGradient, encoderIdentityGradients);
+          }
+        }
+      });
+
+      if (!batchPolicySamples && !batchValueSamples && !batchIdentitySamples) {
+        continue;
+      }
+
+      if (batchPolicySamples > 0) {
+        scaleGradientBundle(policyGradients, 1 / batchPolicySamples);
+        scaleGradientBundle(encoderPolicyGradients, 1 / batchPolicySamples);
+        addGradientBundleInto(encoderGradients, encoderPolicyGradients);
+      }
+      if (batchValueSamples > 0) {
+        scaleGradientBundle(valueGradients, 1 / batchValueSamples);
+        scaleGradientBundle(encoderValueGradients, 1 / batchValueSamples);
+        addGradientBundleInto(encoderGradients, encoderValueGradients);
+      }
+      if (batchIdentitySamples > 0) {
+        scaleGradientBundle(identityGradients, 1 / batchIdentitySamples);
+        scaleGradientBundle(encoderIdentityGradients, 1 / batchIdentitySamples);
+        addGradientBundleInto(encoderGradients, encoderIdentityGradients);
+      }
+
+      addL2Penalty(encoderGradients, normalizedBundle.encoder.network, trainingOptions.weightDecay);
+      if (batchPolicySamples > 0) addL2Penalty(policyGradients, normalizedBundle.policy.network, trainingOptions.weightDecay);
+      if (batchValueSamples > 0) addL2Penalty(valueGradients, normalizedBundle.value.network, trainingOptions.weightDecay);
+      if (batchIdentitySamples > 0) addL2Penalty(identityGradients, normalizedBundle.identity.network, trainingOptions.weightDecay);
+
+      clipGradientBundle(encoderGradients, trainingOptions.gradientClipNorm);
+      if (batchPolicySamples > 0) clipGradientBundle(policyGradients, trainingOptions.gradientClipNorm);
+      if (batchValueSamples > 0) clipGradientBundle(valueGradients, trainingOptions.gradientClipNorm);
+      if (batchIdentitySamples > 0) clipGradientBundle(identityGradients, trainingOptions.gradientClipNorm);
+
+      applyAdamUpdate(normalizedBundle.encoder.network, encoderGradients, optimizerState.encoder, trainingOptions);
+      if (batchPolicySamples > 0) applyAdamUpdate(normalizedBundle.policy.network, policyGradients, optimizerState.policy, trainingOptions);
+      if (batchValueSamples > 0) applyAdamUpdate(normalizedBundle.value.network, valueGradients, optimizerState.value, trainingOptions);
+      if (batchIdentitySamples > 0) applyAdamUpdate(normalizedBundle.identity.network, identityGradients, optimizerState.identity, trainingOptions);
+    }
+
     history.push({
       epoch: epoch + 1,
-      policyLoss: Number(policy.loss || 0),
-      valueLoss: Number(value.loss || 0),
-      identityLoss: Number(identity.loss || 0),
-      identityAccuracy: Number(identity.accuracy || 0),
-      policySamples: Number(policy.samples || 0),
-      valueSamples: Number(value.samples || 0),
-      identitySamples: Number(identity.samples || 0),
+      policyLoss: policySampleCount > 0 ? (policyLossTotal / policySampleCount) : 0,
+      valueLoss: valueSampleCount > 0 ? (valueLossTotal / valueSampleCount) : 0,
+      identityLoss: identitySampleCount > 0 ? (identityLossTotal / identitySampleCount) : 0,
+      identityAccuracy: identitySampleCount > 0 ? (identityCorrect / identitySampleCount) : 0,
+      policySamples: policySampleCount,
+      valueSamples: valueSampleCount,
+      identitySamples: identitySampleCount,
     });
   }
 
@@ -2137,6 +2602,7 @@ module.exports = {
   extractStateFeatures,
   formatCompactParameterCount,
   getModelBundleTypeLabel,
+  getSharedModelSizePresetOptions,
   inferIdentityHypotheses,
   normalizeModelBundle,
   normalizeTargetProbabilities,

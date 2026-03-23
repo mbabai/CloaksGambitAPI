@@ -44,6 +44,25 @@ function normalizeArray(values) {
   return values.map((value) => (Number.isFinite(value) && value > 0 ? value / sum : 0));
 }
 
+function applyTemperatureToDistribution(weights, temperature = 1) {
+  const normalized = normalizeArray(weights);
+  if (!normalized.length) return [];
+  const safeTemperature = Number.isFinite(temperature) ? temperature : 1;
+  if (safeTemperature <= 0) {
+    const bestIndex = normalized.reduce((best, value, index, values) => (
+      value > values[best] ? index : best
+    ), 0);
+    return normalized.map((_, index) => (index === bestIndex ? 1 : 0));
+  }
+  if (Math.abs(safeTemperature - 1) < 1e-9) {
+    return normalized;
+  }
+  const sharpened = normalized.map((value) => (
+    value > 0 ? Math.pow(value, 1 / safeTemperature) : 0
+  ));
+  return normalizeArray(sharpened);
+}
+
 function ensureHypotheses(identityInference) {
   const hypotheses = Array.isArray(identityInference?.hypotheses)
     ? identityInference.hypotheses
@@ -211,6 +230,7 @@ function evaluateInformationState(modelBundle, state, currentPlayer, rootPlayer,
     return evaluation;
   }
 
+  const policyStartedAtMs = Date.now();
   const policy = predictPolicy(
     modelBundle,
     state,
@@ -219,6 +239,8 @@ function evaluateInformationState(modelBundle, state, currentPlayer, rootPlayer,
     null,
     null,
   );
+  recordForwardPassTiming(options.searchCache, policyStartedAtMs, 1);
+  const valueStartedAtMs = Date.now();
   const value = predictValue(
     modelBundle,
     state,
@@ -226,6 +248,7 @@ function evaluateInformationState(modelBundle, state, currentPlayer, rootPlayer,
     null,
     policy.stateFeatures,
   );
+  recordForwardPassTiming(options.searchCache, valueStartedAtMs, 1);
 
   const evaluation = {
     legalActions,
@@ -263,12 +286,14 @@ function evaluateSampledLeaf(modelBundle, state, currentPlayer, rootPlayer, opti
     return evaluationCache.get(cacheKey);
   }
   const guessedIdentities = buildSampledIdentityGuessMap(state, currentPlayer);
+  const valueStartedAtMs = Date.now();
   const value = predictValue(
     modelBundle,
     state,
     currentPlayer,
     guessedIdentities,
   );
+  recordForwardPassTiming(options.searchCache, valueStartedAtMs, 1);
   const valueRoot = currentPlayer === rootPlayer ? value.value : -value.value;
   if (evaluationCache) {
     evaluationCache.set(cacheKey, valueRoot);
@@ -561,8 +586,18 @@ function createSearchCache() {
       evaluationCacheHits: 0,
       evaluationCount: 0,
       nodeCount: 0,
+      forwardPassCount: 0,
+      forwardPassDurationMs: 0,
     },
   };
+}
+
+function recordForwardPassTiming(searchCache, startedAtMs, count = 1) {
+  if (!searchCache?.stats) return 0;
+  const durationMs = Math.max(0, Date.now() - Number(startedAtMs || 0));
+  searchCache.stats.forwardPassCount = Number(searchCache.stats.forwardPassCount || 0) + Math.max(0, Number(count || 0));
+  searchCache.stats.forwardPassDurationMs = Number(searchCache.stats.forwardPassDurationMs || 0) + durationMs;
+  return durationMs;
 }
 
 function getOrCreateNode(searchCache, state, parent = null, actionFromParent = null, depth = 0) {
@@ -890,6 +925,7 @@ function runDeterminizedMcts(modelBundle, rootState, options = {}) {
 }
 
 function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
+  const startedAtMs = Date.now();
   const rootPlayer = Number.isFinite(options.rootPlayer) ? options.rootPlayer : rootState.toMove;
   const rootLegalActions = getLegalActions(rootState, rootPlayer);
   if (!rootLegalActions.length) {
@@ -911,6 +947,9 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
         evaluationCacheHits: 0,
         evaluationCount: 0,
         nodeCount: 0,
+        searchDurationMs: 0,
+        forwardPassCount: 0,
+        forwardPassDurationMs: 0,
       },
       trainingRecord: null,
     });
@@ -928,13 +967,17 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
     evaluationCacheHits: Number(searchCache.stats?.evaluationCacheHits || 0),
     evaluationCount: Number(searchCache.stats?.evaluationCount || 0),
     nodeCount: Number(searchCache.stats?.nodeCount || 0),
+    forwardPassCount: Number(searchCache.stats?.forwardPassCount || 0),
+    forwardPassDurationMs: Number(searchCache.stats?.forwardPassDurationMs || 0),
   };
+  const identityStartedAtMs = Date.now();
   const identityInference = inferIdentityHypotheses(
     modelBundle,
     rootState,
     rootPlayer,
     { count: options.hypothesisCount },
   );
+  recordForwardPassTiming(searchCache, identityStartedAtMs, 1);
   const hypotheses = ensureHypotheses(identityInference);
   const useUndoTraversal = options.useUndoTraversal !== false && (
     Boolean(options.forceUndoTraversal)
@@ -954,7 +997,10 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
     : null;
   const rootValueEstimates = determinizedRootStates.map((determinizedState) => {
     const guessedIdentities = buildSampledIdentityGuessMap(determinizedState, rootPlayer);
-    return Number(predictValue(modelBundle, determinizedState, rootPlayer, guessedIdentities).value || 0);
+    const valueStartedAtMs = Date.now();
+    const value = predictValue(modelBundle, determinizedState, rootPlayer, guessedIdentities);
+    recordForwardPassTiming(searchCache, valueStartedAtMs, 1);
+    return Number(value.value || 0);
   });
   const riskAggregation = applyRiskBiasToHypotheses(hypotheses, rootValueEstimates, options.riskBias);
   const hypothesisWeights = riskAggregation.weights.length === hypotheses.length
@@ -1102,8 +1148,21 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
     }))
     .sort((a, b) => b.visits - a.visits);
   const nonCatastrophic = ranked.find((entry) => !isCatastrophicKingBluff(rootState, actionByKey[entry.key]));
-  const selectedEntry = nonCatastrophic || ranked[0];
-  const selectedKey = selectedEntry?.key || actionKeys[0];
+  const safeRootActionStats = rootActionStats.filter((entry) => !isCatastrophicKingBluff(rootState, actionByKey[entry.actionKey]));
+  const selectionPool = safeRootActionStats.length ? safeRootActionStats : rootActionStats;
+  const greedyEntry = selectionPool
+    .slice()
+    .sort((left, right) => Number(right.visits || 0) - Number(left.visits || 0))[0]
+    || rootActionStats[0];
+  const stochasticRoot = options.stochasticRoot === true && selectionPool.length > 1;
+  const rootTemperature = Number.isFinite(options.rootTemperature) ? Math.max(0, Number(options.rootTemperature)) : 1;
+  const rootSelectionProbabilities = stochasticRoot
+    ? applyTemperatureToDistribution(selectionPool.map((entry) => Number(entry.visits || 0)), rootTemperature)
+    : [];
+  const selectedEntry = stochasticRoot
+    ? (selectionPool[sampleWeightedIndex(rootSelectionProbabilities, rng)] || greedyEntry)
+    : greedyEntry;
+  const selectedKey = selectedEntry?.actionKey || selectedEntry?.key || actionKeys[0];
   const selectedAction = actionByKey[selectedKey] || rootLegalActions[0] || null;
   const hypothesisSummary = hypotheses.map((hypothesis, index) => ({
     probability: Number(hypothesis?.probability || 0),
@@ -1170,6 +1229,8 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
     evaluationCacheHits: Math.max(0, Number(searchCache.stats.evaluationCacheHits || 0) - statsBefore.evaluationCacheHits),
     evaluationCount: Math.max(0, Number(searchCache.stats.evaluationCount || 0) - statsBefore.evaluationCount),
     nodeCount: Math.max(0, Number(searchCache.stats.nodeCount || 0) - statsBefore.nodeCount),
+    forwardPassCount: Math.max(0, Number(searchCache.stats.forwardPassCount || 0) - statsBefore.forwardPassCount),
+    forwardPassDurationMs: Math.max(0, Number(searchCache.stats.forwardPassDurationMs || 0) - statsBefore.forwardPassDurationMs),
   };
 
   return buildSearchResult({
@@ -1187,6 +1248,16 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
       rootVisits: root.visits,
       actionStats: rootActionStats,
       moveStats: rootActionStats,
+      rootSelection: {
+        stochastic: stochasticRoot,
+        temperature: rootTemperature,
+        probabilities: stochasticRoot
+          ? selectionPool.map((entry, index) => ({
+            actionKey: entry.actionKey,
+            probability: Number(rootSelectionProbabilities[index] || 0),
+          }))
+          : [],
+      },
       hypothesisSummary,
       sampledHypothesisCounts: hypothesisSampleCounts.slice(),
       legalActionMismatchCount: 0,
@@ -1195,6 +1266,9 @@ function runHiddenInfoMcts(modelBundle, rootState, options = {}) {
       evaluationCacheHits: statsDelta.evaluationCacheHits,
       evaluationCount: statsDelta.evaluationCount,
       nodeCount: statsDelta.nodeCount,
+      searchDurationMs: Math.max(0, Date.now() - startedAtMs),
+      forwardPassCount: statsDelta.forwardPassCount,
+      forwardPassDurationMs: statsDelta.forwardPassDurationMs,
       sharedTree: {
         totalNodeCount: Number(searchCache.stats.nodeCount || 0),
         totalEvaluationCount: Number(searchCache.stats.evaluationCount || 0),

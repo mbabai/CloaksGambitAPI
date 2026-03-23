@@ -18,7 +18,7 @@ If `/ml-admin` or `/api/v1/ml/*` returns `404`, the ML feature gate is off.
 - `GET /api/v1/ml/workbench` for defaults, run summaries, retained replay metadata, the promoted-model bot checklist state, and the latest resource telemetry snapshot.
 - `GET /api/v1/ml/promoted-bots` and `PUT /api/v1/ml/promoted-bots` for the promoted-model checkbox list in the `Test` tab.
 - `GET /api/v1/ml/live` plus the `/admin` socket namespace's `ml:runProgress` event for reconnect-safe live status.
-- `GET /api/v1/ml/runs/:runId/games` and `GET /api/v1/ml/runs/:runId/replay/:gameId` for replay browsing.
+- `GET /api/v1/ml/runs/:runId/games` and `GET /api/v1/ml/runs/:runId/replay/:gameId` for replay browsing. `replayType=simulation` switches the retained-game list from checkpoint evaluations to retained self-play simulation games.
 - Older snapshot/simulation/training endpoints still exist for compatibility, but the main operator workflow is run-oriented now.
 
 `/api/v1/ml/live` now includes `resourceTelemetry`, a rolling 10-minute history sampled every 2 seconds:
@@ -38,6 +38,7 @@ GPU telemetry is best-effort and currently comes from `nvidia-smi` when it is av
   - `Random Init`: start from a fresh random model bundle.
 - Configure the continuous pipeline:
   - self-play games per cycle
+  - curriculum cadence for the self-play-only 4D opening curriculum
   - parallel game workers for self-play and evaluation
   - MCTS simulations, depth, hidden-identity hypotheses, risk bias, and exploration
   - replay-buffer size
@@ -50,6 +51,7 @@ GPU telemetry is best-effort and currently comes from `nvidia-smi` when it is av
   - stage 2: full promotion tests against prior promoted lineage
 - Optional stop conditions let the run end on best-generation, self-play, training-step, or failed-promotion limits.
 - `Kick Off Run` starts one continuous self-play / train / evaluate loop. The runtime only allows one active run at a time.
+- The curriculum cadence dial controls how quickly self-play drifts from short, advanced endgames toward full setup starts. `100` means the setup bias moves one curriculum rung every 100 self-play games; `1` shifts every game.
 
 ### Runs
 
@@ -70,7 +72,11 @@ GPU telemetry is best-effort and currently comes from `nvidia-smi` when it is av
 ### Replay
 
 - Choose a run.
-- Optionally filter retained games by one generation number.
+- Choose `Evaluation` or `Simulation`.
+- `Evaluation` keeps the existing generation-filtered checkpoint replay list.
+- `Simulation` shows retained self-play games and adds two curriculum filters:
+  - total board pieces
+  - advance depth
 - Select one retained game from the list.
 - Replay controls include:
   - frame slider

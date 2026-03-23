@@ -14,6 +14,7 @@
 - Keep `Cache-Control: no-store` on live status, retained game list, and replay endpoints. The workbench expects fresh run state.
 - Preserve runtime-provided `statusCode`, `code`, `details`, and `activeRuns` fields when present. `public/ml-admin.js` uses them for operator feedback.
 - Replay payloads must stay compatible with `public/js/modules/mlAdmin/replay.js` and the god-view board renderer.
+- `GET /runs/:runId/games` now defaults to evaluation rows but also accepts `replayType=simulation` for retained self-play games. Generation filters should remain evaluation-only.
 
 ## Editing Guidance
 - If you add or rename a runtime method, update this router, `public/ml-admin.js`, and `tests/mlRoutes.test.js` together.

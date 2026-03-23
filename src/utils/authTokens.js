@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 
 const DEFAULT_SECRET = 'development-secret-change-me';
@@ -7,6 +8,10 @@ const TOKEN_HEADER = 'authorization';
 
 function getJwtSecret() {
   return process.env.JWT_SECRET || DEFAULT_SECRET;
+}
+
+function isMongoConnected() {
+  return mongoose?.connection?.readyState === 1;
 }
 
 function createAuthToken(user) {
@@ -68,6 +73,9 @@ function extractTokenFromRequest(req) {
 async function resolveUserFromToken(token) {
   const payload = verifyAuthToken(token);
   if (!payload?.sub) {
+    return null;
+  }
+  if (!isMongoConnected()) {
     return null;
   }
 

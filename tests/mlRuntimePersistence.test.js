@@ -155,6 +155,8 @@ describe('ML runtime persistence compaction', () => {
         target: [0, 1, 0],
       },
     ]));
+    const approvedGenerationBundle = createDefaultModelBundle({ seed: 9001 });
+    const pendingGenerationBundle = createDefaultModelBundle({ seed: 9002 });
 
     const payload = runtime.buildRunJournalPayload({
       id: 'run-journal-tail',
@@ -171,13 +173,39 @@ describe('ML runtime persistence compaction', () => {
         valueSamples,
         identitySamples,
       },
-      generations: [],
+      generations: [
+        {
+          id: 'run-journal-tail:g0000',
+          generation: 0,
+          label: 'G0',
+          approved: true,
+          isBest: true,
+          source: 'promoted',
+          modelBundle: approvedGenerationBundle,
+          stats: {},
+        },
+        {
+          id: 'run-journal-tail:g0001',
+          generation: 1,
+          label: 'G1',
+          approved: false,
+          isBest: false,
+          source: 'candidate',
+          modelBundle: pendingGenerationBundle,
+          stats: {},
+        },
+      ],
       retainedGames: [],
       metricsHistory: [],
       evaluationHistory: [],
       working: {
         modelBundle: createDefaultModelBundle({ seed: 801 }),
         optimizerState: null,
+        pendingEvaluation: {
+          generation: 1,
+          checkpointIndex: 2,
+          queuedAt: '2026-03-12T21:14:00.000Z',
+        },
       },
       stats: {},
     });
@@ -186,6 +214,219 @@ describe('ML runtime persistence compaction', () => {
     expect(payload.replayBuffer.valueSamples).toHaveLength(256);
     expect(payload.replayBuffer.identitySamples.length).toBeLessThanOrEqual(2048);
     expect(payload.replayBuffer.policySamples[0].createdAt).toBe(policySamples[1244].createdAt);
+    expect(payload.run.generations[0].modelBundle).toBeNull();
+    expect(payload.run.generations[1].modelBundle).toBeTruthy();
+  });
+
+  test('shared-family replay samples are compacted before entering the live replay buffer', () => {
+    const run = runtime.createRunRecord({
+      id: 'run-compact-replay',
+      label: 'Compact Replay',
+    });
+
+    runtime.appendRunReplayBuffer(run, {
+      policySamples: [{
+        sampleKey: 'sample-1',
+        snapshotId: 'snapshot-a',
+        player: 0,
+        stateInput: [1, 2, 3, 4],
+        features: [[1], [2]],
+        target: [0.25, 0.75],
+        selectedActionKey: 'move-a',
+        selectedMoveKey: 'move-a',
+        actionKeys: ['move-a', 'move-b'],
+        moveKeys: ['move-a', 'move-b'],
+      }],
+      valueSamples: [{
+        sampleKey: 'sample-1',
+        snapshotId: 'snapshot-a',
+        player: 0,
+        stateInput: [1, 2, 3, 4],
+        features: [1, 2, 3, 4],
+        target: 0.5,
+      }],
+      identitySamples: [{
+        sampleKey: 'sample-1',
+        snapshotId: 'snapshot-a',
+        player: 0,
+        pieceId: 'piece-a',
+        pieceSlot: 2,
+        trueIdentity: 'KNIGHT',
+        trueIdentityIndex: 3,
+        stateInput: [1, 2, 3, 4],
+        pieceFeatures: [9, 8, 7],
+        featureByIdentity: { KNIGHT: [1, 0, 0] },
+        probabilities: { KNIGHT: 0.9 },
+      }],
+    }, {
+      generation: 0,
+      createdAt: '2026-03-19T00:00:00.000Z',
+    });
+
+    const policySample = run.replayBuffer.policySamples[0];
+    const valueSample = run.replayBuffer.valueSamples[0];
+    const identitySample = run.replayBuffer.identitySamples[0];
+
+    expect(policySample).toMatchObject({
+      sampleKey: 'sample-1',
+      generation: 0,
+      createdAt: '2026-03-19T00:00:00.000Z',
+      stateInput: [1, 2, 3, 4],
+      target: [0.25, 0.75],
+    });
+    expect(policySample).not.toHaveProperty('features');
+    expect(policySample).not.toHaveProperty('actionKeys');
+    expect(policySample).not.toHaveProperty('moveKeys');
+    expect(policySample).not.toHaveProperty('selectedActionKey');
+
+    expect(valueSample).toMatchObject({
+      sampleKey: 'sample-1',
+      generation: 0,
+      createdAt: '2026-03-19T00:00:00.000Z',
+      target: 0.5,
+    });
+    expect(valueSample).not.toHaveProperty('features');
+    expect(valueSample).not.toHaveProperty('stateInput');
+
+    expect(identitySample).toMatchObject({
+      sampleKey: 'sample-1',
+      generation: 0,
+      createdAt: '2026-03-19T00:00:00.000Z',
+      pieceSlot: 2,
+      trueIdentityIndex: 3,
+    });
+    expect(identitySample).not.toHaveProperty('stateInput');
+    expect(identitySample).not.toHaveProperty('pieceFeatures');
+    expect(identitySample).not.toHaveProperty('featureByIdentity');
+    expect(identitySample).not.toHaveProperty('probabilities');
+  });
+
+  test('ensureLoaded compacts legacy shared-family replay samples on reload', async () => {
+    runtime = createPersistedRuntime();
+    const persistedState = {
+      version: 3,
+      counters: {
+        snapshot: 1,
+        simulation: 1,
+        game: 1,
+        training: 1,
+        run: 2,
+      },
+      snapshots: [],
+      simulations: [],
+      trainingRuns: [],
+      runs: [{
+        id: 'run-legacy-shared-replay',
+        label: 'Legacy Shared Replay',
+        createdAt: '2026-03-19T00:00:00.000Z',
+        updatedAt: '2026-03-19T00:10:00.000Z',
+        status: 'stopped',
+        stopReason: 'manual_stop',
+        config: {
+          modelSizePreset: '32k',
+          replayBufferMaxPositions: 32,
+        },
+        replayBuffer: {
+          maxPositions: 32,
+          totalPositionsSeen: 1,
+          evictedPositions: 0,
+          policySamples: [{
+            sampleKey: 'sample-1',
+            generation: 0,
+            createdAt: '2026-03-19T00:00:00.000Z',
+            stateInput: [1, 2, 3, 4],
+            target: [0.25, 0.75],
+          }],
+          valueSamples: [{
+            sampleKey: 'sample-1',
+            generation: 0,
+            createdAt: '2026-03-19T00:00:00.000Z',
+            stateInput: [1, 2, 3, 4],
+            target: 0.5,
+          }],
+          identitySamples: [{
+            sampleKey: 'sample-1',
+            generation: 0,
+            createdAt: '2026-03-19T00:00:00.000Z',
+            pieceSlot: 2,
+            trueIdentityIndex: 3,
+            stateInput: [1, 2, 3, 4],
+          }],
+        },
+        retainedGames: [],
+        metricsHistory: [],
+        evaluationHistory: [],
+        stats: {},
+        generations: [{
+          id: 'run-legacy-shared-replay:g0',
+          generation: 0,
+          label: 'G0',
+          approved: true,
+          source: 'bootstrap',
+          createdAt: '2026-03-19T00:00:00.000Z',
+          promotedAt: '2026-03-19T00:00:00.000Z',
+          modelBundle: createDefaultModelBundle({ seed: 1, modelSizePreset: '32k' }),
+          stats: {},
+          latestLoss: null,
+          promotionEvaluation: null,
+        }],
+        working: {
+          modelBundle: createDefaultModelBundle({ seed: 2, modelSizePreset: '32k' }),
+          optimizerState: null,
+          baseGeneration: 0,
+          checkpointIndex: 0,
+          lastLoss: null,
+        },
+      }],
+      activeJobs: {
+        simulation: null,
+        training: null,
+      },
+    };
+    fs.writeFileSync(runtime.dataFilePath, JSON.stringify(persistedState, null, 2));
+
+    await runtime.ensureLoaded();
+
+    const reloadedRun = runtime.getRunById('run-legacy-shared-replay');
+    expect(reloadedRun.replayBuffer.policySamples[0].stateInput).toEqual([1, 2, 3, 4]);
+    expect(reloadedRun.replayBuffer.valueSamples[0]).not.toHaveProperty('stateInput');
+    expect(reloadedRun.replayBuffer.identitySamples[0]).not.toHaveProperty('stateInput');
+  });
+
+  test('incremental self-play metric accumulation matches full-game metric computation', () => {
+    const games = [
+      {
+        plies: 12,
+        training: {
+          policySamples: [
+            { target: [0.5, 0.5], selectedActionKey: 'move-a' },
+            { target: [0.9, 0.1], selectedActionKey: 'move-b' },
+          ],
+        },
+        decisions: [
+          { trace: { searchDurationMs: 10, forwardPassDurationMs: 4, forwardPassCount: 2 } },
+          { trace: { searchDurationMs: 20, forwardPassDurationMs: 6, forwardPassCount: 3 } },
+        ],
+      },
+      {
+        plies: 8,
+        training: {
+          policySamples: [
+            { target: [0.7, 0.3], selectedActionKey: 'move-a' },
+          ],
+        },
+        decisions: [
+          { trace: { searchDurationMs: 30, forwardPassDurationMs: 5, forwardPassCount: 1 } },
+        ],
+      },
+    ];
+
+    const fullMetrics = runtime.computeRunSelfPlayMetrics(games);
+    const incrementalMetrics = runtime.finalizeRunSelfPlayMetrics(
+      runtime.accumulateRunSelfPlayMetrics(runtime.createRunSelfPlayMetricsAccumulator(), games),
+    );
+
+    expect(incrementalMetrics).toEqual(fullMetrics);
   });
 
   test('reloaded active runs keep prior elapsed time without counting interruption downtime', async () => {
@@ -561,6 +802,14 @@ describe('ML runtime persistence compaction', () => {
       id: 'run-journal-test',
       label: 'Journal Run',
     });
+    run.generations.push(runtime.createRunGenerationRecord(run, {
+      generation: 1,
+      label: 'G1',
+      source: 'promoted',
+      approved: true,
+      isBest: false,
+      modelBundle: createDefaultModelBundle({ seed: 4321 }),
+    }));
     runtime.state.runs = [run];
     await runtime.save();
 
@@ -573,6 +822,27 @@ describe('ML runtime persistence compaction', () => {
       valueLoss: 0.09,
       identityLoss: 0.04,
     };
+    run.generations.push(runtime.createRunGenerationRecord(run, {
+      generation: 2,
+      label: 'G2',
+      source: 'candidate',
+      approved: false,
+      isBest: false,
+      modelBundle: createDefaultModelBundle({ seed: 8765 }),
+      parentGeneration: 1,
+      latestLoss: {
+        step: 7,
+        policyLoss: 0.12,
+        valueLoss: 0.09,
+        identityLoss: 0.04,
+      },
+    }));
+    run.working.pendingEvaluation = {
+      generation: 2,
+      checkpointIndex: 1,
+      queuedAt: '2026-03-12T22:09:30.000Z',
+    };
+    run.working.modelBundle = createDefaultModelBundle({ seed: 8765 });
     run.replayBuffer.policySamples = Array.from({ length: 5 }, (_, index) => buildReplaySample(index));
     run.replayBuffer.valueSamples = run.replayBuffer.policySamples.map((sample, index) => ({
       createdAt: sample.createdAt,
@@ -615,6 +885,7 @@ describe('ML runtime persistence compaction', () => {
       useMongoSimulations: false,
       useMongoRuns: false,
     });
+    jest.spyOn(runtime, 'runContinuousPipeline').mockImplementation(async () => {});
     await runtime.ensureLoaded();
 
     const resumedRun = runtime.getRunById('run-journal-test');
@@ -625,6 +896,9 @@ describe('ML runtime persistence compaction', () => {
     expect(resumedRun.replayBuffer.policySamples).toHaveLength(5);
     expect(resumedRun.retainedGames).toHaveLength(1);
     expect(resumedRun.working.lastLoss.step).toBe(7);
+    expect(runtime.getRunGeneration(resumedRun, 1)?.modelBundle).toBeTruthy();
+    expect(runtime.getRunGeneration(resumedRun, 2)?.modelBundle).toBeTruthy();
+    expect(resumedRun.working.pendingEvaluation?.generation).toBe(2);
   });
 
   test('ensureLoaded skips oversized journal replay artifacts for persisted active runs', async () => {

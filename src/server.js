@@ -9,6 +9,8 @@ const path = require('path');
 const fs = require('fs');
 
 const { NODE_ENV, isProduction } = require('./config/loadEnv');
+const { DEFAULT_DEV_PORT, DEFAULT_DEV_PORT_SEARCH_LIMIT } = require('./config/defaults');
+const { bindServerPort } = require('./utils/listenPort');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
@@ -23,6 +25,7 @@ const APP_ASSET_VERSION = String(
     || process.env.GITHUB_SHA
     || Date.now()
 );
+const DEV_RECOVERY_REDIRECT_PORT = 3000;
 
 function getDatabaseNameFromUri(uri) {
   if (!uri) return null;
@@ -316,6 +319,14 @@ async function connectToDatabase() {
   }
 }
 
+function logDevelopmentMongoHelp(uri) {
+  const targetUri = uri || process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit';
+  console.warn('[startup] MongoDB is unavailable. The server will run in degraded mode until MongoDB is started.');
+  console.warn(`[startup] Expected development MongoDB URI: ${targetUri}`);
+  console.warn('[startup] Start a local MongoDB server, then restart the API server.');
+  console.warn('[startup] Example (cmd.exe): mkdir C:\\data\\db && "C:\\Program Files\\MongoDB\\Server\\8.0\\bin\\mongod.exe" --dbpath C:\\data\\db');
+}
+
 async function resetLobbyQueues() {
   try {
     lobbyStore.clear();
@@ -334,11 +345,60 @@ app.use((err, req, res, next) => {
   res.status(500).json({ message: 'Something went wrong!' });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT || DEFAULT_DEV_PORT);
+const HAS_EXPLICIT_PORT = typeof process.env.PORT === 'string' && process.env.PORT.trim().length > 0;
 const server = http.createServer(app);
+let recoveryRedirectServer = null;
 
 initSocket(server);
 let shutdownPromise = null;
+
+function buildLocalRedirectTarget(req, targetPort) {
+  const forwardedHost = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost').trim();
+  const sanitizedHost = forwardedHost.replace(/\s+/g, '');
+  const hostname = sanitizedHost.replace(/:\d+$/, '') || 'localhost';
+  const protocol = String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim() || 'http';
+  const requestPath = req.url || '/';
+  return `${protocol}://${hostname}:${targetPort}${requestPath}`;
+}
+
+async function maybeStartRecoveryRedirectServer(targetPort) {
+  const normalizedTargetPort = Number(targetPort);
+  if (
+    isProduction
+    || HAS_EXPLICIT_PORT
+    || !Number.isFinite(normalizedTargetPort)
+    || normalizedTargetPort === DEV_RECOVERY_REDIRECT_PORT
+  ) {
+    return null;
+  }
+
+  const redirectServer = http.createServer((req, res) => {
+    const location = buildLocalRedirectTarget(req, normalizedTargetPort);
+    res.statusCode = 307;
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Location', location);
+    res.end(`Temporary Redirect: ${location}`);
+  });
+
+  try {
+    await bindServerPort(redirectServer, {
+      preferredPort: DEV_RECOVERY_REDIRECT_PORT,
+      allowFallback: false,
+    });
+    console.warn(`[startup] Recovery redirect listening on ${DEV_RECOVERY_REDIRECT_PORT} and forwarding to ${normalizedTargetPort}.`);
+    recoveryRedirectServer = redirectServer;
+    return redirectServer;
+  } catch (err) {
+    if (err?.code === 'EADDRINUSE') {
+      redirectServer.close(() => {});
+      console.warn(`[startup] Recovery redirect skipped because port ${DEV_RECOVERY_REDIRECT_PORT} is already in use.`);
+      return null;
+    }
+    redirectServer.close(() => {});
+    throw err;
+  }
+}
 
 async function shutdownServer(signal = 'shutdown') {
   if (shutdownPromise) {
@@ -351,6 +411,14 @@ async function shutdownServer(signal = 'shutdown') {
         console.error('Error while closing HTTP server during shutdown:', err);
       }
     });
+    if (recoveryRedirectServer) {
+      recoveryRedirectServer.close((err) => {
+        if (err) {
+          console.error('Error while closing recovery redirect server during shutdown:', err);
+        }
+      });
+      recoveryRedirectServer = null;
+    }
     try {
       await getMlRuntime().flushForShutdown();
       console.log('ML runtime flushed successfully.');
@@ -377,6 +445,7 @@ async function shutdownServer(signal = 'shutdown') {
 });
 
 async function startServer() {
+  const defaultDevUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/cloaks-gambit';
   const connected = await connectToDatabase();
 
   if (connected) {
@@ -393,11 +462,26 @@ async function startServer() {
     await resetLobbyQueues();
     startGuestCleanupTask();
   }
+  if (!connected && !isProduction) {
+    logDevelopmentMongoHelp(defaultDevUri);
+  }
 
-  server.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-    startInternalBots({ port: PORT });
+  const listenResult = await bindServerPort(server, {
+    preferredPort: PORT,
+    allowFallback: !isProduction && !HAS_EXPLICIT_PORT,
+    maxAdditionalPorts: DEFAULT_DEV_PORT_SEARCH_LIMIT,
   });
+  const activePort = Number(listenResult?.port || PORT);
+  if (listenResult?.usedFallback) {
+    console.warn(`[startup] Port ${PORT} is in use; listening on ${activePort} instead.`);
+  }
+  await maybeStartRecoveryRedirectServer(activePort);
+  console.log(`Server is running on port ${activePort}`);
+  if (connected) {
+    startInternalBots({ port: activePort });
+  } else {
+    console.warn('[bot-runtime] skipping internal bot startup because MongoDB is not connected');
+  }
 }
 
 startServer().catch((err) => {
