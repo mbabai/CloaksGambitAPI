@@ -16,10 +16,12 @@ If `/ml-admin` or `/api/v1/ml/*` returns `404`, the ML feature gate is off.
 ## What The Page Uses
 
 - `GET /api/v1/ml/workbench` for defaults, run summaries, retained replay metadata, the promoted-model bot checklist state, and the latest resource telemetry snapshot.
+- `GET /api/v1/ml/workbench` and `GET /api/v1/ml/live` now also include a recent `serverErrors.items` list so the page can keep showing background server failures after refresh.
 - `GET /api/v1/ml/promoted-bots` and `PUT /api/v1/ml/promoted-bots` for the promoted-model checkbox list in the `Test` tab.
-- `GET /api/v1/ml/live` plus the `/admin` socket namespace's `ml:runProgress` event for reconnect-safe live status.
+- `GET /api/v1/ml/live` plus the `/admin` socket namespace's `ml:runProgress`, `admin:serverErrors`, and `admin:serverError` events for reconnect-safe live status and recent server-error reporting.
 - `GET /api/v1/ml/runs/:runId/games` and `GET /api/v1/ml/runs/:runId/replay/:gameId` for replay browsing. `replayType=simulation` switches the retained-game list from checkpoint evaluations to retained self-play simulation games.
 - Older snapshot/simulation/training endpoints still exist for compatibility, but the main operator workflow is run-oriented now.
+- The browser now stays same-origin for ML API polling instead of probing other localhost ports from the page. If the server restarts or Mongo reconnects, the workbench backs off and retries instead of spamming CSP errors.
 
 `/api/v1/ml/live` now includes `resourceTelemetry`, a rolling 10-minute history sampled every 2 seconds:
 
@@ -60,6 +62,7 @@ GPU telemetry is best-effort and currently comes from `nvidia-smi` when it is av
   - the current percentage
   - a compact sparkline for the last 10 minutes
   - 2-second sampling cadence
+- The same `Run State` panel now includes `Recent Server Errors`, which surfaces background failures such as guest-cleanup Mongo outages and ML route/runtime errors without requiring you to watch the server terminal.
 - Selecting a run opens its detail view with:
   - status, elapsed time, and update time
   - best generation and worker generation
@@ -68,6 +71,7 @@ GPU telemetry is best-effort and currently comes from `nvidia-smi` when it is av
 - `Stop Run` requests a graceful stop. `Delete Run` only works after the run is no longer active.
 - `Generation Win Graph` plots generation-vs-generation results retained by the run. Hover details reflect the current staged evaluation structure, including informational `G0` results and promotion-lineage tests.
 - Refreshing the page is safe. The browser reconciles live state from both polling and the admin socket.
+- If the admin session really goes away, the page stops background polling and tells you to reload instead of hammering `/api/v1/ml/live` with repeated `403` requests.
 
 ### Replay
 

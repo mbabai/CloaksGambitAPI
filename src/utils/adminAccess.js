@@ -1,4 +1,7 @@
+const mongoose = require('mongoose');
+
 const { resolveSessionFromRequest, resolveSessionFromSocketHandshake } = require('./requestSession');
+const { extractTokenFromRequest } = require('./authTokens');
 
 const ADMIN_EMAIL = 'marcellbabai@gmail.com';
 const ADMIN_FORBIDDEN_HTML = `<!doctype html>
@@ -49,6 +52,54 @@ const ADMIN_FORBIDDEN_HTML = `<!doctype html>
   </main>
 </body>
 </html>`;
+const ADMIN_UNAVAILABLE_HTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Session Unavailable</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: #111827;
+      color: #f9fafb;
+      font: 16px/1.5 system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    main {
+      max-width: 520px;
+      background: rgba(17, 24, 39, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 1.6rem;
+      line-height: 1.2;
+    }
+    p {
+      margin: 0 0 12px;
+      color: #d1d5db;
+    }
+    a {
+      color: #93c5fd;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Admin Session Temporarily Unavailable</h1>
+    <p>Your admin token is present, but the server cannot confirm the session because MongoDB is reconnecting.</p>
+    <p>Wait a moment and try again. If the problem keeps happening, reload the page after the database connection recovers.</p>
+    <p><a href="/ml-admin">Retry the ML admin page</a></p>
+  </main>
+</body>
+</html>`;
 
 function normalizeEmail(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -67,10 +118,30 @@ function isAdminSession(session) {
   return normalizeEmail(session.email || session.user?.email) === ADMIN_EMAIL;
 }
 
+function isMongoAuthBackendUnavailable(req) {
+  return mongoose?.connection?.readyState !== 1 && Boolean(extractTokenFromRequest(req));
+}
+
 async function ensureAdminRequest(req, res) {
   const session = await resolveSessionFromRequest(req, { createGuest: false });
   if (isAdminSession(session)) {
     return session;
+  }
+
+  if (isMongoAuthBackendUnavailable(req)) {
+    if (res && typeof res.status === 'function') {
+      if (wantsHtmlResponse(req) && typeof res.type === 'function' && typeof res.send === 'function') {
+        res.status(503);
+        res.type('html');
+        res.send(ADMIN_UNAVAILABLE_HTML);
+      } else {
+        res.status(503).json({
+          message: 'Admin session temporarily unavailable while MongoDB reconnects.',
+          code: 'auth_backend_unavailable',
+        });
+      }
+    }
+    return null;
   }
 
   if (res && typeof res.status === 'function') {

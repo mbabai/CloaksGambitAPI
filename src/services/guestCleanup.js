@@ -1,11 +1,65 @@
+const mongoose = require('mongoose');
+
 const User = require('../models/User');
 const Game = require('../models/Game');
 const Match = require('../models/Match');
+const { reportServerError } = require('./adminErrorFeed');
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const DISCONNECT_RETENTION_MS = 24 * ONE_HOUR_MS;
 
 let cleanupInterval = null;
+let mongoUnavailableNoticeOpen = false;
+
+function hasMongoConnection() {
+  return Boolean(mongoose.connection && mongoose.connection.readyState === 1);
+}
+
+function getMongoReadyState() {
+  return Number.isFinite(Number(mongoose?.connection?.readyState))
+    ? Number(mongoose.connection.readyState)
+    : null;
+}
+
+function reportMongoUnavailable(skipMessage = 'Guest cleanup skipped because MongoDB is not connected.') {
+  if (!mongoUnavailableNoticeOpen) {
+    console.warn('[guestCleanup] %s', skipMessage, {
+      readyState: getMongoReadyState(),
+    });
+  }
+  mongoUnavailableNoticeOpen = true;
+  reportServerError({
+    source: 'guestCleanup',
+    level: 'warn',
+    code: 'mongo_unavailable',
+    message: skipMessage,
+    details: {
+      readyState: getMongoReadyState(),
+    },
+  });
+}
+
+function clearMongoUnavailableNoticeIfNeeded() {
+  if (!mongoUnavailableNoticeOpen || !hasMongoConnection()) {
+    return;
+  }
+  mongoUnavailableNoticeOpen = false;
+  console.log('[guestCleanup] MongoDB connection restored; stale guest cleanup resumed.');
+}
+
+function isMongoConnectivityError(err) {
+  const name = String(err?.name || '');
+  const code = String(err?.code || '');
+  const message = String(err?.message || '').toLowerCase();
+  return name === 'MongoServerSelectionError'
+    || name === 'MongoNetworkTimeoutError'
+    || name === 'MongoNetworkError'
+    || code === 'ECONNREFUSED'
+    || code === 'ETIMEDOUT'
+    || /server selection/i.test(name)
+    || /socket 'connect' timed out/.test(message)
+    || /failed to connect to server/.test(message);
+}
 
 function normalizeId(value) {
   if (!value) return '';
@@ -31,37 +85,27 @@ async function findProtectedGuestIds(candidateIds = []) {
   }
 
   const [games, matches] = await Promise.all([
-    (async () => {
-      try {
-        return await runLeanQuery(
-          Game.find({ players: { $in: candidateIds } }),
-          'players'
-        );
-      } catch (_) {
-        return [];
-      }
-    })(),
-    (async () => {
-      try {
-        return await runLeanQuery(
-          Match.find({
-            $or: [
-              { player1: { $in: candidateIds } },
-              { player2: { $in: candidateIds } },
-              { winner: { $in: candidateIds } },
-            ],
-          }),
-          'player1 player2 winner'
-        );
-      } catch (_) {
-        return [];
-      }
-    })(),
+    runLeanQuery(
+      Game.find({ players: { $in: candidateIds } }),
+      'players'
+    ),
+    runLeanQuery(
+      Match.find({
+        $or: [
+          { player1: { $in: candidateIds } },
+          { player2: { $in: candidateIds } },
+          { winner: { $in: candidateIds } },
+        ],
+      }),
+      'player1 player2 winner'
+    ),
   ]);
 
   const protectedIds = new Set();
+  const gameRows = Array.isArray(games) ? games : [];
+  const matchRows = Array.isArray(matches) ? matches : [];
 
-  games.forEach((game) => {
+  gameRows.forEach((game) => {
     (game?.players || []).forEach((playerId) => {
       const normalized = normalizeId(playerId);
       if (normalized) {
@@ -70,7 +114,7 @@ async function findProtectedGuestIds(candidateIds = []) {
     });
   });
 
-  matches.forEach((match) => {
+  matchRows.forEach((match) => {
     [match?.player1, match?.player2, match?.winner].forEach((playerId) => {
       const normalized = normalizeId(playerId);
       if (normalized) {
@@ -84,6 +128,16 @@ async function findProtectedGuestIds(candidateIds = []) {
 
 async function removeStaleGuests() {
   const cutoff = new Date(Date.now() - DISCONNECT_RETENTION_MS);
+  if (!hasMongoConnection()) {
+    reportMongoUnavailable();
+    return {
+      skipped: true,
+      reason: 'mongo_unavailable',
+    };
+  }
+
+  clearMongoUnavailableNoticeIfNeeded();
+
   try {
     const staleGuests = await User.find({
       isGuest: true,
@@ -116,8 +170,36 @@ async function removeStaleGuests() {
         cutoff
       });
     }
+
+    return {
+      deletedCount: Number(result?.deletedCount || 0),
+      cutoff,
+    };
   } catch (err) {
+    if (isMongoConnectivityError(err)) {
+      reportMongoUnavailable('Guest cleanup could not reach MongoDB; cleanup will retry after the connection recovers.');
+      return {
+        skipped: true,
+        reason: 'mongo_unavailable',
+      };
+    }
+
     console.error('[guestCleanup] Failed to remove stale anonymous accounts:', err);
+    reportServerError({
+      source: 'guestCleanup',
+      level: 'error',
+      code: err?.code || 'guest_cleanup_failed',
+      message: err?.message || 'Failed to remove stale anonymous accounts.',
+      error: err,
+      details: {
+        cutoff: cutoff.toISOString(),
+        readyState: getMongoReadyState(),
+      },
+    });
+    return {
+      skipped: true,
+      reason: 'error',
+    };
   }
 }
 
@@ -147,6 +229,7 @@ function stopGuestCleanupTask() {
 }
 
 module.exports = {
+  removeStaleGuests,
   startGuestCleanupTask,
   stopGuestCleanupTask,
 };

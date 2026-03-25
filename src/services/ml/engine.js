@@ -750,6 +750,41 @@ function getLastAction(state) {
   return state.actions[state.actions.length - 1];
 }
 
+function shouldResolvePendingMoveBeforeMove(state, color) {
+  if (!state || !state.isActive) return false;
+  if (state.playerTurn !== color) return false;
+  if (state.onDeckingPlayer === color) return false;
+  const lastAction = getLastAction(state);
+  const lastMove = getLastMove(state);
+  return Boolean(
+    lastAction
+    && lastAction.type === ACTIONS.MOVE
+    && lastMove
+    && lastMove.state === MOVE_STATES.PENDING
+    && lastMove.player !== color
+  );
+}
+
+function getMoveGenerationState(state, color) {
+  if (!shouldResolvePendingMoveBeforeMove(state, color)) {
+    return state;
+  }
+  const cache = getStateCache(state);
+  cache.moveGenerationStateByColor = cache.moveGenerationStateByColor || [null, null];
+  if (cache.moveGenerationStateByColor[color]) {
+    return cache.moveGenerationStateByColor[color];
+  }
+
+  const preview = cloneState(state);
+  const previewMoveIndex = preview.moves.length - 1;
+  const previewMove = ensureWritableMoveAt(preview, previewMoveIndex);
+  resolveMove(preview, previewMove, previewMoveIndex);
+  preview.playerTurn = color;
+  preview.toMove = color;
+  cache.moveGenerationStateByColor[color] = preview;
+  return preview;
+}
+
 function cloneSquareLike(square) {
   return square ? { ...square } : square;
 }
@@ -1178,7 +1213,13 @@ function getDeclaredMoveActionsForColor(state, color) {
     return cache.declaredMoveActionsByColor[color];
   }
 
-  const encoded = ensureEncodedState(state);
+  const moveState = getMoveGenerationState(state, color);
+  if (!moveState?.isActive) {
+    cache.declaredMoveActionsByColor = cache.declaredMoveActionsByColor || [null, null];
+    cache.declaredMoveActionsByColor[color] = [];
+    return [];
+  }
+  const encoded = ensureEncodedState(moveState);
   const actions = [];
   let boardMask = encoded.boardMaskByColor[color] >>> 0;
 
@@ -1265,7 +1306,10 @@ function countMoveOptionsForColor(state, color) {
   if (Number.isFinite(cache.moveOptionCountsByColor[color])) {
     return cache.moveOptionCountsByColor[color];
   }
-  const count = countDeclaredMoveOptionsForColorEncoded(state, color);
+  const moveState = getMoveGenerationState(state, color);
+  const count = moveState?.isActive
+    ? countDeclaredMoveOptionsForColorEncoded(moveState, color)
+    : 0;
   cache.moveOptionCountsByColor[color] = count;
   return count;
 }
@@ -1445,7 +1489,7 @@ function resolveMove(state, move, moveIndex = -1) {
 }
 
 function validateMoveAction(state, action) {
-  if (!action) return { ok: false };
+  if (!state?.isActive || !action) return { ok: false };
   const color = action.player;
   const from = action.from || {};
   const to = action.to || {};
@@ -1475,37 +1519,29 @@ function validateMoveAction(state, action) {
 }
 
 function applyMoveAction(state, action) {
-  const validation = validateMoveAction(state, action);
+  const color = action.player;
+  const validationState = getMoveGenerationState(state, color);
+  const validation = validateMoveAction(validationState, action);
   if (!validation.ok) return false;
 
-  const color = action.player;
   const from = { ...action.from };
   const to = { ...action.to };
   const declaration = action.declaration;
-  const pieceId = validation.piece.id;
-
   let earlyResolved = false;
-  if (state.moves.length > 0) {
-    const prevMove = state.moves[state.moves.length - 1];
-    if (
-      prevMove
-      && prevMove.state === MOVE_STATES.PENDING
-      && prevMove.player !== color
-      && equalsSquare(prevMove.to, to)
-    ) {
-      earlyResolved = true;
-      const writablePrevMove = ensureWritableMoveAt(state, state.moves.length - 1);
-      const endedEarly = resolveMove(state, writablePrevMove, state.moves.length - 1);
-      if (endedEarly) {
-        state.ply += 1;
-        syncTurn(state);
-        return true;
-      }
+  if (shouldResolvePendingMoveBeforeMove(state, color)) {
+    earlyResolved = true;
+    const writablePrevMove = ensureWritableMoveAt(state, state.moves.length - 1);
+    const endedEarly = resolveMove(state, writablePrevMove, state.moves.length - 1);
+    if (endedEarly) {
+      state.ply += 1;
+      syncTurn(state);
+      return true;
     }
   }
 
   const checkAfterResolution = validateMoveAction(state, action);
   if (!checkAfterResolution.ok) return false;
+  const pieceId = checkAfterResolution.piece.id;
 
   const move = {
     player: color,

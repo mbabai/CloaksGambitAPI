@@ -15,6 +15,7 @@ jest.mock('../src/utils/authTokens', () => ({
   TOKEN_COOKIE_NAME: 'cgToken',
   extractTokenFromRequest: jest.fn(() => null),
   resolveUserFromToken: jest.fn(() => null),
+  verifyAuthToken: jest.fn(() => null),
   parseCookies: jest.requireActual('../src/utils/authTokens').parseCookies,
 }));
 
@@ -23,6 +24,7 @@ const ensureUser = require('../src/utils/ensureUser');
 const {
   extractTokenFromRequest,
   resolveUserFromToken,
+  verifyAuthToken,
 } = require('../src/utils/authTokens');
 const mongoose = require('mongoose');
 const { resolveSessionFromRequest } = require('../src/utils/requestSession');
@@ -34,6 +36,7 @@ describe('requestSession helper', () => {
     mongoose.connection.readyState = 1;
     extractTokenFromRequest.mockReturnValue(null);
     resolveUserFromToken.mockResolvedValue(null);
+    verifyAuthToken.mockReturnValue(null);
     User.findById.mockResolvedValue(null);
   });
 
@@ -86,6 +89,7 @@ describe('requestSession helper', () => {
   test('skips token session resolution while mongo is disconnected', async () => {
     mongoose.connection.readyState = 0;
     extractTokenFromRequest.mockReturnValue('signed-token');
+    verifyAuthToken.mockReturnValue({ sub: 'user-1' });
 
     const session = await resolveSessionFromRequest({
       headers: {
@@ -94,6 +98,33 @@ describe('requestSession helper', () => {
     }, { createGuest: false });
 
     expect(session).toBeNull();
+    expect(resolveUserFromToken).not.toHaveBeenCalled();
+  });
+
+  test('reuses signed authenticated token claims while mongo is disconnected', async () => {
+    mongoose.connection.readyState = 0;
+    extractTokenFromRequest.mockReturnValue('signed-token');
+    verifyAuthToken.mockReturnValue({
+      sub: 'admin-1',
+      username: 'Admin',
+      email: 'marcellbabai@gmail.com',
+      isGuest: false,
+    });
+
+    const session = await resolveSessionFromRequest({
+      headers: {
+        authorization: 'Bearer signed-token',
+      },
+    }, { createGuest: false });
+
+    expect(session).toMatchObject({
+      type: 'authenticated',
+      authenticated: true,
+      userId: 'admin-1',
+      username: 'Admin',
+      email: 'marcellbabai@gmail.com',
+      isGuest: false,
+    });
     expect(resolveUserFromToken).not.toHaveBeenCalled();
   });
 });

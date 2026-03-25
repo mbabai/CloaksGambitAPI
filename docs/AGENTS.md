@@ -11,6 +11,7 @@
 
 ## Read These First For Current ML Work
 - `docs/ml-admin.md`: operator-facing guide for the current `/ml-admin` run workbench.
+- `docs/ml-hardware-optimizations.md`: consolidated inventory of CPU/GPU/throughput ML optimization work, current runtime heuristics, and known docs-vs-code mismatches.
 - `docs/ml-runtime-rebuild-execplan.md`: background on the earlier simulation/training/snapshot runtime rebuild.
 - `docs/ml-continuous-run-pipeline-execplan.md`: explains the current run-oriented pipeline, generation tracking, replay buffers, and workbench contract.
 - `docs/ml-parallel-runtime-execplan.md`: documents worker-thread game concurrency and optional parallel head training.

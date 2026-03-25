@@ -22,6 +22,11 @@ const mockRuntime = {
   startTestGame: jest.fn(),
 };
 
+const mockAdminErrorFeed = {
+  getRecentServerErrors: jest.fn(),
+  reportServerError: jest.fn(),
+};
+
 jest.mock('../src/utils/adminAccess', () => ({
   ensureAdminRequest: jest.fn(async () => ({ userId: 'admin-user' })),
 }));
@@ -29,6 +34,8 @@ jest.mock('../src/utils/adminAccess', () => ({
 jest.mock('../src/services/ml/runtime', () => ({
   getMlRuntime: jest.fn(() => mockRuntime),
 }));
+
+jest.mock('../src/services/adminErrorFeed', () => mockAdminErrorFeed);
 
 const { ensureAdminRequest } = require('../src/utils/adminAccess');
 const mlRouter = require('../src/routes/v1/ml');
@@ -44,6 +51,14 @@ describe('ml routes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     ensureAdminRequest.mockResolvedValue({ userId: 'admin-user' });
+    mockAdminErrorFeed.getRecentServerErrors.mockReturnValue([
+      {
+        id: 'server-error-1',
+        source: 'guestCleanup',
+        level: 'warn',
+        message: 'Guest cleanup skipped because MongoDB is not connected.',
+      },
+    ]);
     mockRuntime.getWorkbench.mockResolvedValue({
       summary: {
         counts: {
@@ -78,6 +93,16 @@ describe('ml routes', () => {
         enabledIds: ['generation:run-1:0'],
         total: 1,
         enabledCount: 1,
+      },
+      serverErrors: {
+        items: [
+          {
+            id: 'server-error-1',
+            source: 'guestCleanup',
+            level: 'warn',
+            message: 'Guest cleanup skipped because MongoDB is not connected.',
+          },
+        ],
       },
       live: {
         resourceTelemetry: {
@@ -239,6 +264,16 @@ describe('ml routes', () => {
         total: 1,
         enabledCount: 1,
       },
+      serverErrors: {
+        items: [
+          {
+            id: 'server-error-1',
+            source: 'guestCleanup',
+            level: 'warn',
+            message: 'Guest cleanup skipped because MongoDB is not connected.',
+          },
+        ],
+      },
       live: {
         resourceTelemetry: {
           cpu: { available: true, currentPercent: 18.5, updatedAt: '2026-03-13T06:00:00.000Z', history: [] },
@@ -249,6 +284,28 @@ describe('ml routes', () => {
         runs: [{ runId: 'run-1', phase: 'selfplay', status: 'running' }],
       },
     });
+  });
+
+  test('GET /workbench reports backend failures through the admin error feed', async () => {
+    const err = new Error('Failed to load ML workbench');
+    err.code = 'workbench_failed';
+    err.details = { readyState: 0 };
+    mockRuntime.getWorkbench.mockRejectedValueOnce(err);
+
+    const response = await request(createApp()).get('/api/v1/ml/workbench');
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({
+      message: 'Failed to load ML workbench',
+      code: 'workbench_failed',
+      details: { readyState: 0 },
+    });
+    expect(mockAdminErrorFeed.reportServerError).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'mlRoute:workbench',
+      code: 'workbench_failed',
+      status: 500,
+      message: 'Failed to load ML workbench',
+    }));
   });
 
   test('GET and PUT /promoted-bots expose the admin bot catalog', async () => {
@@ -416,6 +473,16 @@ describe('ml routes', () => {
     expect(liveResponse.body.runs).toEqual([
       { runId: 'run-1', phase: 'training', status: 'running' },
     ]);
+    expect(liveResponse.body.serverErrors).toEqual({
+      items: [
+        {
+          id: 'server-error-1',
+          source: 'guestCleanup',
+          level: 'warn',
+          message: 'Guest cleanup skipped because MongoDB is not connected.',
+        },
+      ],
+    });
   });
 
   test('POST /runs/:runId/continue resumes a stopped run', async () => {

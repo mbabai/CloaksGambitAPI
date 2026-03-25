@@ -19,6 +19,8 @@ function createAuthToken(user) {
   const payload = {
     sub: user._id.toString(),
     username: user.username || null,
+    email: user.email || '',
+    isGuest: Boolean(user.isGuest),
   };
   return jwt.sign(payload, getJwtSecret(), { expiresIn: '365d' });
 }

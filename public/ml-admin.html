@@ -194,6 +194,102 @@
         color: var(--muted);
       }
 
+      .server-error-section {
+        display: grid;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .server-error-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .server-error-card {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(239, 135, 135, 0.3);
+        background: rgba(49, 18, 22, 0.52);
+      }
+
+      .server-error-card.warn {
+        border-color: rgba(240, 182, 88, 0.34);
+        background: rgba(49, 33, 13, 0.5);
+      }
+
+      .server-error-card.info {
+        border-color: rgba(127, 210, 222, 0.26);
+        background: rgba(12, 31, 37, 0.62);
+      }
+
+      .server-error-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      .server-error-title {
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .server-error-card.warn .server-error-title {
+        color: var(--accent-strong);
+      }
+
+      .server-error-card.info .server-error-title {
+        color: var(--teal);
+      }
+
+      .server-error-card.error .server-error-title {
+        color: var(--danger);
+      }
+
+      .server-error-meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .server-error-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .server-error-tag {
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(133, 184, 175, 0.2);
+        background: rgba(6, 18, 23, 0.76);
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .server-error-details {
+        margin-top: 10px;
+      }
+
+      .server-error-details summary {
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--accent-strong);
+      }
+
+      .server-error-details pre {
+        margin: 8px 0 0;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(133, 184, 175, 0.16);
+        background: rgba(6, 18, 23, 0.86);
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
       .metrics {
         display: grid;
         grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -947,6 +1043,12 @@
             </div>
           </div>
           <div id="latestRunSummary" class="subtle">No runs yet.</div>
+          <div class="server-error-section">
+            <div id="serverErrorSummary" class="subtle">No recent server errors.</div>
+            <div id="serverErrorList" class="server-error-list">
+              <div class="subtle">No recent server errors reported.</div>
+            </div>
+          </div>
         </div>
       </section>
 

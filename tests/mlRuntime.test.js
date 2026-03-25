@@ -1491,6 +1491,7 @@ describeMlWorkflow('ML runtime', () => {
     });
     run.working.selfPlayProgress = {
       active: true,
+      inFlight: true,
       cycle: 3,
       workerGeneration: 0,
       opponentGeneration: 0,
@@ -1501,8 +1502,22 @@ describeMlWorkflow('ML runtime', () => {
       averageMctsSearchDurationMs: 55,
       averageForwardPassDurationMs: 4,
     };
+    run.working.evaluationProgress = {
+      active: true,
+      inFlight: true,
+      checkpointIndex: 1,
+      candidateGeneration: 1,
+      stage: 'baseline',
+      stageLabel: 'Baseline',
+      opponentGeneration: 0,
+      opponentLabel: 'G0',
+      completedGames: 2,
+      targetGames: 10,
+      activeGames: 3,
+    };
     run.working.trainingProgress = {
       active: true,
+      inFlight: true,
       cycle: 3,
       completedSteps: 1,
       targetSteps: 4,
@@ -1516,11 +1531,20 @@ describeMlWorkflow('ML runtime', () => {
 
     expect(payload.selfPlayProgress).toMatchObject({
       active: true,
+      inFlight: true,
       completedGames: 2,
       activeGames: 4,
     });
+    expect(payload.evaluationProgress).toMatchObject({
+      active: true,
+      inFlight: true,
+      completedGames: 2,
+      activeGames: 3,
+      stage: 'baseline',
+    });
     expect(payload.trainingProgress).toMatchObject({
       active: true,
+      inFlight: true,
       completedSteps: 1,
       targetSteps: 4,
       background: true,

@@ -49,6 +49,7 @@ const {
   decodeMlPersistenceArtifacts,
   encodeMlPersistenceArtifacts,
 } = require('./persistenceCodec');
+const { reportServerError } = require('../adminErrorFeed');
 const eventBus = require('../../eventBus');
 const MlRunModel = require('../../models/MlRun');
 const MlRunCheckpointModel = require('../../models/MlRunCheckpoint');
@@ -12123,6 +12124,7 @@ class MlRuntime {
     const summary = options.summary || null;
     return {
       active: options.active !== false,
+      inFlight: options.inFlight === true,
       checkpointIndex: Number(options.checkpointIndex || 0),
       candidateGeneration: Number(options.candidateGeneration || 0),
       stage: String(options.stage || 'baseline'),
@@ -12133,6 +12135,7 @@ class MlRuntime {
       opponentLabel: options.opponentLabel || null,
       completedGames: Number(options.completedGames || 0),
       targetGames: Number(options.targetGames || 0),
+      activeGames: Number(options.activeGames || 0),
       requiredWinRate: Number.isFinite(Number(options.requiredWinRate))
         ? Number(options.requiredWinRate)
         : null,
@@ -12146,6 +12149,7 @@ class MlRuntime {
   buildRunSelfPlayProgress(options = {}) {
     return {
       active: options.active !== false,
+      inFlight: options.inFlight === true,
       cycle: Number(options.cycle || 0),
       workerGeneration: Number(options.workerGeneration || 0),
       opponentGeneration: Number.isFinite(Number(options.opponentGeneration))
@@ -12163,6 +12167,7 @@ class MlRuntime {
   buildRunTrainingProgress(options = {}) {
     return {
       active: options.active !== false,
+      inFlight: options.inFlight === true,
       cycle: Number(options.cycle || 0),
       completedSteps: Number(options.completedSteps || 0),
       targetSteps: Number(options.targetSteps || 0),
@@ -12340,6 +12345,20 @@ class MlRuntime {
     const promotionTests = [];
 
     try {
+      await this.updateRunEvaluationProgress(run, {
+        checkpointIndex,
+        candidateGeneration,
+        stage: 'baseline',
+        stageLabel: 'Baseline',
+        opponentGeneration: baselineTargetGeneration,
+        opponentLabel: `G${baselineTargetGeneration}`,
+        completedGames: 0,
+        targetGames: baselineGamesRequired,
+        activeGames: 0,
+        inFlight: false,
+        requiredWinRate: baselineWinRateRequired,
+        summary: null,
+      });
       const playedBaselineGames = await this.playRunGenerationGamesChunked(run, {
         phase: 'evaluation',
         whiteGeneration: candidateGeneration,
@@ -12347,6 +12366,26 @@ class MlRuntime {
         gameCount: baselineGamesRequired,
         checkpointIndex,
         taskState,
+        onTaskProgress: async (taskProgress) => {
+          await this.updateRunEvaluationProgress(run, {
+            checkpointIndex,
+            candidateGeneration,
+            stage: 'baseline',
+            stageLabel: 'Baseline',
+            opponentGeneration: baselineTargetGeneration,
+            opponentLabel: `G${baselineTargetGeneration}`,
+            completedGames: baselineGames.length,
+            targetGames: baselineGamesRequired,
+            activeGames: Number(taskProgress?.activeGames || 0),
+            inFlight: Number(taskProgress?.activeGames || 0) > 0,
+            requiredWinRate: baselineWinRateRequired,
+            summary: this.summarizeGenerationMatchup(
+              baselineGames,
+              candidateGeneration,
+              baselineTargetGeneration,
+            ),
+          });
+        },
         onChunk: async (chunkGames, progressState) => {
           baselineGames.push(...(Array.isArray(chunkGames) ? chunkGames : []));
           this.recordRunEvaluationGames(run, candidateGenerationRecord, chunkGames);
@@ -12364,6 +12403,8 @@ class MlRuntime {
             opponentLabel: `G${baselineTargetGeneration}`,
             completedGames: progressState.completedGames,
             targetGames: progressState.targetGames,
+            activeGames: 0,
+            inFlight: false,
             requiredWinRate: baselineWinRateRequired,
             summary,
           });
@@ -12385,6 +12426,22 @@ class MlRuntime {
           const promotionGames = [];
           const opponentGeneration = Number(opponent.generation);
           const opponentLabel = opponent.label || `G${opponent.generation}`;
+          await this.updateRunEvaluationProgress(run, {
+            checkpointIndex,
+            candidateGeneration,
+            stage: 'promotion',
+            stageLabel: opponent.isBaselineFallback
+              ? `Promotion Fallback ${Number(opponent.sequenceIndex || 1)}`
+              : 'Promotion',
+            opponentGeneration,
+            opponentLabel,
+            completedGames: 0,
+            targetGames: promotionTestGamesRequired,
+            activeGames: 0,
+            inFlight: false,
+            requiredWinRate: promotionTestWinRateRequired,
+            summary: null,
+          });
           const playedPromotionGames = await this.playRunGenerationGamesChunked(run, {
             phase: 'evaluation',
             whiteGeneration: candidateGeneration,
@@ -12392,6 +12449,28 @@ class MlRuntime {
             gameCount: promotionTestGamesRequired,
             checkpointIndex,
             taskState,
+            onTaskProgress: async (taskProgress) => {
+              await this.updateRunEvaluationProgress(run, {
+                checkpointIndex,
+                candidateGeneration,
+                stage: 'promotion',
+                stageLabel: opponent.isBaselineFallback
+                  ? `Promotion Fallback ${Number(opponent.sequenceIndex || 1)}`
+                  : 'Promotion',
+                opponentGeneration,
+                opponentLabel,
+                completedGames: promotionGames.length,
+                targetGames: promotionTestGamesRequired,
+                activeGames: Number(taskProgress?.activeGames || 0),
+                inFlight: Number(taskProgress?.activeGames || 0) > 0,
+                requiredWinRate: promotionTestWinRateRequired,
+                summary: this.summarizeGenerationMatchup(
+                  promotionGames,
+                  candidateGeneration,
+                  opponentGeneration,
+                ),
+              });
+            },
             onChunk: async (chunkGames, progressState) => {
               promotionGames.push(...(Array.isArray(chunkGames) ? chunkGames : []));
               this.recordRunEvaluationGames(run, candidateGenerationRecord, chunkGames);
@@ -12411,6 +12490,8 @@ class MlRuntime {
                 opponentLabel,
                 completedGames: progressState.completedGames,
                 targetGames: progressState.targetGames,
+                activeGames: 0,
+                inFlight: false,
                 requiredWinRate: promotionTestWinRateRequired,
                 summary,
               });
@@ -12514,6 +12595,7 @@ class MlRuntime {
         completedSteps: 0,
         targetSteps: steps,
         checkpointIndex: Number(run.working?.checkpointIndex || 0),
+        inFlight: false,
         background: options.deferEvaluation === true,
         trainingBackend: null,
         trainingDevice: null,
@@ -12538,6 +12620,16 @@ class MlRuntime {
           || stepIndex === (steps - 1)
         );
         const trainingStepStartedAt = Date.now();
+        await this.updateRunTrainingProgress(run, {
+          cycle: Number(run.stats?.cycle || 0),
+          completedSteps: stepIndex,
+          targetSteps: steps,
+          checkpointIndex: Number(run.working?.checkpointIndex || 0),
+          inFlight: true,
+          background: options.deferEvaluation === true,
+          trainingBackend: null,
+          trainingDevice: null,
+        });
         const trainingResult = await this.trainModelBundleBatch({
           modelBundle: run.working.modelBundle,
           optimizerState: run.working.optimizerState,
@@ -12608,6 +12700,7 @@ class MlRuntime {
           completedSteps: stepIndex + 1,
           targetSteps: steps,
           checkpointIndex: Number(run.working?.checkpointIndex || 0),
+          inFlight: false,
           background: options.deferEvaluation === true,
           trainingBackend: lossEntry.trainingBackend,
           trainingDevice: lossEntry.trainingDevice,
@@ -12836,6 +12929,7 @@ class MlRuntime {
         completedGames: 0,
         targetGames: Number(run.config?.numSelfplayWorkers || 0),
         latestGameId: null,
+        inFlight: false,
         activeGames: 0,
         averageMctsSearchDurationMs: 0,
         averageForwardPassDurationMs: 0,
@@ -12859,6 +12953,7 @@ class MlRuntime {
             completedGames: Number(selfPlayGameCount || 0),
             targetGames: Number(run.config?.numSelfplayWorkers || 0),
             latestGameId: null,
+            inFlight: Number(taskProgress?.activeGames || 0) > 0,
             activeGames: Number(taskProgress?.activeGames || 0),
             averageMctsSearchDurationMs: Number(taskProgress?.averageMctsSearchDurationMs || 0),
             averageForwardPassDurationMs: Number(taskProgress?.averageForwardPassDurationMs || 0),
@@ -12898,6 +12993,7 @@ class MlRuntime {
             completedGames: Number(progressState?.completedGames || 0),
             targetGames: Number(progressState?.targetGames || run.config?.numSelfplayWorkers || 0),
             latestGameId: normalizedChunkGames.length ? normalizedChunkGames[normalizedChunkGames.length - 1].id : null,
+            inFlight: false,
             activeGames: 0,
             averageMctsSearchDurationMs: Number(run.stats?.averageMctsSearchDurationMs || 0),
             averageForwardPassDurationMs: Number(run.stats?.averageForwardPassDurationMs || 0),
@@ -13019,6 +13115,20 @@ class MlRuntime {
           label: run.label,
           stopReason: run.stopReason,
           error: run.lastError,
+        });
+        reportServerError({
+          source: 'mlRuntime',
+          level: 'error',
+          code: run.lastError?.code || 'run_pipeline_failed',
+          message: run.stopReason || 'ML run pipeline failed.',
+          error: err,
+          details: {
+            runId: run.id,
+            label: run.label,
+            status: run.status,
+            stopReason: run.stopReason,
+            lastError: run.lastError,
+          },
         });
         this.logRunEvent(run, 'run_pipeline_error', {
           status: 'error',

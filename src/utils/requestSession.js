@@ -8,6 +8,7 @@ const {
   extractTokenFromRequest,
   resolveUserFromToken,
   parseCookies,
+  verifyAuthToken,
 } = require('./authTokens');
 
 const FALLBACK_USERNAME = 'GoogleUser';
@@ -105,6 +106,30 @@ function normalizeInjectedSession(session) {
   };
 }
 
+function resolveSessionFromVerifiedToken(token) {
+  const payload = verifyAuthToken(token);
+  if (!payload?.sub) {
+    return null;
+  }
+  const hasExplicitGuestFlag = typeof payload.isGuest === 'boolean';
+  const hasEmail = typeof payload.email === 'string' && payload.email.trim().length > 0;
+  if (!hasExplicitGuestFlag && !hasEmail) {
+    return null;
+  }
+  const isGuest = hasExplicitGuestFlag
+    ? payload.isGuest
+    : false;
+  return {
+    type: isGuest ? 'guest' : 'authenticated',
+    authenticated: !isGuest,
+    userId: String(payload.sub),
+    username: payload.username || FALLBACK_USERNAME,
+    email: typeof payload.email === 'string' ? payload.email : '',
+    isGuest,
+    user: null,
+  };
+}
+
 async function resolveGuestFromCookieUser(cookieUserId) {
   if (!cookieUserId) return null;
   if (!isMongoConnected()) return null;
@@ -147,6 +172,10 @@ async function resolveSessionFromRequest(req, options = {}) {
   const token = extractTokenFromRequest(req);
 
   if (token) {
+    const tokenSession = resolveSessionFromVerifiedToken(token);
+    if (tokenSession && !isMongoConnected()) {
+      return tokenSession;
+    }
     try {
       if (isMongoConnected()) {
         const resolved = await resolveUserFromToken(token);
@@ -162,6 +191,9 @@ async function resolveSessionFromRequest(req, options = {}) {
         }
       }
     } catch (err) {
+      if (isMongoUnavailableError(err) && tokenSession) {
+        return tokenSession;
+      }
       if (!isMongoUnavailableError(err)) {
         console.warn('Failed to resolve session from token', err);
       }

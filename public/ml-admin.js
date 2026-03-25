@@ -1,6 +1,7 @@
 import { createGenerationWinChart } from '/js/modules/mlAdmin/generationWinChart.js';
 import { createReplayWorkbench } from '/js/modules/mlAdmin/replay.js';
 import { createResourceUsageChart } from '/js/modules/mlAdmin/resourceUsageChart.js';
+import { getRunStatActivity } from '/js/modules/mlAdmin/runActivity.js';
 
 const workflowTabs = Array.from(document.querySelectorAll('[data-workflow-tab]'));
 const workflowPanels = Array.from(document.querySelectorAll('[data-workflow-panel]'));
@@ -9,6 +10,8 @@ const WORKBENCH_POLL_MS = 30000;
 const UI_CLOCK_MS = 1000;
 const ACTIVE_RUN_DETAIL_REFRESH_MS = 15000;
 const ACTIVE_WORKFLOW_TAB_STORAGE_KEY = 'mlAdminActiveWorkflowTab';
+const MAX_SERVER_ERRORS = 12;
+const SERVER_ERROR_TEXT_LIMIT = 4000;
 
 function loadStoredWorkflowTab() {
   try {
@@ -28,6 +31,8 @@ function persistWorkflowTab(tab) {
 const els = {
   refreshWorkbenchBtn: document.getElementById('refreshWorkbenchBtn'),
   statusText: document.getElementById('statusText'),
+  serverErrorSummary: document.getElementById('serverErrorSummary'),
+  serverErrorList: document.getElementById('serverErrorList'),
 
   countRuns: document.getElementById('countRuns'),
   countActiveRuns: document.getElementById('countActiveRuns'),
@@ -124,6 +129,7 @@ const state = {
   defaults: null,
   runs: [],
   resourceTelemetry: null,
+  serverErrors: [],
   runDetailsById: new Map(),
   liveRunsById: new Map(),
   activeWorkflowTab: loadStoredWorkflowTab(),
@@ -150,12 +156,16 @@ const state = {
   adminSocket: null,
   adminSocketOrigin: '',
   adminSocketDisabled: false,
+  adminSessionLost: false,
+  pollBackoffUntilMs: 0,
   livePollHandle: null,
   workbenchPollHandle: null,
   uiClockHandle: null,
   liveRenderQueued: false,
   runDetailRefreshedAtMs: new Map(),
 };
+
+let clientServerErrorSequence = 0;
 
 const fieldHelpTextById = {
   seedModeSelect: 'Choose whether to start from the preferred bootstrap baseline, a fresh random model, or a promoted generation from an existing run.',
@@ -770,6 +780,204 @@ function logMlAdminError(context, error = null, details = {}) {
     payload: error?.payload || null,
     ...details,
   });
+}
+
+function isValidIsoDate(value) {
+  return typeof value === 'string' && value.trim() && !Number.isNaN(Date.parse(value));
+}
+
+function normalizeServerErrorEntry(entry = {}) {
+  const error = entry?.error && typeof entry.error === 'object'
+    ? entry.error
+    : null;
+  const createdAt = isValidIsoDate(entry?.createdAt)
+    ? entry.createdAt
+    : new Date().toISOString();
+  const lastSeenAt = isValidIsoDate(entry?.lastSeenAt)
+    ? entry.lastSeenAt
+    : createdAt;
+  const id = typeof entry?.id === 'string' && entry.id.trim()
+    ? entry.id.trim()
+    : `client-server-error-${Date.now()}-${clientServerErrorSequence += 1}`;
+  const level = (() => {
+    const normalized = String(entry?.level || '').trim().toLowerCase();
+    if (normalized === 'warn' || normalized === 'warning') return 'warn';
+    if (normalized === 'info') return 'info';
+    return 'error';
+  })();
+  const source = typeof entry?.source === 'string' && entry.source.trim()
+    ? entry.source.trim()
+    : 'server';
+  const message = typeof entry?.message === 'string' && entry.message.trim()
+    ? entry.message.trim()
+    : (typeof error?.message === 'string' && error.message.trim()
+      ? error.message.trim()
+      : 'Server error');
+  const code = entry?.code
+    ? String(entry.code)
+    : (error?.code ? String(error.code) : '');
+  const status = Number.isFinite(Number(entry?.status))
+    ? Number(entry.status)
+    : null;
+  const count = Math.max(1, Math.floor(Number(entry?.count) || 1));
+  const details = entry?.details !== undefined
+    ? entry.details
+    : (error?.details !== undefined ? error.details : null);
+  const stack = typeof entry?.stack === 'string' && entry.stack.trim()
+    ? entry.stack.trim()
+    : (typeof error?.stack === 'string' && error.stack.trim() ? error.stack.trim() : '');
+  return {
+    id,
+    createdAt,
+    lastSeenAt,
+    level,
+    source,
+    message,
+    code,
+    status,
+    count,
+    details,
+    stack,
+  };
+}
+
+function sortServerErrorEntries(entries = []) {
+  return [...entries].sort((left, right) => {
+    const leftTime = Date.parse(left?.lastSeenAt || left?.createdAt || '') || 0;
+    const rightTime = Date.parse(right?.lastSeenAt || right?.createdAt || '') || 0;
+    return rightTime - leftTime;
+  });
+}
+
+function stringifyServerErrorData(value) {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function formatServerErrorDetails(entry) {
+  const segments = [];
+  const detailsText = stringifyServerErrorData(entry?.details);
+  const stackText = typeof entry?.stack === 'string' ? entry.stack.trim() : '';
+  if (detailsText) {
+    segments.push(detailsText);
+  }
+  if (stackText) {
+    segments.push(stackText);
+  }
+  const combined = segments.join('\n\n').trim();
+  if (!combined) {
+    return '';
+  }
+  if (combined.length <= SERVER_ERROR_TEXT_LIMIT) {
+    return combined;
+  }
+  return `${combined.slice(0, SERVER_ERROR_TEXT_LIMIT)}\n\n[truncated]`;
+}
+
+function renderServerErrors() {
+  if (!els.serverErrorSummary || !els.serverErrorList) {
+    return;
+  }
+  const items = sortServerErrorEntries(state.serverErrors).slice(0, MAX_SERVER_ERRORS);
+  if (!items.length) {
+    els.serverErrorSummary.textContent = 'No recent server errors.';
+    els.serverErrorList.innerHTML = '<div class="subtle">No recent server errors reported.</div>';
+    return;
+  }
+  const errorCount = items.filter((entry) => entry.level === 'error').length;
+  const warningCount = items.filter((entry) => entry.level === 'warn').length;
+  const issueLabel = items.length === 1 ? 'issue' : 'issues';
+  els.serverErrorSummary.textContent = `${items.length} recent server ${issueLabel} (${errorCount} error${errorCount === 1 ? '' : 's'}, ${warningCount} warning${warningCount === 1 ? '' : 's'}).`;
+  els.serverErrorList.innerHTML = items.map((entry) => {
+    const detailText = formatServerErrorDetails(entry);
+    const tags = [
+      entry.code ? `Code ${entry.code}` : '',
+      entry.status ? `HTTP ${entry.status}` : '',
+      entry.count > 1 ? `Seen ${entry.count}x` : '',
+    ].filter(Boolean);
+    return `
+      <article class="server-error-card ${escapeHtml(entry.level)}">
+        <div class="server-error-head">
+          <div>
+            <div class="server-error-title">${escapeHtml(entry.message)}</div>
+            <div class="server-error-meta">${escapeHtml(entry.source)} · ${escapeHtml(formatDate(entry.lastSeenAt || entry.createdAt))}</div>
+          </div>
+        </div>
+        ${tags.length ? `<div class="server-error-tags">${tags.map((tag) => `<span class="server-error-tag">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+        ${detailText ? `<details class="server-error-details"><summary>Details</summary><pre>${escapeHtml(detailText)}</pre></details>` : ''}
+      </article>
+    `;
+  }).join('');
+}
+
+function upsertServerErrors(entries = []) {
+  const nextEntries = Array.isArray(entries) ? entries : [];
+  if (!nextEntries.length) {
+    return;
+  }
+  const merged = new Map(state.serverErrors.map((entry) => [entry.id, entry]));
+  nextEntries
+    .map((entry) => normalizeServerErrorEntry(entry))
+    .forEach((entry) => {
+      const existing = merged.get(entry.id);
+      if (!existing) {
+        merged.set(entry.id, entry);
+        return;
+      }
+      const isSameObservation = existing.lastSeenAt === entry.lastSeenAt
+        && existing.message === entry.message
+        && existing.status === entry.status;
+      merged.set(entry.id, {
+        ...existing,
+        ...entry,
+        createdAt: existing.createdAt || entry.createdAt,
+        count: isSameObservation
+          ? Math.max(Number(existing.count || 1), Number(entry.count || 1))
+          : Math.max(Number(existing.count || 1), 1) + Math.max(Number(entry.count || 1), 1),
+      });
+    });
+  state.serverErrors = sortServerErrorEntries(Array.from(merged.values())).slice(0, MAX_SERVER_ERRORS);
+  renderServerErrors();
+}
+
+function recordServerError(entry = {}) {
+  upsertServerErrors([entry]);
+}
+
+function pauseBackgroundPolling(durationMs = 15000) {
+  const duration = Math.max(1000, Number(durationMs) || 0);
+  state.pollBackoffUntilMs = Math.max(state.pollBackoffUntilMs, Date.now() + duration);
+}
+
+function resumeBackgroundPolling() {
+  state.pollBackoffUntilMs = 0;
+}
+
+function canRunBackgroundPolling() {
+  return !state.adminSessionLost && Date.now() >= Number(state.pollBackoffUntilMs || 0);
+}
+
+function markAdminSessionLost(message = 'Admin session lost. Reload the page and sign in again.') {
+  state.adminSessionLost = true;
+  pauseBackgroundPolling(60000);
+  disconnectAdminSocket({ disable: true });
+  recordServerError({
+    id: 'ml-admin-session-lost',
+    source: 'mlAdminAuth',
+    level: 'error',
+    status: 403,
+    message,
+  });
+  setStatus(message, 'error');
 }
 
 function sortRunsByRecent(runs = []) {
@@ -1430,15 +1638,6 @@ async function apiFetch(path, options = {}) {
     };
     pushOrigin(state.apiBaseOrigin);
     pushOrigin(window.location.origin);
-    const isLocalhost = ['localhost', '127.0.0.1'].includes(String(window.location.hostname || '').toLowerCase());
-    if (isLocalhost) {
-      const protocol = window.location.protocol || 'http:';
-      const host = window.location.hostname || 'localhost';
-      pushOrigin(`${protocol}//${host}:3000`);
-      for (let port = 3100; port <= 3125; port += 1) {
-        pushOrigin(`${protocol}//${host}:${port}`);
-      }
-    }
     return candidates;
   }
 
@@ -1462,11 +1661,13 @@ async function apiFetch(path, options = {}) {
       const resolvedOrigin = getResolvedResponseOrigin(origin, response, path);
       const previousOrigin = state.apiBaseOrigin;
       state.apiBaseOrigin = resolvedOrigin;
+      state.adminSessionLost = false;
+      state.adminSocketDisabled = false;
+      resumeBackgroundPolling();
       if (previousOrigin !== resolvedOrigin) {
         if (state.adminSocket && state.adminSocketOrigin !== resolvedOrigin) {
           disconnectAdminSocket();
         }
-        state.adminSocketDisabled = false;
       }
       if ((!state.adminSocket || state.adminSocketOrigin !== resolvedOrigin) && !state.adminSocketDisabled) {
         connectAdminSocket();
@@ -1485,6 +1686,18 @@ async function apiFetch(path, options = {}) {
       method: init.method || 'GET',
       candidateOrigins,
     });
+    recordServerError({
+      id: `ml-admin-api:${init.method || 'GET'}:${path}:network`,
+      source: 'mlAdminApi',
+      level: 'error',
+      message: lastFetchError?.message || 'Failed to reach the server.',
+      details: {
+        path,
+        method: init.method || 'GET',
+        candidateOrigins,
+      },
+    });
+    pauseBackgroundPolling(15000);
     throw lastFetchError || new Error('Failed to fetch');
   }
   let payload = null;
@@ -1501,9 +1714,41 @@ async function apiFetch(path, options = {}) {
       path,
       method: init.method || 'GET',
     });
+    if (response.status === 403) {
+      markAdminSessionLost(payload?.message || 'Admin session lost. Reload the page and sign in again.');
+    } else if (response.status >= 500) {
+      pauseBackgroundPolling(15000);
+    }
+    if (response.status >= 500) {
+      recordServerError({
+        id: `ml-admin-api:${init.method || 'GET'}:${path}:status:${response.status}`,
+        source: 'mlAdminApi',
+        level: 'error',
+        status: response.status,
+        code: payload?.code || '',
+        message: error.message,
+        details: {
+          path,
+          method: init.method || 'GET',
+          response: payload || null,
+        },
+      });
+    }
     throw error;
   }
   return payload;
+}
+
+async function refreshAuthenticatedSession() {
+  try {
+    await fetch('/api/auth/session', {
+      credentials: 'include',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+  } catch (_) {}
 }
 
 function isValidReplayCatalogPayload(payload) {
@@ -1708,10 +1953,15 @@ function renderSelectedRun() {
     : `Baseline G${primaryEvalGeneration}`;
   const timing = getRunTimingSnapshot(run.id);
   const replayBufferRate = getReplayBufferRateSnapshot(run, live, timing);
-  const phase = String(live?.phase || '').toLowerCase();
-  const selfPlayActive = Boolean(selfPlayProgress?.active) || phase === 'selfplay';
-  const evaluationActive = Boolean(evaluationProgress?.active) || phase === 'evaluation' || phase === 'promotion';
-  const trainingActive = Boolean(trainingProgress?.active) || phase === 'training';
+  const {
+    selfPlayActive,
+    evaluationActive,
+    trainingActive,
+  } = getRunStatActivity({
+    selfPlayProgress,
+    evaluationProgress,
+    trainingProgress,
+  });
   if (els.selectedRunRuntime) {
     els.selectedRunRuntime.querySelector('.v').textContent = formatDuration(getRunElapsedMs(run, live));
   }
@@ -2388,6 +2638,7 @@ async function selectRun(runId, { syncReplay = false, forceDetail = false } = {}
 async function refreshWorkbench({ silent = false, forceSelectedDetail = false } = {}) {
   if (!silent) setStatus('Refreshing ML run workbench...');
   const payload = await apiFetch('/api/v1/ml/workbench');
+  upsertServerErrors(payload?.serverErrors?.items || []);
   applyDefaults(payload.defaults || {});
   state.seedSourceOptions = Array.isArray(payload?.seedSources?.items) && payload.seedSources.items.length
     ? payload.seedSources.items
@@ -2684,13 +2935,14 @@ async function refreshSelectedRunDetailIfActive() {
 
 async function loadLiveStatus() {
   const live = await apiFetch('/api/v1/ml/live');
+  upsertServerErrors(live?.serverErrors?.items || []);
   applyResourceTelemetry(live?.resourceTelemetry || null, { render: false });
   (live?.runs || []).forEach((payload) => applyLiveRunPayload(payload));
   renderResourceTelemetry();
 }
 
 function connectAdminSocket() {
-  if (typeof io !== 'function' || state.adminSocketDisabled) return;
+  if (typeof io !== 'function' || state.adminSocketDisabled || state.adminSessionLost) return;
   const socketOrigin = String(state.apiBaseOrigin || window.location.origin).replace(/\/$/, '');
   if (state.adminSocket) {
     if (state.adminSocketOrigin === socketOrigin) {
@@ -2715,6 +2967,14 @@ function connectAdminSocket() {
     setStatus('Live updates connected.', 'ok');
   });
 
+  socket.on('admin:serverErrors', (payload) => {
+    upsertServerErrors(payload?.items || []);
+  });
+
+  socket.on('admin:serverError', (payload) => {
+    upsertServerErrors([payload]);
+  });
+
   socket.on('connect_error', (err) => {
     const statusCode = Number(
       err?.description?.status
@@ -2728,7 +2988,29 @@ function connectAdminSocket() {
       || statusCode === 403
       || /xhr poll error|unauthorized|forbidden|invalid namespace/.test(message);
     if (!shouldDisable) {
+      recordServerError({
+        id: 'ml-admin-socket:connect-error',
+        source: 'mlAdminSocket',
+        level: 'warn',
+        status: statusCode || null,
+        message: err?.message || 'Admin socket connection failed.',
+        details: {
+          statusCode,
+        },
+      });
       return;
+    }
+    if (statusCode >= 500 || !statusCode) {
+      recordServerError({
+        id: 'ml-admin-socket:connect-error',
+        source: 'mlAdminSocket',
+        level: 'warn',
+        status: statusCode || null,
+        message: err?.message || 'Admin socket connection failed.',
+        details: {
+          statusCode,
+        },
+      });
     }
     disableSocket();
   });
@@ -2755,6 +3037,26 @@ function connectAdminSocket() {
         status: payload?.status || null,
         stopReason: payload?.stopReason || null,
         lastError: payload?.lastError || null,
+      });
+      recordServerError({
+        id: payload?.runId && payload?.timestamp
+          ? `ml-run-error:${payload.runId}:${payload.timestamp}`
+          : '',
+        source: 'mlRuntime',
+        level: 'error',
+        code: payload?.lastError?.code || payload?.stopReason || '',
+        message: payload?.message || payload?.lastError?.message || payload?.stopReason || 'ML run failed.',
+        details: {
+          runId: payload?.runId || null,
+          label: payload?.label || null,
+          phase,
+          status: payload?.status || null,
+          stopReason: payload?.stopReason || null,
+          lastError: payload?.lastError || null,
+        },
+        stack: payload?.lastError?.stack || '',
+        createdAt: payload?.timestamp || new Date().toISOString(),
+        lastSeenAt: payload?.timestamp || new Date().toISOString(),
       });
       setStatus(`Run failed: ${payload?.message || payload?.stopReason || payload?.runId || 'unknown error'}.`, 'error');
     }
@@ -2784,7 +3086,7 @@ function connectAdminSocket() {
 function startPolling() {
   if (!state.livePollHandle) {
     state.livePollHandle = window.setInterval(() => {
-      if (document.visibilityState === 'hidden') return;
+      if (document.visibilityState === 'hidden' || !canRunBackgroundPolling()) return;
       loadLiveStatus()
         .then(() => refreshSelectedRunDetailIfActive())
         .catch(() => {});
@@ -2792,7 +3094,7 @@ function startPolling() {
   }
   if (!state.workbenchPollHandle) {
     state.workbenchPollHandle = window.setInterval(() => {
-      if (document.visibilityState === 'hidden') return;
+      if (document.visibilityState === 'hidden' || !canRunBackgroundPolling()) return;
       refreshWorkbench({ silent: true }).catch(() => {});
     }, WORKBENCH_POLL_MS);
   }
@@ -2947,7 +3249,7 @@ function bindEvents() {
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible') return;
+    if (document.visibilityState !== 'visible' || !canRunBackgroundPolling()) return;
     loadLiveStatus().catch(() => {});
     refreshWorkbench({ silent: true }).catch(() => {});
   });
@@ -2957,6 +3259,8 @@ async function boot() {
   let bootError = null;
   bindEvents();
   applyFieldTooltips();
+  renderServerErrors();
+  await refreshAuthenticatedSession();
   try {
     await refreshWorkbench({ silent: false, forceSelectedDetail: false });
   } catch (err) {

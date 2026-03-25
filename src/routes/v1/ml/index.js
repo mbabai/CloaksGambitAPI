@@ -1,9 +1,52 @@
 const express = require('express');
 const { ensureAdminRequest } = require('../../../utils/adminAccess');
 const { getMlRuntime } = require('../../../services/ml/runtime');
+const { getRecentServerErrors, reportServerError } = require('../../../services/adminErrorFeed');
 
 const router = express.Router();
 const mlRuntime = getMlRuntime();
+
+function buildMlErrorBody(err, fallbackMessage) {
+  const body = {
+    message: err?.message || fallbackMessage,
+  };
+  if (err?.code) body.code = err.code;
+  if (err?.details !== undefined) body.details = err.details;
+  if (Array.isArray(err?.activeRuns)) body.activeRuns = err.activeRuns;
+  return body;
+}
+
+function sendMlError(res, err, fallbackMessage, context) {
+  const statusCode = Number.isInteger(err?.statusCode)
+    ? err.statusCode
+    : (Number.isInteger(err?.status) ? err.status : 500);
+  const body = buildMlErrorBody(err, fallbackMessage);
+  if (statusCode >= 500) {
+    reportServerError({
+      source: `mlRoute:${context}`,
+      level: 'error',
+      code: body.code || `http_${statusCode}`,
+      status: statusCode,
+      message: body.message,
+      error: err,
+      details: {
+        context,
+        details: body.details || null,
+        activeRuns: body.activeRuns || null,
+      },
+    });
+  }
+  return res.status(statusCode).json(body);
+}
+
+function attachServerErrors(payload = {}) {
+  return {
+    ...payload,
+    serverErrors: {
+      items: getRecentServerErrors(),
+    },
+  };
+}
 
 router.use(async (req, res, next) => {
   const adminSession = await ensureAdminRequest(req, res);
@@ -19,7 +62,7 @@ router.get('/summary', async (req, res) => {
     const summary = await mlRuntime.getSummary();
     res.json(summary);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load ML summary' });
+    return sendMlError(res, err, 'Failed to load ML summary', 'summary');
   }
 });
 
@@ -28,9 +71,9 @@ router.get('/workbench', async (req, res) => {
     const workbench = await mlRuntime.getWorkbench({
       limit: req.query.limit || 100,
     });
-    res.json(workbench);
+    res.json(attachServerErrors(workbench));
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load ML workbench' });
+    return sendMlError(res, err, 'Failed to load ML workbench', 'workbench');
   }
 });
 
@@ -39,7 +82,7 @@ router.get('/promoted-bots', async (req, res) => {
     const catalog = await mlRuntime.getPromotedBotCatalog();
     res.json(catalog);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load promoted bot catalog' });
+    return sendMlError(res, err, 'Failed to load promoted bot catalog', 'promoted-bots.get');
   }
 });
 
@@ -49,7 +92,7 @@ router.put('/promoted-bots', async (req, res) => {
     const catalog = await mlRuntime.updatePromotedBotCatalog(payload.enabledIds || []);
     res.json(catalog);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to update promoted bot catalog' });
+    return sendMlError(res, err, 'Failed to update promoted bot catalog', 'promoted-bots.put');
   }
 });
 
@@ -58,7 +101,7 @@ router.get('/runs', async (req, res) => {
     const items = await mlRuntime.listRuns({ limit: req.query.limit || 100 });
     res.json({ items });
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load ML runs' });
+    return sendMlError(res, err, 'Failed to load ML runs', 'runs.list');
   }
 });
 
@@ -70,7 +113,7 @@ router.get('/runs/:runId', async (req, res) => {
     }
     res.json(run);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load ML run' });
+    return sendMlError(res, err, 'Failed to load ML run', 'runs.get');
   }
 });
 
@@ -80,11 +123,7 @@ router.post('/runs', async (req, res) => {
     const result = await mlRuntime.startRun(payload);
     res.json(result);
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to start ML run' };
-    if (err?.code) body.code = err.code;
-    if (Array.isArray(err?.activeRuns)) body.activeRuns = err.activeRuns;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to start ML run', 'runs.create');
   }
 });
 
@@ -101,10 +140,7 @@ router.patch('/runs/:runId/generations/:generation', async (req, res) => {
     }
     res.json({ generation: updated });
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to rename run generation' };
-    if (err?.code) body.code = err.code;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to rename run generation', 'runs.rename-generation');
   }
 });
 
@@ -116,7 +152,7 @@ router.post('/runs/:runId/stop', async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to stop ML run' });
+    return sendMlError(res, err, 'Failed to stop ML run', 'runs.stop');
   }
 });
 
@@ -128,7 +164,7 @@ router.post('/runs/:runId/kill', async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to kill ML run' });
+    return sendMlError(res, err, 'Failed to kill ML run', 'runs.kill');
   }
 });
 
@@ -141,11 +177,7 @@ router.post('/runs/:runId/continue', async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to continue ML run' };
-    if (err?.code) body.code = err.code;
-    if (Array.isArray(err?.activeRuns)) body.activeRuns = err.activeRuns;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to continue ML run', 'runs.continue');
   }
 });
 
@@ -162,8 +194,7 @@ router.post('/test-games', async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    res.status(statusCode).json({ message: err.message || 'Failed to start ML test game' });
+    return sendMlError(res, err, 'Failed to start ML test game', 'test-games.create');
   }
 });
 
@@ -181,7 +212,7 @@ router.delete('/runs/:runId', async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to delete ML run' });
+    return sendMlError(res, err, 'Failed to delete ML run', 'runs.delete');
   }
 });
 
@@ -239,7 +270,7 @@ router.get('/runs/:runId/games', async (req, res) => {
     const items = await mlRuntime.listRunGames(req.params.runId, generationA, generationB, { replayType });
     res.json({ items });
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load run games' });
+    return sendMlError(res, err, 'Failed to load run games', 'runs.games');
   }
 });
 
@@ -252,16 +283,17 @@ router.get('/runs/:runId/replay/:gameId', async (req, res) => {
     }
     res.json(replay);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load run replay' });
+    return sendMlError(res, err, 'Failed to load run replay', 'runs.replay');
   }
 });
 
 router.get('/live', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store');
     const live = await mlRuntime.getLiveStatus();
-    res.json(live);
+    res.json(attachServerErrors(live));
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load ML live status' });
+    return sendMlError(res, err, 'Failed to load ML live status', 'live');
   }
 });
 
@@ -270,7 +302,7 @@ router.get('/snapshots', async (req, res) => {
     const snapshots = await mlRuntime.listSnapshots();
     res.json({ items: snapshots });
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load snapshots' });
+    return sendMlError(res, err, 'Failed to load snapshots', 'snapshots.list');
   }
 });
 
@@ -279,7 +311,7 @@ router.get('/participants', async (req, res) => {
     const participants = await mlRuntime.listParticipants();
     res.json(participants);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load participants' });
+    return sendMlError(res, err, 'Failed to load participants', 'participants.list');
   }
 });
 
@@ -291,7 +323,7 @@ router.get('/snapshots/:snapshotId', async (req, res) => {
     }
     res.json(snapshot);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load snapshot details' });
+    return sendMlError(res, err, 'Failed to load snapshot details', 'snapshots.get');
   }
 });
 
@@ -305,7 +337,7 @@ router.post('/snapshots/create', async (req, res) => {
     });
     res.json({ snapshot });
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to create snapshot' });
+    return sendMlError(res, err, 'Failed to create snapshot', 'snapshots.create');
   }
 });
 
@@ -318,10 +350,7 @@ router.patch('/snapshots/:snapshotId', async (req, res) => {
     }
     res.json({ snapshot });
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to rename snapshot' };
-    if (err?.code) body.code = err.code;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to rename snapshot', 'snapshots.rename');
   }
 });
 
@@ -333,10 +362,7 @@ router.delete('/snapshots/:snapshotId', async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to delete snapshot' };
-    if (err?.code) body.code = err.code;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to delete snapshot', 'snapshots.delete');
   }
 });
 
@@ -345,7 +371,7 @@ router.get('/simulations', async (req, res) => {
     const items = await mlRuntime.listSimulations({ limit: req.query.limit });
     res.json({ items });
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load simulations' });
+    return sendMlError(res, err, 'Failed to load simulations', 'simulations.list');
   }
 });
 
@@ -357,7 +383,7 @@ router.get('/simulations/:simulationId', async (req, res) => {
     }
     res.json(simulation);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load simulation details' });
+    return sendMlError(res, err, 'Failed to load simulation details', 'simulations.get');
   }
 });
 
@@ -369,7 +395,7 @@ router.delete('/simulations/:simulationId', async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to delete simulation' });
+    return sendMlError(res, err, 'Failed to delete simulation', 'simulations.delete');
   }
 });
 
@@ -382,10 +408,7 @@ router.patch('/simulations/:simulationId', async (req, res) => {
     }
     res.json({ simulation });
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to rename simulation' };
-    if (err?.code) body.code = err.code;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to rename simulation', 'simulations.rename');
   }
 });
 
@@ -410,7 +433,7 @@ router.post('/simulations/run', async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to run simulations' });
+    return sendMlError(res, err, 'Failed to run simulations', 'simulations.run');
   }
 });
 
@@ -435,10 +458,7 @@ router.post('/simulations/start', async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to start simulations' };
-    if (err?.code) body.code = err.code;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to start simulations', 'simulations.start');
   }
 });
 
@@ -451,7 +471,7 @@ router.post('/simulations/stop', async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to stop simulation task' });
+    return sendMlError(res, err, 'Failed to stop simulation task', 'simulations.stop');
   }
 });
 
@@ -463,7 +483,7 @@ router.get('/replay/:simulationId/:gameId', async (req, res) => {
     }
     res.json(replay);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load replay' });
+    return sendMlError(res, err, 'Failed to load replay', 'simulations.replay');
   }
 });
 
@@ -473,7 +493,7 @@ router.get('/loss', async (req, res) => {
     const history = await mlRuntime.getLossHistory({ snapshotId });
     res.json({ snapshotId, history });
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load loss history' });
+    return sendMlError(res, err, 'Failed to load loss history', 'loss.history');
   }
 });
 
@@ -482,7 +502,7 @@ router.get('/training/runs', async (req, res) => {
     const items = await mlRuntime.listTrainingRuns({ limit: req.query.limit });
     res.json({ items });
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Failed to load training runs' });
+    return sendMlError(res, err, 'Failed to load training runs', 'training.list');
   }
 });
 
@@ -504,11 +524,7 @@ router.post('/training/run', async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to run training' };
-    if (err?.code) body.code = err.code;
-    if (err?.details) body.details = err.details;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to run training', 'training.run');
   }
 });
 
@@ -530,11 +546,7 @@ router.post('/training/start', async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-    const body = { message: err.message || 'Failed to start training' };
-    if (err?.code) body.code = err.code;
-    if (err?.details) body.details = err.details;
-    res.status(statusCode).json(body);
+    return sendMlError(res, err, 'Failed to start training', 'training.start');
   }
 });
 

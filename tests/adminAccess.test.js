@@ -3,12 +3,24 @@ jest.mock('../src/utils/requestSession', () => ({
   resolveSessionFromSocketHandshake: jest.fn(),
 }));
 
+jest.mock('mongoose', () => ({
+  connection: {
+    readyState: 1,
+  },
+}));
+
+jest.mock('../src/utils/authTokens', () => ({
+  extractTokenFromRequest: jest.fn(() => null),
+}));
+
 const {
   ensureAdminRequest,
 } = require('../src/utils/adminAccess');
 const {
   resolveSessionFromRequest,
 } = require('../src/utils/requestSession');
+const mongoose = require('mongoose');
+const { extractTokenFromRequest } = require('../src/utils/authTokens');
 
 function createResponse() {
   return {
@@ -38,6 +50,8 @@ function createResponse() {
 describe('adminAccess', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mongoose.connection.readyState = 1;
+    extractTokenFromRequest.mockReturnValue(null);
   });
 
   test('returns an html 403 page for denied document requests', async () => {
@@ -74,5 +88,27 @@ describe('adminAccess', () => {
     expect(res.statusCode).toBe(403);
     expect(res.jsonBody).toEqual({ message: 'Forbidden' });
     expect(res.body).toBeNull();
+  });
+
+  test('returns json 503 when admin auth cannot be confirmed during a mongo reconnect', async () => {
+    resolveSessionFromRequest.mockResolvedValue(null);
+    mongoose.connection.readyState = 0;
+    extractTokenFromRequest.mockReturnValue('signed-token');
+    const req = {
+      headers: {
+        accept: 'application/json',
+        cookie: 'cgToken=signed-token',
+      },
+    };
+    const res = createResponse();
+
+    const session = await ensureAdminRequest(req, res);
+
+    expect(session).toBeNull();
+    expect(res.statusCode).toBe(503);
+    expect(res.jsonBody).toEqual({
+      message: 'Admin session temporarily unavailable while MongoDB reconnects.',
+      code: 'auth_backend_unavailable',
+    });
   });
 });

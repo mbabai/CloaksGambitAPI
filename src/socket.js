@@ -11,6 +11,7 @@ const { buildSpectateSnapshot } = require('./utils/spectatorSnapshot');
 const { buildClockPayload } = require('./utils/gameClock');
 const { appendLocalDebugLog } = require('./utils/localDebugLogger');
 const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/activeMatches');
+const { getRecentServerErrors } = require('./services/adminErrorFeed');
 const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
 const { ensureAdminSocketHandshake } = require('./utils/adminAccess');
 const { resolveSessionFromSocketHandshake } = require('./utils/requestSession');
@@ -988,6 +989,14 @@ function initSocket(httpServer) {
   // Allow other parts of the app to request an on-demand admin metrics refresh
   eventBus.on('adminRefresh', () => scheduleAdminMetricsEmit());
 
+  eventBus.on('admin:serverError', (payload) => {
+    try {
+      adminNamespace.emit('admin:serverError', payload || {});
+    } catch (err) {
+      console.error('Error emitting admin:serverError to admin namespace:', err);
+    }
+  });
+
   if (mlWorkflowEnabled) {
     eventBus.on('ml:runProgress', (payload) => {
       try {
@@ -1322,6 +1331,9 @@ function initSocket(httpServer) {
 
     socket.data = socket.data || {};
     socket.data.spectating = new Set();
+    socket.emit('admin:serverErrors', {
+      items: getRecentServerErrors(),
+    });
 
     if (mlWorkflowEnabled) {
       getMlRuntime().getLiveStatus()
