@@ -6,7 +6,7 @@ This document must be maintained in accordance with [PLANS.md](C:\Users\marce\On
 
 ## Purpose / Big Picture
 
-After this change, the in-game board should render through one reusable Canvas-based game surface instead of being rebuilt out of per-cell DOM. A player should still be able to play a game, drag and click pieces, see clocks and bars, and get the same move/challenge overlays. A spectator should use the same surface with a different visibility mode, and an admin or ML tool should be able to reuse the same view in a future "god view" mode without inventing a second board stack.
+After this change, the in-game board should render through one reusable Canvas-based game surface instead of being rebuilt out of per-cell DOM. A player should still be able to play a game, drag and click pieces, see clocks and bars, and get the same move/challenge overlays. A spectator should use the same surface with a different visibility mode, and future admin or replay tooling should be able to reuse the same view in a future "god view" mode without inventing a second board stack.
 
 The user-visible proof is concrete. Starting the app and entering a live game should show the board on a Canvas surface while preserving normal move input and overlays. Opening a spectate view should render through the same `game view` module, not a separate board assembly path. The code should expose one surface API that can later host multiple simultaneous boards for tournament watching.
 
@@ -17,7 +17,7 @@ The user-visible proof is concrete. Starting the app and entering a live game sh
 - [x] (2026-03-11 11:30Z) Added `public/js/modules/gameView/modes.js` and `public/js/modules/gameView/view.js`, documenting explicit `player`, `spectator`, and `god` visibility modes in code and wiring a single surface API around the board, bars, and overlay layer.
 - [x] (2026-03-11 11:41Z) Replaced the visible board DOM renderer with a Canvas renderer in `public/js/modules/render/board.js` and moved `createBoardView()` to a Canvas stage with bubble overlays, geometry helpers, and a lightweight hit layer so replay/admin tooling stayed functional.
 - [x] (2026-03-11 11:58Z) Migrated the main play surface in `public/index.js` to `createGameView()`, switched board overlays onto the shared bubble API, and moved drag hit-testing onto the board geometry helpers.
-- [x] (2026-03-11 12:07Z) Migrated `public/js/modules/spectate/controller.js` and the replay surface in `public/ml-admin.js` onto the shared game-view stack so spectator masking and admin/god rendering now share one client abstraction.
+- [x] (2026-03-11 12:07Z) Migrated `public/js/modules/spectate/controller.js` onto the shared game-view stack so spectator masking and shared board rendering now use one client abstraction.
 - [x] (2026-03-11 12:23Z) Added focused view-mode regression coverage in `tests/gameViewModes.test.js`, ran `npm test`, and verified the live player surface with Playwright on `3101` after `3100` was already occupied by another app process.
 
 ## Surprises & Discoveries
@@ -28,8 +28,8 @@ The user-visible proof is concrete. Starting the app and entering a live game sh
 - Observation: the hardest part of the migration is not drawing the board; it is replacing all of the board-related hit-testing and overlay behavior that currently assumes each square is a DOM element.
   Evidence: `public/index.js` uses `refs.boardCells` for move-choice bubbles, drag previews, drop hit-testing, and post-move overlays.
 
-- Observation: `createBoardView()` is still used by `public/ml-admin.js`, so the board-layer API must remain stable enough for replay/admin tooling even while player and spectator move to a higher-level `game view`.
-  Evidence: `public/ml-admin.js`, `public/index.js`, and `public/js/modules/spectate/controller.js` all instantiate `createBoardView()`.
+- Observation: `createBoardView()` remained a shared low-level dependency during the migration, so the board-layer API needed to stay stable while player and spectator flows moved to a higher-level `game view`.
+  Evidence: `public/index.js` and `public/js/modules/spectate/controller.js` both instantiate `createBoardView()`.
 
 - Observation: once the board became a positioned Canvas surface with its own hit layer, sibling setup buttons could be blocked unless the board container itself stayed in a lower stacking context than the action overlays.
   Evidence: Playwright caught `Random Setup` clicks being intercepted by `.cg-board-hit-cell` until `public/js/modules/gameView/view.js` assigned explicit z-index ordering for board and bar layers.
@@ -108,13 +108,13 @@ Then drive the app with Playwright CLI against `http://127.0.0.1:3100/`, checkin
 
 Acceptance is behavioral. In a live game, the board should render on a Canvas surface and still support normal click and drag interactions for setup, on-deck, and in-game moves. The top and bottom bars should still show names, clocks, wins, challenge bubbles, captured pieces, and daggers in the same positions they do now. Spectating a live match should use the same game-view module but render spectator masking and no player input.
 
-The structural acceptance is just as important. `public/index.js` and `public/js/modules/spectate/controller.js` should no longer assemble their own board and bar stacks. They should both use the same `createGameView()` surface API, and that API should accept a view mode that can later be reused for admin or ML tooling. The board-layer code should no longer require one DOM element per square to function.
+The structural acceptance is just as important. `public/index.js` and `public/js/modules/spectate/controller.js` should no longer assemble their own board and bar stacks. They should both use the same `createGameView()` surface API, and that API should accept a view mode that can later be reused for admin or replay tooling. The board-layer code should no longer require one DOM element per square to function.
 
 The test acceptance is to run `npm test` and keep the full suite green. Add new focused tests so the mode-masking and scene-transform logic are locked down by code, not only by manual inspection.
 
 ## Idempotence and Recovery
 
-The migration should stay additive until both the player and spectator flows are working on the new surface. `createBoardView()` remains available during the transition so admin/ML replay tooling does not break halfway through. If a milestone fails partway, revert only the in-progress module wiring and keep the existing server contracts untouched. No destructive data migration is involved.
+The migration should stay additive until both the player and spectator flows are working on the new surface. `createBoardView()` remains available during the transition so other replay tooling does not break halfway through. If a milestone fails partway, revert only the in-progress module wiring and keep the existing server contracts untouched. No destructive data migration is involved.
 
 ## Artifacts and Notes
 
@@ -154,4 +154,4 @@ That constructor must return an object with methods equivalent to:
 
 The existing `public/js/modules/components/boardView.js` must remain a valid board-layer abstraction, even if its internals move to Canvas and its geometry helpers expand.
 
-Revision note: created this ExecPlan after tracing the current player board, spectator board, ML replay board, board scene, and drag/hit-test paths. The chosen approach is a shared Canvas game surface with explicit view modes rather than separate player and spectator assembly code.
+Revision note: created this ExecPlan after tracing the current player board, spectator board, board scene, and drag/hit-test paths. The chosen approach is a shared Canvas game surface with explicit view modes rather than separate player and spectator assembly code.

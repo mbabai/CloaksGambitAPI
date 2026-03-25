@@ -4,7 +4,6 @@
 - `rules.md` is the long-form, human-readable rules document.
 - `shared/constants/game.json` is the machine-readable constants source.
 - `src/services/game/liveGameRules.js` contains the small shared helpers already extracted for live routes.
-- `src/services/ml/engine.js` is the heavier rules reference used by simulations and training.
 
 ## Live Move State Machine
 - `setup.js` places 5 pieces on the home rank, marks one real on-deck piece, and leaves the remaining 2 in stash.
@@ -39,4 +38,3 @@
 - If you change live gameplay rules, update:
   - `rules.md`
   - the route-level Jest tests
-  - any mirrored ML/runtime behavior that depends on the same flow

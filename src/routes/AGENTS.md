@@ -5,7 +5,6 @@
   - `/api/v1/*` from `src/routes/v1/`
   - `/api/auth/*` from `src/routes/auth/google.js`
 - `src/routes/v1/index.js` registers each route module explicitly instead of auto-loading directories. If you add a route file, you must mount it there.
-- `src/routes/v1/ml/index.js` is only mounted when `src/utils/mlFeatureGate.js` enables the ML workflow. See `src/routes/v1/ml/AGENTS.md` before changing the admin workbench API.
 
 ## Common Patterns
 - Most mutating routes follow this order:
@@ -33,4 +32,3 @@
 - `src/routes/v1/gameAction/` is the live HTTP state machine for the board game.
 - `rules.md` is the long-form rule reference.
 - `shared/constants/game.json` is the machine-readable constants source.
-- `src/services/ml/engine.js` is a second rules implementation used by simulation/training. Keep it aligned with live behavior when making non-trivial rules changes.

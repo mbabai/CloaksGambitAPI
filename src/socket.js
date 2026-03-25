@@ -12,13 +12,10 @@ const { buildClockPayload } = require('./utils/gameClock');
 const { appendLocalDebugLog } = require('./utils/localDebugLogger');
 const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/activeMatches');
 const { getRecentServerErrors } = require('./services/adminErrorFeed');
-const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
 const { ensureAdminSocketHandshake } = require('./utils/adminAccess');
 const { resolveSessionFromSocketHandshake } = require('./utils/requestSession');
-const { getMlRuntime } = require('./services/ml/runtime');
 
 function initSocket(httpServer) {
-  const mlWorkflowEnabled = isMlWorkflowEnabled();
   const io = new Server(httpServer, {
     cors: {
       origin: true,
@@ -997,32 +994,6 @@ function initSocket(httpServer) {
     }
   });
 
-  if (mlWorkflowEnabled) {
-    eventBus.on('ml:runProgress', (payload) => {
-      try {
-        adminNamespace.emit('ml:runProgress', payload || {});
-      } catch (err) {
-        console.error('Error emitting ml:runProgress to admin namespace:', err);
-      }
-    });
-
-    eventBus.on('ml:trainingProgress', (payload) => {
-      try {
-        adminNamespace.emit('ml:trainingProgress', payload || {});
-      } catch (err) {
-        console.error('Error emitting ml:trainingProgress to admin namespace:', err);
-      }
-    });
-
-    eventBus.on('ml:simulationProgress', (payload) => {
-      try {
-        adminNamespace.emit('ml:simulationProgress', payload || {});
-      } catch (err) {
-        console.error('Error emitting ml:simulationProgress to admin namespace:', err);
-      }
-    });
-  }
-
   io.on('connection', async (socket) => {
     const session = socket.data?.session || null;
     const userId = session?.userId;
@@ -1334,26 +1305,6 @@ function initSocket(httpServer) {
     socket.emit('admin:serverErrors', {
       items: getRecentServerErrors(),
     });
-
-    if (mlWorkflowEnabled) {
-      getMlRuntime().getLiveStatus()
-        .then((live) => {
-          if (Array.isArray(live?.runs)) {
-            live.runs.forEach((payload) => {
-              socket.emit('ml:runProgress', payload);
-            });
-          }
-          if (live?.simulation) {
-            socket.emit('ml:simulationProgress', live.simulation);
-          }
-          if (live?.training) {
-            socket.emit('ml:trainingProgress', live.training);
-          }
-        })
-        .catch((err) => {
-          console.error('Failed to emit initial ML live status to admin socket:', err);
-        });
-    }
 
     socket.on('spectate:join', (payload = {}) => {
       joinSpectateRoom(socket, payload);

@@ -1,5 +1,4 @@
 const eventBus = require('../eventBus');
-const { isInternalSimulationActive } = require('./simulationRequestContext');
 
 function buildAffectedUsers(game, fallback = []) {
   if (Array.isArray(fallback) && fallback.length) {
@@ -11,9 +10,6 @@ function buildAffectedUsers(game, fallback = []) {
 }
 
 function emitGameChanged(game, extra = {}) {
-  if (isInternalSimulationActive()) {
-    return false;
-  }
   return eventBus.emit('gameChanged', {
     game: typeof game?.toObject === 'function' ? game.toObject() : game,
     affectedUsers: buildAffectedUsers(game, extra.affectedUsers),
@@ -22,9 +18,6 @@ function emitGameChanged(game, extra = {}) {
 }
 
 function emitPlayersBothReady(gameId, affectedUsers = []) {
-  if (isInternalSimulationActive()) {
-    return false;
-  }
   return eventBus.emit('players:bothReady', {
     gameId,
     affectedUsers: affectedUsers.map((value) => value.toString()),

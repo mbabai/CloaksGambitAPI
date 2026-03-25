@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { isMlWorkflowEnabled } = require('../../utils/mlFeatureGate');
 
 // User routes
 const userGetList = require('./users/getList');
@@ -114,11 +113,6 @@ router.use('/lobby/matchmaking', lobbyMatchmaking);
 // Bot routes
 router.use('/bots/catalog', botsCatalog);
 router.use('/bots/register', botsRegister);
-
-// ML routes
-if (isMlWorkflowEnabled()) {
-  router.use('/ml', require('./ml'));
-}
 
 // Debug routes
 router.use('/debug/localLog', debugLocalLog);

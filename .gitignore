@@ -35,6 +35,4 @@ output/
 *.tmp
 *.temp 
 
-# Local ML runtime artifacts
-data/ml/
 

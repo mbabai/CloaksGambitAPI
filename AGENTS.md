@@ -6,32 +6,23 @@
 - `src/routes/AGENTS.md`: route layout, queue/auth expectations, and write-route patterns.
 - `src/routes/auth/AGENTS.md`: Google OAuth, session recovery, and cookie/JWT behavior.
 - `src/routes/v1/gameAction/AGENTS.md`: live rules state machine for setup, move, bomb, challenge, pass, and on-deck.
-- `src/routes/v1/ml/AGENTS.md`: admin ML API layout, continuous-run routes, replay payloads, and compatibility endpoints.
 - `src/models/AGENTS.md`: hybrid in-memory/live-state plus Mongo history persistence model.
-- `src/services/AGENTS.md`: shared live rules helpers, bots, history, matchmaking support, and ML/runtime integration.
-- `src/services/ml/AGENTS.md`: continuous-run runtime, route-backed self-play, search/modeling modules, worker-thread helpers, and training backend invariants.
+- `src/services/AGENTS.md`: shared live rules helpers, bots, history, and matchmaking support.
 - `src/utils/AGENTS.md`: server config cache, auth helpers, guest handling, masking, and clock authority.
 - `public/AGENTS.md`: browser boot flow, auth/session sync, sockets, and modularization status.
-- `public/js/modules/mlAdmin/AGENTS.md`: ML workbench chart/replay modules and the DOM contracts they rely on.
 - `shared/AGENTS.md`: shared constants pipeline and shared bot runtime.
 - `tests/AGENTS.md`: current Jest strategy and the highest-signal regression suites.
 - `docs/AGENTS.md`: doc folder intent and the recent refactor records worth reading first.
-- `ml_backend/AGENTS.md`: Python Torch bridge protocol, venv expectations, and JSON checkpoint compatibility rules.
-- `data/ml/AGENTS.md`: file-backed ML runtime state, backups, and safe recovery/editing guidance.
 
 ## Architecture Snapshot
 - Express serves the REST API, HTML shells, static assets, and Socket.IO from the same Node process in `src/server.js`.
-- Live `Game` and `Match` records are stored in memory while active. Completed games and matches are persisted to MongoDB history collections. `User`, `ServerConfig`, `Simulation`, `SimulationGame`, and `TrainingRun` stay Mongo-backed throughout.
+- Live `Game` and `Match` records are stored in memory while active. Completed games and matches are persisted to MongoDB history collections. `User` and `ServerConfig` stay Mongo-backed throughout.
 - Auth is hybrid: Google OAuth creates a long-lived JWT plus readable identity cookies, while guests are created automatically for non-ranked flows. The frontend repairs session state through `/api/auth/session`.
 - Server-authored `game.clockState` is now the live clock source of truth. Clients and spectators should consume the `clocks` payload from sockets instead of inferring time from raw actions when a snapshot exists.
-- The ML workflow is feature-gated by `ENABLE_ML_WORKFLOW` and currently centers on continuous runs. The main surfaces are `src/routes/v1/ml/index.js`, `src/services/ml/runtime.js`, `public/ml-admin.html`, `public/ml-admin.js`, and the `/admin` socket namespace's `ml:runProgress` stream.
-- ML runtime state is persisted locally in `data/ml/runtime.json`, with simulation/training histories mirrored to MongoDB when available. The runtime is expected to resume unfinished run, simulation, and training jobs after boot.
-- Training can stay in the Node trainer or go through `src/services/ml/pythonTrainingBridge.js` plus `ml_backend/torch_training_bridge.py`. Inference, self-play search, and live test games still consume the JSON model bundle from Node.
 - Recent refactors to understand before editing:
   - `src/routes/auth/google.js` and `src/utils/ensureUser.js` now repair local authenticated sessions and prevent real users from being downgraded into guest accounts.
   - `src/server.js` no longer rewrites Atlas URIs. Production uses the raw `MONGODB_ATLAS_CONNECTION_STRING`, applies `dbName: 'cloaksgambit'`, and retries once with `authSource=admin` if needed.
   - `src/utils/gameClock.js`, `src/models/Game.js`, `src/socket.js`, and the browser clock helpers now use stored server clock state instead of replay-only authority.
-  - `src/services/ml/runtime.js`, `src/routes/v1/ml/index.js`, `public/ml-admin.js`, and `public/js/modules/mlAdmin/` now describe a run-oriented ML workbench while still keeping older snapshot/simulation/training helpers around for compatibility.
 
 ## Project Structure & Module Organization
 - `src/`: Node.js API code (entry point: `src/server.js`), organized by `config/`, `models/`, `routes/`, `services/`, `state/`, and `utils/`.
@@ -40,7 +31,6 @@
 - `tests/`: Jest test suite (`*.test.js`) for shared constants, utility behavior, and integration-facing logic.
 - `scripts/`: Build and maintenance scripts (for example `build-shared-constants.js` and migrations).
 - `docs/`: API and UI documentation; refer to `docs/colors.md` for color token usage.
-- `ml_backend/`: Separate Python/ML workspace; treat as independent from the Node API runtime.
 
 ## Build, Test, and Development Commands
 - `npm install`: Install Node dependencies.

@@ -1,10 +1,6 @@
 const express = require('express');
 const request = require('supertest');
 
-const mockRuntime = {
-  startPromotedBotGame: jest.fn(),
-};
-
 jest.mock('../src/utils/lobbyAccess', () => ({
   resolveLobbySession: jest.fn(),
 }));
@@ -17,16 +13,8 @@ jest.mock('../src/services/bots/registry', () => ({
   getBuiltinBotDefinition: jest.fn(() => null),
 }));
 
-jest.mock('../src/utils/mlFeatureGate', () => ({
-  isMlWorkflowEnabled: jest.fn(() => true),
-}));
-
-jest.mock('../src/services/ml/runtime', () => ({
-  getMlRuntime: jest.fn(() => mockRuntime),
-}));
-
 const { resolveLobbySession } = require('../src/utils/lobbyAccess');
-const { ensureGuestForBotGame } = require('../src/services/bots/registry');
+const { ensureGuestForBotGame, ensureBotUser } = require('../src/services/bots/registry');
 const enterBotRouter = require('../src/routes/v1/lobby/enterBot');
 
 function createApp() {
@@ -41,28 +29,21 @@ describe('enter bot route', () => {
     jest.clearAllMocks();
     resolveLobbySession.mockResolvedValue({ userId: 'human-1' });
     ensureGuestForBotGame.mockResolvedValue({ userId: 'human-1', username: 'GuestOne' });
-    mockRuntime.startPromotedBotGame.mockResolvedValue({
-      status: 'matched',
-      userId: 'human-1',
-      username: 'GuestOne',
-      matchId: 'match-9',
-      gameId: 'game-9',
-      botId: 'generation:run-1:4',
+    ensureBotUser.mockResolvedValue({
+      user: {
+        _id: 'bot-1',
+        username: 'EasyBot',
+      },
     });
   });
 
-  test('delegates promoted-model selections to the ML runtime', async () => {
+  test('rejects unknown bot selections', async () => {
     const response = await request(createApp())
       .post('/api/v1/lobby/enterBot')
-      .send({ botId: 'generation:run-1:4' });
+      .send({ botId: 'unknown-bot' });
 
-    expect(response.status).toBe(200);
-    expect(mockRuntime.startPromotedBotGame).toHaveBeenCalledWith({
-      botId: 'generation:run-1:4',
-      userId: 'human-1',
-      username: 'GuestOne',
-      sidePreference: 'random',
-    });
-    expect(response.body.gameId).toBe('game-9');
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ message: 'Selected bot is not available.' });
+    expect(ensureBotUser).not.toHaveBeenCalled();
   });
 });

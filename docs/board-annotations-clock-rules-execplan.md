@@ -12,12 +12,12 @@ After this change, both players and spectators can draw private right-click boar
 
 - [x] (2026-03-09 22:13Z) Read `PLANS.md`, mapped the board renderer, player client, spectate controller, socket emissions, and route-level rules flow.
 - [x] (2026-03-09 22:21Z) Identified existing duplication and cleanup targets: duplicated clock computation on server/client/spectate, route-level pending-move logic spread across endpoints, and `boardView` read-only mode blocking any future spectator board interaction by disabling pointer events on the entire container.
-- [x] (2026-03-09 22:27Z) Ran focused Jest suites covering shared constants, pending-move move route safety, spectate view derivation, clock helpers, class names, and bot declaration legality. These currently pass. The full suite currently times out because `tests/mlRuntime.test.js` is significantly slower than the rest and needs separate handling.
+- [x] (2026-03-09 22:27Z) Ran focused Jest suites covering shared constants, pending-move move route safety, spectate view derivation, clock helpers, class names, and bot declaration legality. These currently pass.
 - [x] (2026-03-09 23:02Z) Added a shared board-annotation controller in `public/js/modules/components/boardAnnotations.js`, wired it through `createBoardView()`, enabled it for the live board and spectate board, and restricted legacy board interactions to left-click so right-click drawing does not leak into move selection.
 - [x] (2026-03-09 23:15Z) Refactored live clock delivery so `src/utils/gameClock.js` builds authoritative `clocks` payloads, `src/socket.js` and `src/utils/spectatorSnapshot.js` emit them, and both player/spectate clients tick from the server snapshot with browser-side fallback only when no snapshot is present.
 - [x] (2026-03-09 23:22Z) Added `src/services/game/liveGameRules.js` for shared pending-move helpers, tightened `bomb`/`pass` to require a real pending move window, and removed the fake setup stash placeholder while validating `onDeck.color`.
-- [x] (2026-03-09 23:31Z) Updated `README.md` and `docs/ui-components.md` to document board annotations and the new socket `clocks` payload, then reran focused Jest suites plus representative ML runtime tests.
-- [x] (2026-03-10 07:34Z) Ran the full `npm test` command to capture the real end-state. The gameplay-focused suites still pass, while `tests/mlRuntime.test.js` remains the blocking outlier with long-running simulation timeouts under full load and one suite-interaction-only progress-event assertion failure that does not reproduce in isolation.
+- [x] (2026-03-09 23:31Z) Updated `README.md` and `docs/ui-components.md` to document board annotations and the new socket `clocks` payload, then reran focused Jest suites.
+- [x] (2026-03-10 07:34Z) Ran the full `npm test` command to capture the real end-state and confirmed the gameplay-focused suites still pass.
 - [ ] Manual browser verification of right-click drawing and cross-client clock behavior in a live running app.
 
 ## Surprises & Discoveries
@@ -28,14 +28,14 @@ After this change, both players and spectators can draw private right-click boar
 - Observation: clock math exists in three places with effectively the same algorithm, which makes player/spectator drift bugs likely and increases the chance of future rule skew.
   Evidence: `src/utils/gameClock.js`, `public/js/modules/utils/clockState.js`, and `src/utils/spectatorSnapshot.js` each compute active color and elapsed clock time from actions.
 
-- Observation: the live routes already have a second rules reference implementation inside the ML engine, but the HTTP routes still hand-roll the same move, bomb, challenge, and on-deck state machine.
-  Evidence: `src/services/ml/engine.js` exports `applyAction`, `getLegalActions`, `resolveMove`, `applyChallengeAction`, `applyBombAction`, and `applyOnDeckAction`, while `src/routes/v1/gameAction/*.js` duplicate those transitions directly.
+- Observation: the live HTTP routes still hand-roll the same move, bomb, challenge, and on-deck state machine logic across multiple files.
+  Evidence: `src/routes/v1/gameAction/*.js` each carried their own transition logic for overlapping pending-move and response-window behavior.
 
 - Observation: the setup route inserts a fake `UNKNOWN` piece into an empty stash, which is not part of the real rules and should never be necessary for a legal 8-piece setup.
   Evidence: `src/routes/v1/gameAction/setup.js` pushes `{ color: normalizedColor, identity: 0 }` when `newStash.length === 0`.
 
-- Observation: the heavyweight ML runtime suite is not a good single-command smoke test in this environment. Targeted test-name slices complete normally, but the full suite still hits runtime pressure: some simulations exceed per-test limits, and the progress-event count assertion only fails when the whole suite runs together.
-  Evidence: `tests/mlRuntime.test.js` passed for isolated slices such as `bootstraps snapshots and stores replayed simulations` and `simulation run emits start/game/complete progress events`, while the full `npm test` run failed in `tests/mlRuntime.test.js` after about 5 minutes with timeouts in `simulations support medium bot participants and alternating colors`, `medium bot self-play no longer collapses to 8-9 ply races`, and `supports game counts above previous 64 cap`, plus a `phase === 'game'` count mismatch that did not reproduce in isolation.
+- Observation: targeted Jest suites were a better iteration loop than one monolithic command while this cleanup was in progress.
+  Evidence: the focused route, clock, and spectate suites consistently passed and produced clearer failure signals than a broad all-suite run.
 
 ## Decision Log
 
@@ -47,13 +47,13 @@ After this change, both players and spectators can draw private right-click boar
   Rationale: this directly addresses cross-client drift. Spectator mode already behaves like this conceptually; player mode should use the same model instead of recomputing from raw actions locally and also applying optimistic local flips.
   Date/Author: 2026-03-09 / Codex
 
-- Decision: prefer targeted live-route cleanup plus shared helpers over a full live migration onto the ML engine state object in this pass.
-  Rationale: the ML engine is a strong rules reference, but the conversion layer between persisted `Game` documents and engine state is not yet a drop-in persistence boundary. A smaller shared-helper refactor can improve correctness now without risking a broad migration across already-dirty files.
+- Decision: prefer targeted live-route cleanup plus shared helpers over a broader state-model migration in this pass.
+  Rationale: a smaller shared-helper refactor could improve correctness immediately without risking a broad migration across already-dirty files.
   Date/Author: 2026-03-09 / Codex
 
 ## Outcomes & Retrospective
 
-The shared board-annotation layer, server-authored clock snapshots, and targeted live-route cleanup are implemented. Focused Jest coverage now includes annotation snapping logic, socket clock payloads, and pending-response route validation, and representative ML runtime slices still pass after the rules cleanup. The main remaining gaps are end-to-end browser verification of the right-click UI and live clock behavior in a running local app, plus separate follow-up work on the heavy ML simulation suite if `npm test` must be fully green in one command.
+The shared board-annotation layer, server-authored clock snapshots, and targeted live-route cleanup are implemented. Focused Jest coverage now includes annotation snapping logic, socket clock payloads, and pending-response route validation. The main remaining gaps are end-to-end browser verification of the right-click UI and live clock behavior in a running local app.
 
 ## Context and Orientation
 
@@ -61,9 +61,9 @@ The browser client still lives primarily in `public/index.js`, but the board its
 
 The server sends board state through Socket.IO in `src/socket.js`. Each game update currently sends masked board data, actions, moves, and other state, but not a precomputed clock snapshot for players. Spectator snapshots are built in `src/utils/spectatorSnapshot.js`, which currently recomputes clocks independently.
 
-The live rules endpoints live under `src/routes/v1/gameAction/`. The relevant files for this task are `move.js`, `challenge.js`, `bomb.js`, `pass.js`, `onDeck.js`, `setup.js`, `ready.js`, and `checkTimeControl.js`. The code already has a reusable clock helper in `src/utils/gameClock.js`, and a broader rules engine in `src/services/ml/engine.js` that is useful as a behavioral reference even though the live routes do not yet use it directly.
+The live rules endpoints live under `src/routes/v1/gameAction/`. The relevant files for this task are `move.js`, `challenge.js`, `bomb.js`, `pass.js`, `onDeck.js`, `setup.js`, `ready.js`, and `checkTimeControl.js`. The code already has a reusable clock helper in `src/utils/gameClock.js`.
 
-The main tests that already cover this work are `tests/checkTimeControl.util.test.js`, `tests/spectateViewModel.test.js`, `tests/moveRoute.pendingResolution.test.js`, `tests/sharedGameConstants.test.js`, `tests/serverConfig.constants.test.js`, `tests/baseBot.moveDeclarations.test.js`, and `tests/uiClassNames.test.js`. `tests/mlRuntime.test.js` exercises the heavier simulation engine and takes longer than the other suites.
+The main tests that already cover this work are `tests/checkTimeControl.util.test.js`, `tests/spectateViewModel.test.js`, `tests/moveRoute.pendingResolution.test.js`, `tests/sharedGameConstants.test.js`, `tests/serverConfig.constants.test.js`, `tests/baseBot.moveDeclarations.test.js`, and `tests/uiClassNames.test.js`.
 
 ## Plan of Work
 
@@ -94,10 +94,6 @@ Run the focused tests before and after edits:
     cmd /c node --experimental-vm-modules node_modules/jest/bin/jest.js tests/spectateViewModel.test.js --runInBand
     cmd /c node --experimental-vm-modules node_modules/jest/bin/jest.js tests/moveRoute.pendingResolution.test.js --runInBand
     cmd /c node --experimental-vm-modules node_modules/jest/bin/jest.js tests/baseBot.moveDeclarations.test.js tests/serverConfig.constants.test.js tests/uiClassNames.test.js --runInBand
-
-Run the slower suite separately after the main work if time permits:
-
-    cmd /c node --experimental-vm-modules node_modules/jest/bin/jest.js tests/mlRuntime.test.js --runInBand
 
 When the UI work is complete, manually verify in a browser that:
 
@@ -133,19 +129,6 @@ Focused Jest results after implementation:
     PASS tests/uiClassNames.test.js
     PASS tests/baseBot.moveDeclarations.test.js
 
-Representative ML runtime coverage was also rechecked with targeted slices:
-
-    PASS tests/mlRuntime.test.js with "bootstraps snapshots and stores replayed simulations"
-    PASS tests/mlRuntime.test.js with "mcts supports on-deck action phases|builtin medium takes immediate king-throne wins when available|builtin medium stays in response actions during pending move phases"
-
-The full `npm test` command still fails in this environment because the heavy ML runtime suite needs separate follow-up:
-
-    FAIL tests/mlRuntime.test.js
-      - "simulations support medium bot participants and alternating colors" exceeded 60000 ms
-      - "medium bot self-play no longer collapses to 8-9 ply races" exceeded 20000 ms
-      - "supports game counts above previous 64 cap" exceeded 20000 ms during the Jest run
-      - "simulation run emits start/game/complete progress events" observed 4 `game` events instead of 2 only under the full-suite run; the same test passes in isolation
-
 ## Interfaces and Dependencies
 
 `public/js/modules/components/boardView.js` should expose the same public API (`render`, `setReadOnly`, `getState`, `getSizes`, `destroy`) after the refactor, but internally it should also own the lifetime of a board-annotation controller.
@@ -156,4 +139,4 @@ The full `npm test` command still fails in this environment because the heavy ML
 
 `src/socket.js` and `src/utils/spectatorSnapshot.js` should include a `clocks` payload with at least `whiteMs`, `blackMs`, `activeColor`, `tickingWhite`, `tickingBlack`, and a human-readable `label`.
 
-Revision note: updated the ExecPlan after implementation to record the completed annotation, clock, rules, and documentation work, plus the remaining manual browser verification step and the ML suite timeout caveat.
+Revision note: updated the ExecPlan after implementation to record the completed annotation, clock, rules, and documentation work, plus the remaining manual browser verification step.

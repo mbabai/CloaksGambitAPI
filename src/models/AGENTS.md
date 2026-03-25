@@ -4,7 +4,7 @@
 - `Game` and `Match` are hybrid models:
   - active/live documents live in process memory through custom `GameDocument` and `MatchDocument` wrappers.
   - completed documents are persisted into the underlying Mongoose history models.
-- `User`, `ServerConfig`, `Simulation`, `SimulationGame`, and `TrainingRun` are plain Mongoose models.
+- `User` and `ServerConfig` are plain Mongoose models.
 
 ## Why This Matters
 - Active games and matches are fast and mutable in-memory objects.
@@ -29,11 +29,6 @@
 - Active queries are usually served from the in-memory store.
 - Queries that explicitly target `isActive: false` route to the Mongoose history model.
 - Be careful when changing query helpers: history queries and live queries intentionally do not hit the same backing store.
-
-## ML History Models
-- `Simulation` stores batch-level metadata plus inline game summaries when detailed games are not split out.
-- `SimulationGame` stores detailed replay/training records keyed by `simulationId` plus per-game ids. Keep its compound indexes aligned with how `src/services/ml/runtime.js` queries replays.
-- `TrainingRun` stores restart-safe training-job history and checkpoints. Runtime resume logic depends on its `status`, `checkpoint`, and snapshot lineage fields remaining stable.
 
 ## Editing Guidance
 - When adding a new `Game` or `Match` field, inspect all of these in the same edit:

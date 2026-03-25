@@ -1,7 +1,6 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { isInternalSimulationActive } = require('./simulationRequestContext');
 
 const DEBUG_DIR = path.join(os.tmpdir(), 'cloaks-gambit-debug');
 const DEBUG_LOG_FILE = path.join(DEBUG_DIR, 'clock-events.jsonl');
@@ -9,9 +8,6 @@ const DEBUG_LOG_FILE = path.join(DEBUG_DIR, 'clock-events.jsonl');
 let announcedPath = false;
 
 function isLocalDebugLoggingEnabled() {
-  if (isInternalSimulationActive()) {
-    return false;
-  }
   const explicit = String(process.env.CG_LOCAL_GAME_LOGS || '').trim().toLowerCase();
   if (explicit === 'false' || explicit === '0' || explicit === 'off') {
     return false;

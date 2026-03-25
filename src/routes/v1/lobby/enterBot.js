@@ -6,8 +6,6 @@ const eventBus = require('../../../eventBus');
 const { resolveLobbySession } = require('../../../utils/lobbyAccess');
 const lobbyStore = require('../../../state/lobby');
 const getServerConfig = require('../../../utils/getServerConfig');
-const { isMlWorkflowEnabled } = require('../../../utils/mlFeatureGate');
-const { getMlRuntime } = require('../../../services/ml/runtime');
 const {
   ensureGuestForBotGame,
   ensureBotUser,
@@ -54,17 +52,6 @@ router.post('/', async (req, res) => {
       botId: selectionId,
       username,
     });
-
-    if (!builtinBotId && isMlWorkflowEnabled()) {
-      const mlRuntime = getMlRuntime();
-      const result = await mlRuntime.startPromotedBotGame({
-        botId: selectionId,
-        userId,
-        username,
-        sidePreference: 'random',
-      });
-      return res.json(result);
-    }
 
     if (!builtinBot) {
       return res.status(400).json({ message: 'Selected bot is not available.' });

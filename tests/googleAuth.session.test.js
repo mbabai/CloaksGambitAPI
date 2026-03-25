@@ -6,6 +6,11 @@ jest.mock('../src/models/User', () => ({
 }));
 
 jest.mock('../src/utils/ensureUser', () => jest.fn());
+jest.mock('mongoose', () => ({
+  connection: {
+    readyState: 1,
+  },
+}));
 jest.mock('../src/utils/authTokens', () => ({
   createAuthToken: jest.fn(() => 'dev-token'),
   TOKEN_COOKIE_NAME: 'cgToken',
@@ -16,6 +21,7 @@ jest.mock('../src/utils/authTokens', () => ({
 
 const User = require('../src/models/User');
 const ensureUser = require('../src/utils/ensureUser');
+const mongoose = require('mongoose');
 const authRouter = require('../src/routes/auth/google');
 
 function extractGetHandler(router, routePath) {
@@ -72,6 +78,7 @@ describe('google auth session route', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.NODE_ENV = 'development';
+    mongoose.connection.readyState = 1;
   });
 
   test('re-mints an authenticated local session from a real user cookie in development', async () => {

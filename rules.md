@@ -97,7 +97,6 @@ Not by declaring them as a bomb. However, as a bluff (declaring it as another pi
 ### Code Ownership
 - Live HTTP gameplay flow lives in `src/routes/v1/gameAction/`.
 - Shared live-route helpers live in `src/services/game/liveGameRules.js`.
-- A second, heavier rules implementation used by simulation/training lives in `src/services/ml/engine.js`.
 - Machine-readable enums and defaults live in `shared/constants/game.json`.
 
 ### Current Live Move Lifecycle

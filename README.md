@@ -40,8 +40,6 @@ and left-click anywhere to clear local drawings.
   `AUTH_COOKIE_SAME_SITE=none` and `AUTH_COOKIE_SECURE=true`. Set
   `AUTH_COOKIE_DOMAIN` only when you intentionally want to share cookies across
   subdomains.
-- The admin ML workflow is feature-gated by `ENABLE_ML_WORKFLOW`. It defaults to
-  enabled outside production and disabled in production unless explicitly set.
 
 ## Running the Application
 
@@ -54,16 +52,6 @@ Production mode:
 ```bash
 npm start
 ```
-
-## ML Workbench
-
-- Admin UI: `http://localhost:3000/ml-admin`
-- The route and `/api/v1/ml/*` endpoints are only mounted when
-  `ENABLE_ML_WORKFLOW` is enabled.
-- The current workbench is run-oriented: `Config`, `Runs`, `Replay`, and `Test`.
-- Training can stay in the Node CPU trainer or use the optional Python Torch
-  bridge in `ml_backend/`.
-- Usage guide: [`docs/ml-admin.md`](docs/ml-admin.md)
 
 ## WebSocket Connection
 
@@ -163,20 +151,6 @@ Get-Content "$env:TEMP\cloaks-gambit-debug\clock-events.jsonl" -Tail 80
 - POST /api/v1/lobby/exitQuickplay - Leave the quickplay queue
 - POST /api/v1/lobby/enterRanked - Join the ranked queue
 - POST /api/v1/lobby/exitRanked - Leave the ranked queue
-
-### ML (Admin-only, Feature-gated)
-- GET /api/v1/ml/workbench - Load the aggregated ML workbench payload
-- GET /api/v1/ml/live - Load current live run/simulation/training status
-- GET /api/v1/ml/runs - List continuous ML runs
-- GET /api/v1/ml/runs/:runId - Load one run with generations and retained games
-- POST /api/v1/ml/runs - Start a continuous run
-- POST /api/v1/ml/runs/:runId/stop - Request a graceful stop for a run
-- DELETE /api/v1/ml/runs/:runId - Delete a stopped run
-- GET /api/v1/ml/runs/:runId/games - List retained games for a run
-- GET /api/v1/ml/runs/:runId/replay/:gameId - Load one retained replay
-- POST /api/v1/ml/test-games - Launch a live test game against a selected run generation
-- Legacy snapshot/simulation/training helper endpoints still exist under
-  `/api/v1/ml/*` for compatibility and lower-level tooling.
 
 ## Project Structure
 

@@ -96,7 +96,7 @@ const ADMIN_UNAVAILABLE_HTML = `<!doctype html>
     <h1>Admin Session Temporarily Unavailable</h1>
     <p>Your admin token is present, but the server cannot confirm the session because MongoDB is reconnecting.</p>
     <p>Wait a moment and try again. If the problem keeps happening, reload the page after the database connection recovers.</p>
-    <p><a href="/ml-admin">Retry the ML admin page</a></p>
+    <p><a href="/admin">Retry the admin page</a></p>
   </main>
 </body>
 </html>`;

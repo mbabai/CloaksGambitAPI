@@ -109,7 +109,6 @@ const PROD_FAVICON_PATH = path.join(PUBLIC_DIR, 'assets', 'images', 'cloakHood.j
 const DEV_FAVICON_PATH = path.join(PUBLIC_DIR, 'assets', 'images', 'cloakHoodInverted.jpg');
 const INDEX_HTML_PATH = path.join(PUBLIC_DIR, 'index.html');
 const ADMIN_HTML_PATH = path.join(PUBLIC_DIR, 'admin.html');
-const ML_ADMIN_HTML_PATH = path.join(PUBLIC_DIR, 'ml-admin.html');
 const htmlTemplateCache = new Map();
 const staticOptions = {
   etag: true,
@@ -193,20 +192,7 @@ const lobbyStore = require('./state/lobby');
 const getServerConfig = require('./utils/getServerConfig');
 const { startInternalBots } = require('./services/bots/internalBots');
 const { startGuestCleanupTask } = require('./services/guestCleanup');
-const { isMlWorkflowEnabled } = require('./utils/mlFeatureGate');
 const { ensureAdminRequest } = require('./utils/adminAccess');
-const { getMlRuntime } = require('./services/ml/runtime');
-
-const mlWorkflowEnabled = isMlWorkflowEnabled();
-
-function isBlockedMlRequestPath(requestPath = '') {
-  const normalized = typeof requestPath === 'string' ? requestPath.trim() : '';
-  return normalized === '/ml-admin'
-    || normalized === '/ml-admin/'
-    || normalized === '/ml-admin.html'
-    || normalized === '/ml-admin.js'
-    || normalized.startsWith('/api/v1/ml');
-}
 
 // Middleware
 app.use(cors({
@@ -218,12 +204,6 @@ app.use(compression());
 app.use(morgan(isProduction ? 'combined' : 'dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use((req, res, next) => {
-  if (mlWorkflowEnabled || !isBlockedMlRequestPath(req.path)) {
-    return next();
-  }
-  return res.status(404).json({ message: 'Not found' });
-});
 app.get('/favicon.ico', (req, res) => {
   const hostHeader = req.get('x-forwarded-host') || req.get('host');
   const faviconPath = resolveExistingFaviconPath(hostHeader);
@@ -247,16 +227,6 @@ app.get(['/admin', '/admin.html'], async (req, res) => {
     return;
   }
   sendVersionedHtml(res, ADMIN_HTML_PATH);
-});
-app.get(['/ml-admin', '/ml-admin.html'], async (req, res) => {
-  if (!mlWorkflowEnabled) {
-    return res.status(404).json({ message: 'Not found' });
-  }
-  const adminSession = await ensureAdminRequest(req, res);
-  if (!adminSession) {
-    return;
-  }
-  return sendVersionedHtml(res, ML_ADMIN_HTML_PATH);
 });
 app.use(express.static(PUBLIC_DIR, staticOptions));
 // Serve UI image assets from fallback locations if not present in public/
@@ -405,7 +375,7 @@ async function shutdownServer(signal = 'shutdown') {
     return shutdownPromise;
   }
   shutdownPromise = (async () => {
-    console.log(`Received ${signal}; flushing ML runtime state before exit...`);
+    console.log(`Received ${signal}; shutting down...`);
     server.close((err) => {
       if (err) {
         console.error('Error while closing HTTP server during shutdown:', err);
@@ -418,12 +388,6 @@ async function shutdownServer(signal = 'shutdown') {
         }
       });
       recoveryRedirectServer = null;
-    }
-    try {
-      await getMlRuntime().flushForShutdown();
-      console.log('ML runtime flushed successfully.');
-    } catch (err) {
-      console.error('Failed to flush ML runtime during shutdown:', err);
     }
     try {
       await mongoose.disconnect();
