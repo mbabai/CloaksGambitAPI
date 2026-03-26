@@ -33,9 +33,12 @@ const {
   joinTournamentAsViewer,
   leaveTournament,
   addBotToTournament,
+  kickTournamentPlayer,
+  reallowTournamentPlayer,
   startTournament,
   listTournamentGames,
   listLiveTournaments,
+  consumeTournamentAlerts,
 } = require('../src/services/tournaments/liveTournaments');
 
 describe('live tournaments service', () => {
@@ -142,5 +145,42 @@ describe('live tournaments service', () => {
       tournamentId: created.id,
       session: { userId: '000000000000000000000353', username: 'Late Joiner', isGuest: false },
     })).rejects.toThrow(/only available while tournament is starting/i);
+  });
+
+  test('host can kick and re-allow a player during starting state', async () => {
+    const host = { userId: '000000000000000000000451', username: 'Host5', isGuest: false };
+    const player = { userId: '000000000000000000000452', username: 'KickedPlayer', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Kick Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: player });
+
+    const kicked = await kickTournamentPlayer({
+      tournamentId: created.id,
+      session: host,
+      targetUserId: player.userId,
+    });
+    expect(kicked.players.some((entry) => entry.userId === player.userId)).toBe(false);
+    expect(kicked.removedPlayers.some((entry) => entry.userId === player.userId)).toBe(true);
+
+    await expect(joinTournamentAsPlayer({
+      tournamentId: created.id,
+      session: player,
+    })).rejects.toThrow(/removed from this tournament/i);
+
+    const relisted = await listLiveTournaments({ session: player });
+    expect(relisted.some((entry) => entry.id === created.id)).toBe(false);
+
+    const reallowed = await reallowTournamentPlayer({
+      tournamentId: created.id,
+      session: host,
+      targetUserId: player.userId,
+    });
+    expect(reallowed.removedPlayers.some((entry) => entry.userId === player.userId)).toBe(false);
+
+    const visibleAgain = await listLiveTournaments({ session: player });
+    expect(visibleAgain.some((entry) => entry.id === created.id)).toBe(true);
+
+    const alerts = consumeTournamentAlerts(player.userId);
+    expect(alerts.length).toBeGreaterThan(0);
+    expect(alerts[0]).toMatch(/removed/i);
   });
 });

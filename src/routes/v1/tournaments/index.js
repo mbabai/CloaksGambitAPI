@@ -6,6 +6,7 @@ const eventBus = require('../../../eventBus');
 const {
   isTournamentTestModeEnabled,
   listLiveTournaments,
+  consumeTournamentAlerts,
   getTournamentDetails,
   createTournament,
   joinTournamentAsPlayer,
@@ -13,6 +14,8 @@ const {
   leaveTournament,
   cancelTournament,
   addBotToTournament,
+  kickTournamentPlayer,
+  reallowTournamentPlayer,
   startTournament,
   listTournamentGames,
   listAllTournamentsForAdmin,
@@ -47,9 +50,11 @@ function handleRouteError(res, err) {
 
 router.get('/', async (req, res) => {
   try {
+    const session = await resolveSessionFromRequest(req, { createGuest: false });
     return res.json({
       testModeEnabled: isTournamentTestModeEnabled(),
-      tournaments: await listLiveTournaments(),
+      tournaments: await listLiveTournaments({ session }),
+      alerts: consumeTournamentAlerts(session?.userId),
       botDifficultyOptions: getTournamentBotDifficultyOptions(),
     });
   } catch (err) {
@@ -142,6 +147,36 @@ router.post('/start', async (req, res) => {
     assertParticipationAllowed(session);
     const tournament = await startTournament({ tournamentId: req.body?.tournamentId, session });
     eventBus.emit('adminRefresh');
+    return res.json({ tournament });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.post('/kick-player', async (req, res) => {
+  try {
+    const session = await resolveTournamentSession(req);
+    assertParticipationAllowed(session);
+    const tournament = await kickTournamentPlayer({
+      tournamentId: req.body?.tournamentId,
+      session,
+      targetUserId: req.body?.userId,
+    });
+    return res.json({ tournament });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.post('/reallow-player', async (req, res) => {
+  try {
+    const session = await resolveTournamentSession(req);
+    assertParticipationAllowed(session);
+    const tournament = await reallowTournamentPlayer({
+      tournamentId: req.body?.tournamentId,
+      session,
+      targetUserId: req.body?.userId,
+    });
     return res.json({ tournament });
   } catch (err) {
     return handleRouteError(res, err);

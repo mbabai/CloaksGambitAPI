@@ -9,6 +9,8 @@ import {
   apiCancelTournament,
   apiAddTournamentBot,
   apiStartTournament,
+  apiKickTournamentPlayer,
+  apiReallowTournamentPlayer,
   apiGetTournamentDetails,
 } from '../api/game.js';
 
@@ -60,6 +62,7 @@ export function initTournamentUi({
   onSessionRefresh,
   onSpectateMatch,
   registerSpectateUsername,
+  onParticipantStateChange,
 }) {
   if (!triggerButton) return null;
 
@@ -77,10 +80,35 @@ export function initTournamentUi({
   });
 
   const browserOverlay = createOverlay(createOverlayOptions('Tournament browser', 'Close tournament browser'));
-  const createOverlayModal = createOverlay(createOverlayOptions('Create tournament', 'Close create tournament modal'));
-  const lobbyOverlay = createOverlay(createOverlayOptions('Tournament lobby', 'Close tournament lobby'));
-  const addBotOverlay = createOverlay(createOverlayOptions('Add bot to tournament', 'Close add bot modal'));
-  const activeOverlay = createOverlay(createOverlayOptions('Active tournament games', 'Close active tournament games'));
+  const createOverlayModal = createOverlay({
+    ...createOverlayOptions('Create tournament', 'Close create tournament modal'),
+    onCloseRequest: () => {
+      createOverlayModal.hide({ restoreFocus: false });
+      browserOverlay.show();
+    },
+  });
+  const lobbyOverlay = createOverlay({
+    ...createOverlayOptions('Tournament lobby', 'Close tournament lobby'),
+    onCloseRequest: () => {
+      if (currentViewRole === 'participant') return;
+      lobbyOverlay.hide({ restoreFocus: false });
+    },
+  });
+  const addBotOverlay = createOverlay({
+    ...createOverlayOptions('Add bot to tournament', 'Close add bot modal'),
+    onCloseRequest: () => {
+      addBotOverlay.hide({ restoreFocus: false });
+      if (currentTournament) openLobbyModal(currentTournament);
+    },
+  });
+  const activeOverlay = createOverlay({
+    ...createOverlayOptions('Active tournament games', 'Close active tournament games'),
+    onCloseRequest: () => {
+      if (currentViewRole === 'participant') return;
+      activeOverlay.hide({ restoreFocus: false });
+    },
+  });
+  const confirmLeaveOverlay = createOverlay(createOverlayOptions('Leave tournament confirmation', 'Close leave confirmation'));
 
   let browserStatusEl = null;
   let browserListEl = null;
@@ -91,7 +119,49 @@ export function initTournamentUi({
   let cachedRows = [];
   let botDifficultyOptions = [];
   let currentTournament = null;
+  let currentViewRole = null;
+  let isInTournamentGame = false;
   let browserTestModeEnabled = false;
+
+  function notifyParticipantState() {
+    if (typeof onParticipantStateChange !== 'function') return;
+    onParticipantStateChange(currentViewRole === 'participant');
+  }
+
+  function setParticipantRole(role) {
+    currentViewRole = role === 'participant' ? 'participant' : (role === 'viewer' ? 'viewer' : null);
+    notifyParticipantState();
+  }
+
+  function hideAllOverlays() {
+    browserOverlay.hide({ restoreFocus: false });
+    createOverlayModal.hide({ restoreFocus: false });
+    lobbyOverlay.hide({ restoreFocus: false });
+    addBotOverlay.hide({ restoreFocus: false });
+    activeOverlay.hide({ restoreFocus: false });
+    confirmLeaveOverlay.hide({ restoreFocus: false });
+  }
+
+  async function showCurrentTournamentHome() {
+    if (!currentTournament || currentViewRole !== 'participant' || isInTournamentGame) return;
+    try {
+      const details = await apiGetTournamentDetails({ tournamentId: currentTournament.id });
+      currentTournament = details?.tournament || currentTournament;
+      const games = Array.isArray(details?.games) ? details.games : [];
+      registerTournamentPlayers(games);
+      if (currentTournament.state === 'active') {
+        openActiveModal(currentTournament, games);
+      } else {
+        openLobbyModal(currentTournament);
+      }
+    } catch (_) {
+      if (currentTournament.state === 'active') {
+        openActiveModal(currentTournament, []);
+      } else {
+        openLobbyModal(currentTournament);
+      }
+    }
+  }
 
   function registerTournamentPlayers(games = []) {
     if (typeof registerSpectateUsername !== 'function') return;
@@ -167,6 +237,14 @@ export function initTournamentUi({
       cachedRows = Array.isArray(payload?.tournaments) ? payload.tournaments : [];
       botDifficultyOptions = Array.isArray(payload?.botDifficultyOptions) ? payload.botDifficultyOptions : [];
       browserTestModeEnabled = Boolean(payload?.testModeEnabled);
+      if (Array.isArray(payload?.alerts) && payload.alerts.length > 0) {
+        payload.alerts.forEach((message) => {
+          if (!message) return;
+          try {
+            window.alert(message);
+          } catch (_) {}
+        });
+      }
       if (selectedTournamentId && !cachedRows.some((entry) => entry.id === selectedTournamentId)) {
         selectedTournamentId = null;
       }
@@ -209,6 +287,7 @@ export function initTournamentUi({
       try {
         const result = await apiJoinTournament({ tournamentId: selectedTournamentId, role: 'player' });
         currentTournament = result?.tournament || null;
+        setParticipantRole('participant');
         browserOverlay.hide({ restoreFocus: false });
         openLobbyModal(currentTournament || getSelectedTournament());
       } catch (err) {
@@ -221,6 +300,7 @@ export function initTournamentUi({
       try {
         await apiJoinTournament({ tournamentId: selectedTournamentId, role: 'viewer' });
         const details = await apiGetTournamentDetails({ tournamentId: selectedTournamentId });
+        setParticipantRole('viewer');
         registerTournamentPlayers(details?.games || []);
         browserOverlay.hide({ restoreFocus: false });
         if (details?.tournament?.state === 'active') {
@@ -245,6 +325,7 @@ export function initTournamentUi({
     victorySelect.innerHTML = '<option value="3">3</option><option value="4">4</option><option value="5">5</option>';
 
     const saveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Create Tournament'), { variant: 'neutral', position: 'relative' });
+    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Cancel'), { variant: 'neutral', position: 'relative' });
 
     const row = (label, control) => {
       const wrap = el('label', { className: 'tournament-modal__field' });
@@ -259,6 +340,7 @@ export function initTournamentUi({
     section.appendChild(row('Elimination style', styleSelect));
     section.appendChild(row('Victory points', victorySelect));
     section.appendChild(saveBtn);
+    section.appendChild(cancelBtn);
     createOverlayModal.content.appendChild(section);
     createOverlayModal.content.appendChild(status);
 
@@ -274,11 +356,17 @@ export function initTournamentUi({
           },
         });
         currentTournament = result?.tournament || null;
+        setParticipantRole('participant');
         createOverlayModal.hide({ restoreFocus: false });
         openLobbyModal(currentTournament);
       } catch (err) {
         status.textContent = err.message || 'Failed to create tournament.';
       }
+    });
+
+    cancelBtn.addEventListener('click', () => {
+      createOverlayModal.hide({ restoreFocus: false });
+      browserOverlay.show();
     });
 
     createOverlayModal.show();
@@ -298,11 +386,13 @@ export function initTournamentUi({
     });
 
     const addBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Add Bot Player'), { variant: 'neutral', position: 'relative' });
+    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Cancel'), { variant: 'neutral', position: 'relative' });
 
     addBotOverlay.content.appendChild(title);
     section.appendChild(nameInput);
     section.appendChild(difficulty);
     section.appendChild(addBtn);
+    section.appendChild(cancelBtn);
     addBotOverlay.content.appendChild(section);
     addBotOverlay.content.appendChild(status);
 
@@ -322,48 +412,103 @@ export function initTournamentUi({
       }
     });
 
+    cancelBtn.addEventListener('click', () => {
+      addBotOverlay.hide({ restoreFocus: false });
+      openLobbyModal(tournament);
+    });
+
     addBotOverlay.show();
   }
 
   function openLobbyModal(tournamentLike) {
     if (!tournamentLike?.id) return;
     const tournament = tournamentLike;
+    currentTournament = tournament;
     lobbyOverlay.content.innerHTML = '';
     const { title, status, section } = createModalShell(`${asText(tournament.label, 'Tournament')} Lobby`);
     status.textContent = `State: ${tournament.state} · Phase: ${tournament.phase}`;
+    const session = getSessionInfo ? getSessionInfo() : null;
+    const isHost = String(session?.userId || '') === String(tournament.host?.userId || '');
+    const isStarting = tournament.state === 'starting';
 
     const playersList = el('div', { className: 'tournament-player-list' });
     const players = Array.isArray(tournament.players) ? tournament.players : [];
+    const removedPlayers = Array.isArray(tournament.removedPlayers) ? tournament.removedPlayers : [];
     if (!players.length) {
       playersList.appendChild(el('div', { className: 'menu-message' }, 'No players joined yet.'));
     } else {
       players.forEach((player) => {
         const suffix = player.type === 'bot' ? `Bot · ${player.difficulty || 'easy'}` : 'Human';
-        playersList.appendChild(el('div', { className: 'tournament-player-row' }, `${player.username} · ${suffix}`));
+        const row = el('div', { className: 'tournament-player-row' });
+        row.appendChild(el('span', {}, `${player.username} · ${suffix}`));
+        if (isHost && isStarting && String(player.userId || '') !== String(tournament.host?.userId || '')) {
+          const kickBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Kick Player'), { variant: 'neutral', position: 'relative' });
+          kickBtn.addEventListener('click', async () => {
+            status.textContent = `Kicking ${player.username}...`;
+            try {
+              const result = await apiKickTournamentPlayer({
+                tournamentId: tournament.id,
+                userId: player.userId,
+              });
+              currentTournament = result?.tournament || tournament;
+              openLobbyModal(currentTournament);
+            } catch (err) {
+              status.textContent = err.message || 'Failed to kick player.';
+            }
+          });
+          row.appendChild(kickBtn);
+        }
+        playersList.appendChild(row);
+      });
+    }
+    if (isHost && isStarting && removedPlayers.length > 0) {
+      removedPlayers.forEach((player) => {
+        const row = el('div', { className: 'tournament-player-row tournament-player-row--kicked' });
+        row.appendChild(el('span', {}, `${player.username} · Removed`));
+        const reallowBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Re-allow'), { variant: 'neutral', position: 'relative' });
+        reallowBtn.addEventListener('click', async () => {
+          status.textContent = `Re-allowing ${player.username}...`;
+          try {
+            const result = await apiReallowTournamentPlayer({
+              tournamentId: tournament.id,
+              userId: player.userId,
+            });
+            currentTournament = result?.tournament || tournament;
+            openLobbyModal(currentTournament);
+          } catch (err) {
+            status.textContent = err.message || 'Failed to re-allow player.';
+          }
+        });
+        row.appendChild(reallowBtn);
+        playersList.appendChild(row);
       });
     }
 
     const btnRow = el('div', { className: 'tournament-modal__actions' });
-    const startBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Start Tournament'), { variant: 'neutral', position: 'relative' });
-    const addBotBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Add Bot'), { variant: 'neutral', position: 'relative' });
-    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Leave Tournament'), { variant: 'neutral', position: 'relative' });
-    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Cancel Tournament'), { variant: 'neutral', position: 'relative' });
+    const controlsRow = el('div', { className: 'tournament-modal__controls' });
+    const startBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, 'Start Tournament'), { variant: 'neutral', position: 'relative' });
+    const joinTournamentBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Join Tournament'), { variant: 'neutral', position: 'relative' });
+    const addBotBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Add Bot'), { variant: 'neutral', position: 'relative' });
+    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Leave Tournament'), { variant: 'neutral', position: 'relative' });
+    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Cancel Tournament'), { variant: 'neutral', position: 'relative' });
 
-    const session = getSessionInfo ? getSessionInfo() : null;
-    const isHost = String(session?.userId || '') === String(tournament.host?.userId || '');
-    const isStarting = tournament.state === 'starting';
     if (!isHost || !isStarting) {
       startBtn.disabled = true;
       addBotBtn.disabled = true;
       cancelBtn.disabled = true;
     }
+    if (!isStarting || players.some((entry) => String(entry.userId || '') === String(session?.userId || ''))) {
+      joinTournamentBtn.disabled = true;
+    }
 
+    controlsRow.appendChild(joinTournamentBtn);
     btnRow.appendChild(startBtn);
     btnRow.appendChild(addBotBtn);
     btnRow.appendChild(cancelBtn);
     btnRow.appendChild(leaveBtn);
 
     lobbyOverlay.content.appendChild(title);
+    lobbyOverlay.content.appendChild(controlsRow);
     lobbyOverlay.content.appendChild(status);
     section.appendChild(el('h3', {}, 'Players'));
     section.appendChild(playersList);
@@ -403,15 +548,21 @@ export function initTournamentUi({
     });
 
     leaveBtn.addEventListener('click', async () => {
-      status.textContent = 'Leaving tournament...';
-      try {
-        await apiLeaveTournament({ tournamentId: tournament.id });
-        lobbyOverlay.hide({ restoreFocus: false });
-        browserOverlay.show();
-        await refreshBrowser();
-      } catch (err) {
-        status.textContent = err.message || 'Failed to leave tournament.';
-      }
+      openLeaveConfirmModal({
+        tournament,
+        onConfirm: async () => {
+          status.textContent = 'Leaving tournament...';
+          const result = await apiLeaveTournament({ tournamentId: tournament.id });
+          currentTournament = result?.tournament || null;
+          setParticipantRole(null);
+          lobbyOverlay.hide({ restoreFocus: false });
+          browserOverlay.show();
+          await refreshBrowser();
+        },
+        onError: (message) => {
+          status.textContent = message || 'Failed to leave tournament.';
+        },
+      });
     });
 
     lobbyOverlay.show();
@@ -419,6 +570,7 @@ export function initTournamentUi({
 
   function openActiveModal(tournament, games = []) {
     if (!tournament) return;
+    currentTournament = tournament;
     activeOverlay.content.innerHTML = '';
     const { title, status, section } = createModalShell(`${asText(tournament.label, 'Tournament')} · Active`);
     status.textContent = 'Round robin is active now. Elimination starts when round robin is complete.';
@@ -443,16 +595,18 @@ export function initTournamentUi({
       });
     }
 
+    const controlsRow = el('div', { className: 'tournament-modal__controls' });
     const refreshBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Refresh Games'), { variant: 'neutral', position: 'relative' });
-    const doneBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Back to Browser'), { variant: 'neutral', position: 'relative' });
-    const buttonRow = el('div', { className: 'tournament-modal__actions' });
-    buttonRow.appendChild(refreshBtn);
-    buttonRow.appendChild(doneBtn);
+    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Leave Tournament'), { variant: 'neutral', position: 'relative' });
+    const doneBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, currentViewRole === 'participant' ? 'Tournament Home' : 'Back to Browser'), { variant: 'neutral', position: 'relative' });
+    controlsRow.appendChild(refreshBtn);
+    if (currentViewRole === 'participant') controlsRow.appendChild(leaveBtn);
+    controlsRow.appendChild(doneBtn);
 
     activeOverlay.content.appendChild(title);
+    activeOverlay.content.appendChild(controlsRow);
     activeOverlay.content.appendChild(status);
     section.appendChild(gameList);
-    section.appendChild(buttonRow);
     activeOverlay.content.appendChild(section);
 
     refreshBtn.addEventListener('click', async () => {
@@ -464,12 +618,69 @@ export function initTournamentUi({
     });
 
     doneBtn.addEventListener('click', async () => {
+      if (currentViewRole === 'participant') {
+        await showCurrentTournamentHome();
+        return;
+      }
       activeOverlay.hide({ restoreFocus: false });
       browserOverlay.show();
       await refreshBrowser();
     });
 
+    leaveBtn.addEventListener('click', () => {
+      openLeaveConfirmModal({
+        tournament,
+        onConfirm: async () => {
+          await apiLeaveTournament({ tournamentId: tournament.id });
+          setParticipantRole(null);
+          activeOverlay.hide({ restoreFocus: false });
+          browserOverlay.show();
+          await refreshBrowser();
+        },
+      });
+    });
+
     activeOverlay.show();
+  }
+
+  function openLeaveConfirmModal({ tournament, onConfirm, onError } = {}) {
+    confirmLeaveOverlay.content.innerHTML = '';
+    const title = el('h2', { className: 'tournament-modal__title' }, 'Leave Tournament?');
+    const message = el(
+      'div',
+      { className: 'menu-message tournament-modal__status' },
+      'Are you sure you wish to leave? you will forfeit all subsequent games.'
+    );
+    const row = el('div', { className: 'tournament-modal__actions' });
+    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Leave'), { variant: 'danger', position: 'relative' });
+    const stayBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Stay'), { variant: 'neutral', position: 'relative' });
+    row.appendChild(leaveBtn);
+    row.appendChild(stayBtn);
+    confirmLeaveOverlay.content.appendChild(title);
+    confirmLeaveOverlay.content.appendChild(message);
+    confirmLeaveOverlay.content.appendChild(row);
+
+    leaveBtn.addEventListener('click', async () => {
+      try {
+        await Promise.resolve(onConfirm && onConfirm(tournament));
+        confirmLeaveOverlay.hide({ restoreFocus: false });
+      } catch (err) {
+        if (typeof onError === 'function') {
+          onError(err?.message);
+        }
+      }
+    });
+
+    stayBtn.addEventListener('click', () => {
+      confirmLeaveOverlay.hide({ restoreFocus: false });
+      if (currentTournament?.state === 'active') {
+        openActiveModal(currentTournament, []);
+      } else if (currentTournament) {
+        openLobbyModal(currentTournament);
+      }
+    });
+
+    confirmLeaveOverlay.show();
   }
 
   buildBrowserModal();
@@ -480,6 +691,10 @@ export function initTournamentUi({
     if (typeof onSessionRefresh === 'function') {
       await onSessionRefresh().catch(() => null);
     }
+    if (currentViewRole === 'participant' && currentTournament) {
+      await showCurrentTournamentHome();
+      return;
+    }
     browserOverlay.show();
     await refreshBrowser();
   });
@@ -488,6 +703,27 @@ export function initTournamentUi({
     openBrowser: async () => {
       browserOverlay.show();
       await refreshBrowser();
-    }
+    },
+    openHomeIfParticipant: () => {
+      showCurrentTournamentHome();
+    },
+    setTournamentGameActive: (inGame) => {
+      isInTournamentGame = Boolean(inGame);
+      if (isInTournamentGame) {
+        hideAllOverlays();
+        return;
+      }
+      showCurrentTournamentHome();
+    },
   };
 }
+    joinTournamentBtn.addEventListener('click', async () => {
+      status.textContent = 'Joining tournament...';
+      try {
+        const result = await apiJoinTournament({ tournamentId: tournament.id, role: 'player' });
+        currentTournament = result?.tournament || tournament;
+        openLobbyModal(currentTournament);
+      } catch (err) {
+        status.textContent = err.message || 'Failed to join tournament.';
+      }
+    });

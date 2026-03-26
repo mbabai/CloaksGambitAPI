@@ -155,6 +155,8 @@ logBootConstantsOnce();
     variant: 'neutral',
     position: 'relative'
   });
+  let tournamentUiController = null;
+  let tournamentParticipantMode = false;
   const accountPanel = document.getElementById('menuAccountPanel');
   const usernameDisplay = document.getElementById('usernameDisplay');
   const accountPanelContent = document.getElementById('accountPanelContent');
@@ -840,7 +842,7 @@ logBootConstantsOnce();
   }
 
   if (tournamentBtn) {
-    initTournamentUi({
+    tournamentUiController = initTournamentUi({
       triggerButton: tournamentBtn,
       getSessionInfo: () => sessionInfo,
       onSessionRefresh: refreshSession,
@@ -849,6 +851,10 @@ logBootConstantsOnce();
         spectateController.open(matchId);
       },
       registerSpectateUsername: setSpectateUsername,
+      onParticipantStateChange: (isParticipant) => {
+        tournamentParticipantMode = Boolean(isParticipant);
+        updateFindButton();
+      },
     });
   }
 
@@ -1994,6 +2000,17 @@ logBootConstantsOnce();
   }
 
   function updateFindButton() {
+    if (tournamentParticipantMode) {
+      queueBtn.classList.remove('searching');
+      queueBtn.textContent = 'Tournament Active';
+      queueBtn.disabled = true;
+      modeSelect.disabled = true;
+      selectWrap.classList.add('disabled');
+      stopQueueTimer();
+      queueTimerEl = null;
+      return;
+    }
+    queueBtn.disabled = false;
     const awaitingServerQueueState = !queueStatusKnown && queueStartTime != null;
     const anyQueued = queuedState.quickplay || queuedState.ranked || queuedState.bots;
     let mode = modeSelect.value;
@@ -2081,6 +2098,9 @@ logBootConstantsOnce();
             lastGameId = latest._id; // treat as already handled
           }
           hideQueuer();
+          if (tournamentParticipantMode && tournamentUiController) {
+            tournamentUiController.setTournamentGameActive(true);
+          }
           showPlayArea();
 
           if (latest?.match) {
@@ -2239,6 +2259,9 @@ logBootConstantsOnce();
 
         // As soon as we are in a game, hide the Find Game UI and reveal the play area
         hideQueuer();
+        if (tournamentParticipantMode && tournamentUiController) {
+          tournamentUiController.setTournamentGameActive(true);
+        }
         showPlayArea();
         loadPlayerNames(payload.players);
         currentIsWhite = (color === 0);
@@ -2282,6 +2305,9 @@ logBootConstantsOnce();
           winReason: payload?.winReason,
         });
         gameFinished = payload?.winReason !== undefined && payload?.winReason !== null;
+        if (tournamentParticipantMode && tournamentUiController) {
+          tournamentUiController.setTournamentGameActive(false);
+        }
         stopClockInterval();
         selected = null;
         dragging = null;
@@ -4596,6 +4622,10 @@ logBootConstantsOnce();
     currentDrawOffer = null;
     drawOfferCooldowns = [null, null];
     clearDrawCooldownTimeout();
+    if (tournamentParticipantMode && tournamentUiController) {
+      tournamentUiController.setTournamentGameActive(false);
+      tournamentUiController.openHomeIfParticipant();
+    }
   }
 
   function renderBoardAndBars() {
