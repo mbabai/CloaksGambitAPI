@@ -39,6 +39,18 @@ const tournamentSchema = new mongoose.Schema({
     type: [mongoose.Schema.Types.Mixed],
     default: [],
   },
+  roundRobinRounds: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: [],
+  },
+  currentRoundRobinRound: {
+    type: Number,
+    default: 0,
+  },
+  roundRobinRoundsStartedAt: {
+    type: Date,
+    default: null,
+  },
   matchIds: {
     type: [mongoose.Schema.Types.ObjectId],
     ref: 'Match',

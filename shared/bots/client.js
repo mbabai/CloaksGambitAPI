@@ -55,7 +55,12 @@ class BotClient {
     });
     this.socket.on('game:finished', (payload) => {
       if (payload?.gameId) {
-        this.games.delete(payload.gameId);
+        const keyPrefix = `${payload.gameId}:`;
+        Array.from(this.games.keys()).forEach((key) => {
+          if (String(key).startsWith(keyPrefix)) {
+            this.games.delete(key);
+          }
+        });
         console.log('[bot] game finished', payload.gameId);
       }
     });
@@ -63,19 +68,33 @@ class BotClient {
 
   handleUpdate(payload) {
     if (!payload?.gameId) return;
-    let controller = this.games.get(payload.gameId);
-    if (!controller) {
-      if (!this.socket) return;
-      controller = new this.ControllerClass(
-        this.serverUrl,
-        payload.gameId,
-        this.userId,
-        this.token,
-        this.socket,
-      );
-      this.games.set(payload.gameId, controller);
-    }
-    controller.handleUpdate(payload).catch(err => console.error('Failed update', err));
+    const normalizedPlayers = Array.isArray(payload.players)
+      ? payload.players.map(id => (id != null ? id.toString() : ''))
+      : [];
+    const myUserId = this.userId != null ? this.userId.toString() : '';
+    const myColors = normalizedPlayers.reduce((acc, id, idx) => {
+      if (id && id === myUserId) acc.push(idx);
+      return acc;
+    }, []);
+    const targetColors = myColors.length ? myColors : [null];
+
+    targetColors.forEach((forcedColor) => {
+      const key = `${payload.gameId}:${forcedColor === null ? 'auto' : forcedColor}`;
+      let controller = this.games.get(key);
+      if (!controller) {
+        if (!this.socket) return;
+        controller = new this.ControllerClass(
+          this.serverUrl,
+          payload.gameId,
+          this.userId,
+          this.token,
+          this.socket,
+          forcedColor,
+        );
+        this.games.set(key, controller);
+      }
+      controller.handleUpdate(payload).catch(err => console.error('Failed update', err));
+    });
   }
 }
 

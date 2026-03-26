@@ -2375,7 +2375,7 @@ logBootConstantsOnce();
         try {
           console.log('[socket] players:bothNext received', payload);
           clearBannerOverlay({ restoreFocus: false });
-          const { gameId, color } = payload || {};
+          const { gameId, color, requiresAccept, acceptWindowSeconds } = payload || {};
           if (!gameId) return;
 
           const nextGameId = typeof gameId === 'string' ? gameId : String(gameId);
@@ -2391,6 +2391,14 @@ logBootConstantsOnce();
           }
 
           lastGameId = nextGameId;
+          if (requiresAccept) {
+            showTournamentAcceptBanner({
+              gameId: nextGameId,
+              color,
+              startSeconds: Number(acceptWindowSeconds) || 30,
+            });
+            return;
+          }
           showMatchFoundBanner(3, async function(remaining) {
             if (remaining === 0) {
               try { await apiReady(nextGameId, color); } catch (e) { console.error('Failed to ready after next', e); }
@@ -4127,6 +4135,88 @@ logBootConstantsOnce();
         return;
       }
       countEl.textContent = remaining === 0 ? 'Go!' : String(remaining);
+    }, 1000);
+  }
+
+  function showTournamentAcceptBanner({ gameId, color, startSeconds = 30 } = {}) {
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+    content.innerHTML = '';
+    if (closeButton) closeButton.hidden = true;
+
+    const card = document.createElement('div');
+    card.style.width = '100%';
+    card.style.maxWidth = '100%';
+    card.style.padding = '18px 26px';
+    card.style.borderTop = '2px solid var(--CG-deep-gold)';
+    card.style.borderBottom = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+
+    const title = document.createElement('div');
+    title.textContent = 'Tournament Match Ready';
+    title.style.fontSize = '28px';
+    title.style.fontWeight = '800';
+    title.style.marginBottom = '10px';
+
+    const message = document.createElement('div');
+    message.textContent = 'Accept within 30 seconds to start this game.';
+    message.style.fontSize = '18px';
+    message.style.marginBottom = '12px';
+
+    const timerEl = document.createElement('div');
+    timerEl.style.fontSize = '48px';
+    timerEl.style.fontWeight = '900';
+    timerEl.style.marginBottom = '12px';
+
+    const acceptBtn = createButton({
+      label: 'Accept',
+      variant: 'primary',
+      position: 'relative'
+    });
+
+    card.appendChild(title);
+    card.appendChild(message);
+    card.appendChild(timerEl);
+    card.appendChild(acceptBtn);
+    content.appendChild(card);
+
+    function closeBanner() {
+      if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+      content.innerHTML = '';
+      overlay.hide();
+    }
+
+    let remaining = Math.max(1, Number(startSeconds) || 30);
+    timerEl.textContent = String(remaining);
+    overlay.show({ initialFocus: acceptBtn });
+
+    acceptBtn.addEventListener('click', async () => {
+      acceptBtn.disabled = true;
+      acceptBtn.textContent = 'Accepting…';
+      try {
+        await apiReady(gameId, color);
+        closeBanner();
+      } catch (err) {
+        console.error('Failed to accept tournament match', err);
+        acceptBtn.disabled = false;
+        acceptBtn.textContent = 'Accept';
+      }
+    });
+
+    if (bannerInterval) clearInterval(bannerInterval);
+    bannerInterval = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(bannerInterval);
+        bannerInterval = null;
+        closeBanner();
+        return;
+      }
+      timerEl.textContent = String(remaining);
     }, 1000);
   }
 

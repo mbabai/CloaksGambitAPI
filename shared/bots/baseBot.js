@@ -79,7 +79,7 @@ async function postJSON(serverUrl, path, token, body) {
 }
 
 class BaseBotController {
-  constructor(serverUrl, gameId, playerId, token, socket) {
+  constructor(serverUrl, gameId, playerId, token, socket, forcedColor = null) {
     this.serverUrl = serverUrl;
     this.gameId = gameId;
     this.playerId = playerId;
@@ -87,7 +87,7 @@ class BaseBotController {
     this.socket = socket;
 
     this.matchId = null;
-    this.color = null;
+    this.color = Number.isInteger(forcedColor) ? forcedColor : null;
     this.board = [];
     this.stashes = [[], []];
     this.onDecks = [null, null];
