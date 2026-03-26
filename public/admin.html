@@ -154,6 +154,15 @@
       .history-delete-btn:hover { color: var(--deep-green); background: var(--light-gold); transform: scale(1.08); }
       .history-delete-btn:focus-visible { outline: 2px solid var(--light-gold); outline-offset: 2px; }
       .history-delete-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+      .tournament-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid rgba(184,134,11,0.35); }
+      .tournament-row:last-child { border-bottom: none; }
+      .tournament-row__meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+      .tournament-row__label { font-size: 14px; color: var(--light-gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tournament-row__sub { font-size: 11px; color: rgba(255,215,0,0.7); }
+      .tournament-delete-btn { border: none; background: transparent; color: rgba(255,215,0,0.85); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 6px; border-radius: 6px; font-size: 18px; line-height: 1; transition: transform 0.15s ease, color 0.2s ease, background 0.2s ease; }
+      .tournament-delete-btn:hover { color: var(--deep-green); background: var(--light-gold); transform: scale(1.08); }
+      .tournament-delete-btn:focus-visible { outline: 2px solid var(--light-gold); outline-offset: 2px; }
+      .tournament-delete-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
       .admin-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 1000; }
       .admin-modal-overlay[hidden] { display: none; }
       .admin-modal { background: rgba(24,9,38,0.95); border: 4px solid var(--deep-gold); border-radius: 8px; padding: 20px; width: 100%; max-width: 360px; box-sizing: border-box; color: var(--light-gold); display: flex; flex-direction: column; gap: 16px; }
@@ -282,6 +291,7 @@
       <h1 style="margin: 0 0 16px; font-size: 32px; color: var(--light-gold); font-family: var(--cg-font-family); font-weight: var(--cg-font-weight-regular);">Admin Dashboard</h1>
       <div class="tab-header">
         <button class="tab-button active" data-tab="live">Live</button>
+        <button class="tab-button" data-tab="tournaments">Tournaments</button>
         <button class="tab-button" data-tab="history">History</button>
       </div>
 
@@ -316,6 +326,20 @@
           <div class="listCard" style="grid-column: span 2;">
             <div class="title">Active Matches</div>
             <div id="matchesList" class="tableList" role="table"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="adminTournamentsPanel" class="tab-panel" data-tab-panel="tournaments">
+        <h2>Tournaments</h2>
+        <div class="grid grid--lists">
+          <div class="listCard">
+            <div class="title">Active Tournaments</div>
+            <div id="activeTournamentsList" class="tableList" role="table"></div>
+          </div>
+          <div class="listCard">
+            <div class="title">Historic Tournaments</div>
+            <div id="historicTournamentsList" class="tableList" role="table"></div>
           </div>
         </div>
       </div>
@@ -430,5 +454,3 @@
     <script type="module" src="/admin.js?v=__ASSET_VERSION__"></script>
   </body>
   </html>
-
-

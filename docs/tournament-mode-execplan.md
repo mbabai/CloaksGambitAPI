@@ -15,9 +15,14 @@ After this change, a user can open the main menu, create or join a tournament, p
 - [x] (2026-03-25 20:03Z) Researched standard seeded brackets and double-elimination structure, then captured the product rules in `docs/tournaments.md`.
 - [x] (2026-03-25 20:03Z) Drafted this initial ExecPlan before implementation.
 - [x] (2026-03-25 21:34Z) Confirmed product decisions with the user: login is required for creation, the owner role is `host`, host participation is a starting-mode toggle instead of auto-join, minimum start count is `4`, all players advance to elimination with BYEs as needed, accept timeout is a loss of the current matchup, double elimination uses a true reset final, elimination ELO is applied once per match/series, and active tournaments must persist in MongoDB for recovery even if active matches are disposable.
-- [ ] Add a first-class `Tournament` model and live tournament manager.
-- [ ] Add tournament HTTP routes and Socket.IO events.
-- [ ] Add tournament browser, create, lobby, accept, live-panel, and bracket-view UI.
+- [x] (2026-03-26 00:00Z) Added doc requirement that hosts can add bots during `starting` via a name + difficulty modal, and bot entrants behave exactly like normal players in tournament flow.
+- [x] (2026-03-26 17:30Z) Added a first-pass live in-memory tournament manager with create/join/leave/start/add-bot flows and bot difficulty options.
+- [x] (2026-03-26 17:30Z) Added tournament HTTP routes under `/api/v1/tournaments` for browser list, create, join/leave, add-bot, start, details, and test-mode inspection.
+- [x] (2026-03-26 17:30Z) Added tournament browser/create/lobby/add-bot/active-game modals in the main menu and wired them to the new API routes.
+- [x] (2026-03-26 19:10Z) Reworked tournament overlays to use the existing history modal skin and active-match row components so the UI aligns with established design tokens/classes.
+- [x] (2026-03-26 19:10Z) Wired tournament active-game rows to spectate existing matches directly and register player usernames before opening spectate.
+- [x] (2026-03-26 19:10Z) Removed pre-seeded elimination game creation at tournament start; only round-robin games are created at start now.
+- [x] (2026-03-26 19:10Z) Emitted standard `gameChanged`, `players:bothNext`, and `match:created` events for tournament games so bot players receive turn prompts like other live modes.
 - [ ] Implement round-robin pairing, seeding, elimination progression, and tournament-specific spectate return behavior.
 - [ ] Add tournament persistence, history support, tests, and manual verification.
 
@@ -71,6 +76,22 @@ After this change, a user can open the main menu, create or join a tournament, p
 - Decision: persist active tournament objects in MongoDB for recovery, but allow active matches/games to be lost across restart.
   Rationale: the user wants tournament continuity after restart without requiring full live-game recovery.
   Date/Author: 2026-03-25 / Codex
+
+- Decision: allow only the host to add bot entrants, and only during the `starting` state, through a small modal with bot name plus difficulty.
+  Rationale: this keeps lobby curation explicit, prevents active-phase bracket manipulation, and preserves parity between bot entrants and normal player entrants.
+  Date/Author: 2026-03-26 / Codex
+
+- Decision: enable a tournament dev test-mode in non-production that allows guest sessions to create/join tournaments while keeping production participation login-gated.
+  Rationale: this supports local/manual QA of tournament UX without Google auth while preserving production auth requirements.
+  Date/Author: 2026-03-26 / Codex
+
+- Decision: tournament elimination ELO applies only when both participants are human; any elimination matchup containing a bot has zero ELO impact.
+  Rationale: user explicitly required no rating impact for bot opponents even during elimination rounds.
+  Date/Author: 2026-03-26 / Codex
+
+- Decision: do not generate an elimination match at tournament start; surface elimination only when round-robin finishes and seeding is available.
+  Rationale: pre-seeding an elimination game immediately after start confused users, produced nonsensical active rows, and did not represent the intended tournament flow.
+  Date/Author: 2026-03-26 / Codex
 
 ## Outcomes & Retrospective
 
@@ -205,5 +226,8 @@ Recommended dependencies if the spike succeeds:
 Do not depend on a public CDN at runtime.
 
 Revision note: initial planning revision created before implementation so the repo has both a durable tournament spec and a concrete execution plan.
+Revision note (2026-03-26): updated progress + decisions to capture UI polish/spectate fixes, bot event emission changes, and removal of pre-seeded elimination games.
 
 Revision note: updated after user clarification to lock the `host` terminology, host participation toggle, elimination ELO semantics, and Mongo-backed active-tournament recovery rules.
+
+Revision note: updated after the first implementation slice to record the new `/api/v1/tournaments` routes, menu-driven tournament modals, development test-mode guest participation, and bot-opponent elimination ELO exemption.

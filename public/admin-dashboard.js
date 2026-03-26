@@ -142,6 +142,8 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   const rankedQueueListEl = document.getElementById('rankedQueueList');
   const usersListEl = document.getElementById('usersList');
   const matchesListEl = document.getElementById('matchesList');
+  const activeTournamentsListEl = document.getElementById('activeTournamentsList');
+  const historicTournamentsListEl = document.getElementById('historicTournamentsList');
   const purgeActiveMatchesBtn = upgradeButton(document.getElementById('purgeActiveMatchesBtn'), {
     variant: 'danger',
     position: 'relative'
@@ -248,6 +250,128 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       frag.appendChild(row);
     });
     targetEl.appendChild(frag);
+  }
+
+  function renderTournamentRows(targetEl, tournaments = []) {
+    if (!targetEl) return;
+    targetEl.innerHTML = '';
+    if (!Array.isArray(tournaments) || tournaments.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'row';
+      empty.textContent = 'No tournaments found.';
+      targetEl.appendChild(empty);
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    tournaments.forEach((tournament) => {
+      const id = normalizeId(tournament?.id);
+      const row = document.createElement('div');
+      row.className = 'tournament-row';
+      const meta = document.createElement('div');
+      meta.className = 'tournament-row__meta';
+      const label = document.createElement('div');
+      label.className = 'tournament-row__label';
+      label.textContent = tournament?.label || 'Tournament';
+      label.title = tournament?.id || '';
+      const sub = document.createElement('div');
+      sub.className = 'tournament-row__sub';
+      sub.textContent = `${tournament?.state || 'unknown'} · players ${Number(tournament?.playerCount || 0)} · matches ${Number(tournament?.matchCount || 0)} · games ${Number(tournament?.gameCount || 0)}`;
+      meta.appendChild(label);
+      meta.appendChild(sub);
+
+      const deleteBtn = createButton({
+        label: '🗑',
+        variant: 'danger',
+        position: 'relative',
+      });
+      deleteBtn.classList.add('tournament-delete-btn');
+      deleteBtn.setAttribute('aria-label', `Delete tournament ${tournament?.label || ''}`.trim());
+      deleteBtn.title = 'Delete tournament and all associated matches/games';
+      if (id) {
+        deleteBtn.addEventListener('click', () => {
+          requestTournamentDeletion({ id, label: tournament?.label || id });
+        });
+      } else {
+        deleteBtn.disabled = true;
+      }
+
+      row.appendChild(meta);
+      row.appendChild(deleteBtn);
+      frag.appendChild(row);
+    });
+    targetEl.appendChild(frag);
+  }
+
+  async function fetchAdminTournaments(status = 'all') {
+    const res = await authFetch('/api/v1/tournaments/admin/list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to load ${status} tournaments (${res.status})`);
+    }
+    const payload = await res.json().catch(() => ({}));
+    return Array.isArray(payload?.tournaments) ? payload.tournaments : [];
+  }
+
+  async function refreshTournamentLists() {
+    try {
+      const [activeRows, historicRows] = await Promise.all([
+        fetchAdminTournaments('active'),
+        fetchAdminTournaments('historic'),
+      ]);
+      renderTournamentRows(activeTournamentsListEl, activeRows);
+      renderTournamentRows(historicTournamentsListEl, historicRows);
+    } catch (err) {
+      console.error('Failed to refresh tournament lists', err);
+      renderTournamentRows(activeTournamentsListEl, []);
+      renderTournamentRows(historicTournamentsListEl, []);
+    }
+  }
+
+  async function requestTournamentDeletion({ id, label }) {
+    const tournamentId = normalizeId(id);
+    if (!tournamentId) {
+      alert('Unable to delete tournament: missing identifier.');
+      return;
+    }
+    const displayName = label || tournamentId;
+    const ok = confirm(`Delete tournament \"${displayName}\"? This removes all associated matches and games.`);
+    if (!ok) return;
+
+    try {
+      const res = await authFetch('/api/v1/tournaments/admin/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tournamentId }),
+      });
+      if (!res.ok) {
+        let message = `Failed to delete tournament (${res.status}).`;
+        try {
+          const payload = await res.json();
+          if (typeof payload?.message === 'string' && payload.message.trim()) {
+            message = payload.message;
+          }
+        } catch (_) {}
+        alert(message);
+        return;
+      }
+      const payload = await res.json().catch(() => ({}));
+      const deletedMatches = Number(payload?.deletedMatches || 0);
+      const deletedGames = Number(payload?.deletedGames || 0);
+      alert(`Tournament deleted. Matches removed: ${deletedMatches}. Games removed: ${deletedGames}.`);
+      await refreshTournamentLists();
+      fetchAllUsers();
+      if (historyLoaded) {
+        await fetchHistorySummary();
+        await fetchHistoryData({ page: 1, forceReset: true });
+      }
+    } catch (err) {
+      console.error('Error deleting tournament', err);
+      alert('Error deleting tournament. Check console for details.');
+    }
   }
 
   function mapHistoryFilterToMatchType(filter) {
@@ -904,6 +1028,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       alert(summaryParts.join(' '));
 
       fetchAllUsers();
+      await refreshTournamentLists();
       await fetchHistorySummary();
       await fetchHistoryData({ page: 1, forceReset: true });
     } catch (err) {
@@ -1075,6 +1200,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       console.error(err);
       alert('Error deleting match. Check console for details.');
     } finally {
+      await refreshTournamentLists();
       await fetchHistorySummary();
       await fetchHistoryData({ page: 1, forceReset: true });
     }
@@ -1173,6 +1299,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
 
   socket.on('connect', () => {
     fetchAllUsers();
+    refreshTournamentLists();
   });
 
   socket.on('admin:metrics', async payload => {
@@ -1207,6 +1334,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     renderList(rankedQueueListEl, payload.rankedQueueUserIds);
     activeMatchesStore.replaceAll(payload.matches);
     fetchAllUsers();
+    refreshTournamentLists();
     if (historyLoaded) {
       await fetchHistorySummary();
       await fetchHistoryData({ page: 1, forceReset: true });
@@ -1250,6 +1378,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         statsOverlayController.handleUsernameUpdate({ userId: id, username: trimmed });
       }
       fetchAllUsers();
+      refreshTournamentLists();
       renderActiveMatchesFromState();
       if (latestMetrics) {
         renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
@@ -1286,6 +1415,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
           await fetchHistorySummary();
           await fetchHistoryData({ page: 1, forceReset: true });
         }
+        await refreshTournamentLists();
       } catch (err) {
         console.error(err);
         alert('Error purging active matches. Check console.');
@@ -1294,5 +1424,3 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   }
 
 })();
-
-

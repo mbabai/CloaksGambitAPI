@@ -1006,6 +1006,99 @@ body.history-overlay-open {
   font-size: var(--cg-active-match-action-font-size, 13px);
 }
 
+.tournament-modal {
+  max-width: min(980px, 92vw);
+}
+
+.tournament-modal--wide {
+  max-width: min(1200px, 95vw);
+}
+
+.tournament-modal__content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tournament-modal__title {
+  margin: 0;
+}
+
+.tournament-modal__subtitle {
+  margin: 6px 0 0;
+}
+
+.tournament-modal__status {
+  opacity: 0.95;
+}
+
+.tournament-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tournament-modal__actions--split .cg-button {
+  flex: 1 1 180px;
+}
+
+.tournament-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tournament-modal__field-label {
+  font-weight: 600;
+}
+
+.tournament-browser__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(52vh, 460px);
+  overflow-y: auto;
+}
+
+.tournament-browser__row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.tournament-browser__row--active {
+  outline: 2px solid rgba(255, 215, 0, 0.6);
+  outline-offset: 1px;
+}
+
+.tournament-browser__label {
+  font-size: 1.05rem;
+}
+
+.tournament-browser__meta {
+  opacity: 0.9;
+}
+
+.tournament-player-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tournament-player-list__item {
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 215, 0, 0.35);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.tournament-active-list .cg-active-match {
+  border-color: rgba(255, 215, 0, 0.7);
+}
+
 .cg-spectate-result-card {
   width: 100%;
   max-width: 100%;
@@ -1411,4 +1504,3 @@ body.history-overlay-open {
   width: 100%;
   height: 1px;
 }
-

@@ -195,4 +195,60 @@ export async function apiPostLocalDebugLog(payload = {}) {
   });
 }
 
+async function sendTournamentRequest(path, payload = {}, { method = 'POST' } = {}) {
+  const options = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: method === 'GET' ? undefined : JSON.stringify(payload || {}),
+  };
+  if (method === 'GET') {
+    delete options.headers;
+    delete options.body;
+  }
+  const res = await authFetch(path, options);
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = null;
+  }
+  if (!res.ok) {
+    const error = new Error((data && data.message) || 'Tournament request failed');
+    error.response = res;
+    error.data = data;
+    throw error;
+  }
+  return data;
+}
 
+export async function apiGetTournaments() {
+  return sendTournamentRequest('/api/v1/tournaments', {}, { method: 'GET' });
+}
+
+export async function apiCreateTournament(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/create', payload);
+}
+
+export async function apiJoinTournament(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/join', payload);
+}
+
+export async function apiLeaveTournament(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/leave', payload);
+}
+
+export async function apiCancelTournament(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/cancel', payload);
+}
+
+export async function apiAddTournamentBot(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/add-bot', payload);
+}
+
+export async function apiStartTournament(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/start', payload);
+}
+
+export async function apiGetTournamentDetails(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/details', payload);
+}

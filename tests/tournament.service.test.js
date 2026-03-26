@@ -1,0 +1,176 @@
+jest.mock('../src/utils/ensureUser', () => jest.fn(async (userId) => ({
+  userId: userId || '000000000000000000000111',
+  username: 'EnsuredUser',
+  isGuest: true,
+})));
+
+jest.mock('../src/services/bots/registry', () => ({
+  ensureBotUser: jest.fn(async (difficulty = 'easy') => ({
+    user: {
+      _id: difficulty === 'medium' ? '000000000000000000000222' : '000000000000000000000221',
+      username: `${difficulty}-bot`,
+    },
+  })),
+  listBuiltinBotCatalog: jest.fn(() => [
+    { id: 'easy', label: 'Easy', playable: true },
+    { id: 'medium', label: 'Medium', playable: true },
+  ]),
+  getBuiltinBotDefinition: jest.fn((input) => {
+    if (String(input).toLowerCase() === 'medium') return { id: 'medium', label: 'Medium', playable: true };
+    if (String(input).toLowerCase() === 'easy') return { id: 'easy', label: 'Easy', playable: true };
+    return null;
+  }),
+  normalizeBuiltinBotId: jest.fn((input) => {
+    const lowered = String(input || '').toLowerCase();
+    return lowered === 'medium' ? 'medium' : lowered === 'easy' ? 'easy' : '';
+  }),
+}));
+
+const {
+  resetForTests,
+  createTournament,
+  joinTournamentAsPlayer,
+  joinTournamentAsViewer,
+  leaveTournament,
+  addBotToTournament,
+  startTournament,
+  listTournamentGames,
+  listLiveTournaments,
+  deleteTournamentCascade,
+} = require('../src/services/tournaments/liveTournaments');
+
+describe('live tournaments service', () => {
+  beforeEach(() => {
+    resetForTests();
+  });
+
+  test('host can add bot only during starting state', async () => {
+    const host = { userId: '000000000000000000000101', username: 'Host', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'My Tournament' });
+
+    const afterBot = await addBotToTournament({
+      tournamentId: created.id,
+      session: host,
+      botName: 'Rooky',
+      difficulty: 'easy',
+    });
+
+    expect(afterBot.players).toHaveLength(1);
+    expect(afterBot.players[0]).toMatchObject({
+      type: 'bot',
+      username: 'Rooky',
+      difficulty: 'easy',
+    });
+
+    await joinTournamentAsPlayer({
+      tournamentId: created.id,
+      session: { userId: '000000000000000000000102', username: 'Human Two', isGuest: true },
+    });
+
+    await startTournament({ tournamentId: created.id, session: host });
+
+    await expect(addBotToTournament({
+      tournamentId: created.id,
+      session: host,
+      botName: 'Late Bot',
+      difficulty: 'medium',
+    })).rejects.toThrow('only available while tournament is starting');
+  });
+
+  test('starting tournament creates round-robin games and no pre-seeded elimination game', async () => {
+    const host = { userId: '000000000000000000000201', username: 'Host2', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Elo Rules Cup' });
+
+    await joinTournamentAsPlayer({
+      tournamentId: created.id,
+      session: { userId: '000000000000000000000202', username: 'Human Three', isGuest: false },
+    });
+
+    await addBotToTournament({
+      tournamentId: created.id,
+      session: host,
+      botName: 'Medium Bot',
+      difficulty: 'medium',
+    });
+
+    await startTournament({ tournamentId: created.id, session: host });
+    const games = await listTournamentGames(created.id);
+    const elimination = games.find((entry) => entry.phase === 'elimination');
+    const roundRobin = games.find((entry) => entry.phase === 'round_robin');
+
+    expect(roundRobin).toBeTruthy();
+    expect(roundRobin.players[0]).toHaveProperty('userId');
+    expect(roundRobin.players[1]).toHaveProperty('userId');
+    expect(elimination).toBeFalsy();
+  });
+
+  test('host leaving cancels tournament and stamps completion time', async () => {
+    const host = { userId: '000000000000000000000301', username: 'Host3', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Host Leave Cup' });
+    await joinTournamentAsViewer({
+      tournamentId: created.id,
+      session: { userId: '000000000000000000000302', username: 'Viewer', isGuest: true },
+    });
+
+    const afterLeave = await leaveTournament({ tournamentId: created.id, session: host });
+    expect(afterLeave.state).toBe('cancelled');
+    expect(afterLeave.phase).toBe('completed');
+    expect(afterLeave.completedAt).toBeTruthy();
+  });
+
+  test('host cancel before start leaves no tournament trace', async () => {
+    const host = { userId: '000000000000000000000311', username: 'HostCancel', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'No Trace Cup' });
+    await leaveTournament({ tournamentId: created.id, session: host });
+    const liveRows = await listLiveTournaments();
+    expect(liveRows.some((row) => row.id === created.id)).toBe(false);
+  });
+
+  test('cannot join once tournament is active', async () => {
+    const host = { userId: '000000000000000000000351', username: 'Host4', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Join Guard Cup' });
+    await joinTournamentAsPlayer({
+      tournamentId: created.id,
+      session: { userId: '000000000000000000000352', username: 'P1', isGuest: false },
+    });
+    await addBotToTournament({
+      tournamentId: created.id,
+      session: host,
+      botName: 'Early Bot',
+      difficulty: 'easy',
+    });
+    await startTournament({ tournamentId: created.id, session: host });
+
+    await expect(joinTournamentAsPlayer({
+      tournamentId: created.id,
+      session: { userId: '000000000000000000000353', username: 'Late Joiner', isGuest: false },
+    })).rejects.toThrow(/only available while tournament is starting/i);
+  });
+
+  test('admin deletion removes tournament and dependent matches/games', async () => {
+    const host = { userId: '000000000000000000000501', username: 'HostDelete', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Delete Cascade Cup' });
+    await joinTournamentAsPlayer({
+      tournamentId: created.id,
+      session: { userId: '000000000000000000000502', username: 'Human Opponent', isGuest: false },
+    });
+    await addBotToTournament({
+      tournamentId: created.id,
+      session: host,
+      botName: 'Delete Bot',
+      difficulty: 'easy',
+    });
+    await startTournament({ tournamentId: created.id, session: host });
+
+    const beforeDeleteGames = await listTournamentGames(created.id);
+    expect(beforeDeleteGames.length).toBeGreaterThan(0);
+
+    const result = await deleteTournamentCascade({ tournamentId: created.id });
+    expect(result.tournamentId).toBe(created.id);
+    expect(result.deletedMatches).toBeGreaterThan(0);
+    expect(result.deletedGames).toBeGreaterThan(0);
+
+    const liveRows = await listLiveTournaments();
+    expect(liveRows.some((row) => row.id === created.id)).toBe(false);
+  });
+});

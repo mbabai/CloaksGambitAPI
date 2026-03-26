@@ -1,307 +1,203 @@
 # Tournament Mode
 
-## Overview
+## Purpose
 
-Tournament mode adds a new menu entry that lets users create, join, and watch organized multi-match events. A tournament begins with a timed rolling round-robin phase, then converts the standings into a seeded elimination bracket. Tournament data, standings, bracket state, and linked matches/games must be saved as first-class records.
+Tournament mode provides a dedicated flow for creating and running multi-game events from the main menu, with host-managed lobby controls, bot entrants, spectator access, and admin-side cleanup tooling.
 
-This is the durable product/spec document. The implementation plan lives in [docs/tournament-mode-execplan.md](/C:/Users/marce/OneDrive/Documents/GitHub/CloaksGambitAPI/docs/tournament-mode-execplan.md).
+This file documents the **current implemented behavior** and the known follow-up gaps.
 
-## Main Menu Entry
+## Current User-Facing Flow
 
-- Add a `Tournament` button to [public/index.html](/C:/Users/marce/OneDrive/Documents/GitHub/CloaksGambitAPI/public/index.html).
-- Place it directly below `Ranked` and above `Rulebook`.
-- Use the provided trophy/bracket icon.
-- Clicking it opens the tournament browser modal.
+### Main menu entry
 
-## Tournament Browser Modal
+- Main menu includes a `Tournament` button.
+- Clicking it opens the Tournament Browser overlay.
 
-The browser modal lists live tournaments in the `starting` and `active` states. Each row should show:
+### Tournament Browser
 
-- tournament label
-- state badge
-- host username
-- current phase if active
-- player count
-- viewer count
+- Lists tournaments in `starting` or `active` state.
+- Each row displays:
+  - label
+  - state
+  - host username
+  - player count
+  - viewer count
+- Browser actions:
+  - `Create`
+  - `Join` (as player)
+  - `View` (as viewer)
 
-Top actions:
+Behavior:
 
-- `Create`
-- `Join`
-- `View`
+- `Join` is enabled only for `starting` tournaments.
+- `View` is enabled for `starting` and `active` tournaments.
+- `View` auto-joins the user as a viewer before opening details.
+- Tournament details endpoint requires membership (host/player/viewer).
 
-Rules:
+### Create Tournament
 
-- `Join` and `View` stay disabled until a tournament row is selected.
-- `Join` is allowed only for tournaments in `starting`.
-- `View` is allowed for both `starting` and `active`.
-- `Join` requires a logged-in user.
-- If the user is not logged in, `Join` stays disabled and shows the tooltip `Log in to join tournaments.`
+Create modal currently supports:
 
-## Tournament States
+- Label
+- Round robin minutes (1–30)
+- Elimination style (`single`, `double`)
+- Victory points (`3`, `4`, `5`)
 
-Persisted tournament lifecycle states:
+On success, the creator becomes host and lands in the lobby overlay.
+
+### Lobby / host controls
+
+Lobby displays current players and state/phase.
+
+Host-only while `starting`:
+
+- `Start Tournament`
+- `Add Bot`
+- `Cancel Tournament`
+
+All members:
+
+- `Leave Tournament`
+
+Add Bot modal supports:
+
+- bot display name
+- difficulty from bot registry options (currently Easy/Medium playable)
+
+### Active Tournament view
+
+- Active overlay renders tournament games using the same styled active-match rows as spectate browser.
+- Each row has a `Spectate` action.
+- Spectating opens the existing shared spectate controller by `matchId`.
+- Tournament player usernames are registered before spectate opens so names render correctly.
+
+## Current Server Behavior
+
+## States
+
+Persisted tournament states:
 
 - `starting`
 - `active`
 - `completed`
 - `cancelled`
 
-Only `starting` and `active` belong in the live browser list. `completed` and `cancelled` remain in MongoDB history.
-
 ## Roles
-
-Tournament membership roles:
 
 - `host`
 - `player`
 - `viewer`
-- `eliminated`
 
-Confirmed product decisions:
+## Match/Game creation
 
-- creating a tournament requires login
-- the owner is called the `host`
-- the host does not auto-join as a player
-- while the tournament is `starting`, the host has a `Participate` toggle that adds or removes them from the player field
-- viewers do not affect seeding or pairings
+When host starts a tournament:
 
-## Create Tournament Modal
+- state becomes `active`
+- phase becomes `round_robin`
+- service creates **real `Match` and `Game` records** for round-robin pairings
+- `matchIds` and `gameIds` are stored on the tournament
 
-Creating a tournament opens a config modal with required choices:
+Important current behavior:
 
-1. `Round robin time`: integer minutes `1` through `30`, default `15`
-2. `Elimination style`: `Single Elimination` or `Double Elimination`, default `Single Elimination`
-3. `Victory points`: `3`, `4`, or `5`, default `3`
+- no elimination match is pre-seeded at start
+- elimination progression is not yet implemented end-to-end
 
-After creation:
+## Live event emission
 
-- create the tournament object
-- set the creating user as host
-- default the host participation toggle to off
-- open the pre-start tournament lobby modal
+Tournament-created games emit the same runtime events as other live modes:
 
-## Pre-Start Tournament Lobby Modal
+- `gameChanged`
+- `players:bothNext`
+- `match:created`
 
-For the host:
+This ensures bot clients receive prompts and bot-vs-bot tournament games actually play.
 
-- show `Start Tournament`
-- show `Cancel Tournament`
-- show a `Participate` toggle while the tournament is `starting`
+## ELO and match typing
 
-For a joined player who is not the host:
+`Match` supports tournament types:
 
-- show `Leave Tournament`
+- `TOURNAMENT_ROUND_ROBIN`
+- `TOURNAMENT_ELIMINATION`
 
-For a viewer:
+ELO logic:
 
-- show `Leave Tournament`
+- round-robin games: no ELO
+- elimination: ELO applies only when `eloEligible === true`
+- elimination matches involving bots are created with `eloEligible = false`
 
-The body must show the joined player list. A separate viewer list is optional.
+## Persistence and Recovery
 
-`Cancel Tournament` removes everyone from the live tournament, closes the live state, and persists the record as `cancelled`.
+Tournament persistence model:
 
-## Active Tournament UI
+- in-memory map for live runtime state
+- Mongo snapshotting for started/completed/cancelled tournament records
 
-Once started, tournament details move onto the main play surface.
+Stored fields include:
 
-Desktop:
+- host/config/state/phase/timestamps
+- players/viewers
+- `matchIds`
+- `gameIds`
 
-- show a right-side tournament panel
+## API Surface (implemented)
 
-Mobile:
+Participant routes:
 
-- show a tournament tab that slides over the board
+- `GET /api/v1/tournaments`
+- `GET /api/v1/tournaments/test-mode`
+- `POST /api/v1/tournaments/create`
+- `POST /api/v1/tournaments/join`
+- `POST /api/v1/tournaments/leave`
+- `POST /api/v1/tournaments/cancel`
+- `POST /api/v1/tournaments/add-bot`
+- `POST /api/v1/tournaments/start`
+- `POST /api/v1/tournaments/details`
 
-The live panel must show:
+Admin routes:
 
-- current phase: `Round Robin` or `Elimination`
-- player list
-- round-robin `W/L/D` standings while relevant
-- elimination status once the bracket begins
-- `Bracket View` button during elimination
+- `POST /api/v1/tournaments/admin/list`
+- `POST /api/v1/tournaments/admin/delete`
 
-## Spectating Rules
+Admin delete behavior:
 
-Tournament spectating should reuse the existing viewer mode.
+- deletes tournament record
+- cascades deletion of associated matches and games (active and historic where applicable)
+- emits `adminRefresh`
 
-Viewers:
+## Admin Dashboard
 
-- can click a player name to watch that player's current tournament game, if one exists
-- return to the same tournament surface when the viewed game ends
+Admin UI now has a dedicated `Tournaments` tab with two lists:
 
-Players:
+- Active Tournaments
+- Historic Tournaments
 
-- cannot spectate other games while assigned to an active game
-- may spectate other games only while idle and not currently playing
-- also return to the same tournament surface when spectating ends
+Each row includes a delete action that calls the admin delete endpoint and reports deleted match/game counts.
 
-Eliminated players stay in the tournament as viewers and must be clearly marked `Eliminated`.
+## History Integration (implemented)
 
-## Round-Robin Phase
+History summary now includes `tournamentMatches` bucket:
 
-This is a timed rolling pairing phase, not a precomputed everyone-plays-everyone-once schedule.
+- total
+- wins
+- draws
+- losses
+- winPct
 
-Rules:
+Tournament match types are normalized and included in summary aggregation.
 
-- the phase lasts for the configured round-robin minutes
-- pair free players randomly into single games
-- use the ranked time control and increment
-- these games do not change ELO
-- these games are single-game results, not first-to-`N` series
-- when a game ends, those players can be paired again
-- prefer opponents they have not yet faced in this tournament
-- after a player has faced everyone, repeated pairings are allowed
-- when the timer expires, stop creating new round-robin games
-- do not end games already in progress
-- start elimination only after the last round-robin games finish
+## Dev Test Mode
 
-Recommended odd-player handling:
+Current behavior:
 
-- allow odd player counts
-- one player may idle when necessary
-- rotate the idle assignment fairly
+- non-production: guest participation allowed for tournament flows
+- production: guests blocked from participation endpoints
 
-## Seeding Rules
+## Known Gaps / Next Work
 
-When round robin ends, rank players by:
+The following are **not fully implemented yet**:
 
-1. more wins
-2. fewer losses
-3. draws do not directly affect ordering
-4. higher pre-tournament ELO
-5. deterministic random tie-breaker recorded on the tournament
-
-Recommended assumption:
-
-- every joined player advances to elimination
-- if the count is not a power of two, pad the bracket with BYEs for the highest seeds
-
-## Elimination Phase
-
-When a bracket match becomes ready, both players receive an accept overlay with a visible 30-second countdown.
-
-Rules:
-
-- the overlay must appear on top of whatever the user is doing
-- both players must accept before the series starts
-- if a player fails to accept, they forfeit that elimination matchup
-- in single elimination, that loss removes them from the tournament
-- in double elimination, that loss should follow the bracket normally: upper-bracket loss drops to lower bracket, lower-bracket loss eliminates
-
-Series format:
-
-- elimination is first to the configured `victoryPoints`
-- each individual game uses normal Cloaks' Gambit rules and the ranked time control
-- the series winner advances
-
-ELO:
-
-- elimination matches affect ELO
-- apply ELO once per elimination match/series, exactly like ranked `Match` scoring
-- round-robin games do not affect ELO
-
-## Bracket Rules
-
-Single elimination:
-
-- seed the field from round-robin ranking
-- use standard seeded `inner_outer` ordering
-- pad with BYEs to the next power of two if needed
-- without a bronze match, third place may be tied between semifinal losers
-
-Double elimination:
-
-- all players begin in the upper bracket
-- first loss sends a player to the lower bracket
-- second loss eliminates them
-- the lower bracket alternates between major and minor rounds
-- recommended grand final behavior is a true reset final: if the lower-bracket finalist beats the undefeated upper-bracket finalist once, play one last deciding series
-
-## Bracket View
-
-During elimination, `Bracket View` opens a pannable/zoomable visual bracket.
-
-Requirements:
-
-- show current bracket state
-- show player names and live series scores
-- make active match nodes clickable for spectating
-- return users to the tournament surface when spectating ends
-
-Recommended technical direction:
-
-- keep bracket structure as explicit tournament data
-- evaluate `brackets-manager.js` for bracket generation
-- evaluate `brackets-viewer.js` for browser rendering
-- self-host viewer assets instead of relying on a runtime CDN
-
-## Tournament Completion
-
-When the tournament ends:
-
-- show a final modal
-- display `1st`, `2nd`, and `3rd`
-- allow `3rd` to contain a tie where the bracket does not produce a unique third-place finisher
-- provide `Finish`
-
-`Finish` removes the user from the tournament and returns them to the main lobby.
-
-## Persistence and History
-
-Add a first-class `Tournament` object and save it in MongoDB.
-
-Persist:
-
-- config
-- host
-- lifecycle state
-- phase
-- timestamps
-- players
-- viewers
-- pre-tournament ELO snapshots
-- round-robin standings
-- seeding
-- bracket state
-- linked matches
-- linked games
-- final placements
-
-Also:
-
-- saved matches that belong to a tournament must include `tournamentId`
-- saved games should include `tournamentId` or reliably derive it through the match
-- history needs a `Tournament` section/filter
-- round-robin and elimination matches both appear there
-- elimination matches affect ELO but still belong to tournament history, not ordinary ranked queue history
-
-Recovery:
-
-- once a tournament has started, its tournament object must be persisted in MongoDB so the server can recover it after restart
-- active in-progress matches and games do not need to survive restart
-- on recovery, the tournament should reload from MongoDB, detect any lost in-progress matchup state, and put the affected players back into a recoverable waiting or pending-match state rather than pretending the lost game still exists
-
-## External Research Notes
-
-Bracket structure recommendations here are based on:
-
-- [Brackets Documentation: Ordering](https://drarig29.github.io/brackets-docs/user-guide/ordering/)
-- [Brackets Documentation: Structure](https://drarig29.github.io/brackets-docs/user-guide/structure/)
-- [Brackets Documentation: Glossary](https://drarig29.github.io/brackets-docs/user-guide/glossary/)
-- [ORAU Science Bowl: Seeding of Teams for Single Elimination Tournament](https://www.orau.gov/sciencebowl/files/teams/seeding-of-teams-for-single-elimination-tournament.pdf)
-
-## Confirmed Decisions
-
-The following product calls are now locked for implementation:
-
-1. tournament creation requires login
-2. the tournament owner is called the `host`
-3. the host can choose whether to participate through a starting-mode toggle and is not auto-added as a player
-4. minimum player count to start is `4`
-5. all joined players advance to elimination, with BYEs where needed
-6. a missed accept window counts as a loss of the current matchup
-7. double elimination uses a true bracket-reset final
-8. elimination ELO is awarded once per match/series, like ranked play
-9. the pre-start lobby needs only the player list plus viewer count
-10. active tournaments must persist in MongoDB for recovery, even though in-progress matches/games may be lost
+1. Full round-robin scheduler lifecycle (timed rolling pairings with repeat-avoidance and transition handling).
+2. Seeding and bracket generation from round-robin standings.
+3. Full elimination progression/acceptance overlays/forfeit windows.
+4. Final placements modal (`1st/2nd/3rd`) and finish flow.
+5. Dedicated tournament filter controls in all history UIs.
