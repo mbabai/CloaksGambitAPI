@@ -1414,13 +1414,14 @@ body.history-overlay-open {
 
 
 .tournament-modal {
-  max-width: min(760px, 96vw);
+  max-width: min(980px, 98vw);
 }
 
 .tournament-modal__content {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: min(80vh, 760px);
 }
 
 .tournament-modal__title {
@@ -1435,6 +1436,7 @@ body.history-overlay-open {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
 }
 
 .tournament-modal__field {
@@ -1449,18 +1451,40 @@ body.history-overlay-open {
   gap: 8px;
 }
 
+.tournament-modal__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 215, 0, 0.35);
+  background: rgba(5, 8, 18, 0.72);
+}
+
 .tournament-modal__button {
   position: relative;
   min-height: 44px;
-  padding: 10px 14px;
-  border-radius: 8px;
+  padding: 10px 16px;
+  border-radius: 10px;
   font-size: 16px;
   line-height: 1.2;
+  border: 2px solid rgba(255, 215, 0, 0.72);
+  background: linear-gradient(180deg, rgba(40, 19, 86, 0.95), rgba(19, 9, 41, 0.95));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  font-weight: 700;
 }
 
 .tournament-modal__button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.tournament-modal__button--success {
+  background: linear-gradient(180deg, rgba(12, 120, 62, 0.95), rgba(7, 84, 41, 0.95));
+}
+
+.tournament-modal__button--danger {
+  background: linear-gradient(180deg, rgba(144, 26, 36, 0.95), rgba(101, 14, 22, 0.95));
 }
 
 .tournament-browser-list {
@@ -1479,6 +1503,11 @@ body.history-overlay-open {
   gap: 4px;
   text-align: left;
   padding: 10px 12px;
+}
+
+.tournament-browser-row.active {
+  border-color: rgba(255, 215, 0, 0.95);
+  box-shadow: 0 0 0 1px rgba(255, 215, 0, 0.5) inset;
 }
 
 .tournament-browser-row__title {
@@ -1502,10 +1531,23 @@ body.history-overlay-open {
   border-radius: 8px;
   padding: 8px 10px;
   background: rgba(255, 215, 0, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tournament-player-row--kicked {
+  opacity: 0.65;
+  background: rgba(90, 90, 90, 0.25);
 }
 
 .tournament-active-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(255, 215, 0, 0.28);
+  background: rgba(5, 8, 18, 0.82);
+  border-radius: 10px;
 }

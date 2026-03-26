@@ -249,6 +249,14 @@ export async function apiStartTournament(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/start', payload);
 }
 
+export async function apiKickTournamentPlayer(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/kick-player', payload);
+}
+
+export async function apiReallowTournamentPlayer(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/reallow-player', payload);
+}
+
 export async function apiGetTournamentDetails(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/details', payload);
 }

@@ -215,4 +215,65 @@ describe('tournaments routes', () => {
     expect(deleteRes.status).toBe(200);
     expect(deleteRes.body.deleted).toBe(true);
   });
+
+  test('host can kick and re-allow players through routes', async () => {
+    process.env.NODE_ENV = 'development';
+    const app = createApp();
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'host-kick-route',
+      username: 'KickHost',
+      isGuest: true,
+      authenticated: false,
+    });
+    const createRes = await request(app)
+      .post('/api/v1/tournaments/create')
+      .send({ label: 'Kick Route Cup' });
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'guest-kick-route',
+      username: 'KickTarget',
+      isGuest: true,
+      authenticated: false,
+    });
+    await request(app)
+      .post('/api/v1/tournaments/join')
+      .send({ tournamentId: createRes.body.tournament.id, role: 'player' });
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'host-kick-route',
+      username: 'KickHost',
+      isGuest: true,
+      authenticated: false,
+    });
+    const kickRes = await request(app)
+      .post('/api/v1/tournaments/kick-player')
+      .send({ tournamentId: createRes.body.tournament.id, userId: 'guest-kick-route' });
+    expect(kickRes.status).toBe(200);
+    expect(kickRes.body.tournament.removedPlayers.some((entry) => entry.userId === 'guest-kick-route')).toBe(true);
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'guest-kick-route',
+      username: 'KickTarget',
+      isGuest: true,
+      authenticated: false,
+    });
+    const listRes = await request(app).get('/api/v1/tournaments');
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.tournaments.some((entry) => entry.id === createRes.body.tournament.id)).toBe(false);
+    expect(Array.isArray(listRes.body.alerts)).toBe(true);
+    expect(listRes.body.alerts.join(' ')).toMatch(/removed/i);
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'host-kick-route',
+      username: 'KickHost',
+      isGuest: true,
+      authenticated: false,
+    });
+    const reallowRes = await request(app)
+      .post('/api/v1/tournaments/reallow-player')
+      .send({ tournamentId: createRes.body.tournament.id, userId: 'guest-kick-route' });
+    expect(reallowRes.status).toBe(200);
+    expect(reallowRes.body.tournament.removedPlayers.some((entry) => entry.userId === 'guest-kick-route')).toBe(false);
+  });
 });

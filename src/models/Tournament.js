@@ -35,6 +35,10 @@ const tournamentSchema = new mongoose.Schema({
     type: [mongoose.Schema.Types.Mixed],
     default: [],
   },
+  removedPlayers: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: [],
+  },
   matchIds: {
     type: [mongoose.Schema.Types.ObjectId],
     ref: 'Match',

@@ -14,6 +14,7 @@ const {
 } = require('../bots/registry');
 
 const TOURNAMENTS = new Map();
+const TOURNAMENT_ALERTS = new Map();
 
 function isMongoConnected() {
   return mongoose?.connection?.readyState === 1;
@@ -103,6 +104,29 @@ function summarizeTournament(tournament) {
   };
 }
 
+function queueTournamentAlert(userId, message) {
+  const id = String(userId || '');
+  if (!id || !message) return;
+  const current = TOURNAMENT_ALERTS.get(id) || [];
+  current.push(String(message));
+  TOURNAMENT_ALERTS.set(id, current.slice(-5));
+}
+
+function consumeTournamentAlerts(userId) {
+  const id = String(userId || '');
+  if (!id) return [];
+  const alerts = TOURNAMENT_ALERTS.get(id) || [];
+  TOURNAMENT_ALERTS.delete(id);
+  return alerts;
+}
+
+function isKickedFromTournament(tournament, userId) {
+  const target = String(userId || '');
+  if (!target) return false;
+  const removed = Array.isArray(tournament?.removedPlayers) ? tournament.removedPlayers : [];
+  return removed.some((entry) => String(entry?.userId || '') === target);
+}
+
 function toTournamentModelPayload(tournament) {
   const matchIds = Array.isArray(tournament.matchIds)
     ? tournament.matchIds
@@ -130,6 +154,7 @@ function toTournamentModelPayload(tournament) {
     },
     players: Array.isArray(tournament.players) ? tournament.players : [],
     viewers: Array.isArray(tournament.viewers) ? tournament.viewers : [],
+    removedPlayers: Array.isArray(tournament.removedPlayers) ? tournament.removedPlayers : [],
     matchIds,
     gameIds: Array.isArray(tournament.gameIds)
       ? tournament.gameIds
@@ -161,6 +186,7 @@ function fromTournamentDocument(doc) {
     },
     players: Array.isArray(doc.players) ? doc.players : [],
     viewers: Array.isArray(doc.viewers) ? doc.viewers : [],
+    removedPlayers: Array.isArray(doc.removedPlayers) ? doc.removedPlayers : [],
     matchIds: Array.isArray(doc.matchIds) ? doc.matchIds.map((id) => String(id)) : [],
     gameIds: Array.isArray(doc.gameIds) ? doc.gameIds.map((id) => String(id)) : [],
     createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : nowIso(),
@@ -205,12 +231,14 @@ async function hydrateActiveFromDatabase() {
   });
 }
 
-async function listLiveTournaments() {
+async function listLiveTournaments({ session } = {}) {
   if (TOURNAMENTS.size === 0) {
     await hydrateActiveFromDatabase();
   }
+  const viewerUserId = String(session?.userId || '');
   const rows = Array.from(TOURNAMENTS.values())
     .filter((entry) => entry.state === 'starting' || entry.state === 'active')
+    .filter((entry) => !viewerUserId || !isKickedFromTournament(entry, viewerUserId))
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return rows.map((entry) => summarizeTournament(entry));
 }
@@ -287,6 +315,7 @@ async function createTournament({ hostSession, label, config = {} }) {
     },
     players: [],
     viewers: [],
+    removedPlayers: [],
     matchIds: [],
     gameIds: [],
     createdAt,
@@ -307,6 +336,12 @@ async function joinTournamentAsPlayer({ tournamentId, session }) {
 
   if (hasPlayerWithId(tournament, userId)) {
     return cloneTournament(tournament);
+  }
+
+  if (isKickedFromTournament(tournament, userId)) {
+    const err = new Error('You were removed from this tournament by the host.');
+    err.statusCode = 403;
+    throw err;
   }
 
   const existingViewerIndex = findMemberIndex(tournament.viewers, userId);
@@ -450,6 +485,78 @@ async function addBotToTournament({ tournamentId, session, botName, difficulty }
   return cloneTournament(tournament);
 }
 
+async function kickTournamentPlayer({ tournamentId, session, targetUserId }) {
+  const tournament = await getTournamentOrThrow(tournamentId);
+  if (!canManageTournament(tournament, session.userId)) {
+    const err = new Error('Only host can kick players.');
+    err.statusCode = 403;
+    throw err;
+  }
+  requireStartingState(tournament, 'Kick Player');
+  const target = String(targetUserId || '').trim();
+  if (!target) {
+    const err = new Error('Player not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (String(tournament.host?.userId || '') === target) {
+    const err = new Error('Host cannot be kicked.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const playerIndex = findMemberIndex(tournament.players, target);
+  if (playerIndex < 0) {
+    const err = new Error('Player not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  const [removed] = tournament.players.splice(playerIndex, 1);
+  tournament.viewers = (Array.isArray(tournament.viewers) ? tournament.viewers : [])
+    .filter((entry) => String(entry.userId || '') !== target);
+  tournament.removedPlayers = Array.isArray(tournament.removedPlayers) ? tournament.removedPlayers : [];
+  const existing = tournament.removedPlayers.findIndex((entry) => String(entry.userId || '') === target);
+  const removedEntry = {
+    userId: target,
+    username: removed?.username || 'Player',
+    kickedAt: nowIso(),
+  };
+  if (existing >= 0) {
+    tournament.removedPlayers[existing] = removedEntry;
+  } else {
+    tournament.removedPlayers.push(removedEntry);
+  }
+  queueTournamentAlert(target, `You were removed from tournament "${tournament.label}".`);
+  await persistTournamentSnapshot(tournament);
+  return cloneTournament(tournament);
+}
+
+async function reallowTournamentPlayer({ tournamentId, session, targetUserId }) {
+  const tournament = await getTournamentOrThrow(tournamentId);
+  if (!canManageTournament(tournament, session.userId)) {
+    const err = new Error('Only host can re-allow players.');
+    err.statusCode = 403;
+    throw err;
+  }
+  requireStartingState(tournament, 'Re-allow Player');
+  const target = String(targetUserId || '').trim();
+  if (!target) {
+    const err = new Error('Player not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  const existing = Array.isArray(tournament.removedPlayers)
+    ? tournament.removedPlayers.findIndex((entry) => String(entry.userId || '') === target)
+    : -1;
+  if (existing < 0) {
+    const err = new Error('Player not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  tournament.removedPlayers.splice(existing, 1);
+  await persistTournamentSnapshot(tournament);
+  return cloneTournament(tournament);
+}
+
 function buildMatchLabelFromPlayers(p1, p2) {
   const includesBot = p1.type === 'bot' || p2.type === 'bot';
   return { includesBot };
@@ -579,6 +686,11 @@ async function startTournament({ tournamentId, session }) {
 
 async function getTournamentDetails(tournamentId, { session } = {}) {
   const tournament = await getTournamentOrThrow(tournamentId);
+  if (session?.userId && isKickedFromTournament(tournament, session.userId)) {
+    const err = new Error('You were removed from this tournament by the host.');
+    err.statusCode = 403;
+    throw err;
+  }
   if (session?.userId && !isTournamentMember(tournament, session.userId)) {
     const err = new Error('You must join this tournament as player or viewer before opening details.');
     err.statusCode = 403;
@@ -727,12 +839,14 @@ function getTournamentBotDifficultyOptions() {
 
 function resetForTests() {
   TOURNAMENTS.clear();
+  TOURNAMENT_ALERTS.clear();
 }
 
 module.exports = {
   TOURNAMENT_MATCH_TYPES,
   isTournamentTestModeEnabled,
   listLiveTournaments,
+  consumeTournamentAlerts,
   getTournamentDetails,
   isTournamentMember,
   createTournament,
@@ -741,6 +855,8 @@ module.exports = {
   leaveTournament,
   cancelTournament,
   addBotToTournament,
+  kickTournamentPlayer,
+  reallowTournamentPlayer,
   startTournament,
   listTournamentGames,
   listAllTournamentsForAdmin,
