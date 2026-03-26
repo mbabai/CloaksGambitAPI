@@ -6531,6 +6531,25 @@ logBootConstantsOnce();
     }
   }
 
+  function setBoardDragOriginOverlay(origin, active) {
+    if (!origin) return null;
+    let cellEl = null;
+    try {
+      if (origin.type === 'boardAny') {
+        cellEl = refs.boardCells?.[origin.uiR]?.[origin.uiC]?.el || null;
+      } else if (origin.type === 'board') {
+        cellEl = refs.bottomCells?.[origin.index]?.el || null;
+      }
+      if (!cellEl) return null;
+      if (active) {
+        cellEl.style.background = 'rgba(0, 0, 0, 0.32)';
+      } else {
+        cellEl.style.background = 'transparent';
+      }
+    } catch (_) {}
+    return cellEl;
+  }
+
   function startDrag(e, origin, piece, opts = null) {
     if (gameFinished) return;
     purgeDanglingDragArtifacts({ force: true });
@@ -6556,11 +6575,9 @@ logBootConstantsOnce();
     ghost.style.top = startCY + 'px';
     document.body.appendChild(ghost);
     let originEl = null;
-    let boardOriginDimming = false;
     if (origin && (origin.type === 'boardAny' || origin.type === 'board')) {
       try {
-        boardView?.setTransientState({ draggingOrigin: origin });
-        boardOriginDimming = true;
+        originEl = setBoardDragOriginOverlay(origin, true);
       } catch (_) {}
     } else {
       if (origin.type === 'stash') originEl = refs.stashSlots?.[origin.index]?.el || null;
@@ -6575,7 +6592,6 @@ logBootConstantsOnce();
       origin,
       ghostEl: ghost,
       originEl,
-      boardOriginDimming,
       touchId,
       lastClientX: startCX,
       lastClientY: startCY,
@@ -6674,8 +6690,8 @@ logBootConstantsOnce();
       }
       try { document.body.removeChild(ghost); } catch (_) {}
       try {
-        if (dragging.boardOriginDimming) {
-          boardView?.clearTransientState(['draggingOrigin']);
+        if (dragging.origin && (dragging.origin.type === 'boardAny' || dragging.origin.type === 'board')) {
+          setBoardDragOriginOverlay(dragging.origin, false);
         } else if (dragging.originEl) {
           dragging.originEl.style.opacity = '';
         }
