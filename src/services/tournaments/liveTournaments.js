@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const eventBus = require('../../eventBus');
 const Match = require('../../models/Match');
 const Game = require('../../models/Game');
 const Tournament = require('../../models/Tournament');
@@ -495,11 +496,28 @@ async function createTournamentMatch({ tournament, playerA, playerB, phase, game
     match: match._id,
     timeControlStart: gameSettings.timeControl,
     increment: gameSettings.increment,
+    playersReady: [false, false],
   });
 
   match.games = Array.isArray(match.games) ? match.games : [];
   match.games.push(String(game._id));
   await match.save();
+
+  const gamePayload = typeof game.toObject === 'function' ? game.toObject() : game;
+  const affectedUsers = players.map((id) => String(id));
+  eventBus.emit('gameChanged', {
+    game: gamePayload,
+    affectedUsers,
+  });
+  eventBus.emit('players:bothNext', {
+    game: gamePayload,
+    affectedUsers,
+  });
+  eventBus.emit('match:created', {
+    matchId: String(match._id),
+    players: affectedUsers,
+    type: match.type,
+  });
 
   return {
     matchId: String(match._id),
@@ -548,17 +566,6 @@ async function startTournament({ tournamentId, session }) {
       playerA: tournament.players[i],
       playerB: tournament.players[i + 1],
       phase: 'round_robin',
-      gameSettings,
-    }));
-  }
-
-  if (tournament.players.length >= 2) {
-    const sorted = tournament.players.slice().sort((a, b) => a.username.localeCompare(b.username));
-    generatedMatches.push(await createTournamentMatch({
-      tournament,
-      playerA: sorted[0],
-      playerB: sorted[1],
-      phase: 'elimination',
       gameSettings,
     }));
   }
@@ -613,8 +620,20 @@ async function listTournamentGames(tournamentId) {
       phase: isElimination ? 'elimination' : 'round_robin',
       status: game.isActive ? (isElimination ? 'pending_accept' : 'live') : 'completed',
       players: [
-        { entryId: p1?.entryId || null, username: p1?.username || 'Player 1', type: p1?.type || 'human', difficulty: p1?.difficulty || null },
-        { entryId: p2?.entryId || null, username: p2?.username || 'Player 2', type: p2?.type || 'human', difficulty: p2?.difficulty || null },
+        {
+          entryId: p1?.entryId || null,
+          userId: p1?.userId ? String(p1.userId) : (playerIds[0] || null),
+          username: p1?.username || 'Player 1',
+          type: p1?.type || 'human',
+          difficulty: p1?.difficulty || null,
+        },
+        {
+          entryId: p2?.entryId || null,
+          userId: p2?.userId ? String(p2.userId) : (playerIds[1] || null),
+          username: p2?.username || 'Player 2',
+          type: p2?.type || 'human',
+          difficulty: p2?.difficulty || null,
+        },
       ],
       eloImpact: isElimination ? Boolean(match.eloEligible) : false,
       reason: isElimination
@@ -625,6 +644,76 @@ async function listTournamentGames(tournamentId) {
     });
   }
   return items;
+}
+
+async function listAllTournamentsForAdmin() {
+  const cachedRows = Array.from(TOURNAMENTS.values()).map((entry) => cloneTournament(entry));
+  if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
+    return cachedRows.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  }
+  if (!isMongoConnected()) {
+    return cachedRows.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  }
+  const docs = await Tournament.find({}).sort({ createdAt: -1 }).lean();
+  const byId = new Map();
+  docs.forEach((doc) => {
+    const normalized = fromTournamentDocument(doc);
+    if (normalized?.id) byId.set(normalized.id, normalized);
+  });
+  cachedRows.forEach((row) => {
+    if (row?.id) byId.set(String(row.id), row);
+  });
+  return Array.from(byId.values())
+    .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+}
+
+async function deleteTournamentForAdmin(tournamentId) {
+  const normalizedId = String(tournamentId || '').trim();
+  if (!normalizedId) {
+    const err = new Error('Tournament not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const cached = TOURNAMENTS.get(normalizedId);
+  let tournament = cached || null;
+
+  if (!tournament && process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID && isMongoConnected()) {
+    const doc = await Tournament.findById(normalizedId).lean();
+    if (doc) {
+      tournament = fromTournamentDocument(doc);
+    }
+  }
+
+  if (!tournament) {
+    const err = new Error('Tournament not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const matchIds = new Set(Array.isArray(tournament.matchIds) ? tournament.matchIds.map((id) => String(id)) : []);
+  const gameIds = new Set(Array.isArray(tournament.gameIds) ? tournament.gameIds.map((id) => String(id)) : []);
+
+  if (matchIds.size > 0) {
+    const matchDocs = await Match.find({ _id: { $in: Array.from(matchIds) } }).select({ games: 1 }).lean();
+    matchDocs.forEach((match) => {
+      if (!Array.isArray(match?.games)) return;
+      match.games.forEach((gameId) => {
+        if (gameId) gameIds.add(String(gameId));
+      });
+    });
+  }
+
+  if (gameIds.size > 0) {
+    await Game.deleteMany({ _id: { $in: Array.from(gameIds) } });
+  }
+  if (matchIds.size > 0) {
+    await Match.deleteMany({ _id: { $in: Array.from(matchIds) } });
+  }
+
+  TOURNAMENTS.delete(normalizedId);
+  await removeTournamentSnapshot(normalizedId);
+  return { id: normalizedId, deleted: true };
 }
 
 function getTournamentBotDifficultyOptions() {
@@ -654,6 +743,8 @@ module.exports = {
   addBotToTournament,
   startTournament,
   listTournamentGames,
+  listAllTournamentsForAdmin,
+  deleteTournamentForAdmin,
   getTournamentBotDifficultyOptions,
   resetForTests,
 };

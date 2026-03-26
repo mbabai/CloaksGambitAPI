@@ -4,6 +4,9 @@ const request = require('supertest');
 jest.mock('../src/utils/requestSession', () => ({
   resolveSessionFromRequest: jest.fn(),
 }));
+jest.mock('../src/utils/adminAccess', () => ({
+  ensureAdminRequest: jest.fn(),
+}));
 jest.mock('../src/utils/ensureUser', () => jest.fn(async (userId) => ({
   userId: userId || '000000000000000000000401',
   username: 'EnsuredGuest',
@@ -28,6 +31,7 @@ jest.mock('../src/services/bots/registry', () => ({
 }));
 
 const { resolveSessionFromRequest } = require('../src/utils/requestSession');
+const { ensureAdminRequest } = require('../src/utils/adminAccess');
 const tournamentsRouter = require('../src/routes/v1/tournaments');
 const { resetForTests } = require('../src/services/tournaments/liveTournaments');
 
@@ -42,6 +46,8 @@ describe('tournaments routes', () => {
   beforeEach(() => {
     resetForTests();
     resolveSessionFromRequest.mockReset();
+    ensureAdminRequest.mockReset();
+    ensureAdminRequest.mockResolvedValue({ userId: 'admin-user', authenticated: true, isGuest: false });
   });
 
   test('development test-mode allows guest participation', async () => {
@@ -154,5 +160,59 @@ describe('tournaments routes', () => {
       .send({ tournamentId: '507f1f77bcf86cd799439011', role: 'player' });
 
     expect(joinRes.status).toBe(401);
+  });
+
+  test('details requires membership before loading', async () => {
+    process.env.NODE_ENV = 'development';
+    const app = createApp();
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'host-ctx',
+      username: 'HostCtx',
+      isGuest: true,
+      authenticated: false,
+    });
+    const createRes = await request(app)
+      .post('/api/v1/tournaments/create')
+      .send({ label: 'Members Cup' });
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'stranger',
+      username: 'Stranger',
+      isGuest: true,
+      authenticated: false,
+    });
+    const detailsRes = await request(app)
+      .post('/api/v1/tournaments/details')
+      .send({ tournamentId: createRes.body.tournament.id });
+
+    expect(detailsRes.status).toBe(403);
+    expect(detailsRes.body.message).toMatch(/must join/i);
+  });
+
+  test('admin list and delete endpoints work', async () => {
+    process.env.NODE_ENV = 'development';
+    const app = createApp();
+    resolveSessionFromRequest.mockResolvedValue({
+      userId: 'host-admin-path',
+      username: 'HostAdminPath',
+      isGuest: true,
+      authenticated: false,
+    });
+
+    const createRes = await request(app)
+      .post('/api/v1/tournaments/create')
+      .send({ label: 'Admin Delete Cup' });
+
+    const listRes = await request(app).get('/api/v1/tournaments/admin/list');
+    expect(listRes.status).toBe(200);
+    expect(Array.isArray(listRes.body.tournaments)).toBe(true);
+    expect(listRes.body.tournaments.some((row) => row.id === createRes.body.tournament.id)).toBe(true);
+
+    const deleteRes = await request(app)
+      .post('/api/v1/tournaments/admin/delete')
+      .send({ tournamentId: createRes.body.tournament.id });
+    expect(deleteRes.status).toBe(200);
+    expect(deleteRes.body.deleted).toBe(true);
   });
 });

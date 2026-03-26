@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { resolveSessionFromRequest } = require('../../../utils/requestSession');
+const { ensureAdminRequest } = require('../../../utils/adminAccess');
+const eventBus = require('../../../eventBus');
 const {
   isTournamentTestModeEnabled,
   listLiveTournaments,
@@ -13,6 +15,8 @@ const {
   addBotToTournament,
   startTournament,
   listTournamentGames,
+  listAllTournamentsForAdmin,
+  deleteTournamentForAdmin,
   getTournamentBotDifficultyOptions,
 } = require('../../../services/tournaments/liveTournaments');
 
@@ -137,6 +141,7 @@ router.post('/start', async (req, res) => {
     const session = await resolveTournamentSession(req);
     assertParticipationAllowed(session);
     const tournament = await startTournament({ tournamentId: req.body?.tournamentId, session });
+    eventBus.emit('adminRefresh');
     return res.json({ tournament });
   } catch (err) {
     return handleRouteError(res, err);
@@ -155,6 +160,29 @@ router.post('/details', async (req, res) => {
     const tournament = await getTournamentDetails(req.body?.tournamentId, { session });
     const games = await listTournamentGames(req.body?.tournamentId);
     return res.json({ tournament, games });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.get('/admin/list', async (req, res) => {
+  try {
+    const adminSession = await ensureAdminRequest(req, res);
+    if (!adminSession) return;
+    const tournaments = await listAllTournamentsForAdmin();
+    return res.json({ tournaments });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.post('/admin/delete', async (req, res) => {
+  try {
+    const adminSession = await ensureAdminRequest(req, res);
+    if (!adminSession) return;
+    const result = await deleteTournamentForAdmin(req.body?.tournamentId);
+    eventBus.emit('adminRefresh');
+    return res.json(result);
   } catch (err) {
     return handleRouteError(res, err);
   }
