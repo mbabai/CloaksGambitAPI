@@ -1449,6 +1449,20 @@ body.history-overlay-open {
   gap: 8px;
 }
 
+.tournament-modal__button {
+  position: relative;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.tournament-modal__button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .tournament-browser-list {
   display: flex;
   flex-direction: column;
@@ -1461,6 +1475,7 @@ body.history-overlay-open {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  width: 100%;
   gap: 4px;
   text-align: left;
   padding: 10px 12px;

@@ -91,6 +91,7 @@ export function initTournamentUi({
   let cachedRows = [];
   let botDifficultyOptions = [];
   let currentTournament = null;
+  let browserTestModeEnabled = false;
 
   function registerTournamentPlayers(games = []) {
     if (typeof registerSpectateUsername !== 'function') return;
@@ -109,13 +110,20 @@ export function initTournamentUi({
   function updateBrowserButtons() {
     const session = getSessionInfo ? getSessionInfo() : null;
     const selected = getSelectedTournament();
-    const loggedInForParticipation = Boolean(session?.authenticated) || Boolean(session?.isGuest);
+    const isLoggedIn = Boolean(session?.authenticated);
+    const canParticipate = isLoggedIn || (browserTestModeEnabled && Boolean(session?.isGuest));
     if (joinBtn) {
-      const canJoin = Boolean(selected && selected.state === 'starting' && loggedInForParticipation);
+      const canJoin = Boolean(selected && selected.state === 'starting' && canParticipate);
       joinBtn.disabled = !canJoin;
-      joinBtn.title = canJoin
-        ? ''
-        : (selected ? 'Join is only available for starting tournaments.' : 'Select a tournament first.');
+      if (!isLoggedIn && !browserTestModeEnabled) {
+        joinBtn.title = 'Login required for participation.';
+      } else if (!selected) {
+        joinBtn.title = 'Select a tournament first.';
+      } else if (selected.state !== 'starting') {
+        joinBtn.title = 'Join is only available for starting tournaments.';
+      } else {
+        joinBtn.title = '';
+      }
     }
     if (viewBtn) {
       const canView = Boolean(selected && (selected.state === 'starting' || selected.state === 'active'));
@@ -134,7 +142,7 @@ export function initTournamentUi({
     }
 
     rows.forEach((row) => {
-      const rowBtn = el('button', { type: 'button', className: 'menu-button tournament-browser-row' });
+      const rowBtn = el('button', { type: 'button', className: 'tournament-modal__button tournament-browser-row' });
       if (selectedTournamentId === row.id) rowBtn.classList.add('active');
       rowBtn.innerHTML = `
         <span class="tournament-browser-row__title">${row.label}</span>
@@ -158,15 +166,12 @@ export function initTournamentUi({
       const payload = await apiGetTournaments();
       cachedRows = Array.isArray(payload?.tournaments) ? payload.tournaments : [];
       botDifficultyOptions = Array.isArray(payload?.botDifficultyOptions) ? payload.botDifficultyOptions : [];
+      browserTestModeEnabled = Boolean(payload?.testModeEnabled);
       if (selectedTournamentId && !cachedRows.some((entry) => entry.id === selectedTournamentId)) {
         selectedTournamentId = null;
       }
       renderTournamentRows(cachedRows);
-      if (browserStatusEl) {
-        browserStatusEl.textContent = payload?.testModeEnabled
-          ? 'Dev test-mode is ON: guest users may participate.'
-          : 'Login required for participation.';
-      }
+      if (browserStatusEl) browserStatusEl.textContent = '';
       updateBrowserButtons();
     } catch (err) {
       if (browserStatusEl) browserStatusEl.textContent = err.message || 'Failed to load tournaments.';
@@ -177,9 +182,9 @@ export function initTournamentUi({
     const { title, status, section } = createModalShell('Tournament Browser');
     const topRow = el('div', { className: 'tournament-modal__actions' });
 
-    createBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Create'), { variant: 'neutral', position: 'relative' });
-    joinBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Join'), { variant: 'neutral', position: 'relative' });
-    viewBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'View'), { variant: 'neutral', position: 'relative' });
+    createBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Create'), { variant: 'neutral', position: 'relative' });
+    joinBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Join'), { variant: 'neutral', position: 'relative' });
+    viewBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'View'), { variant: 'neutral', position: 'relative' });
 
     topRow.appendChild(createBtn);
     topRow.appendChild(joinBtn);
@@ -239,7 +244,7 @@ export function initTournamentUi({
     const victorySelect = el('select');
     victorySelect.innerHTML = '<option value="3">3</option><option value="4">4</option><option value="5">5</option>';
 
-    const saveBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Create Tournament'), { variant: 'neutral', position: 'relative' });
+    const saveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Create Tournament'), { variant: 'neutral', position: 'relative' });
 
     const row = (label, control) => {
       const wrap = el('label', { className: 'tournament-modal__field' });
@@ -292,7 +297,7 @@ export function initTournamentUi({
       difficulty.appendChild(option);
     });
 
-    const addBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Add Bot Player'), { variant: 'neutral', position: 'relative' });
+    const addBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Add Bot Player'), { variant: 'neutral', position: 'relative' });
 
     addBotOverlay.content.appendChild(title);
     section.appendChild(nameInput);
@@ -339,10 +344,10 @@ export function initTournamentUi({
     }
 
     const btnRow = el('div', { className: 'tournament-modal__actions' });
-    const startBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Start Tournament'), { variant: 'neutral', position: 'relative' });
-    const addBotBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Add Bot'), { variant: 'neutral', position: 'relative' });
-    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Leave Tournament'), { variant: 'neutral', position: 'relative' });
-    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Cancel Tournament'), { variant: 'neutral', position: 'relative' });
+    const startBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Start Tournament'), { variant: 'neutral', position: 'relative' });
+    const addBotBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Add Bot'), { variant: 'neutral', position: 'relative' });
+    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Leave Tournament'), { variant: 'neutral', position: 'relative' });
+    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Cancel Tournament'), { variant: 'neutral', position: 'relative' });
 
     const session = getSessionInfo ? getSessionInfo() : null;
     const isHost = String(session?.userId || '') === String(tournament.host?.userId || '');
@@ -438,8 +443,8 @@ export function initTournamentUi({
       });
     }
 
-    const refreshBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Refresh Games'), { variant: 'neutral', position: 'relative' });
-    const doneBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Back to Browser'), { variant: 'neutral', position: 'relative' });
+    const refreshBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Refresh Games'), { variant: 'neutral', position: 'relative' });
+    const doneBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Back to Browser'), { variant: 'neutral', position: 'relative' });
     const buttonRow = el('div', { className: 'tournament-modal__actions' });
     buttonRow.appendChild(refreshBtn);
     buttonRow.appendChild(doneBtn);
