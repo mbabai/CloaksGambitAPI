@@ -6074,18 +6074,20 @@ logBootConstantsOnce();
       try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
       suppressMouseUntil = Date.now() + 500;
       const t = e.touches[0];
+      const touchId = Number.isInteger(t?.identifier) ? t.identifier : null;
       const startX = t.clientX, startY = t.clientY;
       let dragStarted = false;
       const move = (ev) => {
         if (dragStarted) return;
-        const tt = ev.touches[0];
+        const tt = getTouchFromEventById(ev, touchId);
+        if (!tt) return;
         const dx = Math.abs(tt.clientX - startX);
         const dy = Math.abs(tt.clientY - startY);
         if ((dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) && originPiece) {
           dragStarted = true;
           document.removeEventListener('touchmove', move);
           // if (DRAG_DEBUG) console.log('[drag] start touch', { target, x: tt.clientX, y: tt.clientY });
-          startDrag({ clientX: tt.clientX, clientY: tt.clientY }, target, originPiece);
+          startDrag({ clientX: tt.clientX, clientY: tt.clientY }, target, originPiece, { touchId });
         }
       };
       const end = (ev) => {
@@ -6163,18 +6165,20 @@ logBootConstantsOnce();
       try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
       suppressMouseUntil = Date.now() + 500;
       const t = e.touches[0];
+      const touchId = Number.isInteger(t?.identifier) ? t.identifier : null;
       const startX = t.clientX, startY = t.clientY;
       let dragStarted = false;
       const move = (ev) => {
         if (dragStarted) return;
         // Only start a drag if this square has your piece and it's your turn
         if (!piece || piece.color !== myColorIdx || currentPlayerTurn !== myColorIdx) return;
-        const tt = ev.touches[0];
+        const tt = getTouchFromEventById(ev, touchId);
+        if (!tt) return;
         const dx = Math.abs(tt.clientX - startX);
         const dy = Math.abs(tt.clientY - startY);
         if (dx > DRAG_PX_THRESHOLD_TOUCH || dy > DRAG_PX_THRESHOLD_TOUCH) {
           dragStarted = true; document.removeEventListener('touchmove', move);
-          startDrag({ clientX: tt.clientX, clientY: tt.clientY }, sourceTarget, piece);
+          startDrag({ clientX: tt.clientX, clientY: tt.clientY }, sourceTarget, piece, { touchId });
         }
       };
       const end = (ev) => {
@@ -6475,7 +6479,24 @@ logBootConstantsOnce();
     selected = null; renderBoardAndBars();
   }
 
-  function startDrag(e, origin, piece) {
+  function getTouchFromEventById(ev, touchId) {
+    try {
+      const hasTouchId = Number.isInteger(touchId);
+      if (hasTouchId) {
+        const touches = Array.from(ev?.touches || []);
+        const changed = Array.from(ev?.changedTouches || []);
+        const foundActive = touches.find((entry) => entry && entry.identifier === touchId);
+        if (foundActive) return foundActive;
+        const foundChanged = changed.find((entry) => entry && entry.identifier === touchId);
+        if (foundChanged) return foundChanged;
+      }
+      return (ev?.touches && ev.touches[0]) || (ev?.changedTouches && ev.changedTouches[0]) || null;
+    } catch (_) {
+      return (ev?.touches && ev.touches[0]) || (ev?.changedTouches && ev.changedTouches[0]) || null;
+    }
+  }
+
+  function startDrag(e, origin, piece, opts = null) {
     if (gameFinished) return;
     purgeDanglingDragArtifacts({ force: true });
     try { if (e && typeof e.preventDefault === 'function') e.preventDefault(); } catch (_) {}
@@ -6513,14 +6534,15 @@ logBootConstantsOnce();
         if (originEl) originEl.style.opacity = '0.5';
       } catch (_) {}
     }
-    dragging = { piece, origin, ghostEl: ghost, originEl, boardOriginDimming };
+    const touchId = Number.isInteger(opts?.touchId) ? opts.touchId : null;
+    dragging = { piece, origin, ghostEl: ghost, originEl, boardOriginDimming, touchId };
     suppressMouseUntil = Date.now() + 700; // extend suppression window during drag
     // if (DRAG_DEBUG) console.log('[drag] ghost init', { x: startCX, y: startCY, origin });
     // Do not re-render here; we dim the origin element directly to avoid disrupting touch event streams
     const move = (ev) => {
       if (!dragging) return;
       try { if (ev.cancelable) ev.preventDefault(); } catch (_) {}
-      const t = ev.touches ? ev.touches[0] : (ev.changedTouches ? ev.changedTouches[0] : null);
+      const t = getTouchFromEventById(ev, dragging.touchId);
       const x = (t && t.clientX !== undefined) ? t.clientX : ev.clientX;
       const y = (t && t.clientY !== undefined) ? t.clientY : ev.clientY;
       if (typeof x === 'number') ghost.style.left = x + 'px';
@@ -6552,8 +6574,9 @@ logBootConstantsOnce();
       document.removeEventListener('touchend', up);
       document.removeEventListener('touchcancel', up);
       if (!dragging) return;
-      const cx = ev.clientX !== undefined ? ev.clientX : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientX);
-      const cy = ev.clientY !== undefined ? ev.clientY : (ev.changedTouches && ev.changedTouches[0] && ev.changedTouches[0].clientY);
+      const endTouch = getTouchFromEventById(ev, dragging.touchId);
+      const cx = ev.clientX !== undefined ? ev.clientX : (endTouch && endTouch.clientX);
+      const cy = ev.clientY !== undefined ? ev.clientY : (endTouch && endTouch.clientY);
       const dest = hitTestDrop(cx, cy);
       // if (DRAG_DEBUG) console.log('[drag] end', { x: cx, y: cy, dest });
       // Clear preview overlays
