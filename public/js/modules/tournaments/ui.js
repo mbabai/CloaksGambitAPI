@@ -1,5 +1,6 @@
 import { createOverlay } from '../ui/overlays.js';
 import { upgradeButton } from '../ui/buttons.js';
+import { renderActiveMatchesList } from '../spectate/activeMatches.js';
 import {
   apiGetTournaments,
   apiCreateTournament,
@@ -30,34 +31,56 @@ function el(tag, attrs = {}, text = '') {
   return node;
 }
 
+function createModalShell(titleText) {
+  const title = el('h2', { className: 'tournament-modal__title' }, titleText);
+  const status = el('div', { className: 'menu-message tournament-modal__status' }, '');
+  const section = el('div', { className: 'tournament-modal__section' });
+  return { title, status, section };
+}
+
+function gameToActiveRow(game) {
+  const players = Array.isArray(game?.players) ? game.players : [];
+  return {
+    id: game?.matchId || null,
+    type: game?.phase === 'elimination' ? 'Tournament Elimination' : 'Tournament Round Robin',
+    players: [
+      players[0]?.userId || players[0]?.entryId || players[0]?.username || null,
+      players[1]?.userId || players[1]?.entryId || players[1]?.username || null,
+    ],
+    player1Score: 0,
+    player2Score: 0,
+    drawCount: 0,
+    __raw: game,
+  };
+}
+
 export function initTournamentUi({
   triggerButton,
   getSessionInfo,
   onSessionRefresh,
+  onSpectateMatch,
+  registerSpectateUsername,
 }) {
   if (!triggerButton) return null;
 
-  const browserOverlay = createOverlay({
-    ariaLabel: 'Tournament browser',
-    closeText: '×',
-    closeLabel: 'Close tournament browser',
+  const createOverlayOptions = (ariaLabel, closeLabel) => ({
+    ariaLabel,
+    baseClass: 'cg-overlay',
+    dialogClass: 'history-modal tournament-modal',
+    contentClass: 'history-modal-content tournament-modal__content',
+    backdropClass: 'cg-overlay__backdrop history-overlay-backdrop',
+    closeButtonClass: 'history-close-btn',
+    closeLabel,
+    closeText: '✕',
+    openClass: 'open cg-overlay--open',
+    bodyOpenClass: 'history-overlay-open cg-overlay-open',
   });
-  const createOverlayModal = createOverlay({
-    ariaLabel: 'Create tournament',
-    closeText: '×',
-  });
-  const lobbyOverlay = createOverlay({
-    ariaLabel: 'Tournament lobby',
-    closeText: '×',
-  });
-  const addBotOverlay = createOverlay({
-    ariaLabel: 'Add bot to tournament',
-    closeText: '×',
-  });
-  const activeOverlay = createOverlay({
-    ariaLabel: 'Active tournament games',
-    closeText: '×',
-  });
+
+  const browserOverlay = createOverlay(createOverlayOptions('Tournament browser', 'Close tournament browser'));
+  const createOverlayModal = createOverlay(createOverlayOptions('Create tournament', 'Close create tournament modal'));
+  const lobbyOverlay = createOverlay(createOverlayOptions('Tournament lobby', 'Close tournament lobby'));
+  const addBotOverlay = createOverlay(createOverlayOptions('Add bot to tournament', 'Close add bot modal'));
+  const activeOverlay = createOverlay(createOverlayOptions('Active tournament games', 'Close active tournament games'));
 
   let browserStatusEl = null;
   let browserListEl = null;
@@ -65,10 +88,19 @@ export function initTournamentUi({
   let viewBtn = null;
   let createBtn = null;
   let selectedTournamentId = null;
-  let selectedTournamentState = null;
   let cachedRows = [];
   let botDifficultyOptions = [];
   let currentTournament = null;
+
+  function registerTournamentPlayers(games = []) {
+    if (typeof registerSpectateUsername !== 'function') return;
+    games.forEach((game) => {
+      (Array.isArray(game?.players) ? game.players : []).forEach((player) => {
+        if (!player?.userId || !player?.username) return;
+        registerSpectateUsername(player.userId, player.username);
+      });
+    });
+  }
 
   function getSelectedTournament() {
     return cachedRows.find((row) => row.id === selectedTournamentId) || null;
@@ -89,9 +121,7 @@ export function initTournamentUi({
       const canView = Boolean(selected && (selected.state === 'starting' || selected.state === 'active'));
       viewBtn.disabled = !canView;
     }
-    if (createBtn) {
-      createBtn.disabled = false;
-    }
+    if (createBtn) createBtn.disabled = false;
   }
 
   function renderTournamentRows(rows = []) {
@@ -104,26 +134,17 @@ export function initTournamentUi({
     }
 
     rows.forEach((row) => {
-      const rowBtn = el('button', { type: 'button', className: 'menu-button' });
-      rowBtn.style.display = 'flex';
-      rowBtn.style.flexDirection = 'column';
-      rowBtn.style.alignItems = 'flex-start';
-      rowBtn.style.gap = '4px';
-      rowBtn.style.padding = '10px 12px';
-      rowBtn.style.textAlign = 'left';
-      if (selectedTournamentId === row.id) {
-        rowBtn.classList.add('active');
-      }
+      const rowBtn = el('button', { type: 'button', className: 'menu-button tournament-browser-row' });
+      if (selectedTournamentId === row.id) rowBtn.classList.add('active');
       rowBtn.innerHTML = `
-        <strong>${row.label}</strong>
-        <span>State: ${row.state}</span>
-        <span>Host: ${row.hostUsername}</span>
-        <span>Players: ${row.playerCount} · Viewers: ${row.viewerCount}</span>
+        <span class="tournament-browser-row__title">${row.label}</span>
+        <span class="tournament-browser-row__meta">${row.state.toUpperCase()} · ${row.phase || 'lobby'}</span>
+        <span class="tournament-browser-row__meta">Host: ${row.hostUsername}</span>
+        <span class="tournament-browser-row__meta">Players: ${row.playerCount} · Viewers: ${row.viewerCount}</span>
       `;
       upgradeButton(rowBtn, { variant: 'neutral', position: 'relative' });
       rowBtn.addEventListener('click', () => {
         selectedTournamentId = row.id;
-        selectedTournamentState = row.state;
         renderTournamentRows(cachedRows);
         updateBrowserButtons();
       });
@@ -132,69 +153,46 @@ export function initTournamentUi({
   }
 
   async function refreshBrowser() {
-    if (browserStatusEl) {
-      browserStatusEl.textContent = 'Loading tournaments...';
-    }
+    if (browserStatusEl) browserStatusEl.textContent = 'Loading tournaments...';
     try {
       const payload = await apiGetTournaments();
       cachedRows = Array.isArray(payload?.tournaments) ? payload.tournaments : [];
       botDifficultyOptions = Array.isArray(payload?.botDifficultyOptions) ? payload.botDifficultyOptions : [];
       if (selectedTournamentId && !cachedRows.some((entry) => entry.id === selectedTournamentId)) {
         selectedTournamentId = null;
-        selectedTournamentState = null;
       }
       renderTournamentRows(cachedRows);
       if (browserStatusEl) {
-        const note = payload?.testModeEnabled
+        browserStatusEl.textContent = payload?.testModeEnabled
           ? 'Dev test-mode is ON: guest users may participate.'
           : 'Login required for participation.';
-        browserStatusEl.textContent = note;
       }
       updateBrowserButtons();
     } catch (err) {
-      if (browserStatusEl) {
-        browserStatusEl.textContent = err.message || 'Failed to load tournaments.';
-      }
+      if (browserStatusEl) browserStatusEl.textContent = err.message || 'Failed to load tournaments.';
     }
   }
 
   function buildBrowserModal() {
-    const title = el('h2', {}, 'Tournament Browser');
-    title.style.margin = '0';
-    const topRow = el('div');
-    topRow.style.display = 'flex';
-    topRow.style.gap = '8px';
-    topRow.style.flexWrap = 'wrap';
+    const { title, status, section } = createModalShell('Tournament Browser');
+    const topRow = el('div', { className: 'tournament-modal__actions' });
 
-    createBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Create'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
-    joinBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Join'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
-    viewBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'View'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
+    createBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Create'), { variant: 'neutral', position: 'relative' });
+    joinBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Join'), { variant: 'neutral', position: 'relative' });
+    viewBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'View'), { variant: 'neutral', position: 'relative' });
 
     topRow.appendChild(createBtn);
     topRow.appendChild(joinBtn);
     topRow.appendChild(viewBtn);
 
-    browserStatusEl = el('div', { className: 'menu-message' }, 'Loading tournaments...');
-    browserListEl = el('div');
-    browserListEl.style.display = 'flex';
-    browserListEl.style.flexDirection = 'column';
-    browserListEl.style.gap = '8px';
-    browserListEl.style.maxHeight = '420px';
-    browserListEl.style.overflowY = 'auto';
+    browserStatusEl = status;
+    browserListEl = el('div', { className: 'tournament-browser-list' });
 
     browserOverlay.content.appendChild(title);
     browserOverlay.content.appendChild(topRow);
     browserOverlay.content.appendChild(browserStatusEl);
-    browserOverlay.content.appendChild(browserListEl);
+    section.appendChild(browserListEl);
+    browserOverlay.content.appendChild(section);
 
     createBtn.addEventListener('click', () => {
       browserOverlay.hide({ restoreFocus: false });
@@ -218,6 +216,7 @@ export function initTournamentUi({
       try {
         await apiJoinTournament({ tournamentId: selectedTournamentId, role: 'viewer' });
         const details = await apiGetTournamentDetails({ tournamentId: selectedTournamentId });
+        registerTournamentPlayers(details?.games || []);
         browserOverlay.hide({ restoreFocus: false });
         if (details?.tournament?.state === 'active') {
           openActiveModal(details.tournament, details.games || []);
@@ -232,37 +231,30 @@ export function initTournamentUi({
 
   function openCreateModal() {
     createOverlayModal.content.innerHTML = '';
-    const title = el('h2', {}, 'Create Tournament');
-    title.style.margin = '0';
+    const { title, status, section } = createModalShell('Create Tournament');
     const labelInput = el('input', { type: 'text', placeholder: 'Tournament label', maxlength: '60' });
     const minutesInput = el('input', { type: 'number', min: '1', max: '30', value: '15' });
     const styleSelect = el('select');
     styleSelect.innerHTML = '<option value="single">Single Elimination</option><option value="double">Double Elimination</option>';
     const victorySelect = el('select');
     victorySelect.innerHTML = '<option value="3">3</option><option value="4">4</option><option value="5">5</option>';
-    const status = el('div', { className: 'menu-message' }, '');
 
-    const saveBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Create Tournament'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
+    const saveBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Create Tournament'), { variant: 'neutral', position: 'relative' });
 
     const row = (label, control) => {
-      const wrap = el('label');
-      wrap.style.display = 'flex';
-      wrap.style.flexDirection = 'column';
-      wrap.style.gap = '4px';
+      const wrap = el('label', { className: 'tournament-modal__field' });
       wrap.appendChild(el('span', {}, label));
       wrap.appendChild(control);
       return wrap;
     };
 
     createOverlayModal.content.appendChild(title);
-    createOverlayModal.content.appendChild(row('Label', labelInput));
-    createOverlayModal.content.appendChild(row('Round robin minutes', minutesInput));
-    createOverlayModal.content.appendChild(row('Elimination style', styleSelect));
-    createOverlayModal.content.appendChild(row('Victory points', victorySelect));
-    createOverlayModal.content.appendChild(saveBtn);
+    section.appendChild(row('Label', labelInput));
+    section.appendChild(row('Round robin minutes', minutesInput));
+    section.appendChild(row('Elimination style', styleSelect));
+    section.appendChild(row('Victory points', victorySelect));
+    section.appendChild(saveBtn);
+    createOverlayModal.content.appendChild(section);
     createOverlayModal.content.appendChild(status);
 
     saveBtn.addEventListener('click', async () => {
@@ -289,8 +281,7 @@ export function initTournamentUi({
 
   function openAddBotModal(tournament) {
     addBotOverlay.content.innerHTML = '';
-    const title = el('h2', {}, 'Add Bot');
-    title.style.margin = '0';
+    const { title, status, section } = createModalShell('Add Bot');
     const nameInput = el('input', { type: 'text', placeholder: 'Bot display name', maxlength: '40' });
     const difficulty = el('select');
     const options = botDifficultyOptions.length
@@ -301,16 +292,13 @@ export function initTournamentUi({
       difficulty.appendChild(option);
     });
 
-    const addBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Add Bot Player'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
-    const status = el('div', { className: 'menu-message' }, '');
+    const addBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Add Bot Player'), { variant: 'neutral', position: 'relative' });
 
     addBotOverlay.content.appendChild(title);
-    addBotOverlay.content.appendChild(nameInput);
-    addBotOverlay.content.appendChild(difficulty);
-    addBotOverlay.content.appendChild(addBtn);
+    section.appendChild(nameInput);
+    section.appendChild(difficulty);
+    section.appendChild(addBtn);
+    addBotOverlay.content.appendChild(section);
     addBotOverlay.content.appendChild(status);
 
     addBtn.addEventListener('click', async () => {
@@ -336,46 +324,25 @@ export function initTournamentUi({
     if (!tournamentLike?.id) return;
     const tournament = tournamentLike;
     lobbyOverlay.content.innerHTML = '';
-    const title = el('h2', {}, `${asText(tournament.label, 'Tournament')} Lobby`);
-    title.style.margin = '0';
+    const { title, status, section } = createModalShell(`${asText(tournament.label, 'Tournament')} Lobby`);
+    status.textContent = `State: ${tournament.state} · Phase: ${tournament.phase}`;
 
-    const status = el('div', { className: 'menu-message' }, `State: ${tournament.state} · Phase: ${tournament.phase}`);
-    const playersList = el('div');
-    playersList.style.display = 'flex';
-    playersList.style.flexDirection = 'column';
-    playersList.style.gap = '6px';
-
+    const playersList = el('div', { className: 'tournament-player-list' });
     const players = Array.isArray(tournament.players) ? tournament.players : [];
     if (!players.length) {
       playersList.appendChild(el('div', { className: 'menu-message' }, 'No players joined yet.'));
     } else {
       players.forEach((player) => {
-        const suffix = player.type === 'bot' ? ` (Bot: ${player.difficulty || 'easy'})` : '';
-        playersList.appendChild(el('div', { className: 'menu-message' }, `${player.username}${suffix}`));
+        const suffix = player.type === 'bot' ? `Bot · ${player.difficulty || 'easy'}` : 'Human';
+        playersList.appendChild(el('div', { className: 'tournament-player-row' }, `${player.username} · ${suffix}`));
       });
     }
 
-    const btnRow = el('div');
-    btnRow.style.display = 'flex';
-    btnRow.style.flexWrap = 'wrap';
-    btnRow.style.gap = '8px';
-
-    const startBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Start Tournament'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
-    const addBotBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Add Bot'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
-    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Leave Tournament'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
-    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Cancel Tournament'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
+    const btnRow = el('div', { className: 'tournament-modal__actions' });
+    const startBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Start Tournament'), { variant: 'neutral', position: 'relative' });
+    const addBotBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Add Bot'), { variant: 'neutral', position: 'relative' });
+    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Leave Tournament'), { variant: 'neutral', position: 'relative' });
+    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Cancel Tournament'), { variant: 'neutral', position: 'relative' });
 
     const session = getSessionInfo ? getSessionInfo() : null;
     const isHost = String(session?.userId || '') === String(tournament.host?.userId || '');
@@ -393,9 +360,10 @@ export function initTournamentUi({
 
     lobbyOverlay.content.appendChild(title);
     lobbyOverlay.content.appendChild(status);
-    lobbyOverlay.content.appendChild(el('h3', {}, 'Players'));
-    lobbyOverlay.content.appendChild(playersList);
-    lobbyOverlay.content.appendChild(btnRow);
+    section.appendChild(el('h3', {}, 'Players'));
+    section.appendChild(playersList);
+    section.appendChild(btnRow);
+    lobbyOverlay.content.appendChild(section);
 
     startBtn.addEventListener('click', async () => {
       status.textContent = 'Starting tournament...';
@@ -403,6 +371,7 @@ export function initTournamentUi({
         const result = await apiStartTournament({ tournamentId: tournament.id });
         const details = await apiGetTournamentDetails({ tournamentId: tournament.id });
         currentTournament = result?.tournament || details?.tournament;
+        registerTournamentPlayers(details?.games || []);
         lobbyOverlay.hide({ restoreFocus: false });
         openActiveModal(currentTournament, details?.games || []);
       } catch (err) {
@@ -446,44 +415,45 @@ export function initTournamentUi({
   function openActiveModal(tournament, games = []) {
     if (!tournament) return;
     activeOverlay.content.innerHTML = '';
-    const title = el('h2', {}, `${asText(tournament.label, 'Tournament')} · Active`);
-    title.style.margin = '0';
-    const info = el('div', { className: 'menu-message' }, 'Round-robin games are listed first. Elimination sample shows ELO rules.');
-    const gameList = el('div');
-    gameList.style.display = 'flex';
-    gameList.style.flexDirection = 'column';
-    gameList.style.gap = '8px';
+    const { title, status, section } = createModalShell(`${asText(tournament.label, 'Tournament')} · Active`);
+    status.textContent = 'Round robin is active now. Elimination starts when round robin is complete.';
 
-    if (!games.length) {
+    const gameList = el('div', { className: 'tableList tournament-active-list' });
+    const mappedGames = Array.isArray(games) ? games.map(gameToActiveRow).filter(Boolean) : [];
+    if (!mappedGames.length) {
       gameList.appendChild(el('div', { className: 'menu-message' }, 'No active games yet.'));
     } else {
-      games.forEach((game) => {
-        const wrap = el('div', { className: 'menu-message' });
-        const p1 = game.players?.[0]?.username || 'Player 1';
-        const p2 = game.players?.[1]?.username || 'Player 2';
-        wrap.textContent = `${game.phase.toUpperCase()} · ${p1} vs ${p2} · ${game.status} · ELO: ${game.eloImpact ? 'Yes' : 'No'} (${game.reason})`;
-        gameList.appendChild(wrap);
+      renderActiveMatchesList(gameList, mappedGames, {
+        getUsername: (id) => {
+          const game = games.find((entry) => (entry?.players || []).some((player) => player?.userId === id));
+          const player = (game?.players || []).find((entry) => entry?.userId === id);
+          return player?.username || id || 'Unknown';
+        },
+        onSpectate: (item) => {
+          const matchId = item?.id;
+          if (!matchId || typeof onSpectateMatch !== 'function') return;
+          activeOverlay.hide({ restoreFocus: false });
+          onSpectateMatch(matchId);
+        },
       });
     }
 
-    const refreshBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Refresh Games'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
-    const doneBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Back to Browser'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
+    const refreshBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Refresh Games'), { variant: 'neutral', position: 'relative' });
+    const doneBtn = upgradeButton(el('button', { type: 'button', className: 'menu-button' }, 'Back to Browser'), { variant: 'neutral', position: 'relative' });
+    const buttonRow = el('div', { className: 'tournament-modal__actions' });
+    buttonRow.appendChild(refreshBtn);
+    buttonRow.appendChild(doneBtn);
 
     activeOverlay.content.appendChild(title);
-    activeOverlay.content.appendChild(info);
-    activeOverlay.content.appendChild(gameList);
-    activeOverlay.content.appendChild(refreshBtn);
-    activeOverlay.content.appendChild(doneBtn);
+    activeOverlay.content.appendChild(status);
+    section.appendChild(gameList);
+    section.appendChild(buttonRow);
+    activeOverlay.content.appendChild(section);
 
     refreshBtn.addEventListener('click', async () => {
       try {
         const details = await apiGetTournamentDetails({ tournamentId: tournament.id });
+        registerTournamentPlayers(details?.games || []);
         openActiveModal(details?.tournament || tournament, details?.games || []);
       } catch (_) {}
     });

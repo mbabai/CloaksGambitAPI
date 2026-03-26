@@ -142,6 +142,8 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   const rankedQueueListEl = document.getElementById('rankedQueueList');
   const usersListEl = document.getElementById('usersList');
   const matchesListEl = document.getElementById('matchesList');
+  const adminTournamentsListEl = document.getElementById('adminTournamentsList');
+  const adminTournamentStatusEl = document.getElementById('adminTournamentStatus');
   const purgeActiveMatchesBtn = upgradeButton(document.getElementById('purgeActiveMatchesBtn'), {
     variant: 'danger',
     position: 'relative'
@@ -197,6 +199,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   let historyMaxGameCount = 1;
   let historyFilter = 'all';
   let historyLoaded = false;
+  let tournamentsLoaded = false;
   let isFetchingHistory = false;
   let historySummaryData = null;
   const historyGamesByMatch = new Map();
@@ -558,7 +561,84 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     });
     if (tab === 'history') {
       ensureHistoryLoaded();
+    } else if (tab === 'tournaments') {
+      ensureTournamentsLoaded();
     }
+  }
+
+  function renderAdminTournamentRows(tournaments) {
+    if (!adminTournamentsListEl) return;
+    adminTournamentsListEl.innerHTML = '';
+    const rows = Array.isArray(tournaments) ? tournaments : [];
+    if (!rows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'row';
+      empty.textContent = 'No tournaments found.';
+      adminTournamentsListEl.appendChild(empty);
+      return;
+    }
+    rows.forEach((row) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'row';
+      wrap.style.flexWrap = 'wrap';
+      const meta = document.createElement('div');
+      meta.style.display = 'flex';
+      meta.style.flexDirection = 'column';
+      meta.style.gap = '2px';
+      meta.innerHTML = `
+        <strong>${row.label || 'Tournament'}</strong>
+        <span>${String(row.state || 'unknown').toUpperCase()} · ${row.phase || 'lobby'}</span>
+        <span>Host: ${row.host?.username || 'Unknown'} · Players: ${Array.isArray(row.players) ? row.players.length : 0}</span>
+      `;
+      wrap.appendChild(meta);
+      const deleteBtn = createButton({ label: 'Delete', variant: 'danger', position: 'relative' });
+      deleteBtn.addEventListener('click', async () => {
+        const confirmed = window.confirm(`Delete tournament \"${row.label || row.id}\" and all related matches/games?`);
+        if (!confirmed) return;
+        try {
+          const res = await authFetch('/api/v1/tournaments/admin/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tournamentId: row.id }),
+          });
+          if (!res.ok) {
+            alert(`Failed to delete tournament (${res.status}).`);
+            return;
+          }
+          await fetchAdminTournaments();
+        } catch (err) {
+          console.error('Failed to delete tournament', err);
+          alert('Failed to delete tournament.');
+        }
+      });
+      wrap.appendChild(deleteBtn);
+      adminTournamentsListEl.appendChild(wrap);
+    });
+  }
+
+  async function fetchAdminTournaments() {
+    if (!adminTournamentStatusEl) return;
+    adminTournamentStatusEl.textContent = 'Loading tournaments…';
+    try {
+      const res = await authFetch('/api/v1/tournaments/admin/list', { method: 'GET' });
+      if (!res.ok) {
+        adminTournamentStatusEl.textContent = `Failed to load tournaments (${res.status}).`;
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      const tournaments = Array.isArray(data?.tournaments) ? data.tournaments : [];
+      adminTournamentStatusEl.textContent = tournaments.length ? `${tournaments.length} tournament(s)` : 'No tournaments found.';
+      renderAdminTournamentRows(tournaments);
+    } catch (err) {
+      console.error('Failed to fetch admin tournaments', err);
+      adminTournamentStatusEl.textContent = 'Failed to load tournaments.';
+    }
+  }
+
+  async function ensureTournamentsLoaded() {
+    if (tournamentsLoaded) return;
+    tournamentsLoaded = true;
+    await fetchAdminTournaments();
   }
 
   tabButtons.forEach(btn => {
@@ -1211,6 +1291,9 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       await fetchHistorySummary();
       await fetchHistoryData({ page: 1, forceReset: true });
     }
+    if (tournamentsLoaded) {
+      await fetchAdminTournaments();
+    }
   });
 
   socket.on('admin:matchUpdated', payload => {
@@ -1294,5 +1377,3 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   }
 
 })();
-
-

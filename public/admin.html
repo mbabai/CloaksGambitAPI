@@ -283,6 +283,7 @@
       <div class="tab-header">
         <button class="tab-button active" data-tab="live">Live</button>
         <button class="tab-button" data-tab="history">History</button>
+        <button class="tab-button" data-tab="tournaments">Tournaments</button>
       </div>
 
       <div id="adminLivePanel" class="tab-panel active" data-tab-panel="live">
@@ -405,6 +406,15 @@
 
         <div id="historyMatchesList" class="history-matches" aria-live="polite"></div>
       </div>
+
+      <div id="adminTournamentsPanel" class="tab-panel" data-tab-panel="tournaments">
+        <h2>Tournaments</h2>
+        <div class="listCard">
+          <div class="title">All Tournaments</div>
+          <div id="adminTournamentStatus" class="label">Loading tournaments…</div>
+          <div id="adminTournamentsList" class="tableList" role="table"></div>
+        </div>
+      </div>
     </div>
 
     <div id="spectateOverlay" class="spectate-overlay" hidden>
@@ -430,5 +440,4 @@
     <script type="module" src="/admin.js?v=__ASSET_VERSION__"></script>
   </body>
   </html>
-
 

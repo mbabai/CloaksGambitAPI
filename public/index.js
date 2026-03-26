@@ -844,6 +844,11 @@ logBootConstantsOnce();
       triggerButton: tournamentBtn,
       getSessionInfo: () => sessionInfo,
       onSessionRefresh: refreshSession,
+      onSpectateMatch: (matchId) => {
+        if (!matchId || !spectateController) return;
+        spectateController.open(matchId);
+      },
+      registerSpectateUsername: setSpectateUsername,
     });
   }
 
@@ -6674,4 +6679,3 @@ logBootConstantsOnce();
     return moved;
   }
 })();
-

@@ -76,7 +76,7 @@ describe('live tournaments service', () => {
     })).rejects.toThrow('only available while tournament is starting');
   });
 
-  test('elimination games against bots never impact elo', async () => {
+  test('start creates only round-robin games (no pre-seeded elimination)', async () => {
     const host = { userId: '000000000000000000000201', username: 'Host2', isGuest: false };
     const created = await createTournament({ hostSession: host, label: 'Elo Rules Cup' });
 
@@ -94,12 +94,11 @@ describe('live tournaments service', () => {
 
     await startTournament({ tournamentId: created.id, session: host });
     const games = await listTournamentGames(created.id);
-    const elimination = games.find((entry) => entry.phase === 'elimination');
-
-    expect(elimination).toBeTruthy();
-    expect(elimination.includesBot).toBe(true);
-    expect(elimination.eloImpact).toBe(false);
-    expect(elimination.reason).toMatch(/never affects ELO/i);
+    expect(games.length).toBeGreaterThan(0);
+    expect(games.some((entry) => entry.phase === 'elimination')).toBe(false);
+    const firstPlayers = games[0]?.players || [];
+    expect(firstPlayers[0]?.userId).toBeTruthy();
+    expect(firstPlayers[1]?.userId).toBeTruthy();
   });
 
   test('host leaving cancels tournament and stamps completion time', async () => {
