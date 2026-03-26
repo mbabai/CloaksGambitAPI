@@ -88,6 +88,7 @@ For the host:
 - show `Start Tournament`
 - show `Cancel Tournament`
 - show a `Participate` toggle while the tournament is `starting`
+- show an `Add Bot` action while the tournament is `starting`
 
 For a joined player who is not the host:
 
@@ -98,6 +99,23 @@ For a viewer:
 - show `Leave Tournament`
 
 The body must show the joined player list. A separate viewer list is optional.
+
+`Add Bot` opens a small modal with:
+
+- a required bot display-name text input
+- a required difficulty dropdown
+
+Difficulty options:
+
+- include `Easy` and `Medium` now
+- in the future, populate this dropdown from all available bot profiles
+
+`Add Bot` behavior rules:
+
+- host only
+- allowed only while the tournament state is `starting`
+- creates a bot tournament participant using the selected name and difficulty
+- bots count as normal players for player count, start eligibility, round-robin pairing, seeding, and elimination
 
 `Cancel Tournament` removes everyone from the live tournament, closes the live state, and persists the record as `cancelled`.
 

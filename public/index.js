@@ -28,6 +28,7 @@ import {
 } from '/js/modules/ui/icons.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
+import { initTournamentUi } from '/js/modules/tournaments/ui.js';
 import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
 import {
   computeGameClockState,
@@ -147,6 +148,10 @@ logBootConstantsOnce();
     position: 'relative'
   });
   const rankedLeaderboardBtn = upgradeButton(document.getElementById('rankedLeaderboardBtn'), {
+    variant: 'neutral',
+    position: 'relative'
+  });
+  const tournamentBtn = upgradeButton(document.getElementById('tournamentBtn'), {
     variant: 'neutral',
     position: 'relative'
   });
@@ -831,6 +836,14 @@ logBootConstantsOnce();
     rankedLeaderboardBtn.addEventListener('click', ev => {
       ev.stopPropagation();
       openRankedLeaderboard();
+    });
+  }
+
+  if (tournamentBtn) {
+    initTournamentUi({
+      triggerButton: tournamentBtn,
+      getSessionInfo: () => sessionInfo,
+      onSessionRefresh: refreshSession,
     });
   }
 
@@ -6661,3 +6674,4 @@ logBootConstantsOnce();
     return moved;
   }
 })();
+
