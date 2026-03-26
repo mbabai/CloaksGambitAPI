@@ -15,6 +15,14 @@ const {
 
 const DEFAULT_ELO = 800;
 const defaultConfig = new ServerConfig();
+const TOURNAMENT_MATCH_TYPES = Object.freeze({
+  ROUND_ROBIN: 'TOURNAMENT_ROUND_ROBIN',
+  ELIMINATION: 'TOURNAMENT_ELIMINATION',
+});
+const ALLOWED_MATCH_TYPES = new Set([
+  ...Array.from(defaultConfig.gameModes.values()),
+  ...Object.values(TOURNAMENT_MATCH_TYPES),
+]);
 
 function toObjectId(value) {
   if (!value) return undefined;
@@ -65,8 +73,13 @@ function isHistoryQuery(query = {}) {
 const matchSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: Array.from(defaultConfig.gameModes.values()),
     required: true,
+    validate: {
+      validator(value) {
+        return ALLOWED_MATCH_TYPES.has(String(value || '').toUpperCase());
+      },
+      message: 'Unsupported match type',
+    },
     set(value) {
       return value?.toUpperCase();
     },
@@ -159,6 +172,20 @@ const matchSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  tournamentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tournament',
+    default: null,
+  },
+  tournamentPhase: {
+    type: String,
+    enum: ['round_robin', 'elimination', null],
+    default: null,
+  },
+  eloEligible: {
+    type: Boolean,
+    default: null,
+  },
 });
 
 matchSchema.virtual('duration').get(function duration() {
@@ -186,7 +213,8 @@ matchSchema.methods.endMatch = async function endMatch(winnerId = null) {
   this.isActive = false;
 
   const rankedMode = defaultConfig.gameModes.get('RANKED');
-  if (this.type === rankedMode) {
+  const applyTournamentEliminationElo = this.type === TOURNAMENT_MATCH_TYPES.ELIMINATION && this.eloEligible === true;
+  if (this.type === rankedMode || applyTournamentEliminationElo) {
     let player1Start = Number.isFinite(this.player1StartElo) ? this.player1StartElo : null;
     let player2Start = Number.isFinite(this.player2StartElo) ? this.player2StartElo : null;
 
@@ -310,6 +338,9 @@ class MatchDocument {
     this.startTime = cloneDate(data.startTime) || new Date();
     this.endTime = cloneDate(data.endTime) || null;
     this.isActive = data.isActive !== undefined ? Boolean(data.isActive) : true;
+    this.tournamentId = data.tournamentId ? toIdString(data.tournamentId) : null;
+    this.tournamentPhase = typeof data.tournamentPhase === 'string' ? data.tournamentPhase : null;
+    this.eloEligible = data.eloEligible ?? null;
     this.createdAt = cloneDate(data.createdAt) || new Date();
   }
 
@@ -364,7 +395,8 @@ class MatchDocument {
     this.isActive = false;
 
     const rankedMode = defaultConfig.gameModes.get('RANKED');
-    if (this.type === rankedMode) {
+    const applyTournamentEliminationElo = this.type === TOURNAMENT_MATCH_TYPES.ELIMINATION && this.eloEligible === true;
+    if (this.type === rankedMode || applyTournamentEliminationElo) {
       let player1Start = Number.isFinite(this.player1StartElo) ? this.player1StartElo : null;
       let player2Start = Number.isFinite(this.player2StartElo) ? this.player2StartElo : null;
 
@@ -474,6 +506,7 @@ class MatchModel {
       games: Array.isArray(plain.games)
         ? plain.games.map((id) => toObjectId(id)).filter(Boolean)
         : [],
+      tournamentId: plain.tournamentId ? toObjectId(plain.tournamentId) : null,
       isActive: false,
     };
 
@@ -648,5 +681,6 @@ class MatchModel {
 }
 
 MatchModel.historyModel = MatchHistoryModel;
+MatchModel.TOURNAMENT_MATCH_TYPES = TOURNAMENT_MATCH_TYPES;
 
 module.exports = MatchModel;

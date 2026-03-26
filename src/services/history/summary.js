@@ -1,5 +1,14 @@
 const { winReasons: WIN_REASONS } = require('../../../shared/constants');
 const { normalizeId } = require('../matches/activeMatches');
+const TOURNAMENT_TYPES = new Set(['TOURNAMENT_ROUND_ROBIN', 'TOURNAMENT_ELIMINATION']);
+
+function normalizeMatchType(type) {
+  return typeof type === 'string' ? type.toUpperCase() : '';
+}
+
+function isTournamentType(type) {
+  return TOURNAMENT_TYPES.has(normalizeMatchType(type));
+}
 
 function computeWinPercentage(wins, total) {
   if (!total) return 0;
@@ -11,7 +20,7 @@ function getMatchResult(match, userId) {
   const player1Id = normalizeId(match?.player1);
   const player2Id = normalizeId(match?.player2);
   const winnerId = normalizeId(match?.winner);
-  const type = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
+  const type = normalizeMatchType(match?.type);
   const endedAt = match?.endTime
     ? new Date(match.endTime)
     : (match?.startTime ? new Date(match.startTime) : null);
@@ -73,6 +82,7 @@ function computeHistorySummary(matches, games, { userId } = {}) {
     customMatches: { total: 0, wins: 0, draws: 0, losses: 0, winPct: 0 },
     rankedMatches: { total: 0, wins: 0, draws: 0, losses: 0, winPct: 0 },
     botMatches: { total: 0, wins: 0, draws: 0, losses: 0, winPct: 0 },
+    tournamentMatches: { total: 0, wins: 0, draws: 0, losses: 0, winPct: 0 },
   };
 
   const normalizedUserId = normalizeId(userId);
@@ -101,6 +111,7 @@ function computeHistorySummary(matches, games, { userId } = {}) {
     const isRanked = result.type === 'RANKED';
     const isCustom = result.type === 'CUSTOM';
     const isBot = result.type === 'AI';
+    const isTournament = isTournamentType(result.type);
 
     if (normalizedUserId) {
       if (!result.userResult) return;
@@ -145,6 +156,12 @@ function computeHistorySummary(matches, games, { userId } = {}) {
           summary.botMatches.draws += 1;
         }
       }
+      if (isTournament) {
+        summary.tournamentMatches.total += 1;
+        if (result.userResult === 'win') summary.tournamentMatches.wins += 1;
+        else if (result.userResult === 'loss') summary.tournamentMatches.losses += 1;
+        else summary.tournamentMatches.draws += 1;
+      }
     } else {
       summary.matches.total += 1;
       if (isDraw) {
@@ -183,6 +200,14 @@ function computeHistorySummary(matches, games, { userId } = {}) {
           summary.botMatches.losses += 1;
         }
       }
+      if (isTournament) {
+        summary.tournamentMatches.total += 1;
+        if (isDraw) summary.tournamentMatches.draws += 1;
+        else {
+          summary.tournamentMatches.wins += 1;
+          summary.tournamentMatches.losses += 1;
+        }
+      }
     }
   });
 
@@ -200,7 +225,7 @@ function computeHistorySummary(matches, games, { userId } = {}) {
     const players = Array.isArray(game.players) ? game.players.map((id) => normalizeId(id)) : [];
     const matchId = normalizeId(game.match);
     const match = matchId ? matchById.get(matchId) : null;
-    const matchType = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
+    const matchType = normalizeMatchType(match?.type);
     const winnerIdx = Number.isInteger(game?.winner) ? game.winner : null;
     const winReason = game?.winReason;
     const isDraw = winReason === WIN_REASONS.DRAW
@@ -257,6 +282,7 @@ function computeHistorySummary(matches, games, { userId } = {}) {
   summary.customMatches.winPct = computeWinPercentage(summary.customMatches.wins, summary.customMatches.total);
   summary.rankedMatches.winPct = computeWinPercentage(summary.rankedMatches.wins, summary.rankedMatches.total);
   summary.botMatches.winPct = computeWinPercentage(summary.botMatches.wins, summary.botMatches.total);
+  summary.tournamentMatches.winPct = computeWinPercentage(summary.tournamentMatches.wins, summary.tournamentMatches.total);
 
   return summary;
 }
