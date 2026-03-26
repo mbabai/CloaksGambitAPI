@@ -6540,7 +6540,16 @@ logBootConstantsOnce();
       } catch (_) {}
     }
     const touchId = Number.isInteger(opts?.touchId) ? opts.touchId : null;
-    dragging = { piece, origin, ghostEl: ghost, originEl, boardOriginDimming, touchId };
+    dragging = {
+      piece,
+      origin,
+      ghostEl: ghost,
+      originEl,
+      boardOriginDimming,
+      touchId,
+      lastClientX: startCX,
+      lastClientY: startCY,
+    };
     suppressMouseUntil = Date.now() + 700; // extend suppression window during drag
     // if (DRAG_DEBUG) console.log('[drag] ghost init', { x: startCX, y: startCY, origin });
     // Do not re-render here; we dim the origin element directly to avoid disrupting touch event streams
@@ -6550,8 +6559,14 @@ logBootConstantsOnce();
       const t = getTouchFromEventById(ev, dragging.touchId);
       const x = (t && t.clientX !== undefined) ? t.clientX : ev.clientX;
       const y = (t && t.clientY !== undefined) ? t.clientY : ev.clientY;
-      if (typeof x === 'number') ghost.style.left = x + 'px';
-      if (typeof y === 'number') ghost.style.top = y + 'px';
+      if (typeof x === 'number') {
+        ghost.style.left = x + 'px';
+        dragging.lastClientX = x;
+      }
+      if (typeof y === 'number') {
+        ghost.style.top = y + 'px';
+        dragging.lastClientY = y;
+      }
       // Drag preview bubbles following the pointer over legal destination squares
       if (!isInSetup && boardView) {
         const over = boardView.hitTestBoard(x, y);
@@ -6578,10 +6593,16 @@ logBootConstantsOnce();
       try { window.removeEventListener('touchmove', move, true); } catch (_) {}
       document.removeEventListener('touchend', up);
       document.removeEventListener('touchcancel', up);
+      try { window.removeEventListener('touchend', up, true); } catch (_) {}
+      try { window.removeEventListener('touchcancel', up, true); } catch (_) {}
       if (!dragging) return;
       const endTouch = getTouchFromEventById(ev, dragging.touchId);
-      const cx = ev.clientX !== undefined ? ev.clientX : (endTouch && endTouch.clientX);
-      const cy = ev.clientY !== undefined ? ev.clientY : (endTouch && endTouch.clientY);
+      const cx = ev.clientX !== undefined
+        ? ev.clientX
+        : ((endTouch && endTouch.clientX !== undefined) ? endTouch.clientX : dragging.lastClientX);
+      const cy = ev.clientY !== undefined
+        ? ev.clientY
+        : ((endTouch && endTouch.clientY !== undefined) ? endTouch.clientY : dragging.lastClientY);
       const dest = hitTestDrop(cx, cy);
       // if (DRAG_DEBUG) console.log('[drag] end', { x: cx, y: cy, dest });
       // Clear preview overlays
@@ -6639,6 +6660,8 @@ logBootConstantsOnce();
     window.addEventListener('touchmove', move, { passive: false, capture: true });
     document.addEventListener('touchend', up);
     document.addEventListener('touchcancel', up);
+    window.addEventListener('touchend', up, true);
+    window.addEventListener('touchcancel', up, true);
   }
 
   function hitTestDrop(x, y) {
