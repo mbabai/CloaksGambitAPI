@@ -1,6 +1,5 @@
 import { createOverlay } from '../ui/overlays.js';
 import { upgradeButton } from '../ui/buttons.js';
-import { renderActiveMatchesList } from '../spectate/activeMatches.js';
 import {
   apiGetTournaments,
   apiCreateTournament,
@@ -10,7 +9,6 @@ import {
   apiAddTournamentBot,
   apiStartTournament,
   apiKickTournamentPlayer,
-  apiReallowTournamentPlayer,
   apiGetTournamentDetails,
 } from '../api/game.js';
 
@@ -40,20 +38,24 @@ function createModalShell(titleText) {
   return { title, status, section };
 }
 
-function gameToActiveRow(game) {
-  const players = Array.isArray(game?.players) ? game.players : [];
-  return {
-    id: game?.matchId || null,
-    type: game?.phase === 'elimination' ? 'Tournament Elimination' : 'Tournament Round Robin',
-    players: [
-      players[0]?.userId || players[0]?.entryId || players[0]?.username || null,
-      players[1]?.userId || players[1]?.entryId || players[1]?.username || null,
-    ],
-    player1Score: 0,
-    player2Score: 0,
-    drawCount: 0,
-    __raw: game,
-  };
+function formatPhaseLabel(phase) {
+  return phase === 'round_robin'
+    ? 'Round robin'
+    : phase === 'elimination'
+      ? 'Elimination'
+      : 'Lobby';
+}
+
+function getRoundRobinTimeRemaining(tournament) {
+  const startedAt = Date.parse(tournament?.roundRobinRoundsStartedAt || tournament?.startedAt || '');
+  const minutes = Number(tournament?.config?.roundRobinMinutes) || 15;
+  if (!Number.isFinite(startedAt)) return null;
+  const endTs = startedAt + (minutes * 60 * 1000);
+  const remainingMs = Math.max(0, endTs - Date.now());
+  const totalSeconds = Math.floor(remainingMs / 1000);
+  const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const ss = String(totalSeconds % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
 }
 
 export function initTournamentUi({
@@ -442,9 +444,10 @@ export function initTournamentUi({
         const row = el('div', { className: 'tournament-player-row' });
         row.appendChild(el('span', {}, `${player.username} · ${suffix}`));
         if (isHost && isStarting && String(player.userId || '') !== String(tournament.host?.userId || '')) {
-          const kickBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Kick Player'), { variant: 'neutral', position: 'relative' });
+          const buttonLabel = player.type === 'bot' ? 'Remove Bot' : 'Kick Player';
+          const kickBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, buttonLabel), { variant: 'neutral', position: 'relative' });
           kickBtn.addEventListener('click', async () => {
-            status.textContent = `Kicking ${player.username}...`;
+            status.textContent = `${player.type === 'bot' ? 'Removing' : 'Kicking'} ${player.username}...`;
             try {
               const result = await apiKickTournamentPlayer({
                 tournamentId: tournament.id,
@@ -453,33 +456,11 @@ export function initTournamentUi({
               currentTournament = result?.tournament || tournament;
               openLobbyModal(currentTournament);
             } catch (err) {
-              status.textContent = err.message || 'Failed to kick player.';
+              status.textContent = err.message || (player.type === 'bot' ? 'Failed to remove bot.' : 'Failed to kick player.');
             }
           });
           row.appendChild(kickBtn);
         }
-        playersList.appendChild(row);
-      });
-    }
-    if (isHost && isStarting && removedPlayers.length > 0) {
-      removedPlayers.forEach((player) => {
-        const row = el('div', { className: 'tournament-player-row tournament-player-row--kicked' });
-        row.appendChild(el('span', {}, `${player.username} · Removed`));
-        const reallowBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Re-allow'), { variant: 'neutral', position: 'relative' });
-        reallowBtn.addEventListener('click', async () => {
-          status.textContent = `Re-allowing ${player.username}...`;
-          try {
-            const result = await apiReallowTournamentPlayer({
-              tournamentId: tournament.id,
-              userId: player.userId,
-            });
-            currentTournament = result?.tournament || tournament;
-            openLobbyModal(currentTournament);
-          } catch (err) {
-            status.textContent = err.message || 'Failed to re-allow player.';
-          }
-        });
-        row.appendChild(reallowBtn);
         playersList.appendChild(row);
       });
     }
@@ -584,32 +565,71 @@ export function initTournamentUi({
     currentTournament = tournament;
     activeOverlay.content.innerHTML = '';
     const { title, status, section } = createModalShell(`${asText(tournament.label, 'Tournament')} · Active`);
-    status.textContent = 'Round robin is active now. Elimination starts when round robin is complete.';
+    const phaseText = formatPhaseLabel(tournament?.phase);
+    const timeRemaining = tournament?.phase === 'round_robin'
+      ? getRoundRobinTimeRemaining(tournament)
+      : null;
+    status.textContent = `Phase: ${phaseText}${timeRemaining ? ` · Time remaining: ${timeRemaining}` : ''}`;
 
     const gameList = el('div', { className: 'tableList tournament-active-list' });
-    const mappedGames = Array.isArray(games) ? games.map(gameToActiveRow).filter(Boolean) : [];
-    if (!mappedGames.length) {
-      gameList.appendChild(el('div', { className: 'menu-message' }, 'No active games yet.'));
-    } else {
-      renderActiveMatchesList(gameList, mappedGames, {
-        getUsername: (id) => {
-          const game = games.find((entry) => (entry?.players || []).some((player) => player?.userId === id));
-          const player = (game?.players || []).find((entry) => entry?.userId === id);
-          return player?.username || id || 'Unknown';
-        },
-        onSpectate: (item) => {
-          const matchId = item?.id;
-          if (!matchId || typeof onSpectateMatch !== 'function') return;
+    const rawGames = Array.isArray(games) ? games : [];
+    const playerRows = [];
+    const records = new Map();
+    const players = Array.isArray(tournament?.players) ? tournament.players : [];
+    players.forEach((player) => {
+      records.set(String(player.userId || ''), { wins: 0, losses: 0, draws: 0 });
+    });
+    rawGames.forEach((game) => {
+      if (game?.phase !== 'round_robin') return;
+      const [p1, p2] = Array.isArray(game?.players) ? game.players : [];
+      const aId = String(p1?.userId || '');
+      const bId = String(p2?.userId || '');
+      const a = records.get(aId) || { wins: 0, losses: 0, draws: 0 };
+      const b = records.get(bId) || { wins: 0, losses: 0, draws: 0 };
+      if (game?.status === 'completed') {
+        if (game?.winner === 0) {
+          a.wins += 1;
+          b.losses += 1;
+        } else if (game?.winner === 1) {
+          b.wins += 1;
+          a.losses += 1;
+        } else {
+          a.draws += 1;
+          b.draws += 1;
+        }
+      }
+      records.set(aId, a);
+      records.set(bId, b);
+    });
+    players.forEach((player) => {
+      const userId = String(player.userId || '');
+      const stat = records.get(userId) || { wins: 0, losses: 0, draws: 0 };
+      const game = rawGames.find((entry) => (entry?.players || []).some((p) => String(p?.userId || '') === userId) && entry?.status !== 'completed');
+      const opponent = (game?.players || []).find((entry) => String(entry?.userId || '') !== userId);
+      const row = el('div', { className: 'tournament-player-row' });
+      row.appendChild(el('span', {}, `${player.username} · W:${stat.wins} L:${stat.losses} D:${stat.draws}`));
+      row.appendChild(el('span', {}, game ? `In game against ${opponent?.username || 'Unknown'}` : 'Waiting for next game'));
+      if (game?.matchId) {
+        const spectateBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--success' }, 'Spectate'), { variant: 'neutral', position: 'relative' });
+        spectateBtn.addEventListener('click', () => {
+          if (typeof onSpectateMatch !== 'function') return;
           activeOverlay.hide({ restoreFocus: false });
-          onSpectateMatch(matchId);
-        },
-      });
+          onSpectateMatch(game.matchId);
+        });
+        row.appendChild(spectateBtn);
+      }
+      playerRows.push(row);
+    });
+    if (!playerRows.length) {
+      gameList.appendChild(el('div', { className: 'menu-message' }, 'No tournament players yet.'));
+    } else {
+      playerRows.forEach((row) => gameList.appendChild(row));
     }
 
     const controlsRow = el('div', { className: 'tournament-modal__controls' });
     const refreshBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Refresh Games'), { variant: 'neutral', position: 'relative' });
     const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Leave Tournament'), { variant: 'neutral', position: 'relative' });
-    const doneBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, currentViewRole === 'participant' ? 'Tournament Home' : 'Back to Browser'), { variant: 'neutral', position: 'relative' });
+    const doneBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Back to Browser'), { variant: 'neutral', position: 'relative' });
     controlsRow.appendChild(refreshBtn);
     if (currentViewRole === 'participant') controlsRow.appendChild(leaveBtn);
     controlsRow.appendChild(doneBtn);

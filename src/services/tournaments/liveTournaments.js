@@ -79,6 +79,10 @@ function cloneTournament(tournament) {
   return JSON.parse(JSON.stringify(tournament));
 }
 
+function normalizeTournamentPhaseLabel(phase) {
+  return phase === 'elimination' ? 'elimination' : 'round_robin';
+}
+
 function findMemberIndex(entries, userId) {
   const target = String(userId || '');
   if (!target) return -1;
@@ -155,6 +159,9 @@ function toTournamentModelPayload(tournament) {
     players: Array.isArray(tournament.players) ? tournament.players : [],
     viewers: Array.isArray(tournament.viewers) ? tournament.viewers : [],
     removedPlayers: Array.isArray(tournament.removedPlayers) ? tournament.removedPlayers : [],
+    roundRobinRounds: Array.isArray(tournament.roundRobinRounds) ? tournament.roundRobinRounds : [],
+    currentRoundRobinRound: Number.isFinite(tournament.currentRoundRobinRound) ? tournament.currentRoundRobinRound : 0,
+    roundRobinRoundsStartedAt: tournament.roundRobinRoundsStartedAt ? new Date(tournament.roundRobinRoundsStartedAt) : null,
     matchIds,
     gameIds: Array.isArray(tournament.gameIds)
       ? tournament.gameIds
@@ -187,6 +194,9 @@ function fromTournamentDocument(doc) {
     players: Array.isArray(doc.players) ? doc.players : [],
     viewers: Array.isArray(doc.viewers) ? doc.viewers : [],
     removedPlayers: Array.isArray(doc.removedPlayers) ? doc.removedPlayers : [],
+    roundRobinRounds: Array.isArray(doc.roundRobinRounds) ? doc.roundRobinRounds : [],
+    currentRoundRobinRound: Number.isFinite(doc.currentRoundRobinRound) ? doc.currentRoundRobinRound : 0,
+    roundRobinRoundsStartedAt: doc.roundRobinRoundsStartedAt ? new Date(doc.roundRobinRoundsStartedAt).toISOString() : null,
     matchIds: Array.isArray(doc.matchIds) ? doc.matchIds.map((id) => String(id)) : [],
     gameIds: Array.isArray(doc.gameIds) ? doc.gameIds.map((id) => String(id)) : [],
     createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : nowIso(),
@@ -480,6 +490,8 @@ async function addBotToTournament({ tournamentId, session, botName, difficulty }
     difficulty: definition.id,
     joinedAt: nowIso(),
   });
+  tournament.viewers = (Array.isArray(tournament.viewers) ? tournament.viewers : [])
+    .filter((entry) => String(entry.userId || '') !== botUserId);
 
   await persistTournamentSnapshot(tournament);
   return cloneTournament(tournament);
@@ -562,6 +574,34 @@ function buildMatchLabelFromPlayers(p1, p2) {
   return { includesBot };
 }
 
+function buildRoundRobinRounds(players = []) {
+  const entries = Array.isArray(players) ? players.filter(Boolean) : [];
+  if (entries.length < 2) return [];
+  const roster = entries.slice();
+  if (roster.length % 2 === 1) {
+    roster.push(null);
+  }
+  const rounds = [];
+  const rotating = roster.slice();
+  const totalRounds = rotating.length - 1;
+  for (let round = 0; round < totalRounds; round += 1) {
+    const pairs = [];
+    for (let i = 0; i < rotating.length / 2; i += 1) {
+      const left = rotating[i];
+      const right = rotating[rotating.length - 1 - i];
+      if (left && right) {
+        pairs.push([left, right]);
+      }
+    }
+    rounds.push(pairs);
+    const fixed = rotating[0];
+    const rest = rotating.slice(1);
+    rest.unshift(rest.pop());
+    rotating.splice(0, rotating.length, fixed, ...rest);
+  }
+  return rounds;
+}
+
 async function resolveTournamentGameSettings() {
   const config = await getServerConfig();
   const quickplaySettings = config?.gameModeSettings?.get
@@ -619,6 +659,10 @@ async function createTournamentMatch({ tournament, playerA, playerB, phase, game
   eventBus.emit('players:bothNext', {
     game: gamePayload,
     affectedUsers,
+    tournamentId: tournament.id,
+    tournamentPhase: normalizeTournamentPhaseLabel(phase),
+    requiresAccept: true,
+    acceptWindowSeconds: 30,
   });
   eventBus.emit('match:created', {
     matchId: String(match._id),
@@ -646,6 +690,58 @@ async function createTournamentMatch({ tournament, playerA, playerB, phase, game
   };
 }
 
+async function launchRoundRobinRound(tournament, roundIndex, gameSettings) {
+  const rounds = Array.isArray(tournament?.roundRobinRounds) ? tournament.roundRobinRounds : [];
+  const pairings = Array.isArray(rounds[roundIndex]) ? rounds[roundIndex] : [];
+  if (!pairings.length) return [];
+  const generated = [];
+  for (const pair of pairings) {
+    const [playerA, playerB] = Array.isArray(pair) ? pair : [];
+    if (!playerA || !playerB) continue;
+    generated.push(await createTournamentMatch({
+      tournament,
+      playerA,
+      playerB,
+      phase: 'round_robin',
+      gameSettings,
+    }));
+  }
+  tournament.currentRoundRobinRound = roundIndex;
+  tournament.roundRobinRoundsStartedAt = nowIso();
+  return generated;
+}
+
+async function maybeAdvanceTournamentRoundRobin(tournamentId) {
+  const id = String(tournamentId || '');
+  if (!id) return;
+  const tournament = TOURNAMENTS.get(id);
+  if (!tournament || tournament.state !== 'active' || tournament.phase !== 'round_robin') return;
+  const gameIds = Array.isArray(tournament.gameIds) ? tournament.gameIds.filter(Boolean) : [];
+  if (!gameIds.length) return;
+  const activeGames = await Game.countDocuments({ _id: { $in: gameIds }, isActive: true });
+  if (activeGames > 0) return;
+  const rounds = Array.isArray(tournament.roundRobinRounds) ? tournament.roundRobinRounds : [];
+  const nextRound = Number.isFinite(tournament.currentRoundRobinRound)
+    ? tournament.currentRoundRobinRound + 1
+    : 0;
+  if (nextRound >= rounds.length) {
+    tournament.phase = 'elimination';
+    await persistTournamentSnapshot(tournament);
+    return;
+  }
+  const gameSettings = await resolveTournamentGameSettings();
+  const generatedMatches = await launchRoundRobinRound(tournament, nextRound, gameSettings);
+  tournament.matchIds = [
+    ...(Array.isArray(tournament.matchIds) ? tournament.matchIds : []),
+    ...generatedMatches.map((item) => item.matchId),
+  ];
+  tournament.gameIds = [
+    ...(Array.isArray(tournament.gameIds) ? tournament.gameIds : []),
+    ...generatedMatches.map((item) => item.gameId).filter(Boolean),
+  ];
+  await persistTournamentSnapshot(tournament);
+}
+
 async function startTournament({ tournamentId, session }) {
   const tournament = await getTournamentOrThrow(tournamentId);
   if (!canManageTournament(tournament, session.userId)) {
@@ -664,18 +760,12 @@ async function startTournament({ tournamentId, session }) {
   tournament.state = 'active';
   tournament.phase = 'round_robin';
   tournament.startedAt = nowIso();
+  tournament.currentRoundRobinRound = 0;
+  tournament.roundRobinRounds = buildRoundRobinRounds(tournament.players);
+  tournament.roundRobinRoundsStartedAt = tournament.startedAt;
   const gameSettings = await resolveTournamentGameSettings();
 
-  const generatedMatches = [];
-  for (let i = 0; i + 1 < tournament.players.length; i += 2) {
-    generatedMatches.push(await createTournamentMatch({
-      tournament,
-      playerA: tournament.players[i],
-      playerB: tournament.players[i + 1],
-      phase: 'round_robin',
-      gameSettings,
-    }));
-  }
+  const generatedMatches = await launchRoundRobinRound(tournament, 0, gameSettings);
 
   tournament.matchIds = generatedMatches.map((item) => item.matchId);
   tournament.gameIds = generatedMatches.map((item) => item.gameId).filter(Boolean);
@@ -753,6 +843,8 @@ async function listTournamentGames(tournamentId) {
         : 'Round robin never affects ELO.',
       includesBot,
       startedAt: game.startTime ? new Date(game.startTime).toISOString() : null,
+      winner: typeof game.winner === 'number' ? game.winner : null,
+      winReason: game.winReason || null,
     });
   }
   return items;
@@ -841,6 +933,23 @@ function resetForTests() {
   TOURNAMENTS.clear();
   TOURNAMENT_ALERTS.clear();
 }
+
+eventBus.on('gameChanged', async (payload) => {
+  try {
+    let game = payload?.game;
+    if (game && typeof game.toObject === 'function') {
+      game = game.toObject();
+    }
+    if (!game || game.isActive) return;
+    const matchId = String(game.match || '');
+    if (!matchId) return;
+    const match = await Match.findById(matchId).lean();
+    if (!match?.tournamentId) return;
+    await maybeAdvanceTournamentRoundRobin(String(match.tournamentId));
+  } catch (err) {
+    console.error('Failed to advance tournament round robin after game change:', err);
+  }
+});
 
 module.exports = {
   TOURNAMENT_MATCH_TYPES,

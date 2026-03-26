@@ -976,7 +976,14 @@ function initSocket(httpServer) {
     (payload?.affectedUsers || game.players || []).forEach((id, idx) => {
       const userId = id.toString();
       if (hasConnectedUser(userId)) {
-        emitToUser(userId, 'players:bothNext', { gameId: gameIdStr, color: idx });
+        emitToUser(userId, 'players:bothNext', {
+          gameId: gameIdStr,
+          color: idx,
+          tournamentId: payload?.tournamentId || null,
+          tournamentPhase: payload?.tournamentPhase || null,
+          requiresAccept: Boolean(payload?.requiresAccept),
+          acceptWindowSeconds: Number(payload?.acceptWindowSeconds) || 0,
+        });
       } else {
         console.warn('[socket] players:bothNext target not connected', { userId, gameId: gameIdStr });
       }
