@@ -515,6 +515,17 @@ export function initTournamentUi({
     section.appendChild(btnRow);
     lobbyOverlay.content.appendChild(section);
 
+    joinTournamentBtn.addEventListener('click', async () => {
+      status.textContent = 'Joining tournament...';
+      try {
+        const result = await apiJoinTournament({ tournamentId: tournament.id, role: 'player' });
+        currentTournament = result?.tournament || tournament;
+        openLobbyModal(currentTournament);
+      } catch (err) {
+        status.textContent = err.message || 'Failed to join tournament.';
+      }
+    });
+
     startBtn.addEventListener('click', async () => {
       status.textContent = 'Starting tournament...';
       try {
@@ -717,13 +728,3 @@ export function initTournamentUi({
     },
   };
 }
-    joinTournamentBtn.addEventListener('click', async () => {
-      status.textContent = 'Joining tournament...';
-      try {
-        const result = await apiJoinTournament({ tournamentId: tournament.id, role: 'player' });
-        currentTournament = result?.tournament || tournament;
-        openLobbyModal(currentTournament);
-      } catch (err) {
-        status.textContent = err.message || 'Failed to join tournament.';
-      }
-    });
