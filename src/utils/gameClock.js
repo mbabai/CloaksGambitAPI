@@ -554,6 +554,46 @@ function buildClockPayload(game, { now = Date.now(), setupActionType } = {}) {
   };
 }
 
+function resolveTimeoutResult(game, { now = Date.now(), setupActionType } = {}) {
+  const baseTime = Number(game?.timeControlStart);
+  if (!Number.isFinite(baseTime) || baseTime <= 0) {
+    return { expired: false, winner: null, draw: false, clock: null };
+  }
+
+  const computed = getLiveClockStateSnapshot(game, {
+    now,
+    setupActionType,
+  });
+
+  const whiteExpired = computed.whiteMs <= 0;
+  const blackExpired = computed.blackMs <= 0;
+
+  if (!whiteExpired && !blackExpired) {
+    return {
+      expired: false,
+      winner: null,
+      draw: false,
+      clock: computed,
+    };
+  }
+
+  if (whiteExpired && blackExpired) {
+    return {
+      expired: true,
+      winner: null,
+      draw: true,
+      clock: computed,
+    };
+  }
+
+  return {
+    expired: true,
+    winner: whiteExpired ? 1 : 0,
+    draw: false,
+    clock: computed,
+  };
+}
+
 module.exports = {
   toTimestamp,
   normalizePlayer,
@@ -572,4 +612,5 @@ module.exports = {
   getLiveClockStateSnapshot,
   describeTimeControl,
   buildClockPayload,
+  resolveTimeoutResult,
 };

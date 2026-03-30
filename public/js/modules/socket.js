@@ -13,7 +13,8 @@ export function wireSocket(socket, handlers) {
     onInviteRequest,
     onInviteResult,
     onInviteCancel,
-    onUserNameUpdated
+    onUserNameUpdated,
+    onTournamentUpdated,
   } = handlers;
 
   socket.on('connect', () => { try { onConnect && onConnect(); } catch (_) {} });
@@ -29,6 +30,7 @@ export function wireSocket(socket, handlers) {
   socket.on('custom:inviteResult', (payload) => { try { onInviteResult && onInviteResult(payload); } catch (_) {} });
   socket.on('custom:inviteCancel', (payload) => { try { onInviteCancel && onInviteCancel(payload); } catch (_) {} });
   socket.on('user:nameUpdated', (payload) => { try { onUserNameUpdated && onUserNameUpdated(payload); } catch (_) {} });
+  socket.on('tournament:updated', (payload) => { try { onTournamentUpdated && onTournamentUpdated(payload); } catch (_) {} });
   socket.on('disconnect', () => { try { onDisconnect && onDisconnect(); } catch (_) {} });
 }
 

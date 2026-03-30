@@ -19,8 +19,15 @@ After this change, a user can open the main menu, create or join a tournament, p
 - [x] (2026-03-26 17:30Z) Added a first-pass live in-memory tournament manager with create/join/leave/start/add-bot flows and bot difficulty options.
 - [x] (2026-03-26 17:30Z) Added tournament HTTP routes under `/api/v1/tournaments` for browser list, create, join/leave, add-bot, start, details, and test-mode inspection.
 - [x] (2026-03-26 17:30Z) Added tournament browser/create/lobby/add-bot/active-game modals in the main menu and wired them to the new API routes.
-- [ ] Implement round-robin pairing, seeding, elimination progression, and tournament-specific spectate return behavior.
-- [ ] Add tournament persistence, history support, tests, and manual verification.
+- [x] (2026-03-28 22:40Z) Reworked the browser into a persistent tournament panel with refresh recovery, host controls, participant seeds/records, host messaging, and a pannable elimination bracket viewer.
+- [x] (2026-03-28 22:40Z) Added `current`, `start-elimination`, `transfer-host`, and `message` routes plus client-state shaping for seeds, active-watch targets, and the current user's live tournament game.
+- [x] (2026-03-28 22:40Z) Implemented manual transition from round robin to elimination, single-elimination bracket persistence, host-transfer-before-leave behavior, and victory-target-aware elimination series scoring.
+- [x] (2026-03-28 22:40Z) Added focused tournament Jest coverage for standings helpers, host transfer, current-tournament recovery, host message updates, and manual elimination start; `npm test` passes.
+- [x] (2026-03-29 00:20Z) Split tournament bot entrants from canonical difficulty accounts by creating dedicated bot-user instances per entrant, auto-connecting internal bot clients for those instances, and adding regressions for same-difficulty tournament bots.
+- [x] (2026-03-29 01:05Z) Replaced the incorrect fixed-round round-robin implementation with timed rolling pairings that keep free players active until the start window closes, then wait for the last in-flight game before unlocking elimination.
+- [x] (2026-03-29 03:10Z) Corrected tournament follow-through so tournament games inherit ranked clocks, spectator mode follows the current live series game instead of the just-finished one, and bot-controlled tournament series can advance into later games.
+- [ ] Implement true double-elimination bracket execution, not just the persisted `eliminationStyle` setting.
+- [ ] Deepen active-player leave/forfeit handling so future pairings and current matches are auto-resolved rather than lightly detached.
 
 ## Surprises & Discoveries
 
@@ -38,6 +45,12 @@ After this change, a user can open the main menu, create or join a tournament, p
 
 - Observation: proper double elimination needs more than a winners bracket and a loose losers list; it needs lower-bracket major/minor rounds and often a reset grand final.
   Evidence: [Brackets Documentation: Glossary](https://drarig29.github.io/brackets-docs/user-guide/glossary/) and [Brackets Documentation: Structure](https://drarig29.github.io/brackets-docs/user-guide/structure/).
+
+- Observation: the round-robin seed comparator cannot use simple numeric subtraction when two players are undefeated because `Infinity - Infinity` becomes `NaN` and destabilizes sort order.
+  Evidence: [tests/tournament.standings.test.js](/C:/Users/marce/OneDrive/Documents/GitHub/CloaksGambitAPI/tests/tournament.standings.test.js) failed until the comparator switched to explicit greater-than / less-than checks.
+
+- Observation: the first implementation accidentally shipped a classical fixed-round scheduler even though the product spec called for rolling pairings with a start-window cutoff.
+  Evidence: the user clarified the mismatch after seeing `Round Robin 2 / 3` in the panel, and the prior scheduler in [src/services/tournaments/liveTournaments.js](/C:/Users/marce/OneDrive/Documents/GitHub/CloaksGambitAPI/src/services/tournaments/liveTournaments.js) precomputed `roundRobinRounds` instead of pairing free players continuously.
 
 ## Decision Log
 
@@ -85,9 +98,21 @@ After this change, a user can open the main menu, create or join a tournament, p
   Rationale: user explicitly required no rating impact for bot opponents even during elimination rounds.
   Date/Author: 2026-03-26 / Codex
 
+- Decision: land the persistent tournament panel and elimination flow with single-elimination execution first, while keeping the `eliminationStyle` field documented as a remaining gap.
+  Rationale: the user-visible panel, refresh recovery, host transfer, manual elimination start, and bracket viewer were the critical path; full double-elimination progression remained substantially larger and was not yet implemented in this slice.
+  Date/Author: 2026-03-28 / Codex
+
+- Decision: keep bot difficulty as behavior only, and give each tournament bot entrant its own bot user instance plus internal bot client.
+  Rationale: same-difficulty bots must be able to face each other without collapsing to one shared user identity for color resolution, naming, or game actions.
+  Date/Author: 2026-03-29 / Codex
+
+- Decision: implement round robin as a rolling pairing queue with a hard start cutoff, not as precomputed fixed rounds.
+  Rationale: the user explicitly wants minimum downtime, rematches only when needed, and a timer that stops new starts rather than forcibly ending live games.
+  Date/Author: 2026-03-29 / Codex
+
 ## Outcomes & Retrospective
 
-The planning pass is complete enough to start implementation. The main technical risks are now narrower: live tournament recovery semantics after a lost in-progress match, elimination bracket correctness, and the match-type/ELO/history interaction.
+This slice delivered the persistent tournament shell, refresh recovery route, seeded participant list, host message editing, host transfer flow, manual elimination start, a live single-elimination bracket viewer, per-entrant tournament bot identities, and now a rolling round-robin scheduler that actually matches the product rules. The biggest remaining gaps are explicit: `eliminationStyle` still persists a future double-elimination intent while the live bracket path is single elimination only, and leaving an active tournament still needs stronger automatic forfeit cleanup.
 
 ## Context and Orientation
 
@@ -222,3 +247,11 @@ Revision note: initial planning revision created before implementation so the re
 Revision note: updated after user clarification to lock the `host` terminology, host participation toggle, elimination ELO semantics, and Mongo-backed active-tournament recovery rules.
 
 Revision note: updated after the first implementation slice to record the new `/api/v1/tournaments` routes, menu-driven tournament modals, development test-mode guest participation, and bot-opponent elimination ELO exemption.
+
+Revision note: updated after the persistent-panel slice to record the refresh-restored tournament shell, manual elimination start, host transfer flow, standings helper tests, and the remaining single-vs-double elimination gap.
+
+Revision note: updated after the tournament-bot identity fix to record dedicated bot-instance users, dynamic internal bot clients for tournament entrants, and the same-difficulty bot regression coverage.
+
+Revision note: updated after the rolling round-robin correction to record the timed continuous-pairing scheduler, the no-new-games-after-cutoff rule, and the new tournament regressions covering that behavior.
+
+Revision note: updated after the tournament follow-through fix to record ranked time controls for tournament games, live spectator handoff to the active series game, corrected elimination/round-robin spectate labeling, and automatic bot continuation through multi-game tournament matches.

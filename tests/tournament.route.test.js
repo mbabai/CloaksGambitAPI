@@ -13,6 +13,13 @@ jest.mock('../src/utils/ensureUser', () => jest.fn(async (userId) => ({
   isGuest: true,
 })));
 jest.mock('../src/services/bots/registry', () => ({
+  ensureBotUserInstance: jest.fn(async (options = {}) => ({
+    user: {
+      _id: `instance-${String(options?.instanceKey || 'bot')}`,
+      username: 'instance-bot',
+    },
+    token: `token-${String(options?.instanceKey || 'bot')}`,
+  })),
   ensureBotUser: jest.fn(async () => ({ user: { _id: '000000000000000000000499', username: 'easy-bot' } })),
   listBuiltinBotCatalog: jest.fn(() => [
     { id: 'easy', label: 'Easy', playable: true },
@@ -190,6 +197,42 @@ describe('tournaments routes', () => {
     expect(detailsRes.body.message).toMatch(/must join/i);
   });
 
+  test('current route restores the joined tournament for refresh flows', async () => {
+    process.env.NODE_ENV = 'development';
+    const app = createApp();
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'host-current',
+      username: 'HostCurrent',
+      isGuest: true,
+      authenticated: false,
+    });
+    const createRes = await request(app)
+      .post('/api/v1/tournaments/create')
+      .send({ label: 'Current Cup' });
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'viewer-current',
+      username: 'ViewerCurrent',
+      isGuest: true,
+      authenticated: false,
+    });
+    await request(app)
+      .post('/api/v1/tournaments/join')
+      .send({ tournamentId: createRes.body.tournament.id, role: 'viewer' });
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'viewer-current',
+      username: 'ViewerCurrent',
+      isGuest: true,
+      authenticated: false,
+    });
+    const currentRes = await request(app).get('/api/v1/tournaments/current');
+    expect(currentRes.status).toBe(200);
+    expect(currentRes.body.tournament.id).toBe(createRes.body.tournament.id);
+    expect(currentRes.body.role).toBe('viewer');
+  });
+
   test('admin list and delete endpoints work', async () => {
     process.env.NODE_ENV = 'development';
     const app = createApp();
@@ -275,5 +318,54 @@ describe('tournaments routes', () => {
       .send({ tournamentId: createRes.body.tournament.id, userId: 'guest-kick-route' });
     expect(reallowRes.status).toBe(200);
     expect(reallowRes.body.tournament.removedPlayers.some((entry) => entry.userId === 'guest-kick-route')).toBe(false);
+  });
+
+  test('host can transfer control and update the tournament message through routes', async () => {
+    process.env.NODE_ENV = 'development';
+    const app = createApp();
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'host-transfer-route',
+      username: 'TransferHost',
+      isGuest: true,
+      authenticated: false,
+    });
+    const createRes = await request(app)
+      .post('/api/v1/tournaments/create')
+      .send({ label: 'Transfer Route Cup' });
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'player-transfer-route',
+      username: 'TransferPlayer',
+      isGuest: true,
+      authenticated: false,
+    });
+    await request(app)
+      .post('/api/v1/tournaments/join')
+      .send({ tournamentId: createRes.body.tournament.id, role: 'player' });
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'host-transfer-route',
+      username: 'TransferHost',
+      isGuest: true,
+      authenticated: false,
+    });
+    const messageRes = await request(app)
+      .post('/api/v1/tournaments/message')
+      .send({ tournamentId: createRes.body.tournament.id, message: 'Check in at the board.' });
+    expect(messageRes.status).toBe(200);
+    expect(messageRes.body.tournament.message).toBe('Check in at the board.');
+
+    resolveSessionFromRequest.mockResolvedValueOnce({
+      userId: 'host-transfer-route',
+      username: 'TransferHost',
+      isGuest: true,
+      authenticated: false,
+    });
+    const transferRes = await request(app)
+      .post('/api/v1/tournaments/transfer-host')
+      .send({ tournamentId: createRes.body.tournament.id, userId: 'player-transfer-route' });
+    expect(transferRes.status).toBe(200);
+    expect(transferRes.body.tournament.host.userId).toBe('player-transfer-route');
   });
 });

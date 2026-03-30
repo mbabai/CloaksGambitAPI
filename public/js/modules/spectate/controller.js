@@ -108,6 +108,7 @@ export function createSpectateController(options) {
     scoreEl,
     bannerEl,
     metaEl,
+    titleEl,
     closeButtonEl,
     socket,
     getUsername = (id) => id || 'Unknown',
@@ -269,6 +270,7 @@ export function createSpectateController(options) {
     if (bannerEl) {
       setBannerState(bannerEl, { text: '', variant: ['spectate'], hidden: true });
     }
+    if (titleEl) titleEl.textContent = 'Spectating Match';
     if (metaEl) metaEl.textContent = '';
     if (gameView) gameView.destroy();
     spectateRefs.boardCells = [];
@@ -287,8 +289,16 @@ export function createSpectateController(options) {
     if (!key) return { name: fallbackLabel, elo: null };
     const playersMap = snapshot?.players || {};
     const entry = playersMap[key] || playersMap[id] || null;
-    const username = entry?.username || getUsername(key) || fallbackLabel;
-    setUsername(key, username);
+    const registeredUsername = getUsername(key);
+    const hasTournamentAlias = Boolean(
+      registeredUsername
+      && registeredUsername !== key
+      && registeredUsername !== 'Unknown',
+    );
+    const username = hasTournamentAlias
+      ? registeredUsername
+      : (entry?.username || registeredUsername || fallbackLabel);
+    setUsername(key, username, { priority: hasTournamentAlias ? 20 : 0 });
     const elo = Number.isFinite(entry?.elo) ? entry.elo : null;
     return { name: username, elo };
   }
@@ -306,6 +316,16 @@ export function createSpectateController(options) {
       pieces.push('Game complete');
     }
     metaEl.textContent = pieces.join(' • ');
+  }
+
+  function renderSpectateTitle(snapshot) {
+    if (!titleEl) return;
+    const matchTypeLabel = formatMatchTypeLabel(snapshot?.match?.type);
+    if (matchTypeLabel && matchTypeLabel !== 'Match') {
+      titleEl.textContent = `Spectating ${matchTypeLabel} Match`;
+      return;
+    }
+    titleEl.textContent = 'Spectating Match';
   }
 
   function renderSpectateScore(snapshot) {
@@ -718,6 +738,7 @@ export function createSpectateController(options) {
     const displaySnapshot = getSpectateDisplaySnapshot(snapshot);
     spectateState.data = displaySnapshot;
     syncSpectateClocks(snapshot);
+    renderSpectateTitle(displaySnapshot);
     renderSpectateMeta(displaySnapshot);
     renderSpectateScore(displaySnapshot);
     renderSpectateBanner(displaySnapshot);
@@ -748,6 +769,7 @@ export function createSpectateController(options) {
     spectateState.data = null;
     clearSpectateVisuals();
     overlayEl.hidden = false;
+    if (titleEl) titleEl.textContent = 'Spectating Match';
     if (statusEl) statusEl.textContent = 'Loading live game state…';
     socket.emit('spectate:join', { matchId: normalizedId });
     if (spectateState.resizeHandler) {

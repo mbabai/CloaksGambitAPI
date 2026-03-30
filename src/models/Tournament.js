@@ -14,7 +14,7 @@ const tournamentSchema = new mongoose.Schema({
   },
   phase: {
     type: String,
-    enum: ['lobby', 'round_robin', 'elimination', 'completed'],
+    enum: ['lobby', 'round_robin', 'round_robin_complete', 'elimination', 'completed'],
     default: 'lobby',
   },
   host: {
@@ -39,6 +39,10 @@ const tournamentSchema = new mongoose.Schema({
     type: [mongoose.Schema.Types.Mixed],
     default: [],
   },
+  message: {
+    type: String,
+    default: '',
+  },
   roundRobinRounds: {
     type: [mongoose.Schema.Types.Mixed],
     default: [],
@@ -49,6 +53,14 @@ const tournamentSchema = new mongoose.Schema({
   },
   roundRobinRoundsStartedAt: {
     type: Date,
+    default: null,
+  },
+  roundRobinCompletedAt: {
+    type: Date,
+    default: null,
+  },
+  eliminationBracket: {
+    type: mongoose.Schema.Types.Mixed,
     default: null,
   },
   matchIds: {

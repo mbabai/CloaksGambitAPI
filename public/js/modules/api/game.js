@@ -225,8 +225,16 @@ export async function apiGetTournaments() {
   return sendTournamentRequest('/api/v1/tournaments', {}, { method: 'GET' });
 }
 
+export async function apiGetCurrentTournament() {
+  return sendTournamentRequest('/api/v1/tournaments/current', {}, { method: 'GET' });
+}
+
 export async function apiCreateTournament(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/create', payload);
+}
+
+export async function apiUpdateTournamentConfig(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/config', payload);
 }
 
 export async function apiJoinTournament(payload = {}) {
@@ -249,6 +257,10 @@ export async function apiStartTournament(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/start', payload);
 }
 
+export async function apiStartTournamentElimination(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/start-elimination', payload);
+}
+
 export async function apiKickTournamentPlayer(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/kick-player', payload);
 }
@@ -259,4 +271,12 @@ export async function apiReallowTournamentPlayer(payload = {}) {
 
 export async function apiGetTournamentDetails(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/details', payload);
+}
+
+export async function apiTransferTournamentHost(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/transfer-host', payload);
+}
+
+export async function apiUpdateTournamentMessage(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/message', payload);
 }

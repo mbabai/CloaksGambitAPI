@@ -143,9 +143,10 @@ function drawMainPiece(ctx, imageCache, identityMap, cell, palette) {
 function drawCapturedPiece(ctx, imageCache, identityMap, cell) {
   if (!cell.capturedPiece) return;
   const size = Math.floor(cell.width * 0.9);
+  const rightOffset = cell.width * 0.15;
 
   ctx.save();
-  ctx.translate(cell.centerX, cell.centerY - (cell.height * 0.04));
+  ctx.translate(cell.centerX + rightOffset, cell.centerY - (cell.height * 0.04));
   ctx.rotate(Math.PI / 6);
   ctx.beginPath();
   ctx.rect(-size * 0.42, -size * 0.52, size * 0.84, size * 0.84);

@@ -7,8 +7,10 @@ const {
   isTournamentTestModeEnabled,
   listLiveTournaments,
   consumeTournamentAlerts,
-  getTournamentDetails,
+  getTournamentClientState,
+  getCurrentTournamentForSession,
   createTournament,
+  updateTournamentConfig,
   joinTournamentAsPlayer,
   joinTournamentAsViewer,
   leaveTournament,
@@ -17,7 +19,9 @@ const {
   kickTournamentPlayer,
   reallowTournamentPlayer,
   startTournament,
-  listTournamentGames,
+  startElimination,
+  transferTournamentHost,
+  updateTournamentMessage,
   listAllTournamentsForAdmin,
   deleteTournamentForAdmin,
   getTournamentBotDifficultyOptions,
@@ -66,6 +70,15 @@ router.get('/test-mode', (req, res) => {
   return res.json({ enabled: isTournamentTestModeEnabled() });
 });
 
+router.get('/current', async (req, res) => {
+  try {
+    const session = await resolveSessionFromRequest(req, { createGuest: false });
+    return res.json(await getCurrentTournamentForSession({ session }));
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
 router.post('/create', async (req, res) => {
   try {
     const session = await resolveTournamentSession(req);
@@ -81,6 +94,23 @@ router.post('/create', async (req, res) => {
       tournament,
       testModeEnabled: isTournamentTestModeEnabled(),
     });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.post('/config', async (req, res) => {
+  try {
+    const session = await resolveTournamentSession(req);
+    assertParticipationAllowed(session);
+
+    const tournament = await updateTournamentConfig({
+      tournamentId: req.body?.tournamentId,
+      session,
+      config: req.body?.config || {},
+    });
+
+    return res.json({ tournament });
   } catch (err) {
     return handleRouteError(res, err);
   }
@@ -153,6 +183,48 @@ router.post('/start', async (req, res) => {
   }
 });
 
+router.post('/start-elimination', async (req, res) => {
+  try {
+    const session = await resolveTournamentSession(req);
+    assertParticipationAllowed(session);
+    const tournament = await startElimination({ tournamentId: req.body?.tournamentId, session });
+    eventBus.emit('adminRefresh');
+    return res.json({ tournament });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.post('/transfer-host', async (req, res) => {
+  try {
+    const session = await resolveTournamentSession(req);
+    assertParticipationAllowed(session);
+    const tournament = await transferTournamentHost({
+      tournamentId: req.body?.tournamentId,
+      session,
+      targetUserId: req.body?.userId,
+    });
+    return res.json({ tournament });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.post('/message', async (req, res) => {
+  try {
+    const session = await resolveTournamentSession(req);
+    assertParticipationAllowed(session);
+    const tournament = await updateTournamentMessage({
+      tournamentId: req.body?.tournamentId,
+      session,
+      message: req.body?.message,
+    });
+    return res.json({ tournament });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
 router.post('/kick-player', async (req, res) => {
   try {
     const session = await resolveTournamentSession(req);
@@ -192,9 +264,7 @@ router.post('/details', async (req, res) => {
       throw err;
     }
 
-    const tournament = await getTournamentDetails(req.body?.tournamentId, { session });
-    const games = await listTournamentGames(req.body?.tournamentId);
-    return res.json({ tournament, games });
+    return res.json(await getTournamentClientState(req.body?.tournamentId, { session }));
   } catch (err) {
     return handleRouteError(res, err);
   }

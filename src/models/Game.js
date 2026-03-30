@@ -409,15 +409,19 @@ async function updateMatchAfterGame(game, createNextGame) {
       match.drawCount = (match.drawCount || 0) + 1;
     }
 
-    const config = getServerConfig.getServerConfigSnapshotSync();
-    const quickplayDefaults = config.gameModeSettings.QUICKPLAY
-      || config.gameModeSettings.get?.('QUICKPLAY')
-      || {};
-    const typeSettings = config.gameModeSettings[match.type]
-      || config.gameModeSettings.get?.(match.type)
-      || quickplayDefaults;
-    const winScore = typeSettings?.WIN_SCORE;
-    const drawWins = Number.isFinite(winScore) && (match.drawCount || 0) >= winScore;
+    let winScore = Number.isFinite(Number(match.winScoreTarget)) ? Number(match.winScoreTarget) : null;
+    if (!Number.isFinite(winScore) || winScore <= 0) {
+      const config = getServerConfig.getServerConfigSnapshotSync();
+      const quickplayDefaults = config.gameModeSettings.QUICKPLAY
+        || config.gameModeSettings.get?.('QUICKPLAY')
+        || {};
+      const typeSettings = config.gameModeSettings[match.type]
+        || config.gameModeSettings.get?.(match.type)
+        || quickplayDefaults;
+      winScore = typeSettings?.WIN_SCORE;
+    }
+    const isTournamentElimination = String(match.type || '').toUpperCase() === 'TOURNAMENT_ELIMINATION';
+    const drawWins = !isTournamentElimination && Number.isFinite(winScore) && (match.drawCount || 0) >= winScore;
 
     if (drawWins) {
       await match.endMatch(null);

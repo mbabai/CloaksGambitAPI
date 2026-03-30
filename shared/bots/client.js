@@ -8,6 +8,26 @@ const CONTROLLER_MAP = {
   medium: MediumBotController,
 };
 
+async function postAuthedJSON(serverUrl, path, token, body) {
+  const res = await fetch(`${serverUrl.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const data = await res.json();
+      message = data?.message || message;
+    } catch (_) {}
+    throw new Error(message);
+  }
+  return res;
+}
+
 function resolveController(difficulty) {
   const normalized = typeof difficulty === 'string' ? difficulty.toLowerCase() : 'easy';
   const Controller = CONTROLLER_MAP[normalized] || EasyBotController;
@@ -54,16 +74,69 @@ class BotClient {
       this.handleUpdate(payload);
     });
     this.socket.on('game:finished', (payload) => {
-      if (payload?.gameId) {
-        const keyPrefix = `${payload.gameId}:`;
-        Array.from(this.games.keys()).forEach((key) => {
-          if (String(key).startsWith(keyPrefix)) {
-            this.games.delete(key);
-          }
-        });
-        console.log('[bot] game finished', payload.gameId);
-      }
+      this.handleGameFinished(payload).catch((err) => {
+        console.error('Failed to handle finished game', err);
+      });
     });
+    this.socket.on('players:bothNext', (payload) => {
+      this.handleBothNext(payload).catch((err) => {
+        console.error('Failed to handle players:bothNext', err);
+      });
+    });
+  }
+
+  async handleGameFinished(payload) {
+    const gameId = payload?.gameId;
+    if (!gameId) return;
+    const keyPrefix = `${gameId}:`;
+    const controllers = Array.from(this.games.entries()).filter(([key]) => String(key).startsWith(keyPrefix));
+    if (payload?.matchIsActive) {
+      const submittedColors = new Set();
+      for (const [, controller] of controllers) {
+        const color = Number.isInteger(controller?.color) ? controller.color : null;
+        if (color === null || submittedColors.has(color)) continue;
+        submittedColors.add(color);
+        try {
+          await postAuthedJSON(this.serverUrl, '/api/v1/gameAction/next', this.token, {
+            gameId,
+            color,
+          });
+        } catch (err) {
+          console.error('Failed to queue next game for bot', {
+            gameId,
+            color,
+            message: err?.message || err,
+          });
+        }
+      }
+    }
+    controllers.forEach(([key]) => {
+      this.games.delete(key);
+    });
+    console.log('[bot] game finished', { gameId, matchIsActive: Boolean(payload?.matchIsActive) });
+  }
+
+  async handleBothNext(payload) {
+    const gameId = payload?.gameId;
+    const color = Number.isInteger(payload?.color) ? payload.color : null;
+    if (!gameId || color === null) return;
+    try {
+      await postAuthedJSON(this.serverUrl, '/api/v1/gameAction/ready', this.token, {
+        gameId,
+        color,
+      });
+      console.log('[bot] accepted next game', {
+        gameId,
+        color,
+        requiresAccept: Boolean(payload?.requiresAccept),
+      });
+    } catch (err) {
+      console.error('Failed to accept next game for bot', {
+        gameId,
+        color,
+        message: err?.message || err,
+      });
+    }
   }
 
   handleUpdate(payload) {
@@ -117,10 +190,21 @@ async function registerBot(serverUrl, difficulty, secret) {
   return res.json();
 }
 
-async function startBotClient({ serverUrl, difficulty = 'easy', secret = '' } = {}) {
-  const registration = await registerBot(serverUrl, difficulty, secret);
-  console.log('[bot] registered as', registration.username);
-  const client = new BotClient(serverUrl, registration.token, registration.userId, difficulty);
+async function startBotClient({
+  serverUrl,
+  difficulty = 'easy',
+  secret = '',
+  userId = null,
+  token = null,
+} = {}) {
+  let registration = null;
+  if (!userId || !token) {
+    registration = await registerBot(serverUrl, difficulty, secret);
+    console.log('[bot] registered as', registration.username);
+  }
+  const resolvedUserId = userId || registration?.userId;
+  const resolvedToken = token || registration?.token;
+  const client = new BotClient(serverUrl, resolvedToken, resolvedUserId, difficulty);
   client.start();
   return client;
 }

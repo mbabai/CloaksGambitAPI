@@ -171,6 +171,7 @@ logBootConstantsOnce();
   const spectateScoreEl = document.getElementById('spectateScore');
   const spectateBannerEl = document.getElementById('spectateBanner');
   const spectateMetaEl = document.getElementById('spectateMeta');
+  const spectateTitleEl = document.getElementById('spectateTitle');
   const spectateCloseBtn = upgradeButton(document.getElementById('spectateCloseBtn'), {
     variant: 'dark',
     position: 'relative'
@@ -187,6 +188,7 @@ logBootConstantsOnce();
 
   let spectateController = null;
   const spectateUsernameMap = {};
+  const spectateUsernamePriority = {};
   let spectatePickerOverlay = null;
   let spectatePickerStatusEl = null;
   let spectateMatchListEl = null;
@@ -1545,10 +1547,21 @@ logBootConstantsOnce();
     return username;
   }
 
+  function resolveDisplayedPlayerName(userId, fallbackUsername, idx) {
+    const normalizedId = userId != null ? String(userId) : '';
+    const tournamentAlias = normalizedId ? spectateUsernameMap[normalizedId] : '';
+    return formatPlayerName(tournamentAlias || fallbackUsername, idx);
+  }
+
   async function loadPlayerNames(ids) {
     if (!Array.isArray(ids)) return;
     currentPlayerIds = ids.slice(0, 2);
     playerNames = currentPlayerIds.map((id, idx) => {
+      const normalizedId = String(id || '');
+      const tournamentAlias = normalizedId ? spectateUsernameMap[normalizedId] : '';
+      if (tournamentAlias) {
+        return formatPlayerName(tournamentAlias, idx);
+      }
       const cached = playerProfileCache.get(String(id));
       return formatPlayerName(cached?.username, idx);
     });
@@ -1560,9 +1573,10 @@ logBootConstantsOnce();
     await Promise.all(currentPlayerIds.map(async (id, idx) => {
       try {
         const cacheKey = String(id);
+        const tournamentAlias = spectateUsernameMap[cacheKey];
         const cached = playerProfileCache.get(cacheKey);
         if (cached && typeof cached.username === 'string') {
-          playerNames[idx] = formatPlayerName(cached.username, idx);
+          playerNames[idx] = resolveDisplayedPlayerName(id, cached.username, idx);
           if (Number.isFinite(cached.elo)) {
             playerElos[idx] = cached.elo;
           }
@@ -1577,12 +1591,12 @@ logBootConstantsOnce();
         });
         if (res.ok) {
           const user = await res.json().catch(() => null);
-          const normalizedUsername = formatPlayerName(user?.username, idx);
+          const normalizedUsername = resolveDisplayedPlayerName(id, user?.username, idx);
           const normalizedElo = Number.isFinite(user?.elo) ? user.elo : null;
           playerNames[idx] = normalizedUsername;
           playerElos[idx] = normalizedElo;
           playerProfileCache.set(cacheKey, {
-            username: normalizedUsername,
+            username: tournamentAlias || formatPlayerName(user?.username, idx),
             elo: normalizedElo,
             isBot: Boolean(user?.isBot),
           });
@@ -1608,19 +1622,23 @@ logBootConstantsOnce();
     const activeUserId = getStoredUserId() || userId;
 
     if (targetId) {
+      const displayName = resolveDisplayedPlayerName(targetId, normalizedName, 0);
       const cached = playerProfileCache.get(targetId) || {};
       playerProfileCache.set(targetId, {
         ...cached,
-        username: normalizedName,
+        username: displayName,
       });
       const idx = currentPlayerIds.findIndex((id) => id && id.toString() === targetId);
       if (idx !== -1) {
-        playerNames[idx] = formatPlayerName(normalizedName, idx);
+        playerNames[idx] = resolveDisplayedPlayerName(targetId, normalizedName, idx);
         renderBoardAndBars();
       }
       if (statsOverlayController) {
-        statsOverlayController.registerKnownUsername(targetId, normalizedName);
-        statsOverlayController.handleUsernameUpdate({ userId: targetId, username: normalizedName });
+        const statsName = idx !== -1
+          ? playerNames[idx]
+          : resolveDisplayedPlayerName(targetId, normalizedName, 0);
+        statsOverlayController.registerKnownUsername(targetId, statsName);
+        statsOverlayController.handleUsernameUpdate({ userId: targetId, username: statsName });
       }
     }
 
@@ -1781,7 +1799,11 @@ logBootConstantsOnce();
     const type = typeof match.type === 'string' ? match.type.toUpperCase() : '';
     if (type === 'QUICKPLAY') {
       expectedTimeControl = timeSettings.quickplayMs;
-    } else if (type === 'RANKED') {
+    } else if (
+      type === 'RANKED'
+      || type === 'TOURNAMENT_ROUND_ROBIN'
+      || type === 'TOURNAMENT_ELIMINATION'
+    ) {
       expectedTimeControl = timeSettings.rankedMs;
     } else if (type === 'CUSTOM') {
       expectedTimeControl = timeSettings.customMs || timeSettings.quickplayMs;
@@ -2001,14 +2023,13 @@ logBootConstantsOnce();
 
   function updateFindButton() {
     if (tournamentParticipantMode) {
-      queueBtn.classList.remove('searching');
-      queueBtn.textContent = 'Tournament Active';
-      queueBtn.disabled = true;
-      modeSelect.disabled = true;
-      selectWrap.classList.add('disabled');
+      hideQueuer();
       stopQueueTimer();
       queueTimerEl = null;
       return;
+    }
+    if (!isPlayAreaVisible) {
+      showQueuer();
     }
     queueBtn.disabled = false;
     const awaitingServerQueueState = !queueStatusKnown && queueStartTime != null;
@@ -2456,6 +2477,11 @@ logBootConstantsOnce();
       onUserNameUpdated(payload) {
         handleUserNameUpdated(payload);
       },
+      onTournamentUpdated(payload) {
+        if (tournamentUiController && typeof tournamentUiController.handleTournamentUpdated === 'function') {
+          tournamentUiController.handleTournamentUpdated(payload);
+        }
+      },
       onDisconnect() { /* keep UI; server handles grace */ }
     });
     socket.on('spectate:snapshot', (payload) => {
@@ -2626,6 +2652,9 @@ logBootConstantsOnce();
       if (!userId) {
         userId = await ensureUserId();
       }
+      if (tournamentUiController) {
+        await tournamentUiController.restoreCurrentTournament();
+      }
       console.log('[init] userId', userId);
       try {
         const settings = await apiGetTimeSettings();
@@ -2646,6 +2675,7 @@ logBootConstantsOnce();
         scoreEl: spectateScoreEl,
         bannerEl: spectateBannerEl,
         metaEl: spectateMetaEl,
+        titleEl: spectateTitleEl,
         closeButtonEl: spectateCloseBtn,
         socket,
         getUsername: getSpectateUsername,
@@ -2677,14 +2707,28 @@ logBootConstantsOnce();
     return spectateUsernameMap[key] || key;
   }
 
-  function setSpectateUsername(id, username) {
+  function setSpectateUsername(id, username, options = {}) {
     if (!id) return;
     const key = String(id);
     if (!key) return;
     if (typeof username === 'string' && username.trim()) {
-      spectateUsernameMap[key] = username.trim();
+      const trimmed = username.trim();
+      const nextPriority = Number.isFinite(Number(options?.priority)) ? Number(options.priority) : 0;
+      const currentPriority = Number.isFinite(Number(spectateUsernamePriority[key]))
+        ? Number(spectateUsernamePriority[key])
+        : Number.NEGATIVE_INFINITY;
+      if (currentPriority > nextPriority && spectateUsernameMap[key]) {
+        return;
+      }
+      spectateUsernameMap[key] = trimmed;
+      spectateUsernamePriority[key] = nextPriority;
+      const activeIndex = currentPlayerIds.findIndex((playerId) => String(playerId || '') === key);
+      if (activeIndex !== -1) {
+        playerNames[activeIndex] = resolveDisplayedPlayerName(key, trimmed, activeIndex);
+        renderBoardAndBars();
+      }
       if (statsOverlayController) {
-        statsOverlayController.registerKnownUsername(key, username.trim());
+        statsOverlayController.registerKnownUsername(key, trimmed);
       }
     }
   }
@@ -4645,9 +4689,16 @@ logBootConstantsOnce();
 
   function layoutPlayArea() {
     if (!playAreaRoot) return;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const { left, top, width, height } = computePlayAreaBounds(vw, vh);
+    const overrideBounds = tournamentUiController && typeof tournamentUiController.getPlayAreaBounds === 'function'
+      ? tournamentUiController.getPlayAreaBounds()
+      : null;
+    const vw = overrideBounds?.width || window.innerWidth;
+    const vh = overrideBounds?.height || window.innerHeight;
+    const computed = computePlayAreaBounds(vw, vh);
+    const left = Math.floor((overrideBounds?.left || 0) + computed.left);
+    const top = Math.floor((overrideBounds?.top || 0) + computed.top);
+    const width = computed.width;
+    const height = computed.height;
     Object.assign(playAreaRoot.style, {
       left: left + 'px',
       top: top + 'px',
@@ -4694,7 +4745,9 @@ logBootConstantsOnce();
 
   function returnToLobby() {
     hidePlayArea();
-    showQueuer();
+    if (!tournamentParticipantMode) {
+      showQueuer();
+    }
     clearBannerOverlay({ restoreFocus: false });
     queuedState.quickplay = false;
     queuedState.ranked = false;

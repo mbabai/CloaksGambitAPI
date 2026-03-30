@@ -1,10 +1,14 @@
+const User = require('../../models/User');
 const { startBotClient } = require('../../../shared/bots');
+const { createAuthToken } = require('../../utils/authTokens');
 const { normalizeDifficulty } = require('./registry');
 const { DEFAULT_DEV_PORT } = require('../../config/defaults');
 
 let started = false;
 let startPromise = null;
-const activeClients = new Map();
+const activeDifficultyClients = new Map();
+const activeInstanceClients = new Map();
+let runtimeServerUrl = '';
 
 const DEFAULT_DIFFICULTIES = ['easy', 'medium'];
 
@@ -50,6 +54,7 @@ async function startInternalBots({ port } = {}) {
   if (started) return startPromise;
   started = true;
   const serverUrl = resolveServerUrl(port);
+  runtimeServerUrl = serverUrl;
   const difficulties = parseDifficulties();
   const secret = process.env.BOT_SERVICE_SECRET || '';
   console.log('[bot-runtime] starting internal bot clients', { serverUrl, difficulties });
@@ -61,7 +66,7 @@ async function startInternalBots({ port } = {}) {
           difficulty,
           secret,
         });
-        activeClients.set(difficulty, client);
+        activeDifficultyClients.set(difficulty, client);
         return client;
       } catch (err) {
         console.error(`[bot-runtime] failed to start bot client (${difficulty})`, err);
@@ -72,12 +77,64 @@ async function startInternalBots({ port } = {}) {
     console.error('[bot-runtime] failed to start internal bot clients', err);
     started = false;
     startPromise = null;
-    activeClients.clear();
+    runtimeServerUrl = '';
+    activeDifficultyClients.clear();
+    activeInstanceClients.clear();
     return [];
   });
   return startPromise;
 }
 
+async function ensureInternalBotClient({ difficulty = 'easy', userId, token = null } = {}) {
+  if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
+    return null;
+  }
+  if (!shouldEnable()) {
+    return null;
+  }
+
+  const normalizedUserId = typeof userId === 'string' ? userId.trim() : '';
+  if (!normalizedUserId) {
+    return null;
+  }
+
+  if (activeInstanceClients.has(normalizedUserId)) {
+    return activeInstanceClients.get(normalizedUserId);
+  }
+
+  if (startPromise) {
+    await startPromise.catch(() => null);
+  }
+
+  const serverUrl = runtimeServerUrl || resolveServerUrl();
+  if (!serverUrl) {
+    return null;
+  }
+
+  let authToken = token;
+  if (!authToken) {
+    const user = await User.findById(normalizedUserId).lean().catch(() => null);
+    if (!user) {
+      return null;
+    }
+    authToken = createAuthToken(user);
+  }
+
+  const clientPromise = startBotClient({
+    serverUrl,
+    difficulty: normalizeDifficulty(difficulty),
+    userId: normalizedUserId,
+    token: authToken,
+  }).catch((err) => {
+    activeInstanceClients.delete(normalizedUserId);
+    throw err;
+  });
+
+  activeInstanceClients.set(normalizedUserId, clientPromise);
+  return clientPromise;
+}
+
 module.exports = {
   startInternalBots,
+  ensureInternalBotClient,
 };

@@ -8,12 +8,64 @@ const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
 const lobbyStore = require('./state/lobby');
 const { buildSpectateSnapshot } = require('./utils/spectatorSnapshot');
-const { buildClockPayload } = require('./utils/gameClock');
+const { buildClockPayload, resolveTimeoutResult } = require('./utils/gameClock');
 const { appendLocalDebugLog } = require('./utils/localDebugLogger');
 const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/activeMatches');
 const { getRecentServerErrors } = require('./services/adminErrorFeed');
 const { ensureAdminSocketHandshake } = require('./utils/adminAccess');
 const { resolveSessionFromSocketHandshake } = require('./utils/requestSession');
+const { removeTournamentViewerOnDisconnect } = require('./services/tournaments/liveTournaments');
+
+async function enforceActiveGameTimeouts({
+  GameModel = Game,
+  getConfig = getServerConfig,
+  eventBusRef = eventBus,
+  now = Date.now(),
+} = {}) {
+  const config = await getConfig();
+  const setupActionType = config?.actions?.get
+    ? config.actions.get('SETUP')
+    : config?.actions?.SETUP ?? GAME_CONSTANTS.actions.SETUP;
+  const winReasonValue = config?.winReasons?.get
+    ? config.winReasons.get('TIME_CONTROL')
+    : config?.winReasons?.TIME_CONTROL ?? GAME_CONSTANTS.winReasons.TIME_CONTROL;
+  const activeGames = await GameModel.find({ isActive: true });
+  const expiredGames = [];
+
+  for (const game of Array.isArray(activeGames) ? activeGames : []) {
+    if (!game?.isActive) continue;
+    const timeout = resolveTimeoutResult(game, {
+      now,
+      setupActionType,
+    });
+    if (!timeout.expired) continue;
+
+    try {
+      await game.endGame(timeout.draw ? null : timeout.winner, winReasonValue);
+    } catch (err) {
+      if (String(err?.message || '').includes('already ended')) {
+        continue;
+      }
+      throw err;
+    }
+
+    const payloadGame = typeof game.toObject === 'function' ? game.toObject() : game;
+    const affectedUsers = Array.isArray(payloadGame?.players)
+      ? payloadGame.players.map((playerId) => playerId.toString())
+      : [];
+    eventBusRef.emit('gameChanged', {
+      game: payloadGame,
+      affectedUsers,
+    });
+    expiredGames.push({
+      gameId: payloadGame?._id?.toString?.() || payloadGame?._id || null,
+      winner: timeout.winner,
+      draw: timeout.draw,
+    });
+  }
+
+  return expiredGames;
+}
 
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -30,6 +82,38 @@ function initSocket(httpServer) {
   const playerMatches = new Map();
   const DISCONNECT_LIMIT_MS = 30000;
   const MIN_DISCONNECT_GRACE_MS = 10000;
+  let activeGameTimeoutSweepInFlight = false;
+
+  async function runActiveGameTimeoutSweep() {
+    if (activeGameTimeoutSweepInFlight) return;
+    activeGameTimeoutSweepInFlight = true;
+    try {
+      const expiredGames = await enforceActiveGameTimeouts();
+      if (expiredGames.length > 0) {
+        appendLocalDebugLog('socket-timeout-sweep', {
+          expiredGames,
+        });
+      }
+    } catch (err) {
+      console.error('Error enforcing active game timeouts:', err);
+    } finally {
+      activeGameTimeoutSweepInFlight = false;
+    }
+  }
+
+  const activeGameTimeoutTimer = setInterval(() => {
+    runActiveGameTimeoutSweep().catch((err) => {
+      console.error('Error scheduling active game timeout sweep:', err);
+    });
+  }, 1000);
+  if (typeof activeGameTimeoutTimer?.unref === 'function') {
+    activeGameTimeoutTimer.unref();
+  }
+  if (httpServer && typeof httpServer.on === 'function') {
+    httpServer.on('close', () => {
+      clearInterval(activeGameTimeoutTimer);
+    });
+  }
 
   function toId(value) {
     if (!value) return null;
@@ -800,7 +884,20 @@ function initSocket(httpServer) {
     }
   });
 
-  eventBus.on('gameChanged', (payload) => {
+  eventBus.on('tournament:updated', (payload) => {
+    try {
+      const tournamentId = toId(payload?.tournamentId);
+      if (!tournamentId) return;
+      const userIds = Array.isArray(payload?.userIds) ? payload.userIds.map((id) => toId(id)).filter(Boolean) : [];
+      userIds.forEach((userId) => {
+        emitToUser(userId, 'tournament:updated', { tournamentId });
+      });
+    } catch (err) {
+      console.error('Error broadcasting tournament update:', err);
+    }
+  });
+
+  eventBus.on('gameChanged', async (payload) => {
     let game = payload?.game;
     if (game && typeof game.toObject === 'function') {
       game = game.toObject();
@@ -820,6 +917,14 @@ function initSocket(httpServer) {
 
     const matchId = game.match?.toString();
     const gameIdStr = game._id.toString();
+    let finishedMatch = null;
+    if (!game.isActive && matchId) {
+      try {
+        finishedMatch = await Match.findById(matchId).lean();
+      } catch (err) {
+        console.error('Failed to load finished match for socket payload:', err);
+      }
+    }
     const players = (payload.affectedUsers || game.players || []).map(id => id.toString());
     const clockPayload = buildClockPayload(game, {
       now: Date.now(),
@@ -892,6 +997,7 @@ function initSocket(httpServer) {
         if (!hasConnectedUser(playerId)) return;
         emitToUser(playerId, 'game:finished', {
           matchId,
+          matchIsActive: Boolean(finishedMatch?.isActive),
           gameId: gameIdStr,
           board: game.board,
           actions: game.actions,
@@ -1269,6 +1375,11 @@ function initSocket(httpServer) {
           clearPendingInvitesForUser(userId, 'disconnect');
           markPlayerDisconnectedFromAllMatches(userId);
           removeConnectedUsername(userId);
+          try {
+            await removeTournamentViewerOnDisconnect({ userId });
+          } catch (err) {
+            console.error('Failed to remove tournament viewer on disconnect:', err);
+          }
 
           if (socket.data?.isGuest && !socket.data?.isBot) {
             try {
@@ -1404,3 +1515,6 @@ function initSocket(httpServer) {
 }
 
 module.exports = initSocket;
+module.exports._private = {
+  enforceActiveGameTimeouts,
+};

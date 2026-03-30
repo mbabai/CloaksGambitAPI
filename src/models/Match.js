@@ -186,6 +186,11 @@ const matchSchema = new mongoose.Schema({
     type: Boolean,
     default: null,
   },
+  winScoreTarget: {
+    type: Number,
+    default: null,
+    min: 1,
+  },
 });
 
 matchSchema.virtual('duration').get(function duration() {
@@ -341,6 +346,7 @@ class MatchDocument {
     this.tournamentId = data.tournamentId ? toIdString(data.tournamentId) : null;
     this.tournamentPhase = typeof data.tournamentPhase === 'string' ? data.tournamentPhase : null;
     this.eloEligible = data.eloEligible ?? null;
+    this.winScoreTarget = Number.isFinite(Number(data.winScoreTarget)) ? Number(data.winScoreTarget) : null;
     this.createdAt = cloneDate(data.createdAt) || new Date();
   }
 

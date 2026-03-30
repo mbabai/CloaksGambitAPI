@@ -104,6 +104,8 @@ function formatMatchTypeLabel(type) {
   if (upper === 'RANKED') return 'Ranked';
   if (upper === 'QUICKPLAY') return 'Quickplay';
   if (upper === 'CUSTOM') return 'Custom';
+  if (upper === 'TOURNAMENT_ROUND_ROBIN') return 'Round Robin';
+  if (upper === 'TOURNAMENT_ELIMINATION') return 'Elimination';
   return `${String(type).charAt(0).toUpperCase()}${String(type).slice(1).toLowerCase()}`;
 }
 

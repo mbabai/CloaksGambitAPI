@@ -20,20 +20,7 @@ async function buildSpectateSnapshot(matchId) {
       .lean(),
   ]);
 
-  const normalizeTime = (value) => {
-    if (!value) return 0;
-    const ts = new Date(value).getTime();
-    return Number.isFinite(ts) ? ts : 0;
-  };
-
-  let latestGame = null;
-  if (activeGame && finishedGame) {
-    const activeStart = normalizeTime(activeGame.startTime);
-    const finishedEnd = normalizeTime(finishedGame.endTime);
-    latestGame = activeStart >= finishedEnd ? activeGame : finishedGame;
-  } else {
-    latestGame = activeGame || finishedGame;
-  }
+  let latestGame = activeGame || finishedGame || null;
 
   if (!latestGame) {
     latestGame = await Game.findOne({ match: normalizedId })
