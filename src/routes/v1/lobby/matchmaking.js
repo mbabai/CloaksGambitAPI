@@ -7,7 +7,10 @@ const eventBus = require('../../../eventBus');
 const User = require('../../../models/User');
 const ensureUser = require('../../../utils/ensureUser');
 const lobbyStore = require('../../../state/lobby');
-const { GAME_CONSTANTS } = require('../../../../shared/constants');
+const {
+  getClockSettingsForMatchType,
+  getGameModeType,
+} = require('../../../utils/gameModeClock');
 
 const DEFAULT_ELO = 800;
 
@@ -18,28 +21,10 @@ async function runMatchmaking() {
 
   const config = await getServerConfig();
 
-  const quickplayType = config?.gameModes?.get
-    ? (config.gameModes.get('QUICKPLAY') || 'QUICKPLAY')
-    : (config?.gameModes?.QUICKPLAY || 'QUICKPLAY');
-  const rankedType = config?.gameModes?.get
-    ? (config.gameModes.get('RANKED') || 'RANKED')
-    : (config?.gameModes?.RANKED || 'RANKED');
-
-  const quickplaySettings = config?.gameModeSettings?.get
-    ? (config.gameModeSettings.get('QUICKPLAY') || {})
-    : (config?.gameModeSettings?.QUICKPLAY || {});
-  const rankedSettings = config?.gameModeSettings?.get
-    ? (config.gameModeSettings.get('RANKED') || {})
-    : (config?.gameModeSettings?.RANKED || {});
-  const incrementSetting = config?.gameModeSettings?.get
-    ? config.gameModeSettings.get('INCREMENT')
-    : config?.gameModeSettings?.INCREMENT;
-
-  const increment = Number(incrementSetting) || 0;
-  const quickplayTimeControl = Number(quickplaySettings?.TIME_CONTROL)
-    || GAME_CONSTANTS.gameModeSettings.QUICKPLAY.TIME_CONTROL;
-  const rankedTimeControl = Number(rankedSettings?.TIME_CONTROL)
-    || GAME_CONSTANTS.gameModeSettings.RANKED.TIME_CONTROL;
+  const quickplayType = getGameModeType(config, 'QUICKPLAY', 'QUICKPLAY');
+  const rankedType = getGameModeType(config, 'RANKED', 'RANKED');
+  const quickplayClock = getClockSettingsForMatchType(config, quickplayType);
+  const rankedClock = getClockSettingsForMatchType(config, rankedType);
 
   let snapshot = lobbyStore.getState();
   console.log('Checking queues:', {
@@ -84,8 +69,8 @@ async function runMatchmaking() {
       const game = await Game.create({
         players: gamePlayers,
         match: match._id,
-        timeControlStart: quickplayTimeControl,
-        increment,
+        timeControlStart: quickplayClock.timeControl,
+        increment: quickplayClock.increment,
       });
 
       eventBus.emit('gameChanged', {
@@ -96,6 +81,7 @@ async function runMatchmaking() {
       eventBus.emit('players:bothNext', {
         game: typeof game.toObject === 'function' ? game.toObject() : game,
         affectedUsers: gamePlayers.map(id => id.toString()),
+        currentGameNumber: 1,
       });
 
       match.games.push(game._id);
@@ -184,8 +170,8 @@ async function runMatchmaking() {
       const game = await Game.create({
         players: gamePlayers,
         match: match._id,
-        timeControlStart: rankedTimeControl,
-        increment,
+        timeControlStart: rankedClock.timeControl,
+        increment: rankedClock.increment,
       });
 
       eventBus.emit('gameChanged', {
@@ -196,6 +182,7 @@ async function runMatchmaking() {
       eventBus.emit('players:bothNext', {
         game: typeof game.toObject === 'function' ? game.toObject() : game,
         affectedUsers: gamePlayers.map(id => id.toString()),
+        currentGameNumber: 1,
       });
 
       match.games.push(game._id);

@@ -10,6 +10,7 @@ jest.mock('../src/utils/gameAccess', () => ({
 }));
 
 const sharedConstants = require('../shared/constants');
+const eventBus = require('../src/eventBus');
 const Game = require('../src/models/Game');
 const getServerConfig = require('../src/utils/getServerConfig');
 const { requireGamePlayerContext } = require('../src/utils/gameAccess');
@@ -106,6 +107,9 @@ describe('ready route stored clock authority', () => {
     });
 
     requireGamePlayerContext.mockResolvedValue({
+      game: {
+        playersReady: [true, false],
+      },
       requesterDetails: {
         userId: 'player-1',
         username: 'Player1',
@@ -127,5 +131,31 @@ describe('ready route stored clock authority', () => {
     expect(updated.clockState.activeColor).toBe(0);
     expect(updated.clockState.tickingWhite).toBe(true);
     expect(updated.clockState.tickingBlack).toBe(false);
+  });
+
+  test('duplicate ready is ignored without mutating clocks or emitting ready events again', async () => {
+    requireGamePlayerContext.mockResolvedValue({
+      game: {
+        playersReady: [true, true],
+      },
+      requesterDetails: {
+        userId: 'player-2',
+        username: 'Player2',
+        isBot: true,
+        botDifficulty: 'easy',
+      },
+      color: 1,
+    });
+
+    const response = await callPost(handler, {
+      gameId: 'game-ready-clock-2',
+      color: 1,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toEqual({ message: 'Player already ready' });
+    expect(Game.findByIdAndUpdate).not.toHaveBeenCalled();
+    expect(Game.findById).not.toHaveBeenCalled();
+    expect(eventBus.emit).not.toHaveBeenCalled();
   });
 });

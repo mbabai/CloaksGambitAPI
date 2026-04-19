@@ -41,6 +41,15 @@ function maskGameForColor(game, color) {
   maskedGame.winReason = game.winReason;
   maskedGame.onDeckingPlayer = game.onDeckingPlayer;
   maskedGame.playerTurn = game.playerTurn;
+  maskedGame.setupComplete = Array.isArray(game.setupComplete) ? [...game.setupComplete] : [false, false];
+  maskedGame.playersReady = Array.isArray(game.playersReady) ? [...game.playersReady] : [false, false];
+  maskedGame.startTime = game.startTime || null;
+  maskedGame.timeControlStart = game.timeControlStart ?? null;
+  maskedGame.increment = game.increment ?? 0;
+  maskedGame.requiresAccept = Boolean(game.requiresAccept);
+  maskedGame.acceptWindowSeconds = Number.isFinite(Number(game.acceptWindowSeconds))
+    ? Math.max(0, Number(game.acceptWindowSeconds))
+    : 0;
 
   return maskedGame;
 }

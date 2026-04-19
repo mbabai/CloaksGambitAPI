@@ -23,6 +23,7 @@ const {
   transferTournamentHost,
   updateTournamentMessage,
   listAllTournamentsForAdmin,
+  listCompletedTournamentsForUser,
   deleteTournamentForAdmin,
   getTournamentBotDifficultyOptions,
 } = require('../../../services/tournaments/liveTournaments');
@@ -270,12 +271,60 @@ router.post('/details', async (req, res) => {
   }
 });
 
+router.get('/history', async (req, res) => {
+  try {
+    const session = await resolveSessionFromRequest(req, { createGuest: false });
+    if (!session?.userId) {
+      const err = new Error(LOGIN_REQUIRED_MESSAGE);
+      err.statusCode = 401;
+      throw err;
+    }
+
+    return res.json({
+      tournaments: await listCompletedTournamentsForUser({ session }),
+    });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.post('/history/details', async (req, res) => {
+  try {
+    const session = await resolveSessionFromRequest(req, { createGuest: false });
+    if (!session?.userId) {
+      const err = new Error(LOGIN_REQUIRED_MESSAGE);
+      err.statusCode = 401;
+      throw err;
+    }
+
+    return res.json(await getTournamentClientState(req.body?.tournamentId, {
+      session,
+      accessMode: 'history',
+    }));
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
 router.get('/admin/list', async (req, res) => {
   try {
     const adminSession = await ensureAdminRequest(req, res);
     if (!adminSession) return;
     const tournaments = await listAllTournamentsForAdmin();
     return res.json({ tournaments });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
+router.post('/admin/details', async (req, res) => {
+  try {
+    const adminSession = await ensureAdminRequest(req, res);
+    if (!adminSession) return;
+    return res.json(await getTournamentClientState(req.body?.tournamentId, {
+      session: adminSession,
+      accessMode: 'admin',
+    }));
   } catch (err) {
     return handleRouteError(res, err);
   }

@@ -13,21 +13,19 @@ const {
   normalizeBuiltinBotId,
   getBuiltinBotDefinition,
 } = require('../../../services/bots/registry');
+const {
+  getClockSettingsForMatchType,
+  getGameModeType,
+} = require('../../../utils/gameModeClock');
 
 async function resolveQuickplaySettings() {
   const config = await getServerConfig();
-  const quickplaySettings = config?.gameModeSettings?.get
-    ? (config.gameModeSettings.get('QUICKPLAY') || {})
-    : (config?.gameModeSettings?.QUICKPLAY || {});
-  const incrementSetting = config?.gameModeSettings?.get
-    ? config.gameModeSettings.get('INCREMENT')
-    : config?.gameModeSettings?.INCREMENT;
-  const timeControl = Number(quickplaySettings?.TIME_CONTROL) || 300000;
-  const increment = Number(incrementSetting) || 0;
-  const aiType = config?.gameModes?.get
-    ? (config.gameModes.get('AI') || 'AI')
-    : (config?.gameModes?.AI || 'AI');
-  return { timeControl, increment, type: aiType };
+  const { timeControl, increment } = getClockSettingsForMatchType(config, 'AI');
+  return {
+    timeControl,
+    increment,
+    type: getGameModeType(config, 'AI', 'AI'),
+  };
 }
 
 router.post('/', async (req, res) => {
@@ -135,6 +133,7 @@ router.post('/', async (req, res) => {
     eventBus.emit('players:bothNext', {
       game: gamePayload,
       affectedUsers,
+      currentGameNumber: 1,
       botPlayers: [botUser._id.toString()],
     });
 

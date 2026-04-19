@@ -19,9 +19,17 @@
   - `tests/liveClockState.test.js`
   - `tests/moveRoute.clockState.test.js`
   - `tests/gameClockPayload.test.js`
+- Bot runtime and recovery:
+  - `tests/botClient.continuation.test.js`
+  - `tests/botTurnFailsafe.service.test.js`
+  - `tests/internalBots.runtime.test.js`
 - Match normalization/history:
   - `tests/activeMatches.normalizeId.test.js`
   - `tests/historySummary.service.test.js`
+- Tournament lifecycle and client helpers:
+  - `tests/tournament.service.test.js`
+  - `tests/nextRoute.matchContinuation.test.js`
+  - `tests/tournamentAcceptScheduler.test.js`
 
 ## Practical Workflow
 - `npm test` rebuilds shared constants first.

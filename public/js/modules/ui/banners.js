@@ -104,7 +104,8 @@ export function setBannerState(banner, { text, variant, icon, hidden } = {}) {
 
 /**
  * Returns an unmounted name row element containing the player label, Elo badge,
- * reconnect indicator, and optional victory tokens.
+ * reconnect indicator, and optional victory tokens. Ranked name rows always
+ * render as "name, then badge" so the text remains the primary anchor.
  */
 export function createNameRow({
   documentRef,
@@ -117,7 +118,9 @@ export function createNameRow({
   fontWeight = 'bold',
   gap = 6,
   isRankedMatch = false,
+  showEloBadge = isRankedMatch,
   elo = null,
+  eloVariant = 'dark',
   wins = {},
   connection = null
 } = {}) {
@@ -142,19 +145,14 @@ export function createNameRow({
   nameContent.style.setProperty('--cg-name-row-gap', `${clampNumber(gap, 6)}px`);
 
   let badge = null;
-  if (isRankedMatch && typeof bannerAssets.createEloBadge === 'function') {
+  if (showEloBadge && typeof bannerAssets.createEloBadge === 'function') {
     const badgeSize = Math.max(16, Math.floor(resolvedHeight * 0.9));
-    badge = bannerAssets.createEloBadge({ elo, size: badgeSize });
+    badge = bannerAssets.createEloBadge({ elo, size: badgeSize, variant: eloVariant });
   }
 
   if (badge) {
-    if (orientation === 'top') {
-      nameContent.appendChild(nameWrap);
-      nameContent.appendChild(badge);
-    } else {
-      nameContent.appendChild(badge);
-      nameContent.appendChild(nameWrap);
-    }
+    nameContent.appendChild(nameWrap);
+    nameContent.appendChild(badge);
   } else {
     nameContent.appendChild(nameWrap);
   }

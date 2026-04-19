@@ -236,3 +236,24 @@ export function advanceClockSnapshot(base, now = Date.now()) {
     label: base.label || null,
   };
 }
+
+export function resolveDisplayedClockMs({
+  colorIdx,
+  whiteTimeMs = 0,
+  blackTimeMs = 0,
+  expectedTimeControl = null,
+  gameStartTime = null,
+  hasAuthoritativeClock = false,
+} = {}) {
+  if (
+    !hasAuthoritativeClock
+    && !gameStartTime
+    && Number.isFinite(expectedTimeControl)
+    && expectedTimeControl > 0
+  ) {
+    return expectedTimeControl;
+  }
+  if (colorIdx === 0) return whiteTimeMs;
+  if (colorIdx === 1) return blackTimeMs;
+  return 0;
+}

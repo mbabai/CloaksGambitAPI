@@ -18,12 +18,23 @@ router.post('/', async (req, res) => {
     const { gameId, color } = req.body;
     const context = await requireGamePlayerContext(req, res, { gameId, color });
     if (!context) return;
-    const { requesterDetails, color: normalizedColor } = context;
+    const { game, requesterDetails, color: normalizedColor } = context;
     debugLog('Ready endpoint called with:', {
       gameId,
       color: normalizedColor,
       ...requesterDetails,
     });
+
+    const alreadyReady = Boolean(game?.playersReady?.[normalizedColor]);
+    const bothReadyBefore = Boolean(game?.playersReady?.[0] && game?.playersReady?.[1]);
+    if (alreadyReady) {
+      debugLog('Ready endpoint ignored; player already marked ready:', {
+        gameId,
+        color: normalizedColor,
+        playersReady: game?.playersReady,
+      });
+      return res.json({ message: 'Player already ready' });
+    }
 
     const config = await getServerConfig();
     const now = Date.now();
@@ -97,7 +108,7 @@ router.post('/', async (req, res) => {
 
     // If both players are now ready, emit explicit signal (once)
     try {
-      if (finalGame.playersReady?.[0] && finalGame.playersReady?.[1]) {
+      if (!bothReadyBefore && finalGame.playersReady?.[0] && finalGame.playersReady?.[1]) {
         debugLog('[server] both players READY – emitting players:bothReady', {
           gameId: finalGame._id.toString(),
           players: (finalGame.players || []).map(p => p.toString())

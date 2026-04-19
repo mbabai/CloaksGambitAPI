@@ -23,16 +23,27 @@ function buildSeedOrder(size) {
   return order;
 }
 
-function getRoundLabel(roundIndex, roundCount) {
+function getRoundLabel(roundIndex, roundCount, { section = 'winners', doubleElimination = false } = {}) {
   const totalRounds = Number(roundCount);
   const index = Number(roundIndex);
   if (!Number.isInteger(totalRounds) || !Number.isInteger(index)) {
     return 'Elimination';
   }
-  if (totalRounds === 1) return 'Final';
-  if (index === totalRounds - 1) return 'Final';
-  if (index === totalRounds - 2) return 'Semifinals';
-  if (index === totalRounds - 3) return 'Quarterfinals';
+  const roundsFromEnd = totalRounds - index;
+  if (section === 'finals') {
+    return index === 0 ? 'Grand Finals' : 'Grand Finals Reset';
+  }
+  if (section === 'losers') {
+    if (roundsFromEnd === 1) return 'Losers Finals';
+    if (roundsFromEnd === 2) return 'Losers Semifinals';
+    if (roundsFromEnd === 3) return 'Losers Quarterfinals';
+    return `Losers Round ${index + 1}`;
+  }
+  if (doubleElimination && roundsFromEnd === 1) return 'Winner Finals';
+  if (!doubleElimination && totalRounds === 1) return 'Final';
+  if (!doubleElimination && roundsFromEnd === 1) return 'Final';
+  if (roundsFromEnd === 2) return 'Semifinals';
+  if (roundsFromEnd === 3) return 'Quarterfinals';
   return `Round ${index + 1}`;
 }
 
@@ -43,6 +54,7 @@ function cloneEntrant(entrant) {
     userId: entrant.userId || null,
     username: entrant.username || 'Player',
     seed: toOptionalFiniteNumber(entrant.seed),
+    preTournamentElo: toOptionalFiniteNumber(entrant.preTournamentElo),
     type: entrant.type || 'human',
     difficulty: entrant.difficulty || null,
   };
@@ -114,7 +126,7 @@ function buildInitialSeedMap(entrants, bracketSize) {
   return { seedMap, seedOrder };
 }
 
-function buildWinnersRounds(entrants, bracketSize) {
+function buildWinnersRounds(entrants, bracketSize, { doubleElimination = false } = {}) {
   const { seedMap, seedOrder } = buildInitialSeedMap(entrants, bracketSize);
   const roundCount = Math.log2(bracketSize);
   const winnersRounds = [];
@@ -128,7 +140,7 @@ function buildWinnersRounds(entrants, bracketSize) {
         section: 'winners',
         roundIndex,
         matchIndex,
-        label: getRoundLabel(roundIndex, roundCount),
+        label: getRoundLabel(roundIndex, roundCount, { section: 'winners', doubleElimination }),
       });
       if (roundIndex === 0) {
         const seedA = seedOrder[matchIndex * 2];
@@ -144,7 +156,7 @@ function buildWinnersRounds(entrants, bracketSize) {
     winnersRounds.push({
       section: 'winners',
       roundIndex,
-      label: getRoundLabel(roundIndex, roundCount),
+      label: getRoundLabel(roundIndex, roundCount, { section: 'winners', doubleElimination }),
       matches,
     });
   }
@@ -166,7 +178,7 @@ function buildSingleEliminationBracket(entrants = []) {
   }
 
   const bracketSize = getBracketSize(normalizedEntrants.length);
-  const winnersRounds = buildWinnersRounds(normalizedEntrants, bracketSize);
+  const winnersRounds = buildWinnersRounds(normalizedEntrants, bracketSize, { doubleElimination: false });
 
   return {
     type: 'single',
@@ -192,7 +204,7 @@ function buildDoubleEliminationBracket(entrants = []) {
   }
 
   const bracketSize = getBracketSize(normalizedEntrants.length);
-  const winnersRounds = buildWinnersRounds(normalizedEntrants, bracketSize);
+  const winnersRounds = buildWinnersRounds(normalizedEntrants, bracketSize, { doubleElimination: true });
   const winnersRoundCount = winnersRounds.length;
   const losersRounds = [];
 
@@ -206,7 +218,7 @@ function buildDoubleEliminationBracket(entrants = []) {
         section: 'losers',
         roundIndex: minorRoundIndex,
         matchIndex,
-        label: `Losers ${minorRoundIndex + 1}`,
+        label: getRoundLabel(minorRoundIndex, (winnersRoundCount - 1) * 2, { section: 'losers' }),
       });
       if (groupIndex === 1) {
         minorMatch.sourceA = makeSource('winnersRounds', 0, matchIndex * 2, 'loser');
@@ -220,7 +232,7 @@ function buildDoubleEliminationBracket(entrants = []) {
     losersRounds.push({
       section: 'losers',
       roundIndex: minorRoundIndex,
-      label: `Losers ${minorRoundIndex + 1}`,
+      label: getRoundLabel(minorRoundIndex, (winnersRoundCount - 1) * 2, { section: 'losers' }),
       matches: minorMatches,
     });
 
@@ -232,7 +244,7 @@ function buildDoubleEliminationBracket(entrants = []) {
         section: 'losers',
         roundIndex: majorRoundIndex,
         matchIndex,
-        label: `Losers ${majorRoundIndex + 1}`,
+        label: getRoundLabel(majorRoundIndex, (winnersRoundCount - 1) * 2, { section: 'losers' }),
         sourceA: makeSource('losersRounds', minorRoundIndex, matchIndex, 'winner'),
         sourceB: makeSource('winnersRounds', groupIndex, matchIndex, 'loser'),
       }));
@@ -240,25 +252,28 @@ function buildDoubleEliminationBracket(entrants = []) {
     losersRounds.push({
       section: 'losers',
       roundIndex: majorRoundIndex,
-      label: `Losers ${majorRoundIndex + 1}`,
+      label: getRoundLabel(majorRoundIndex, (winnersRoundCount - 1) * 2, { section: 'losers' }),
       matches: majorMatches,
     });
   }
 
   const finalsRounds = [];
+  const grandFinalLowerSource = losersRounds.length > 0
+    ? makeSource('losersRounds', losersRounds.length - 1, 0, 'winner')
+    : makeSource('winnersRounds', winnersRoundCount - 1, 0, 'loser');
   finalsRounds.push({
     section: 'finals',
     roundIndex: 0,
-    label: 'Grand Final',
+    label: getRoundLabel(0, 2, { section: 'finals' }),
     matches: [
       createMatch({
         prefix: 'fin',
         section: 'finals',
         roundIndex: 0,
         matchIndex: 0,
-        label: 'Grand Final',
+        label: getRoundLabel(0, 2, { section: 'finals' }),
         sourceA: makeSource('winnersRounds', winnersRoundCount - 1, 0, 'winner'),
-        sourceB: makeSource('losersRounds', losersRounds.length - 1, 0, 'winner'),
+        sourceB: grandFinalLowerSource,
         finalStage: 'grand_final',
       }),
     ],
@@ -266,7 +281,7 @@ function buildDoubleEliminationBracket(entrants = []) {
   finalsRounds.push({
     section: 'finals',
     roundIndex: 1,
-    label: 'Reset Final',
+    label: getRoundLabel(1, 2, { section: 'finals' }),
     active: false,
     matches: [
       createMatch({
@@ -274,7 +289,7 @@ function buildDoubleEliminationBracket(entrants = []) {
         section: 'finals',
         roundIndex: 1,
         matchIndex: 0,
-        label: 'Reset Final',
+        label: getRoundLabel(1, 2, { section: 'finals' }),
         finalStage: 'reset_final',
       }),
     ],

@@ -6,7 +6,7 @@ import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog, apiGetTournamentHistory } from '/js/modules/api/game.js';
 import { createLocalGameLogger } from '/js/modules/debug/localGameLogger.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
@@ -27,14 +27,18 @@ import {
   createThroneIcon
 } from '/js/modules/ui/icons.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
+import { getMatchCountdownBannerTitle, shouldPreserveMatchCountdownBanner } from '/js/modules/ui/matchCountdown.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
 import { initTournamentUi } from '/js/modules/tournaments/ui.js';
+import { createTournamentAcceptScheduler } from '/js/modules/tournaments/acceptScheduler.js';
 import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
 import {
   computeGameClockState,
   normalizeClockSnapshot,
   advanceClockSnapshot,
+  resolveDisplayedClockMs,
 } from '/js/modules/utils/clockState.js';
+import { shouldPreserveClockSnapshot } from '/js/modules/utils/clockSyncPolicy.js';
 import { renderActiveMatchesList, createActiveMatchesStore, fetchActiveMatchesList } from '/js/modules/spectate/activeMatches.js';
 import { createSpectateController } from '/js/modules/spectate/controller.js';
 import { getLatestMoveContext } from '/js/shared/latestMoveContext.js';
@@ -232,6 +236,9 @@ logBootConstantsOnce();
   let rankedLeaderboardCurrentUser = null;
   let rankedLeaderboardLoading = false;
   let rankedLeaderboardRequestToken = 0;
+  let accountTournamentHistoryOverlay = null;
+  let accountTournamentHistoryStatusEl = null;
+  let accountTournamentHistoryListEl = null;
   let rankedLeaderboardPagination = {
     page: 1,
     perPage: 100,
@@ -729,6 +736,105 @@ logBootConstantsOnce();
     await loadRankedLeaderboardPage(1);
   }
 
+  function ensureAccountTournamentHistoryOverlay() {
+    if (accountTournamentHistoryOverlay) return accountTournamentHistoryOverlay;
+
+    accountTournamentHistoryOverlay = createOverlay({
+      baseClass: 'cg-overlay history-overlay',
+      dialogClass: 'history-modal tournament-modal',
+      contentClass: 'history-modal-content tournament-modal__content',
+      backdropClass: 'cg-overlay__backdrop history-overlay-backdrop',
+      closeButtonClass: 'history-close-btn',
+      closeButtonVariant: 'danger',
+      closeLabel: 'Close tournament history',
+      closeText: '×',
+      openClass: 'open cg-overlay--open',
+      bodyOpenClass: 'history-overlay-open cg-overlay-open',
+    });
+
+    const { content } = accountTournamentHistoryOverlay;
+    content.innerHTML = '';
+
+    const title = document.createElement('h2');
+    title.id = 'accountTournamentHistoryTitle';
+    title.className = 'tournament-modal__title';
+    title.textContent = 'Completed Tournaments';
+    accountTournamentHistoryOverlay.setLabelledBy(title.id);
+
+    accountTournamentHistoryStatusEl = document.createElement('div');
+    accountTournamentHistoryStatusEl.className = 'menu-message tournament-modal__status';
+
+    accountTournamentHistoryListEl = document.createElement('div');
+    accountTournamentHistoryListEl.className = 'tournament-browser-list';
+
+    content.appendChild(title);
+    content.appendChild(accountTournamentHistoryStatusEl);
+    content.appendChild(accountTournamentHistoryListEl);
+    return accountTournamentHistoryOverlay;
+  }
+
+  function renderAccountTournamentHistoryRows(tournaments = []) {
+    if (!accountTournamentHistoryListEl) return;
+    accountTournamentHistoryListEl.innerHTML = '';
+    if (!Array.isArray(tournaments) || tournaments.length === 0) {
+      return;
+    }
+
+    tournaments.forEach((row) => {
+      const rowBtn = upgradeButton(document.createElement('button'), {
+        variant: 'neutral',
+        position: 'relative',
+      });
+      rowBtn.type = 'button';
+      rowBtn.className = 'tournament-modal__button tournament-browser-row';
+      const placementText = row.competed
+        ? (row.placementLabel || 'Completed')
+        : 'Hosted';
+      const completedText = row.completedAt
+        ? new Date(row.completedAt).toLocaleString()
+        : 'Complete';
+      rowBtn.innerHTML = `
+        <span class="tournament-browser-row__title">${row.label || 'Tournament'}</span>
+        <span class="tournament-browser-row__meta">${placementText}${row.hosted && row.competed ? ' · Hosted' : ''}</span>
+        <span class="tournament-browser-row__meta">${completedText}</span>
+      `;
+      rowBtn.addEventListener('click', async () => {
+        try {
+          await tournamentUiController?.openHistoricalTournament?.(row.id);
+          accountTournamentHistoryOverlay?.hide({ restoreFocus: false });
+          closeMenu();
+        } catch (err) {
+          window.alert(err?.message || 'Unable to open tournament.');
+        }
+      });
+      accountTournamentHistoryListEl.appendChild(rowBtn);
+    });
+  }
+
+  async function openAccountTournamentHistory() {
+    const overlay = ensureAccountTournamentHistoryOverlay();
+    if (accountTournamentHistoryStatusEl) {
+      accountTournamentHistoryStatusEl.textContent = 'Loading tournaments...';
+    }
+    renderAccountTournamentHistoryRows([]);
+    overlay.show();
+    try {
+      const payload = await apiGetTournamentHistory();
+      const tournaments = Array.isArray(payload?.tournaments) ? payload.tournaments : [];
+      if (accountTournamentHistoryStatusEl) {
+        accountTournamentHistoryStatusEl.textContent = tournaments.length
+          ? `${tournaments.length} completed tournament(s)`
+          : 'No completed tournaments yet.';
+      }
+      renderAccountTournamentHistoryRows(tournaments);
+    } catch (err) {
+      if (accountTournamentHistoryStatusEl) {
+        accountTournamentHistoryStatusEl.textContent = err?.message || 'Unable to load tournaments.';
+      }
+      renderAccountTournamentHistoryRows([]);
+    }
+  }
+
   function normalizeBotId(id) {
     const normalized = normalizeId(id);
     return normalized ? String(normalized) : null;
@@ -753,6 +859,27 @@ logBootConstantsOnce();
     const normalized = normalizeBotId(id);
     if (!normalized) return false;
     return botUserIds.has(normalized);
+  }
+
+  function normalizeGuestId(id) {
+    const normalized = normalizeId(id);
+    return normalized ? String(normalized) : null;
+  }
+
+  function markGuestStatus(id, isGuest) {
+    const normalized = normalizeGuestId(id);
+    if (!normalized) return;
+    if (isGuest) {
+      guestUserIds.add(normalized);
+    } else {
+      guestUserIds.delete(normalized);
+    }
+  }
+
+  function isKnownGuestId(id) {
+    const normalized = normalizeGuestId(id);
+    if (!normalized) return false;
+    return guestUserIds.has(normalized);
   }
 
   function isLikelyBotName(name) {
@@ -856,6 +983,38 @@ logBootConstantsOnce();
       onParticipantStateChange: (isParticipant) => {
         tournamentParticipantMode = Boolean(isParticipant);
         updateFindButton();
+      },
+      onTournamentAcceptStateChange: ({ requiresAccept = false, currentUserGame = null } = {}) => {
+        const gameId = currentUserGame?.gameId ? String(currentUserGame.gameId) : null;
+        const color = Number.isInteger(currentUserGame?.color) ? currentUserGame.color : null;
+        if (gameId && locallyAcceptedTournamentGames.has(gameId)) {
+          return;
+        }
+        if (requiresAccept && gameId && color !== null) {
+          stopClockInterval();
+          gameFinished = false;
+          isInSetup = false;
+          selected = null;
+          dragging = null;
+          purgeDanglingDragArtifacts();
+          currentDrawOffer = null;
+          clearDrawCooldownTimeout();
+          lastGameId = gameId;
+          currentIsWhite = color === 0;
+          tournamentAcceptScheduler.queue({
+            gameId,
+            color,
+            startSeconds: Math.max(1, Number(currentUserGame?.acceptWindowSeconds) || 30),
+          });
+          return;
+        }
+        tournamentAcceptScheduler.clearPending({ preserveDeadline: false });
+        tournamentAcceptScheduler.releaseGrace();
+        if (activeBannerKind === 'tournament-accept') {
+          clearBannerOverlay({ restoreFocus: false });
+        } else if (isBannerVisible() && !shouldPreserveTournamentFinishedView()) {
+          clearBannerOverlay({ restoreFocus: false });
+        }
       },
     });
   }
@@ -1051,7 +1210,7 @@ logBootConstantsOnce();
       }
 
       const displayName = userDetails?.username || sessionInfo.username || storedName || '';
-      const eloValue = Number.isFinite(userDetails?.elo) ? userDetails.elo : null;
+      const eloValue = Number.isFinite(userDetails?.elo) ? userDetails.elo : 800;
 
       if (displayName && displayName !== sessionInfo.username) {
         updateSessionInfo({ username: displayName });
@@ -1119,6 +1278,27 @@ logBootConstantsOnce();
       statsBtn.appendChild(statsLabel);
       statsBtn.appendChild(statsBadge);
 
+      const tournamentsBtn = createButton({
+        id: 'tournamentsBtn',
+        variant: 'neutral',
+        position: 'relative'
+      });
+      tournamentsBtn.classList.add('menu-button', 'menu-button--split');
+      tournamentsBtn.innerHTML = '';
+      const tournamentsLabel = document.createElement('span');
+      tournamentsLabel.textContent = 'Tournaments';
+      tournamentsLabel.style.flex = '1';
+      tournamentsLabel.style.textAlign = 'left';
+      const tournamentsMeta = document.createElement('img');
+      tournamentsMeta.src = '/assets/images/Tournament.png';
+      tournamentsMeta.alt = 'Tournament';
+      tournamentsMeta.style.width = '20px';
+      tournamentsMeta.style.height = '20px';
+      tournamentsMeta.style.objectFit = 'contain';
+      tournamentsMeta.style.pointerEvents = 'none';
+      tournamentsBtn.appendChild(tournamentsLabel);
+      tournamentsBtn.appendChild(tournamentsMeta);
+
       const logoutBtn = createButton({
         id: 'logoutBtn',
         variant: 'danger',
@@ -1141,6 +1321,7 @@ logBootConstantsOnce();
 
       accountPanelContent.appendChild(usernameRow);
       accountPanelContent.appendChild(statsBtn);
+      accountPanelContent.appendChild(tournamentsBtn);
       accountPanelContent.appendChild(logoutBtn);
 
       accountBtnImg.src = LOGGED_IN_AVATAR_SRC;
@@ -1152,6 +1333,10 @@ logBootConstantsOnce();
       statsBtn.addEventListener('click', ev => {
         ev.stopPropagation();
         openStatsOverlay();
+      });
+      tournamentsBtn.addEventListener('click', async ev => {
+        ev.stopPropagation();
+        await openAccountTournamentHistory();
       });
       editBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
@@ -1288,7 +1473,7 @@ logBootConstantsOnce();
         if (sessionData.username !== undefined) updates.username = sessionData.username;
         if (sessionData.isGuest !== undefined) updates.isGuest = Boolean(sessionData.isGuest);
         if (sessionData.authenticated !== undefined) updates.authenticated = Boolean(sessionData.authenticated);
-        updateSessionInfo(updates);
+        updateSessionInfo(updates, { syncCookies: Boolean(sessionData.isGuest) });
       }
     } catch (err) {
       console.warn('Failed to refresh session', err);
@@ -1414,6 +1599,22 @@ logBootConstantsOnce();
   let bannerInterval = null;
   let bannerOverlay = null;
   let bannerKeyListener = null;
+  let activeBannerKind = null;
+  let activeBannerGameId = null;
+  const locallyAcceptedTournamentGames = new Set();
+  // Tournament accept timing is client-owned but server-authoritative:
+  // the scheduler only decides when to surface the banner, while the server
+  // still controls whether accept is required and when the accept window expires.
+  const tournamentAcceptScheduler = createTournamentAcceptScheduler({
+    showAcceptBanner: ({ gameId, color, startSeconds }) => {
+      exitTournamentGameViewToPanel();
+      showTournamentAcceptBanner({ gameId, color, startSeconds });
+    },
+    isLocallyAccepted: (gameId) => locallyAcceptedTournamentGames.has(String(gameId || '')),
+    onDebug: emitLocalClockDebug,
+  });
+  let tournamentGameHydrationHandle = null;
+  let tournamentGameHydrationGameId = null;
   let playAreaRoot = null;
   let isPlayAreaVisible = false;
   let queuerHidden = false;
@@ -1443,6 +1644,7 @@ logBootConstantsOnce();
   let playerElos = [null, null];
   let currentPlayerIds = [];
   const playerProfileCache = new Map();
+  const guestUserIds = new Set();
   const connectionStatusByPlayer = new Map();
   let customInvitePrompt = null;
   let botMatchPrompt = null;
@@ -1499,6 +1701,7 @@ logBootConstantsOnce();
   let lastClockUpdate = 0;
   let clockInterval = null;
   let clockBaseSnapshot = null;
+  let clockBaseGameId = null;
   let topClockEl = null;
   let bottomClockEl = null;
   let timeExpiredSent = false;
@@ -1567,7 +1770,7 @@ logBootConstantsOnce();
     });
     playerElos = currentPlayerIds.map((id) => {
       const cached = playerProfileCache.get(String(id));
-      return Number.isFinite(cached?.elo) ? cached.elo : null;
+      return Number.isFinite(cached?.elo) ? cached.elo : 800;
     });
     renderBoardAndBars();
     await Promise.all(currentPlayerIds.map(async (id, idx) => {
@@ -1581,6 +1784,7 @@ logBootConstantsOnce();
             playerElos[idx] = cached.elo;
           }
           markBotStatus(id, Boolean(cached.isBot));
+          markGuestStatus(id, Boolean(cached.isGuest));
           return;
         }
 
@@ -1592,13 +1796,14 @@ logBootConstantsOnce();
         if (res.ok) {
           const user = await res.json().catch(() => null);
           const normalizedUsername = resolveDisplayedPlayerName(id, user?.username, idx);
-          const normalizedElo = Number.isFinite(user?.elo) ? user.elo : null;
+          const normalizedElo = Number.isFinite(user?.elo) ? user.elo : 800;
           playerNames[idx] = normalizedUsername;
           playerElos[idx] = normalizedElo;
           playerProfileCache.set(cacheKey, {
             username: tournamentAlias || formatPlayerName(user?.username, idx),
             elo: normalizedElo,
             isBot: Boolean(user?.isBot),
+            isGuest: Boolean(user?.isGuest),
           });
           if (statsOverlayController) {
             const normalized = normalizeId(id);
@@ -1607,6 +1812,7 @@ logBootConstantsOnce();
             }
           }
           markBotStatus(id, Boolean(user?.isBot));
+          markGuestStatus(id, Boolean(user?.isGuest));
         }
       } catch (_) {}
     }));
@@ -1779,12 +1985,14 @@ logBootConstantsOnce();
   }
 
   function getDisplayClockMsForColor(colorIdx) {
-    if (!gameStartTime && Number.isFinite(expectedTimeControl) && expectedTimeControl > 0) {
-      return expectedTimeControl;
-    }
-    if (colorIdx === 0) return whiteTimeMs;
-    if (colorIdx === 1) return blackTimeMs;
-    return 0;
+    return resolveDisplayedClockMs({
+      colorIdx,
+      whiteTimeMs,
+      blackTimeMs,
+      expectedTimeControl,
+      gameStartTime,
+      hasAuthoritativeClock: Boolean(clockBaseSnapshot),
+    });
   }
 
   function applyExpectedTimeSettingsForMatch(match) {
@@ -1797,7 +2005,7 @@ logBootConstantsOnce();
     }
 
     const type = typeof match.type === 'string' ? match.type.toUpperCase() : '';
-    if (type === 'QUICKPLAY') {
+    if (type === 'QUICKPLAY' || type === 'AI') {
       expectedTimeControl = timeSettings.quickplayMs;
     } else if (
       type === 'RANKED'
@@ -1879,8 +2087,19 @@ logBootConstantsOnce();
     }
   }
 
-  function syncClockBase(base) {
+  function syncClockBase(base, {
+    gameId = null,
+    debugEvent = 'client-clock-base-synced',
+    debugPayload = null,
+  } = {}) {
     clockBaseSnapshot = base || null;
+    if (clockBaseSnapshot) {
+      clockBaseGameId = gameId != null ? String(gameId) : clockBaseGameId;
+    } else if (gameId != null) {
+      clockBaseGameId = String(gameId);
+    } else {
+      clockBaseGameId = null;
+    }
     if (clockBaseSnapshot) {
       const display = advanceClockSnapshot(clockBaseSnapshot, Date.now());
       whiteTimeMs = display.whiteMs;
@@ -1888,8 +2107,10 @@ logBootConstantsOnce();
       activeColor = display.activeColor;
     }
     updateClockDisplay();
-    emitLocalClockDebug('client-clock-base-synced', {
+    emitLocalClockDebug(debugEvent, {
+      clockBaseGameId,
       serverClock: summarizeClockSnapshot(base),
+      ...(debugPayload || {}),
     });
     const expired = whiteTimeMs <= 0 || blackTimeMs <= 0;
     if (expired && lastGameId && !timeExpiredSent) {
@@ -1949,14 +2170,33 @@ logBootConstantsOnce();
     clockInterval = null;
   }
 
-  function recomputeClocksFromServer(serverClockSnapshot = null) {
+  function recomputeClocksFromServer(serverClockSnapshot = null, { gameId = null } = {}) {
     const fallbackLabel = getClockLabel();
     const normalizedServerClock = normalizeClockSnapshot(serverClockSnapshot, {
       receivedAt: Date.now(),
       fallbackLabel,
     });
     if (normalizedServerClock) {
-      syncClockBase(normalizedServerClock);
+      syncClockBase(normalizedServerClock, { gameId });
+      return;
+    }
+
+    if (shouldPreserveClockSnapshot({
+      incomingClockSnapshot: serverClockSnapshot,
+      currentClockSnapshot: clockBaseSnapshot,
+      currentClockGameId: clockBaseGameId,
+      incomingGameId: gameId,
+      gameFinished,
+      setupComplete,
+      actionCount: Array.isArray(actionHistory) ? actionHistory.length : 0,
+      moveCount: Array.isArray(moveHistory) ? moveHistory.length : 0,
+      playerTurn: currentPlayerTurn,
+    })) {
+      syncClockBase(clockBaseSnapshot, {
+        gameId,
+        debugEvent: 'client-clock-base-preserved',
+        debugPayload: { incomingClock: null },
+      });
       return;
     }
 
@@ -1965,6 +2205,7 @@ logBootConstantsOnce();
       : (Number.isFinite(expectedTimeControl) && expectedTimeControl > 0 ? expectedTimeControl : null);
     if (!baseTime) {
       clockBaseSnapshot = null;
+      clockBaseGameId = null;
       updateClockDisplay();
       return;
     }
@@ -1991,6 +2232,7 @@ logBootConstantsOnce();
       blackTimeMs = baseTime;
       activeColor = null;
       clockBaseSnapshot = null;
+      clockBaseGameId = null;
       stopClockInterval();
       updateClockDisplay();
       return;
@@ -2014,7 +2256,9 @@ logBootConstantsOnce();
     }, {
       receivedAt: now,
       fallbackLabel,
-    }));
+    }), {
+      gameId,
+    });
   }
 
   function applyLocalMoveClock() {
@@ -2119,10 +2363,6 @@ logBootConstantsOnce();
             lastGameId = latest._id; // treat as already handled
           }
           hideQueuer();
-          if (tournamentParticipantMode && tournamentUiController) {
-            tournamentUiController.setTournamentGameActive(true);
-          }
-          showPlayArea();
 
           if (latest?.match) {
             activeMatchId = String(latest.match);
@@ -2145,70 +2385,53 @@ logBootConstantsOnce();
           }
 
           // If this player refreshed between games, treat it as pressing Next.
-          // Otherwise, auto-send READY if they had already pressed Next previously.
+          // Otherwise, resolve whether this game still needs accept or should auto-ready.
+          let colorIdx = -1;
+          let isReady = false;
           try {
-            const colorIdx = Array.isArray(latest?.players)
+            colorIdx = Array.isArray(latest?.players)
               ? latest.players.findIndex(function(p){ return p === userId; })
               : -1;
-            const isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
+            isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
               ? Boolean(latest.playersReady[colorIdx])
               : false;
-            const isNext = Array.isArray(latest?.playersNext) && colorIdx > -1
-              ? Boolean(latest.playersNext[colorIdx])
-              : false;
+            const requiresTournamentAccept = resolveTournamentGameRequiresAccept(latest, currentMatch);
             currentIsWhite = (colorIdx === 0);
 
-            if (colorIdx > -1 && !isNext) {
-              try {
-                const match = await apiGetMatchDetails(latest.match);
-                if (match?._id) {
-                  activeMatchId = String(match._id);
-                }
-                const prevGames = Array.isArray(match?.games)
-                  ? match.games.filter(function(g){ return !g.isActive && g._id?.toString() !== latest._id; })
-                  : [];
-                const prevGame = prevGames.length > 0 ? prevGames[prevGames.length - 1] : null;
-                if (prevGame) {
-                  const winnerIdx = prevGame.winner;
-                  const loserIdx = winnerIdx === 0 ? 1 : 0;
-                  const winnerName = playerNames[winnerIdx] || formatPlayerName(null, winnerIdx);
-                  const loserName = playerNames[loserIdx] || formatPlayerName(null, loserIdx);
-                  const prevColorIdx = Array.isArray(prevGame.players)
-                    ? prevGame.players.findIndex(function(p){ return p === userId; })
-                    : -1;
-                  showGameFinishedBanner({
-                    winnerName,
-                    loserName,
-                    winnerColor: winnerIdx,
-                    didWin: winnerIdx === prevColorIdx,
-                    match,
-                    winReason: prevGame.winReason
+            if (colorIdx > -1 && !isReady) {
+              if (tournamentParticipantMode) {
+                if (requiresTournamentAccept) {
+                  if (tournamentUiController) {
+                    tournamentUiController.setTournamentGameActive(false);
+                  }
+                  tournamentAcceptScheduler.queue({
+                    gameId: latest._id?.toString?.() || latest._id || null,
+                    color: colorIdx,
+                    startSeconds: Math.max(1, Number(latest?.acceptWindowSeconds) || 30),
                   });
+                } else {
+                  apiReady(latest._id, colorIdx).catch(function(err){ console.error('READY on reconnect failed', err); });
                 }
-              } catch (err) {
-                console.error('Error showing banner on reconnect', err);
+              } else {
+                console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
+                apiReady(latest._id, colorIdx).catch(function(err){ console.error('READY on reconnect failed', err); });
               }
-              try {
-                await apiNext(latest._id, colorIdx);
-              } catch (err) {
-                console.error('NEXT on reconnect failed', err);
-              }
-              const desc = document.getElementById('gameOverDesc');
-              const btn = document.getElementById('gameOverNextBtn');
-              if (desc) desc.textContent = 'Waiting for other player...';
-              if (btn) btn.style.display = 'none';
-            } else if (colorIdx > -1 && !isReady) {
-              console.log('[client] reconnect sending READY immediately', { gameId: latest._id, color: colorIdx });
-              apiReady(latest._id, colorIdx).catch(function(err){ console.error('READY on reconnect failed', err); });
             }
           } catch (e) { console.error('Error evaluating reconnect ready state', e); }
 
             // Adopt masked state immediately if present, and enter setup if needed
           try {
             if (Array.isArray(latest?.board)) {
+              if (colorIdx > -1 && !isReady) {
+                return;
+              }
+              if (tournamentParticipantMode && tournamentUiController) {
+                tournamentUiController.setTournamentGameActive(true);
+              }
+              showPlayArea();
               currentRows = latest.board.length || 6;
               currentCols = latest.board[0]?.length || 5;
-                setStateFromServer(latest);
+                setStateFromServer(latest, 'initialState');
                 myColor = currentIsWhite ? 0 : 1;
                 const setupArr = Array.isArray(latest?.setupComplete) ? latest.setupComplete : setupComplete;
                 const mineDone = Boolean(setupArr?.[myColor]);
@@ -2249,49 +2472,132 @@ logBootConstantsOnce();
         logGameSnapshot('game:update', snapshot);
         try {
           if (!payload || !payload.gameId || !Array.isArray(payload.players)) return;
-        const gameId = payload.gameId;
-        const color = payload.players.findIndex(p => p === userId);
-        if (color !== 0 && color !== 1) return;
+          const gameId = payload.gameId;
+          const color = payload.players.findIndex(p => p === userId);
+          if (color !== 0 && color !== 1) return;
+          const wasShowingFinishedTournamentView = shouldPreserveTournamentFinishedView();
 
-        if (payload.matchId) {
-          activeMatchId = String(payload.matchId);
-        }
-
-        if (!currentMatch && payload.matchId) {
-          try {
-            currentMatch = await apiGetMatchDetails(payload.matchId);
-            if (currentMatch?._id) {
-              activeMatchId = String(currentMatch._id);
-            }
-            applyExpectedTimeSettingsForMatch(currentMatch);
-          } catch (e) {
-            console.error('Failed to fetch match details', e);
-            applyExpectedTimeSettingsForMatch(null);
+          if (payload.matchId) {
+            activeMatchId = String(payload.matchId);
           }
-        }
 
-        gameFinished = payload.winReason !== undefined && payload.winReason !== null;
-        if (gameFinished) {
-          stopClockInterval();
-          selected = null;
-          dragging = null;
-          purgeDanglingDragArtifacts();
-        }
+          if (payload.matchId && (!currentMatch || String(currentMatch._id || '') !== String(payload.matchId))) {
+            try {
+              currentMatch = await apiGetMatchDetails(payload.matchId);
+              if (currentMatch?._id) {
+                activeMatchId = String(currentMatch._id);
+              }
+              applyExpectedTimeSettingsForMatch(currentMatch);
+            } catch (e) {
+              console.error('Failed to fetch match details', e);
+              applyExpectedTimeSettingsForMatch(null);
+            }
+          }
 
-        // As soon as we are in a game, hide the Find Game UI and reveal the play area
-        hideQueuer();
-        if (tournamentParticipantMode && tournamentUiController) {
-          tournamentUiController.setTournamentGameActive(true);
-        }
-        showPlayArea();
-        loadPlayerNames(payload.players);
-        currentIsWhite = (color === 0);
+          const incomingGameFinished = payload.winReason !== undefined && payload.winReason !== null;
+          if (incomingGameFinished || !wasShowingFinishedTournamentView) {
+            gameFinished = incomingGameFinished;
+          }
+          if (gameFinished) {
+            stopClockInterval();
+            selected = null;
+            dragging = null;
+            purgeDanglingDragArtifacts();
+          }
+
+          const playersReady = Array.isArray(payload.playersReady) ? payload.playersReady : [false, false];
+          const myReady = Boolean(playersReady[color]);
+          const bothPlayersReady = playersReady[0] === true && playersReady[1] === true;
+          const shouldPreserveCountdownBanner = shouldPreserveMatchCountdownBanner({
+            activeBannerKind,
+            activeBannerGameId,
+            incomingGameId: gameId,
+            playersReady,
+          });
+          const requiresTournamentAccept = resolveTournamentGameRequiresAccept(payload, currentMatch);
+          const awaitingTournamentAccept = Boolean(
+            requiresTournamentAccept
+            && !bothPlayersReady
+          );
+
+          hideQueuer();
+          loadPlayerNames(payload.players);
+          currentIsWhite = (color === 0);
+          lastGameId = gameId;
+
+          if (awaitingTournamentAccept) {
+            stopClockInterval();
+            if (!wasShowingFinishedTournamentView) {
+              gameFinished = false;
+              isInSetup = false;
+              selected = null;
+              dragging = null;
+              purgeDanglingDragArtifacts();
+            }
+            if (tournamentUiController) {
+              tournamentUiController.setTournamentGameActive(false);
+            }
+            if (!wasShowingFinishedTournamentView) {
+              hidePlayArea();
+            }
+            if (!myReady && !locallyAcceptedTournamentGames.has(String(gameId))) {
+              tournamentAcceptScheduler.queue({
+                gameId: typeof gameId === 'string' ? gameId : String(gameId),
+                color,
+                startSeconds: Math.max(1, Number(payload?.acceptWindowSeconds) || 30),
+              });
+            } else {
+              tournamentAcceptScheduler.clearPending({ preserveDeadline: true });
+              if (!wasShowingFinishedTournamentView && activeBannerKind === 'tournament-accept') {
+                clearBannerOverlay({ restoreFocus: false });
+              }
+            }
+            return;
+          }
+
+          if (tournamentParticipantMode && !bothPlayersReady) {
+            stopClockInterval();
+            if (!wasShowingFinishedTournamentView) {
+              gameFinished = false;
+              isInSetup = false;
+              selected = null;
+              dragging = null;
+              purgeDanglingDragArtifacts();
+            }
+            tournamentAcceptScheduler.clearPending({ preserveDeadline: false });
+            tournamentAcceptScheduler.releaseGrace();
+            tournamentAcceptScheduler.forgetDeadline(gameId);
+            if (tournamentUiController) {
+              tournamentUiController.setTournamentGameActive(false);
+            }
+            if (!wasShowingFinishedTournamentView) {
+              hidePlayArea();
+            }
+            if (activeBannerKind === 'tournament-accept') {
+              clearBannerOverlay({ restoreFocus: false });
+            }
+            return;
+          }
+
+          clearTournamentGameHydration();
+          locallyAcceptedTournamentGames.delete(String(gameId));
+          tournamentAcceptScheduler.clearPending({ preserveDeadline: false });
+          tournamentAcceptScheduler.releaseGrace();
+          tournamentAcceptScheduler.forgetDeadline(gameId);
+
+          if (!shouldPreserveCountdownBanner) {
+            clearBannerOverlay({ restoreFocus: false });
+          }
+          if (tournamentParticipantMode && tournamentUiController) {
+            tournamentUiController.setTournamentGameActive(true);
+          }
+          showPlayArea();
 
           // If the server provided a board/state, adopt and render
-        if (Array.isArray(payload.board)) {
-          currentRows = payload.board.length || 6;
-          currentCols = payload.board[0]?.length || 5;
-            setStateFromServer(payload);
+          if (Array.isArray(payload.board)) {
+            currentRows = payload.board.length || 6;
+            currentCols = payload.board[0]?.length || 5;
+            setStateFromServer(payload, 'game:update');
             // Keep setup mode consistent after refresh or reconnect
             myColor = currentIsWhite ? 0 : 1;
             const setupArr = Array.isArray(payload?.setupComplete) ? payload.setupComplete : setupComplete;
@@ -2305,20 +2611,19 @@ logBootConstantsOnce();
             } else {
               isInSetup = false;
             }
-          ensurePlayAreaRoot();
-          layoutPlayArea();
-          renderBoardAndBars();
+            ensurePlayAreaRoot();
+            layoutPlayArea();
+            renderBoardAndBars();
+          }
+        } catch (e) {
+          console.error('Error handling game:update', e);
         }
-
-        lastGameId = gameId;
-      } catch (e) {
-        console.error('Error handling game:update', e);
-      }
       },
       onGameFinished(payload) {
         console.log('[socket] game:finished', payload);
         const finishSnapshot = payload && payload.game ? payload.game : payload;
         logGameSnapshot('game:finished', finishSnapshot);
+        clearTournamentGameHydration();
         emitLocalClockDebug('client-game-finished-received', {
           gameId: payload?.gameId || finishSnapshot?._id || finishSnapshot?.id || lastGameId || null,
           incomingClock: summarizeClockSnapshot(finishSnapshot?.clocks || null),
@@ -2340,6 +2645,18 @@ logBootConstantsOnce();
         (async () => {
           try {
             const winnerIdx = payload?.winner;
+            const finishedPlayerIds = Array.isArray(payload?.players)
+              ? payload.players.map((id) => String(id))
+              : (Array.isArray(finishSnapshot?.players) ? finishSnapshot.players.map((id) => String(id)) : []);
+            const finishedColorIdx = finishedPlayerIds.findIndex((id) => id === String(userId || ''));
+            const frozenPlayerNames = Array.isArray(playerNames) ? playerNames.slice(0, 2) : [];
+            const winnerName = winnerIdx === 0 || winnerIdx === 1
+              ? (frozenPlayerNames[winnerIdx] || formatPlayerName(null, winnerIdx))
+              : null;
+            const loserIdx = winnerIdx === 0 ? 1 : winnerIdx === 1 ? 0 : null;
+            const loserName = loserIdx === 0 || loserIdx === 1
+              ? (frozenPlayerNames[loserIdx] || formatPlayerName(null, loserIdx))
+              : null;
             if (payload?.matchId) {
               activeMatchId = String(payload.matchId);
             }
@@ -2352,15 +2669,13 @@ logBootConstantsOnce();
               renderBoardAndBars();
             }
             showGameFinishedBanner({
-              winnerName: winnerIdx === 0 || winnerIdx === 1
-                ? (playerNames[winnerIdx] || formatPlayerName(null, winnerIdx))
-                : null,
-              loserName: winnerIdx === 0 || winnerIdx === 1
-                ? (playerNames[winnerIdx === 0 ? 1 : 0] || formatPlayerName(null, winnerIdx === 0 ? 1 : 0))
-                : null,
+              gameId: payload?.gameId || finishSnapshot?._id || lastGameId || null,
+              winnerName,
+              loserName,
               winnerColor: winnerIdx,
-              didWin: winnerIdx === myColor,
+              didWin: winnerIdx === finishedColorIdx,
               match,
+              matchIsActive: Boolean(payload?.matchIsActive),
               winReason: payload.winReason
             });
             await updateAccountPanel();
@@ -2383,7 +2698,26 @@ logBootConstantsOnce();
             if (remaining <= 0) {
               clearInterval(bannerInterval);
               bannerInterval = null;
-              try { await apiNext(gameId, color); } catch (e) { console.error('auto next failed', e); }
+              try {
+                const nextResult = await apiNext(gameId, color);
+                if (nextResult?.hasNextGame === false) {
+                  const resolved = await resolveSettledPostGameMatch(currentMatch, {
+                    finishedGameId: gameId || null,
+                    fallbackActive: false,
+                    attempts: 1,
+                    delayMs: 0,
+                  });
+                  const latestMatch = resolved?.match || currentMatch || null;
+                  clearBannerOverlay({ restoreFocus: false });
+                  if (tournamentParticipantMode) {
+                    exitTournamentGameViewToPanel();
+                  }
+                  showMatchSummary(latestMatch, { finishedGameId: gameId || null, force: true });
+                  return;
+                }
+              } catch (e) {
+                console.error('auto next failed', e);
+              }
               desc.textContent = 'Waiting for other player...';
               if (btn) btn.style.display = 'none';
             } else {
@@ -2395,15 +2729,15 @@ logBootConstantsOnce();
       async onBothNext(payload) {
         try {
           console.log('[socket] players:bothNext received', payload);
-          clearBannerOverlay({ restoreFocus: false });
           const { gameId, color, requiresAccept, acceptWindowSeconds } = payload || {};
           if (!gameId) return;
 
           const nextGameId = typeof gameId === 'string' ? gameId : String(gameId);
-          const hasLiveBoard = Array.isArray(currentBoard) && currentBoard.length > 0;
+          const currentGameNumber = Number.isFinite(Number(payload?.currentGameNumber))
+            ? Number(payload.currentGameNumber)
+            : 1;
           const isCurrentActiveGame =
             nextGameId === (typeof lastGameId === 'string' ? lastGameId : String(lastGameId || '')) &&
-            hasLiveBoard &&
             !gameFinished;
 
           if (isCurrentActiveGame) {
@@ -2413,47 +2747,33 @@ logBootConstantsOnce();
 
           lastGameId = nextGameId;
           if (requiresAccept) {
-            showTournamentAcceptBanner({
+            tournamentAcceptScheduler.queue({
               gameId: nextGameId,
               color,
               startSeconds: Number(acceptWindowSeconds) || 30,
             });
             return;
           }
+          clearBannerOverlay({ restoreFocus: false });
           showMatchFoundBanner(3, async function(remaining) {
             if (remaining === 0) {
               try { await apiReady(nextGameId, color); } catch (e) { console.error('Failed to ready after next', e); }
             }
-          });
+          }, { gameId: nextGameId, currentGameNumber });
         } catch (e) { console.error('players:bothNext handler failed', e); }
       },
       async onBothReady(payload) {
         try {
-          showPlayArea();
+          clearTournamentGameHydration();
+          tournamentAcceptScheduler.clearPending({ preserveDeadline: false });
+          tournamentAcceptScheduler.releaseGrace();
+          tournamentAcceptScheduler.forgetDeadline(payload?.gameId || lastGameId);
+          clearBannerOverlay({ restoreFocus: false });
           const gameId = payload?.gameId || lastGameId;
           if (!gameId) return;
-          const colorIdx = currentIsWhite ? 0 : 1;
-          const view = await apiGetDetails(gameId, colorIdx);
+          const view = await apiGetDetails(gameId, null);
           if (!view) return;
-          setStateFromServer(view);
-          if (Array.isArray(view.players)) {
-            loadPlayerNames(view.players);
-          }
-          // Enter setup mode if our setup is not complete
-          myColor = currentIsWhite ? 0 : 1;
-          const serverSetup = Array.isArray(view?.setupComplete) ? view.setupComplete : setupComplete;
-          const myDone = Boolean(serverSetup?.[myColor]);
-
-          if (!myDone) {
-            bootstrapWorkingStateFromServer(view);
-            isInSetup = true;
-          } else {
-            isInSetup = false;
-          }
-          // If opponent has completed setup, render their back rank as unknown pieces (already masked by server)
-          ensurePlayAreaRoot();
-          layoutPlayArea();
-          renderBoardAndBars();
+          await activateLiveGameViewFromState(view, 'players:bothReady');
         } catch (e) {
           console.error('players:bothReady handler failed', e);
         }
@@ -2654,6 +2974,16 @@ logBootConstantsOnce();
       }
       if (tournamentUiController) {
         await tournamentUiController.restoreCurrentTournament();
+        const params = new URLSearchParams(window.location.search || '');
+        const adminTournamentId = params.get('adminTournamentId');
+        const archiveTournamentId = params.get('archiveTournamentId');
+        if (!tournamentUiController.hasPersistentTournament()) {
+          if (adminTournamentId) {
+            await tournamentUiController.openHistoricalTournament(adminTournamentId, { admin: true });
+          } else if (archiveTournamentId) {
+            await tournamentUiController.openHistoricalTournament(archiveTournamentId);
+          }
+        }
       }
       console.log('[init] userId', userId);
       try {
@@ -2884,12 +3214,18 @@ logBootConstantsOnce();
     bannerKeyListener = typeof listener === 'function' ? listener : null;
   }
 
+  function setActiveBanner(kind = null, gameId = null) {
+    activeBannerKind = kind || null;
+    activeBannerGameId = gameId !== null && gameId !== undefined ? String(gameId) : null;
+  }
+
   function clearBannerOverlay({ restoreFocus = false } = {}) {
     if (bannerInterval) {
       clearInterval(bannerInterval);
       bannerInterval = null;
     }
     setBannerKeyListener(null);
+    setActiveBanner(null, null);
     if (bannerOverlay) {
       try {
         if (bannerOverlay.content) {
@@ -4107,8 +4443,131 @@ logBootConstantsOnce();
     });
   }
 
-  function showMatchFoundBanner(startSeconds, onTick) {
+  function doesTournamentMatchRequireAccept(match) {
+    const matchType = typeof match?.type === 'string'
+      ? match.type.toUpperCase()
+      : '';
+    if (matchType === 'TOURNAMENT_ROUND_ROBIN') {
+      return true;
+    }
+    if (matchType !== 'TOURNAMENT_ELIMINATION') {
+      return false;
+    }
+    const player1Score = Number(match?.player1Score || 0);
+    const player2Score = Number(match?.player2Score || 0);
+    const drawCount = Number(match?.drawCount || 0);
+    return (player1Score + player2Score + drawCount) === 0;
+  }
+
+  function resolveTournamentGameRequiresAccept(gameLike, matchLike) {
+    if (!tournamentParticipantMode) {
+      return false;
+    }
+    if (typeof gameLike?.requiresAccept === 'boolean') {
+      return Boolean(gameLike.requiresAccept);
+    }
+    return doesTournamentMatchRequireAccept(matchLike);
+  }
+
+  function clearTournamentGameHydration() {
+    if (tournamentGameHydrationHandle) {
+      clearTimeout(tournamentGameHydrationHandle);
+      tournamentGameHydrationHandle = null;
+    }
+    tournamentGameHydrationGameId = null;
+  }
+
+  function shouldPreserveTournamentFinishedView() {
+    if (!tournamentParticipantMode) {
+      return false;
+    }
+    return activeBannerKind === 'game-finished' || activeBannerKind === 'match-summary';
+  }
+
+  async function activateLiveGameViewFromState(view, source = 'game:view') {
+    if (!view || !Array.isArray(view.board)) {
+      return false;
+    }
+    if (Array.isArray(view.players)) {
+      const resolvedColorIdx = view.players.findIndex((playerId) => String(playerId) === String(userId || ''));
+      if (resolvedColorIdx === 0 || resolvedColorIdx === 1) {
+        currentIsWhite = (resolvedColorIdx === 0);
+      }
+      loadPlayerNames(view.players);
+    }
+    if (tournamentParticipantMode && tournamentUiController) {
+      tournamentUiController.setTournamentGameActive(true);
+    }
+    showPlayArea();
+    currentRows = view.board.length || 6;
+    currentCols = view.board[0]?.length || 5;
+    setStateFromServer(view, source);
+    myColor = currentIsWhite ? 0 : 1;
+    const serverSetup = Array.isArray(view?.setupComplete) ? view.setupComplete : setupComplete;
+    const myDone = Boolean(serverSetup?.[myColor]);
+    if (!myDone) {
+      bootstrapWorkingStateFromServer(view);
+      isInSetup = true;
+    } else {
+      isInSetup = false;
+    }
+    ensurePlayAreaRoot();
+    layoutPlayArea();
+    renderBoardAndBars();
+    return true;
+  }
+
+  function scheduleTournamentGameHydration(gameId, color = null, { attempts = 12, delayMs = 750 } = {}) {
+    const normalizedGameId = gameId ? String(gameId) : null;
+    if (!normalizedGameId) {
+      return;
+    }
+    clearTournamentGameHydration();
+    tournamentGameHydrationGameId = normalizedGameId;
+
+    const runAttempt = async (remainingAttempts) => {
+      if (tournamentGameHydrationGameId !== normalizedGameId) {
+        return;
+      }
+      try {
+        const view = await apiGetDetails(normalizedGameId, null);
+        if (tournamentGameHydrationGameId !== normalizedGameId || !view) {
+          return;
+        }
+        const viewPlayersReady = Array.isArray(view?.playersReady) ? view.playersReady : [false, false];
+        const bothPlayersReady = viewPlayersReady[0] === true && viewPlayersReady[1] === true;
+        const requiresTournamentAccept = resolveTournamentGameRequiresAccept(view, currentMatch);
+        if (bothPlayersReady && !requiresTournamentAccept) {
+          locallyAcceptedTournamentGames.delete(normalizedGameId);
+          tournamentAcceptScheduler.clearPending({ preserveDeadline: false });
+          tournamentAcceptScheduler.releaseGrace();
+          tournamentAcceptScheduler.forgetDeadline(normalizedGameId);
+          clearBannerOverlay({ restoreFocus: false });
+          gameFinished = false;
+          clearTournamentGameHydration();
+          await activateLiveGameViewFromState(view, 'tournament-accept-hydrate');
+          return;
+        }
+      } catch (err) {
+        console.error('Tournament game hydration failed', err);
+      }
+
+      if (remainingAttempts <= 1 || tournamentGameHydrationGameId !== normalizedGameId) {
+        clearTournamentGameHydration();
+        return;
+      }
+      tournamentGameHydrationHandle = setTimeout(() => {
+        tournamentGameHydrationHandle = null;
+        runAttempt(remainingAttempts - 1);
+      }, delayMs);
+    };
+
+    runAttempt(attempts);
+  }
+
+  function showMatchFoundBanner(startSeconds, onTick, { gameId = null, currentGameNumber = 1 } = {}) {
     const overlay = ensureBannerOverlay();
+    setActiveBanner('match-found', gameId || null);
     const { content, dialog, closeButton } = overlay;
     dialog.style.alignItems = 'center';
     dialog.style.justifyContent = 'center';
@@ -4132,16 +4591,7 @@ logBootConstantsOnce();
     card.style.textAlign = 'center';
 
     const title = document.createElement('div');
-    let titleText = 'Match Found';
-    if (currentMatch) {
-      const finishedGames = Array.isArray(currentMatch?.games)
-        ? currentMatch.games.filter(g => !g.isActive).length
-        : 0;
-      if (finishedGames > 0) {
-        titleText = `Game ${finishedGames + 1}`;
-      }
-    }
-    title.textContent = titleText;
+    title.textContent = getMatchCountdownBannerTitle(currentGameNumber);
     title.style.fontSize = '32px';
     title.style.fontWeight = '800';
     title.style.marginBottom = '10px';
@@ -4159,6 +4609,7 @@ logBootConstantsOnce();
     function closeBanner() {
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
       content.innerHTML = '';
+      setActiveBanner(null, null);
       overlay.hide();
     }
 
@@ -4183,54 +4634,82 @@ logBootConstantsOnce();
   }
 
   function showTournamentAcceptBanner({ gameId, color, startSeconds = 30 } = {}) {
+    const normalizedGameId = gameId ? String(gameId) : null;
+    if (normalizedGameId && locallyAcceptedTournamentGames.has(normalizedGameId)) {
+      return;
+    }
+    tournamentAcceptScheduler.clearPending({ preserveDeadline: true });
+    tournamentAcceptScheduler.rememberDeadline(normalizedGameId, startSeconds);
+    if (
+      normalizedGameId
+      && activeBannerKind === 'tournament-accept'
+      && activeBannerGameId === normalizedGameId
+      && isBannerVisible()
+    ) {
+      return;
+    }
     const overlay = ensureBannerOverlay();
+    setActiveBanner('tournament-accept', normalizedGameId);
     const { content, dialog, closeButton } = overlay;
     dialog.style.alignItems = 'center';
     dialog.style.justifyContent = 'center';
     content.innerHTML = '';
     if (closeButton) closeButton.hidden = true;
 
-    const card = document.createElement('div');
-    card.style.width = '100%';
-    card.style.maxWidth = '100%';
-    card.style.padding = '18px 26px';
-    card.style.borderTop = '2px solid var(--CG-deep-gold)';
-    card.style.borderBottom = '2px solid var(--CG-deep-gold)';
-    card.style.background = 'var(--CG-deep-purple)';
-    card.style.color = 'var(--CG-white)';
-    card.style.textAlign = 'center';
+    const stack = document.createElement('div');
+    stack.style.display = 'flex';
+    stack.style.flexDirection = 'column';
+    stack.style.alignItems = 'center';
+    stack.style.justifyContent = 'center';
+    stack.style.gap = '12px';
+    stack.style.width = 'min(560px, 92vw)';
+    stack.style.padding = '22px 28px';
+    stack.style.color = 'var(--CG-white)';
+    stack.style.textAlign = 'center';
+    stack.style.background = 'var(--CG-deep-purple)';
+    stack.style.border = '2px solid var(--CG-deep-gold)';
+    stack.style.boxShadow = '0 14px 34px rgba(0, 0, 0, 0.38)';
 
     const title = document.createElement('div');
     title.textContent = 'Tournament Match Ready';
     title.style.fontSize = '28px';
     title.style.fontWeight = '800';
-    title.style.marginBottom = '10px';
 
     const message = document.createElement('div');
-    message.textContent = 'Accept within 30 seconds to start this game.';
+    message.textContent = `Accept within ${Math.max(1, Number(startSeconds) || 30)} seconds to start this game.`;
     message.style.fontSize = '18px';
-    message.style.marginBottom = '12px';
+    message.style.lineHeight = '1.35';
+    message.style.maxWidth = '320px';
 
     const timerEl = document.createElement('div');
     timerEl.style.fontSize = '48px';
     timerEl.style.fontWeight = '900';
-    timerEl.style.marginBottom = '12px';
 
     const acceptBtn = createButton({
       label: 'Accept',
       variant: 'primary',
       position: 'relative'
     });
+    acceptBtn.style.setProperty('--cg-button-padding', '12px 24px');
+    acceptBtn.style.setProperty('--cg-button-border', '2px solid var(--CG-deep-gold)');
+    acceptBtn.style.minWidth = '180px';
+    acceptBtn.style.minHeight = '52px';
+    acceptBtn.style.borderRadius = '12px';
+    acceptBtn.style.fontSize = '20px';
+    acceptBtn.style.setProperty('--cg-button-font-weight', '700');
+    acceptBtn.style.boxShadow = '0 12px 30px rgba(0, 0, 0, 0.28)';
+    acceptBtn.style.margin = '0 auto';
 
-    card.appendChild(title);
-    card.appendChild(message);
-    card.appendChild(timerEl);
-    card.appendChild(acceptBtn);
-    content.appendChild(card);
+    stack.appendChild(title);
+    stack.appendChild(message);
+    stack.appendChild(timerEl);
+    stack.appendChild(acceptBtn);
+    content.appendChild(stack);
 
     function closeBanner() {
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
       content.innerHTML = '';
+      setActiveBanner(null, null);
       overlay.hide();
     }
 
@@ -4241,10 +4720,18 @@ logBootConstantsOnce();
     acceptBtn.addEventListener('click', async () => {
       acceptBtn.disabled = true;
       acceptBtn.textContent = 'Accepting…';
+      if (normalizedGameId) {
+        locallyAcceptedTournamentGames.add(normalizedGameId);
+      }
       try {
-        await apiReady(gameId, color);
+        await apiReady(normalizedGameId, color);
         closeBanner();
+        scheduleTournamentGameHydration(normalizedGameId, color);
       } catch (err) {
+        if (normalizedGameId) {
+          locallyAcceptedTournamentGames.delete(normalizedGameId);
+        }
+        clearTournamentGameHydration();
         console.error('Failed to accept tournament match', err);
         acceptBtn.disabled = false;
         acceptBtn.textContent = 'Accept';
@@ -4265,12 +4752,22 @@ logBootConstantsOnce();
   }
 
   function createScoreboard(match) {
+    const hasSeriesGameStarted = (game) => {
+      if (!game || typeof game !== 'object') return false;
+      if (game.startTime || game.endTime) return true;
+      if (game.winner !== undefined && game.winner !== null) return true;
+      if (game.winReason !== undefined && game.winReason !== null) return true;
+      if (Array.isArray(game.actions) && game.actions.length > 0) return true;
+      if (Array.isArray(game.moves) && game.moves.length > 0) return true;
+      return game.isActive === false;
+    };
+
     const p1Name = formatPlayerName(match?.player1?.username, 0);
     const p2Name = formatPlayerName(match?.player2?.username, 1);
     const p1Score = Number(match?.player1Score || 0);
     const p2Score = Number(match?.player2Score || 0);
     const finishedGames = Array.isArray(match?.games)
-      ? match.games.filter(g => !g.isActive).length
+      ? match.games.filter(g => hasSeriesGameStarted(g) && !g.isActive).length
       : 0;
     const draws = Number.isFinite(match?.drawCount)
       ? match.drawCount
@@ -4363,13 +4860,149 @@ logBootConstantsOnce();
     return container;
   }
 
-  function showGameFinishedBanner({ winnerName, loserName, winnerColor, didWin, match, winReason }) {
+  function hasMatchContinuation(match, finishedGameId = null, fallbackActive = false) {
+    const normalizedFinishedGameId = finishedGameId ? String(finishedGameId) : null;
+    const activeNextGame = Array.isArray(match?.games)
+      ? match.games.some((game) => {
+          if (!game?.isActive) return false;
+          const gameId = game?._id?.toString?.() || game?._id || game?.id || null;
+          if (!gameId) return false;
+          return String(gameId) !== normalizedFinishedGameId;
+        })
+      : false;
+    if (activeNextGame) {
+      return true;
+    }
+
+    // If the match record already says it ended, do not let a stale
+    // matchIsActive socket flag force the client down the "waiting for next
+    // game" path. That stale path is what leaves the finished board up with
+    // the dark overlay and no summary.
+    if (match?.winner || match?.endTime || match?.isActive === false) {
+      return false;
+    }
+
+    const winScoreTarget = Number(match?.winScoreTarget);
+    const player1Score = Number(match?.player1Score || 0);
+    const player2Score = Number(match?.player2Score || 0);
+    const drawCount = Number(match?.drawCount || 0);
+    const isTournamentElimination = String(match?.type || '').toUpperCase() === 'TOURNAMENT_ELIMINATION';
+    if (Number.isFinite(winScoreTarget) && winScoreTarget > 0) {
+      if (player1Score >= winScoreTarget || player2Score >= winScoreTarget) {
+        return false;
+      }
+      if (!isTournamentElimination && drawCount >= winScoreTarget) {
+        return false;
+      }
+    }
+
+    return Boolean(fallbackActive);
+  }
+
+  function isMatchDefinitelyComplete(match) {
+    if (!match || typeof match !== 'object') {
+      return false;
+    }
+    if (match.winner || match.endTime || match.isActive === false) {
+      return true;
+    }
+    const winScoreTarget = Number(match?.winScoreTarget);
+    const player1Score = Number(match?.player1Score || 0);
+    const player2Score = Number(match?.player2Score || 0);
+    const drawCount = Number(match?.drawCount || 0);
+    const isTournamentElimination = String(match?.type || '').toUpperCase() === 'TOURNAMENT_ELIMINATION';
+    if (Number.isFinite(winScoreTarget) && winScoreTarget > 0) {
+      if (player1Score >= winScoreTarget || player2Score >= winScoreTarget) {
+        return true;
+      }
+      if (!isTournamentElimination && drawCount >= winScoreTarget) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function refreshMatchForPostGame(match) {
+    const matchId = match?._id ? String(match._id) : null;
+    if (!matchId) {
+      return match || null;
+    }
+    try {
+      const refreshed = await apiGetMatchDetails(matchId);
+      return refreshed || match || null;
+    } catch (err) {
+      console.error('Failed to refresh match details for post-game flow', err);
+      return match || null;
+    }
+  }
+
+  async function resolveSettledPostGameMatch(match, {
+    finishedGameId = null,
+    fallbackActive = false,
+    attempts = 6,
+    delayMs = 250,
+  } = {}) {
+    let latestMatch = match || null;
+    let latestContinuation = hasMatchContinuation(latestMatch, finishedGameId, fallbackActive);
+    if (!latestContinuation || isMatchDefinitelyComplete(latestMatch)) {
+      return {
+        match: latestMatch,
+        hasNextGame: latestContinuation,
+      };
+    }
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      latestMatch = await refreshMatchForPostGame(latestMatch);
+      latestContinuation = hasMatchContinuation(latestMatch, finishedGameId, fallbackActive);
+      if (!latestContinuation || isMatchDefinitelyComplete(latestMatch)) {
+        break;
+      }
+    }
+
+    return {
+      match: latestMatch,
+      hasNextGame: latestContinuation,
+    };
+  }
+
+  function canShowMatchSummary(match, finishedGameId = null) {
+    const incomingMatchId = match?._id ? String(match._id) : null;
+    const currentMatchId = currentMatch?._id ? String(currentMatch._id) : null;
+    const liveMatchId = activeMatchId ? String(activeMatchId) : null;
+    const normalizedFinishedGameId = finishedGameId ? String(finishedGameId) : null;
+    const currentGameId = lastGameId ? String(lastGameId) : null;
+
+    if (
+      normalizedFinishedGameId
+      && currentGameId
+      && normalizedFinishedGameId !== currentGameId
+      && !gameFinished
+    ) {
+      return false;
+    }
+
+    if (incomingMatchId && liveMatchId && incomingMatchId !== liveMatchId && !gameFinished) {
+      return false;
+    }
+
+    if (incomingMatchId && currentMatchId && incomingMatchId !== currentMatchId && !gameFinished) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function showGameFinishedBanner({ gameId, winnerName, loserName, winnerColor, didWin, match, matchIsActive, winReason }) {
     currentMatch = match;
     if (match?._id) {
       activeMatchId = String(match._id);
     }
     applyExpectedTimeSettingsForMatch(currentMatch);
     const overlay = ensureBannerOverlay();
+    setActiveBanner('game-finished', gameId || null);
     const { content, dialog, closeButton } = overlay;
     dialog.style.alignItems = 'center';
     dialog.style.justifyContent = 'flex-end';
@@ -4381,6 +5014,7 @@ logBootConstantsOnce();
       closeButton.onclick = () => {
         if (summaryTimeout) { clearTimeout(summaryTimeout); summaryTimeout = null; }
         content.innerHTML = '';
+        setActiveBanner(null, null);
         overlay.hide();
         setBannerKeyListener(null);
       };
@@ -4419,9 +5053,10 @@ logBootConstantsOnce();
     const desc = document.createElement('div');
     const colorStr = winnerColor === 0 ? 'White' : 'Black';
     const reason = Number(winReason);
-    const hasNextGame = Array.isArray(match?.games)
-      ? match.games.some(g => g && g.isActive)
-      : false;
+    const initialHasNextGame = hasMatchContinuation(match, gameId || null, Boolean(matchIsActive || match?.isActive));
+    if (!initialHasNextGame && tournamentParticipantMode) {
+      tournamentAcceptScheduler.setGrace();
+    }
     let descText;
     if (isDraw || reason === WIN_REASONS.DRAW) {
       const whiteName = playerNames[0] || formatPlayerName(null, 0);
@@ -4476,34 +5111,73 @@ logBootConstantsOnce();
     btn.style.fontSize = '17px';
     btn.style.marginTop = 'auto';
     btn.addEventListener('click', async () => {
+      btn.disabled = true;
       if (summaryTimeout) {
         clearTimeout(summaryTimeout);
         summaryTimeout = null;
       }
-      const nextGame = Array.isArray(match?.games) ? match.games.find(g => g && g.isActive) : null;
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
-      if (nextGame) {
-        try {
-          await apiNext(nextGame._id, 1 - myColor);
-          desc.textContent = 'Waiting for other player...';
+      try {
+        if (initialHasNextGame && gameId) {
+          desc.textContent = 'Waiting for the next game...';
           btn.style.display = 'none';
-        } catch (e) { console.error('Failed to queue next game', e); }
-      } else {
-        showMatchSummary(match);
+          const nextResult = await apiNext(gameId, myColor);
+          if (nextResult?.hasNextGame === false) {
+            const resolved = await resolveSettledPostGameMatch(match, {
+              finishedGameId: gameId || null,
+              fallbackActive: false,
+              attempts: 1,
+              delayMs: 0,
+            });
+            const latestMatch = resolved.match || match;
+            clearBannerOverlay({ restoreFocus: false });
+            if (tournamentParticipantMode) {
+              exitTournamentGameViewToPanel();
+            }
+            showMatchSummary(latestMatch || match, { finishedGameId: gameId || null, force: true });
+            return;
+          }
+          return;
+        }
+
+        const resolved = await resolveSettledPostGameMatch(match, {
+          finishedGameId: gameId || null,
+          fallbackActive: Boolean(matchIsActive || match?.isActive),
+        });
+        const latestMatch = resolved.match || match;
+
+        clearBannerOverlay({ restoreFocus: false });
+        if (tournamentParticipantMode) {
+          exitTournamentGameViewToPanel();
+        }
+        showMatchSummary(latestMatch || match, { finishedGameId: gameId || null, force: true });
+      } catch (e) {
+        console.error('Failed to advance post-game flow', e);
+        btn.disabled = false;
+        btn.style.display = '';
+        clearBannerOverlay({ restoreFocus: false });
       }
     });
 
-    if (!hasNextGame) {
+    if (!initialHasNextGame && !tournamentParticipantMode) {
       summaryTimeout = setTimeout(() => {
         try {
-          const currentId = currentMatch?._id ? String(currentMatch._id) : null;
-          const incomingId = match?._id ? String(match._id) : null;
-          if (incomingId && currentId && incomingId !== currentId) {
-            return;
-          }
-          showMatchSummary(match);
+          Promise.resolve(resolveSettledPostGameMatch(match, {
+            finishedGameId: gameId || null,
+            fallbackActive: Boolean(matchIsActive || match?.isActive),
+          }))
+            .then((resolved) => {
+              const latestMatch = resolved?.match || match;
+              clearBannerOverlay({ restoreFocus: false });
+              showMatchSummary(latestMatch || match, { finishedGameId: gameId || null, force: true });
+            })
+            .catch((err) => {
+              console.error('Failed to auto show match summary', err);
+              clearBannerOverlay({ restoreFocus: false });
+            });
         } catch (err) {
           console.error('Failed to auto show match summary', err);
+          clearBannerOverlay({ restoreFocus: false });
         }
       }, 4000);
     }
@@ -4527,12 +5201,25 @@ logBootConstantsOnce();
     overlay.show({ initialFocus: btn });
   }
 
-  function showMatchSummary(match) {
+  function showMatchSummary(match, { finishedGameId = null, force = false } = {}) {
+    if (!force && !canShowMatchSummary(match, finishedGameId)) {
+      emitLocalClockDebug('client-match-summary-aborted', {
+        finishedGameId: finishedGameId || null,
+        incomingMatchId: match?._id ? String(match._id) : null,
+        currentMatchId: currentMatch?._id ? String(currentMatch._id) : null,
+        activeMatchId: activeMatchId ? String(activeMatchId) : null,
+        lastGameId: lastGameId ? String(lastGameId) : null,
+        gameFinished,
+      });
+      clearBannerOverlay({ restoreFocus: false });
+      return;
+    }
     currentMatch = match;
     if (match?._id) {
       activeMatchId = String(match._id);
     }
     applyExpectedTimeSettingsForMatch(currentMatch);
+    setActiveBanner('match-summary', match?._id || null);
     const refreshedElos = syncPlayerElosFromMatch(match);
     if (refreshedElos) {
       renderBoardAndBars();
@@ -4550,7 +5237,17 @@ logBootConstantsOnce();
         content.innerHTML = '';
         overlay.hide();
         setBannerKeyListener(null);
-        returnToLobby();
+        if (canShowMatchSummary(match, finishedGameId)) {
+          returnToLobby();
+          return;
+        }
+        emitLocalClockDebug('client-match-summary-close-ignored', {
+          finishedGameId: finishedGameId || null,
+          incomingMatchId: match?._id ? String(match._id) : null,
+          activeMatchId: activeMatchId ? String(activeMatchId) : null,
+          lastGameId: lastGameId ? String(lastGameId) : null,
+          gameFinished,
+        });
       };
     }
     const card = document.createElement('div');
@@ -4583,7 +5280,20 @@ logBootConstantsOnce();
     btn.style.setProperty('--cg-button-font-weight', '700');
     btn.style.fontSize = '16px';
     btn.style.borderRadius = '0';
-    btn.addEventListener('click', () => { returnToLobby(); });
+    btn.addEventListener('click', () => {
+      if (canShowMatchSummary(match, finishedGameId)) {
+        returnToLobby();
+        return;
+      }
+      clearBannerOverlay({ restoreFocus: false });
+      emitLocalClockDebug('client-match-summary-button-ignored', {
+        finishedGameId: finishedGameId || null,
+        incomingMatchId: match?._id ? String(match._id) : null,
+        activeMatchId: activeMatchId ? String(activeMatchId) : null,
+        lastGameId: lastGameId ? String(lastGameId) : null,
+        gameFinished,
+      });
+    });
 
     setBannerKeyListener(ev => {
       const key = ev.key;
@@ -4743,7 +5453,24 @@ logBootConstantsOnce();
     isPlayAreaVisible = false;
   }
 
+  // Tournament accept and tournament match-complete flows should transition the
+  // player back to the tournament shell before the next prompt takes over.
+  function exitTournamentGameViewToPanel() {
+    hidePlayArea();
+    if (!(tournamentParticipantMode && tournamentUiController)) {
+      return;
+    }
+    Promise.resolve(
+      typeof tournamentUiController.exitTournamentGameToPanel === 'function'
+        ? tournamentUiController.exitTournamentGameToPanel()
+        : (tournamentUiController.setTournamentGameActive(false), tournamentUiController.openHomeIfParticipant(), null)
+    ).catch((err) => {
+      console.error('Failed to exit tournament game view to panel', err);
+    });
+  }
+
   function returnToLobby() {
+    clearTournamentGameHydration();
     hidePlayArea();
     if (!tournamentParticipantMode) {
       showQueuer();
@@ -4756,6 +5483,7 @@ logBootConstantsOnce();
     queueStatusKnown = true;
     stopClockInterval();
     clockBaseSnapshot = null;
+    clockBaseGameId = null;
     gameFinished = false;
     updateFindButton();
     currentMatch = null;
@@ -4765,10 +5493,24 @@ logBootConstantsOnce();
     currentDrawOffer = null;
     drawOfferCooldowns = [null, null];
     clearDrawCooldownTimeout();
+    locallyAcceptedTournamentGames.clear();
     if (tournamentParticipantMode && tournamentUiController) {
-      tournamentUiController.setTournamentGameActive(false);
-      tournamentUiController.openHomeIfParticipant();
+      tournamentAcceptScheduler.releaseGrace();
+      Promise.resolve(
+        typeof tournamentUiController.exitTournamentGameToPanel === 'function'
+          ? tournamentUiController.exitTournamentGameToPanel()
+          : (tournamentUiController.setTournamentGameActive(false), tournamentUiController.openHomeIfParticipant(), null)
+      )
+        .catch((err) => {
+          console.error('Failed to refresh tournament panel after returning to lobby', err);
+        })
+        .finally(() => {
+          tournamentAcceptScheduler.flushPending({ forceImmediate: true });
+        });
+      return;
     }
+    tournamentAcceptScheduler.releaseGrace();
+    tournamentAcceptScheduler.flushPending({ forceImmediate: true });
   }
 
   function renderBoardAndBars() {
@@ -4807,12 +5549,16 @@ logBootConstantsOnce();
     const clockLabel = getClockLabel();
     const topIdx = currentIsWhite ? 1 : 0;
     const bottomIdx = currentIsWhite ? 0 : 1;
-    const isRankedMatch = currentMatch && currentMatch.type === 'RANKED';
+    const matchType = typeof currentMatch?.type === 'string'
+      ? currentMatch.type.toUpperCase()
+      : '';
+    const isRankedMatch = matchType === 'RANKED';
+    const hasSeriesWins = isRankedMatch || matchType === 'TOURNAMENT_ELIMINATION';
     const p1Score = currentMatch?.player1Score || 0;
     const p2Score = currentMatch?.player2Score || 0;
     let winsTop = 0;
     let winsBottom = 0;
-    if (isRankedMatch) {
+    if (hasSeriesWins) {
       const toIdString = (value) => {
         if (!value) return '';
         if (typeof value === 'string' || typeof value === 'number') {
@@ -4852,6 +5598,8 @@ logBootConstantsOnce();
     const connectionBottom = getConnectionDisplayForPlayer(bottomPlayerId, bottomPlayerId && bottomPlayerId !== userId);
     const eloTop = playerElos[topIdx];
     const eloBottom = playerElos[bottomIdx];
+    const showEloTop = Boolean(topPlayerId) && !isKnownBotId(topPlayerId) && !isKnownGuestId(topPlayerId);
+    const showEloBottom = Boolean(bottomPlayerId) && !isKnownBotId(bottomPlayerId) && !isKnownGuestId(bottomPlayerId);
     const bars = gameView.render({
       sizes: {
         rows: currentRows,
@@ -4889,6 +5637,8 @@ logBootConstantsOnce();
         isRankedMatch,
         eloTop,
         eloBottom,
+        showEloTop,
+        showEloBottom,
         playerIdTop: topPlayerId,
         playerIdBottom: bottomPlayerId
       },
@@ -5907,9 +6657,10 @@ logBootConstantsOnce();
     }
   }
 
-  function setStateFromServer(u) {
+  function setStateFromServer(u, source = 'unknown') {
     try {
       emitLocalClockDebug('client-game-state-received', {
+        stateSource: source,
         gameId: u?.gameId || u?._id || lastGameId || null,
         incomingClock: summarizeClockSnapshot(u?.clocks || null),
         incomingPlayerTurn: u?.playerTurn,
@@ -6112,7 +6863,9 @@ logBootConstantsOnce();
         }
       }
     } catch (_) {}
-    recomputeClocksFromServer(u?.clocks || null);
+    recomputeClocksFromServer(u?.clocks || null, {
+      gameId: u?.gameId || u?._id || lastGameId || null,
+    });
   }
 
   // ---- Setup helpers ----

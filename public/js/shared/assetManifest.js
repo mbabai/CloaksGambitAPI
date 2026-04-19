@@ -24,6 +24,7 @@ const ASSET_MANIFEST = deepFreeze({
     "throne": "/assets/images/GoldThrone.svg",
     "draw": "/assets/images/draw.png",
     "rank": "/assets/images/rankIcon.png",
+    "bot": "/assets/images/botIcon.png",
     "loading": "/assets/images/loading.gif"
   },
   "ui": {

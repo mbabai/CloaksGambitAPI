@@ -3,6 +3,8 @@ const Match = require('../../models/Match');
 const User = require('../../models/User');
 const { toIdString } = require('../../models/inMemoryUtils');
 
+const DEFAULT_ELO = 800;
+
 function normalizeId(value, seen = null) {
   if (value === undefined || value === null) return null;
   if (typeof value === 'string') {
@@ -265,7 +267,7 @@ function attachPlayerDetails(matches, userMap) {
         ? {
             id: player1Id,
             username: player1User?.username || null,
-            elo: Number.isFinite(player1User?.elo) ? player1User.elo : null,
+            elo: Number.isFinite(player1User?.elo) ? player1User.elo : DEFAULT_ELO,
             isBot: Boolean(player1User?.isBot),
           }
         : null,
@@ -273,7 +275,7 @@ function attachPlayerDetails(matches, userMap) {
         ? {
             id: player2Id,
             username: player2User?.username || null,
-            elo: Number.isFinite(player2User?.elo) ? player2User.elo : null,
+            elo: Number.isFinite(player2User?.elo) ? player2User.elo : DEFAULT_ELO,
             isBot: Boolean(player2User?.isBot),
           }
         : null,

@@ -1,7 +1,9 @@
 import { createOverlay } from '../ui/overlays.js';
 import { upgradeButton } from '../ui/buttons.js';
-import { createThroneIcon } from '../ui/icons.js';
+import { createBotIcon, createThroneIcon } from '../ui/icons.js';
+import { createEloBadge } from '../render/eloBadge.js';
 import {
+  apiReady,
   apiGetTournaments,
   apiGetCurrentTournament,
   apiCreateTournament,
@@ -14,7 +16,8 @@ import {
   apiStartTournamentElimination,
   apiKickTournamentPlayer,
   apiGetTournamentDetails,
-  apiTransferTournamentHost,
+  apiGetTournamentHistoryDetails,
+  apiGetAdminTournamentDetails,
   apiUpdateTournamentMessage,
 } from '../api/game.js';
 
@@ -75,16 +78,123 @@ function getRoundRobinTimeRemaining(tournament, nowMs = Date.now()) {
   return `${mm}:${ss}`;
 }
 
+function getEliminationBreakTimeRemaining(tournament, nowMs = Date.now()) {
+  const startAt = Date.parse(tournament?.eliminationStartsAt || '');
+  if (!Number.isFinite(startAt)) return null;
+  const remainingMs = Math.max(0, startAt - nowMs);
+  const totalSeconds = Math.floor(remainingMs / 1000);
+  const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const ss = String(totalSeconds % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
+function getTournamentPhaseTimer(tournament, nowMs = Date.now()) {
+  if (tournament?.phase === 'round_robin') {
+    const value = getRoundRobinTimeRemaining(tournament, nowMs);
+    return value ? `Time remaining: ${value}` : '';
+  }
+  if (tournament?.phase === 'round_robin_complete') {
+    const value = getEliminationBreakTimeRemaining(tournament, nowMs);
+    return value ? `Break remaining: ${value}` : '';
+  }
+  return '';
+}
+
+function formatPlacementDepth(value, { section = 'winners', bracket = null } = {}) {
+  const roundIndex = Number(value);
+  if (!Number.isFinite(roundIndex) || roundIndex < 0) return '\u2014';
+
+  const normalizedSection = String(section || 'winners').toLowerCase();
+  const normalizedBracket = normalizeBracketCollections(bracket);
+  const totalRounds = normalizedSection === 'losers'
+    ? normalizedBracket.losersRounds.length
+    : normalizedSection === 'finals'
+      ? normalizedBracket.finalsRounds.length
+      : normalizedBracket.winnersRounds.length;
+  const roundsFromEnd = totalRounds - roundIndex;
+  const hasLosersBracket = normalizedBracket.losersRounds.length > 0;
+
+  if (normalizedSection === 'finals') {
+    if (roundIndex === 0) return 'Grand Finals';
+    if (roundIndex === 1) return 'Grand Finals Reset';
+    return String(roundIndex + 1);
+  }
+
+  if (normalizedSection === 'losers') {
+    if (roundsFromEnd === 1) return 'Losers Finals';
+    if (roundsFromEnd === 2) return 'Losers Semifinals';
+    if (roundsFromEnd === 3) return 'Losers Quarterfinals';
+    return String(roundIndex + 1);
+  }
+
+  if (hasLosersBracket && roundsFromEnd === 1) return 'Winner Finals';
+  if (!hasLosersBracket && totalRounds === 1) return 'Final';
+  if (!hasLosersBracket && roundsFromEnd === 1) return 'Final';
+  if (roundsFromEnd === 2) return 'Semifinals';
+  if (roundsFromEnd === 3) return 'Quarterfinals';
+  return String(roundIndex + 1);
+}
+
+function getTournamentStatusHint(tournament, {
+  isInTournamentGame = false,
+  currentUserGame = null,
+  currentUserRequiresAccept = false,
+} = {}) {
+  if (!tournament) return '';
+  if (tournament.phase === 'completed') return 'Tournament complete.';
+  if (currentUserRequiresAccept) return 'Match ready. Accept to begin.';
+  if (isInTournamentGame && currentUserGame) return 'Current tournament game in progress.';
+  if (tournament.phase === 'round_robin' && tournament.roundRobinWaitingForGames) {
+    return 'Waiting for games to finish.';
+  }
+  if (currentUserGame?.opponentUsername) {
+    return `Waiting for next match vs ${currentUserGame.opponentUsername}.`;
+  }
+  if (tournament.phase === 'round_robin_complete' && tournament.eliminationStartsAt) {
+    return 'Waiting for elimination break to end.';
+  }
+  if (tournament.phase === 'elimination') {
+    return 'Waiting for next elimination match.';
+  }
+  return 'Waiting for next match.';
+}
+
 function normalizeTournamentConfig(config = {}) {
   return {
     roundRobinMinutes: Number.isFinite(Number(config?.roundRobinMinutes))
       ? Math.max(1, Math.min(30, Number(config.roundRobinMinutes)))
       : 15,
+    breakMinutes: Number.isFinite(Number(config?.breakMinutes))
+      ? Math.max(0, Math.min(30, Number(config.breakMinutes)))
+      : 5,
     eliminationStyle: String(config?.eliminationStyle || 'single').toLowerCase() === 'double'
       ? 'double'
       : 'single',
     victoryPoints: [3, 4, 5].includes(Number(config?.victoryPoints)) ? Number(config.victoryPoints) : 3,
   };
+}
+
+function appendTournamentSettingSummary(settingsList, config, { includeBreakTime = true } = {}) {
+  if (includeBreakTime) {
+    settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Break time: ${config.breakMinutes} min`));
+  }
+  settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Round robin: ${config.roundRobinMinutes} min`));
+  settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Elimination: ${config.eliminationStyle === 'double' ? 'Double' : 'Single'}`));
+  settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Victory target: ${config.victoryPoints}`));
+}
+
+function createTournamentNumberSettingField(labelText, { value, min, max }) {
+  const field = el('label', { className: 'tournament-panel__setting-field' });
+  field.appendChild(el('span', { className: 'tournament-panel__setting-label' }, labelText));
+  const input = el('input', {
+    className: 'tournament-panel__setting-input',
+    type: 'number',
+    min: String(min),
+    max: String(max),
+    value: String(value),
+  });
+  field.appendChild(input);
+  return { field, input };
 }
 
 function formatStandingPoints(value) {
@@ -93,6 +203,27 @@ function formatStandingPoints(value) {
   return Math.abs(numeric - Math.round(numeric)) < 1e-9
     ? String(Math.round(numeric))
     : numeric.toFixed(1);
+}
+
+function resolveTournamentDisplayElo(entry) {
+  const preTournamentElo = Number(entry?.preTournamentElo);
+  if (Number.isFinite(preTournamentElo) && preTournamentElo > 0) {
+    return preTournamentElo;
+  }
+  const elo = Number(entry?.elo);
+  if (Number.isFinite(elo) && elo > 0) {
+    return elo;
+  }
+  return null;
+}
+
+function isTournamentBot(entry) {
+  return entry?.type === 'bot';
+}
+
+function resolveTournamentIdentityEntry(entry, participantLookup = null) {
+  const participantEntry = participantLookup?.get?.(String(entry?.userId || '')) || null;
+  return participantEntry || entry || null;
 }
 
 function buildRoleFlags(role) {
@@ -123,6 +254,17 @@ function normalizeBracketCollections(bracket = {}) {
     losersRounds: Array.isArray(bracket?.losersRounds) ? bracket.losersRounds : [],
     finalsRounds: Array.isArray(bracket?.finalsRounds) ? bracket.finalsRounds : [],
   };
+}
+
+function cloneBracketRounds(rounds = []) {
+  return Array.isArray(rounds)
+    ? rounds.map((round) => ({
+        ...round,
+        matches: Array.isArray(round?.matches)
+          ? round.matches.map((match) => ({ ...match }))
+          : [],
+      }))
+    : [];
 }
 
 function getMatchLoser(match) {
@@ -201,12 +343,24 @@ function buildCompletedPlacements(participants = [], bracket = null) {
 
   const championId = String(decidingFinal?.winner?.userId || '');
   const runnerUpId = String(getMatchLoser(decidingFinal)?.userId || '');
+  const buildEntry = (participant) => {
+    const progress = ensureProgress(participant?.userId);
+    const points = Number.isFinite(Number(participant?.points)) ? Number(participant.points) : null;
+    return {
+      participant,
+      deepestLosersRound: progress.maxLosersRound,
+      deepestWinnersRound: progress.maxWinnersRound,
+      deepestFinalsRound: progress.maxFinalsRound,
+      points,
+    };
+  };
+
   const ordered = [];
   if (championId && participantByUserId.has(championId)) {
-    ordered.push(participantByUserId.get(championId));
+    ordered.push(buildEntry(participantByUserId.get(championId)));
   }
   if (runnerUpId && participantByUserId.has(runnerUpId) && runnerUpId !== championId) {
-    ordered.push(participantByUserId.get(runnerUpId));
+    ordered.push(buildEntry(participantByUserId.get(runnerUpId)));
   }
 
   const remaining = allParticipants
@@ -214,29 +368,53 @@ function buildCompletedPlacements(participants = [], bracket = null) {
       const userId = String(entry.userId || '');
       return userId && userId !== championId && userId !== runnerUpId;
     })
+    .map(buildEntry)
     .sort((left, right) => {
-      const leftProgress = ensureProgress(left?.userId);
-      const rightProgress = ensureProgress(right?.userId);
-      if (leftProgress.maxFinalsRound !== rightProgress.maxFinalsRound) {
-        return rightProgress.maxFinalsRound - leftProgress.maxFinalsRound;
+      if (left.deepestFinalsRound !== right.deepestFinalsRound) {
+        return right.deepestFinalsRound - left.deepestFinalsRound;
       }
-      if (leftProgress.maxLosersRound !== rightProgress.maxLosersRound) {
-        return rightProgress.maxLosersRound - leftProgress.maxLosersRound;
+      if (left.deepestLosersRound !== right.deepestLosersRound) {
+        return right.deepestLosersRound - left.deepestLosersRound;
       }
-      if (leftProgress.maxWinnersRound !== rightProgress.maxWinnersRound) {
-        return rightProgress.maxWinnersRound - leftProgress.maxWinnersRound;
+      if (left.deepestWinnersRound !== right.deepestWinnersRound) {
+        return right.deepestWinnersRound - left.deepestWinnersRound;
       }
-      const leftSeed = Number.isFinite(Number(left?.seed)) ? Number(left.seed) : Number.MAX_SAFE_INTEGER;
-      const rightSeed = Number.isFinite(Number(right?.seed)) ? Number(right.seed) : Number.MAX_SAFE_INTEGER;
-      if (leftSeed !== rightSeed) return leftSeed - rightSeed;
-      return String(left?.username || '').localeCompare(String(right?.username || ''));
+      const leftPoints = Number.isFinite(left.points) ? left.points : Number.NEGATIVE_INFINITY;
+      const rightPoints = Number.isFinite(right.points) ? right.points : Number.NEGATIVE_INFINITY;
+      if (leftPoints !== rightPoints) return rightPoints - leftPoints;
+      return 0;
     });
 
-  return ordered.concat(remaining).map((participant, index) => ({
-    position: index + 1,
-    label: getOrdinalLabel(index + 1),
-    participant,
-  }));
+  const ranked = ordered.concat(remaining);
+  let lastComparable = null;
+  let lastPlacement = 0;
+  return ranked.map((entry, index) => {
+    const comparable = {
+      deepestFinalsRound: entry.deepestFinalsRound,
+      deepestLosersRound: entry.deepestLosersRound,
+      deepestWinnersRound: entry.deepestWinnersRound,
+      points: entry.points,
+    };
+    const isTie = Boolean(
+      lastComparable
+      && comparable.deepestFinalsRound === lastComparable.deepestFinalsRound
+      && comparable.deepestLosersRound === lastComparable.deepestLosersRound
+      && comparable.deepestWinnersRound === lastComparable.deepestWinnersRound
+      && comparable.points === lastComparable.points
+    );
+    const position = isTie ? lastPlacement : index + 1;
+    lastComparable = comparable;
+    lastPlacement = position;
+    return {
+      position,
+      label: getOrdinalLabel(position),
+      participant: entry.participant,
+      deepestFinalsRound: entry.deepestFinalsRound,
+      deepestLosersRound: entry.deepestLosersRound,
+      deepestWinnersRound: entry.deepestWinnersRound,
+      points: entry.points,
+    };
+  });
 }
 
 function createOverlayOptions(ariaLabel, closeLabel) {
@@ -261,6 +439,7 @@ export function initTournamentUi({
   onSpectateMatch,
   registerSpectateUsername,
   onParticipantStateChange,
+  onTournamentAcceptStateChange,
 }) {
   if (!triggerButton) return null;
 
@@ -280,7 +459,6 @@ export function initTournamentUi({
     },
   });
   const confirmOverlay = createOverlay(createOverlayOptions('Tournament confirmation', 'Close confirmation'));
-  const hostTransferOverlay = createOverlay(createOverlayOptions('Choose a new host', 'Close host transfer prompt'));
   const bracketOverlay = createOverlay(createOverlayOptions('Tournament bracket', 'Close bracket viewer'));
 
   let browserStatusEl = null;
@@ -295,8 +473,8 @@ export function initTournamentUi({
 
   let currentTournament = null;
   let currentRole = null;
+  let currentViewMode = 'live';
   let isInTournamentGame = false;
-  let selectingNewHost = false;
   let messageDraft = '';
   let messageDirty = false;
   let settingsDraft = normalizeTournamentConfig();
@@ -306,6 +484,7 @@ export function initTournamentUi({
   let roundRobinTimerHandle = null;
   let roundRobinTimerEl = null;
   let tournamentServerClockOffsetMs = 0;
+  let lastAcceptStateKey = null;
 
   const panelRoot = el('div', { className: 'tournament-panel', hidden: 'hidden' });
   const panelLayout = el('div', { className: 'tournament-panel__layout' });
@@ -316,9 +495,11 @@ export function initTournamentUi({
   const stagePlaceholder = el('div', { className: 'tournament-panel__stage-placeholder' });
   const stagePlaceholderTitle = el('div', { className: 'tournament-panel__stage-title' }, 'Current Game');
   const stagePlaceholderBody = el('div', { className: 'tournament-panel__stage-body' }, 'Waiting for your next tournament game.');
+  const stagePlaceholderActions = el('div', { className: 'tournament-panel__actions tournament-panel__actions--stage' });
   const stageSurface = el('div', { className: 'tournament-panel__stage-surface' });
   stagePlaceholder.appendChild(stagePlaceholderTitle);
   stagePlaceholder.appendChild(stagePlaceholderBody);
+  stagePlaceholder.appendChild(stagePlaceholderActions);
   stageFrame.appendChild(stagePlaceholder);
   stageFrame.appendChild(stageSurface);
   centerColumn.appendChild(stageFrame);
@@ -328,10 +509,55 @@ export function initTournamentUi({
   panelRoot.appendChild(panelLayout);
   document.body.appendChild(panelRoot);
 
+  function isReadOnlyTournamentView() {
+    return currentViewMode === 'archive' || currentViewMode === 'admin';
+  }
+
+  function clearTournamentQueryParams() {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('adminTournamentId');
+      url.searchParams.delete('archiveTournamentId');
+      const next = `${url.pathname}${url.search}${url.hash}`;
+      window.history.replaceState({}, '', next);
+    } catch (_) {}
+  }
+
   function notifyPanelState() {
     if (typeof onParticipantStateChange === 'function') {
-      onParticipantStateChange(Boolean(currentRole && currentTournament));
+      onParticipantStateChange(Boolean(currentTournament && (currentRole || isReadOnlyTournamentView())));
     }
+  }
+
+  function notifyAcceptState() {
+    if (typeof onTournamentAcceptStateChange !== 'function') return;
+    if (isReadOnlyTournamentView()) {
+      if (lastAcceptStateKey === 'none') return;
+      lastAcceptStateKey = 'none';
+      onTournamentAcceptStateChange({
+        requiresAccept: false,
+        tournament: currentTournament,
+        currentUserGame: null,
+      });
+      return;
+    }
+    const currentUserGame = currentTournament?.currentUserGame || null;
+    const requiresAccept = Boolean(
+      currentRole
+      && currentUserGame?.requiresAccept
+      && currentUserGame?.gameId
+      && Number.isInteger(currentUserGame?.color)
+    );
+    const nextKey = requiresAccept
+      ? `${String(currentTournament?.id || '')}:${String(currentUserGame?.gameId || '')}:${String(currentUserGame?.color)}`
+      : 'none';
+    if (nextKey === lastAcceptStateKey) return;
+    lastAcceptStateKey = nextKey;
+    onTournamentAcceptStateChange({
+      requiresAccept,
+      tournament: currentTournament,
+      currentUserGame: requiresAccept ? currentUserGame : null,
+    });
   }
 
   function stopPolling() {
@@ -363,16 +589,20 @@ export function initTournamentUi({
 
   function refreshRoundRobinTimerDisplay() {
     if (!roundRobinTimerEl || !currentTournament) return;
-    const roundRobinTimer = getRoundRobinTimeRemaining(currentTournament, getTournamentServerNowMs());
-    if (!roundRobinTimer) {
+    const timerText = getTournamentPhaseTimer(currentTournament, getTournamentServerNowMs());
+    if (!timerText) {
       roundRobinTimerEl.textContent = '';
       return;
     }
-    roundRobinTimerEl.textContent = `Time remaining: ${roundRobinTimer}`;
+    roundRobinTimerEl.textContent = timerText;
   }
 
   function scheduleRoundRobinTimerTick() {
-    if (!currentTournament || currentTournament.phase !== 'round_robin' || !roundRobinTimerEl || !roundRobinTimerEl.isConnected) {
+    const canTick = currentTournament
+      && (currentTournament.phase === 'round_robin' || currentTournament.phase === 'round_robin_complete')
+      && roundRobinTimerEl
+      && roundRobinTimerEl.isConnected;
+    if (!canTick) {
       return;
     }
     refreshRoundRobinTimerDisplay();
@@ -385,7 +615,11 @@ export function initTournamentUi({
 
   function startRoundRobinTimer() {
     stopRoundRobinTimer({ preserveElement: true });
-    if (!currentTournament || currentTournament.phase !== 'round_robin' || !roundRobinTimerEl || !roundRobinTimerEl.isConnected) {
+    const canTick = currentTournament
+      && (currentTournament.phase === 'round_robin' || currentTournament.phase === 'round_robin_complete')
+      && roundRobinTimerEl
+      && roundRobinTimerEl.isConnected;
+    if (!canTick) {
       return;
     }
     scheduleRoundRobinTimerTick();
@@ -393,14 +627,18 @@ export function initTournamentUi({
 
   function startPolling() {
     stopPolling();
-    if (!currentRole || !currentTournament) return;
+    if (!currentTournament) return;
     pollHandle = window.setInterval(() => {
-      refreshCurrentTournament({ silent: true }).catch(() => null);
+      refreshCurrentTournament({
+        silent: true,
+        tournamentId: currentViewMode === 'live' ? null : currentTournament.id,
+        viewMode: currentViewMode,
+      }).catch(() => null);
     }, 10000);
   }
 
   function syncPanelVisibility() {
-    const visible = Boolean(currentRole && currentTournament);
+    const visible = Boolean(currentTournament && (currentRole || isReadOnlyTournamentView()));
     panelRoot.hidden = !visible;
     panelRoot.classList.toggle('tournament-panel--visible', visible);
     if (visible) {
@@ -408,7 +646,6 @@ export function initTournamentUi({
     } else {
       stopPolling();
       stopRoundRobinTimer();
-      selectingNewHost = false;
     }
     notifyPanelState();
   }
@@ -427,21 +664,25 @@ export function initTournamentUi({
     });
   }
 
-  function setCurrentTournamentState(payload) {
+  function setCurrentTournamentState(payload, { viewMode = null } = {}) {
     syncTournamentServerClock(payload);
     currentTournament = payload?.tournament || null;
     currentRole = payload?.role || null;
     if (!currentTournament) {
+      currentViewMode = 'live';
       currentRole = null;
       messageDraft = '';
       messageDirty = false;
       settingsDraft = normalizeTournamentConfig();
       settingsDirty = false;
       lastTournamentId = null;
+      lastAcceptStateKey = null;
+      notifyAcceptState();
       syncPanelVisibility();
       renderPanel();
       return;
     }
+    currentViewMode = viewMode || currentViewMode || 'live';
     if (lastTournamentId !== currentTournament.id) {
       messageDraft = asText(currentTournament.message, '');
       messageDirty = false;
@@ -455,22 +696,43 @@ export function initTournamentUi({
       }
     }
     registerKnownTournamentUsers(currentTournament, payload?.games || []);
+    notifyAcceptState();
     syncPanelVisibility();
     renderPanel();
   }
 
-  async function refreshCurrentTournament({ silent = false, tournamentId = null } = {}) {
+  async function refreshCurrentTournament({ silent = false, tournamentId = null, viewMode = null } = {}) {
+    const nextViewMode = viewMode || currentViewMode || 'live';
+    const targetTournamentId = tournamentId || currentTournament?.id || null;
     try {
-      const payload = tournamentId
-        ? await apiGetTournamentDetails({ tournamentId })
-        : await apiGetCurrentTournament();
+      let payload = null;
+      if (nextViewMode === 'admin') {
+        if (!targetTournamentId) {
+          setCurrentTournamentState(null);
+          return null;
+        }
+        payload = await apiGetAdminTournamentDetails({ tournamentId: targetTournamentId });
+      } else if (nextViewMode === 'archive') {
+        if (!targetTournamentId) {
+          setCurrentTournamentState(null);
+          return null;
+        }
+        payload = await apiGetTournamentHistoryDetails({ tournamentId: targetTournamentId });
+      } else {
+        payload = targetTournamentId
+          ? await apiGetTournamentDetails({ tournamentId: targetTournamentId })
+          : await apiGetCurrentTournament();
+      }
       if (!payload?.tournament) {
         setCurrentTournamentState(null);
         return null;
       }
-      setCurrentTournamentState(payload);
+      setCurrentTournamentState(payload, { viewMode: nextViewMode });
       return payload;
     } catch (err) {
+      if ([401, 403, 404].includes(Number(err?.response?.status || 0))) {
+        setCurrentTournamentState(null);
+      }
       if (!silent) {
         try {
           window.alert(err.message || 'Unable to load tournament.');
@@ -480,12 +742,21 @@ export function initTournamentUi({
     }
   }
 
+  function closeTournamentPanel() {
+    clearTournamentQueryParams();
+    setCurrentTournamentState(null);
+    confirmOverlay.hide({ restoreFocus: false });
+  }
+
   async function leaveCurrentTournament({ reopenBrowser = true } = {}) {
     if (!currentTournament?.id) return;
+    if (isReadOnlyTournamentView()) {
+      closeTournamentPanel();
+      return;
+    }
     await apiLeaveTournament({ tournamentId: currentTournament.id });
     setCurrentTournamentState(null);
     confirmOverlay.hide({ restoreFocus: false });
-    hostTransferOverlay.hide({ restoreFocus: false });
     if (reopenBrowser) {
       browserOverlay.show();
       await refreshBrowser();
@@ -607,42 +878,14 @@ export function initTournamentUi({
     confirmOverlay.show();
   }
 
-  function openHostTransferPrompt() {
-    hostTransferOverlay.content.innerHTML = '';
-    const title = el('h2', { className: 'tournament-modal__title' }, 'Who will be the new host?');
-    const body = el('div', { className: 'menu-message tournament-modal__status' }, 'Choose a player from the list on the right.');
-    const actions = el('div', { className: 'tournament-modal__actions' });
-    const cancelBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Cancel'), {
-      variant: 'neutral',
-      position: 'relative',
-    });
-    actions.appendChild(cancelBtn);
-    hostTransferOverlay.content.appendChild(title);
-    hostTransferOverlay.content.appendChild(body);
-    hostTransferOverlay.content.appendChild(actions);
-    cancelBtn.addEventListener('click', () => {
-      selectingNewHost = false;
-      hostTransferOverlay.hide({ restoreFocus: false });
-      renderPanel();
-    });
-    hostTransferOverlay.show();
-  }
-
   async function handleLeaveRequest() {
     if (!currentTournament?.id) return;
+    if (isReadOnlyTournamentView()) {
+      closeTournamentPanel();
+      return;
+    }
     const roleFlags = buildRoleFlags(currentRole);
     const isCompletedTournament = currentTournament.phase === 'completed' || currentTournament.state === 'completed';
-
-    if (roleFlags.isHost && !isCompletedTournament) {
-      const hostCandidates = (Array.isArray(currentTournament.participants) ? currentTournament.participants : [])
-        .filter((entry) => String(entry?.userId || '') !== String(currentTournament.host?.userId || ''));
-      if (hostCandidates.length > 0) {
-        selectingNewHost = true;
-        renderPanel();
-        openHostTransferPrompt();
-        return;
-      }
-    }
 
     if (roleFlags.isViewer) {
       await leaveCurrentTournament();
@@ -658,16 +901,6 @@ export function initTournamentUi({
       confirmVariant: 'danger',
       onConfirm: () => leaveCurrentTournament(),
     });
-  }
-
-  async function assignNewHostAndLeave(nextHostUserId) {
-    if (!currentTournament?.id) return;
-    await apiTransferTournamentHost({
-      tournamentId: currentTournament.id,
-      userId: nextHostUserId,
-    });
-    selectingNewHost = false;
-    await leaveCurrentTournament();
   }
 
   function renderBracketOverlay() {
@@ -715,16 +948,50 @@ export function initTournamentUi({
       dragStart = null;
     });
 
+    const bracketParticipantLookup = new Map(
+      (Array.isArray(currentTournament?.participants) ? currentTournament.participants : [])
+        .filter((participant) => participant?.userId)
+        .map((participant) => [String(participant.userId), participant])
+    );
+
     const bracket = currentTournament.bracket || {};
     const normalizedBracket = {
-      winnersRounds: Array.isArray(bracket?.winnersRounds)
-        ? bracket.winnersRounds
-        : (Array.isArray(bracket?.rounds) ? bracket.rounds : []),
-      losersRounds: Array.isArray(bracket?.losersRounds) ? bracket.losersRounds : [],
-      finalsRounds: Array.isArray(bracket?.finalsRounds)
-        ? bracket.finalsRounds.filter((round) => round?.active !== false || (Array.isArray(round?.matches) && round.matches.some((match) => match?.winner || match?.playerA || match?.playerB)))
-        : [],
+      winnersRounds: cloneBracketRounds(
+        Array.isArray(bracket?.winnersRounds)
+          ? bracket.winnersRounds
+          : (Array.isArray(bracket?.rounds) ? bracket.rounds : []),
+      ),
+      losersRounds: cloneBracketRounds(Array.isArray(bracket?.losersRounds) ? bracket.losersRounds : []),
+      finalsRounds: cloneBracketRounds(
+        Array.isArray(bracket?.finalsRounds)
+          ? bracket.finalsRounds.filter((round) => round?.active !== false || (Array.isArray(round?.matches) && round.matches.some((match) => match?.winner || match?.playerA || match?.playerB)))
+          : [],
+      ),
     };
+    const resetRoundIndex = normalizedBracket.finalsRounds.findIndex(
+      (round) => round?.matches?.[0]?.finalStage === 'reset_final',
+    );
+    if (resetRoundIndex >= 0) {
+      const resetRound = normalizedBracket.finalsRounds[resetRoundIndex];
+      const resetMatch = resetRound?.matches?.[0] || null;
+      const grandFinalRound = normalizedBracket.finalsRounds.find(
+        (round) => round?.matches?.[0]?.finalStage === 'grand_final',
+      ) || normalizedBracket.finalsRounds[0] || null;
+      const hasVisibleReset = Boolean(
+        resetMatch
+        && (
+          resetRound?.active !== false
+          || resetMatch?.winner?.userId
+          || resetMatch?.playerA?.userId
+          || resetMatch?.playerB?.userId
+        )
+      );
+      if (grandFinalRound?.matches?.[0] && hasVisibleReset) {
+        grandFinalRound.label = resetRound?.label || 'Grand Finals Reset';
+        grandFinalRound.matches[0].resetMatch = { ...resetMatch };
+      }
+      normalizedBracket.finalsRounds.splice(resetRoundIndex, 1);
+    }
 
     const MATCH_HEIGHT = 116;
     const MATCH_GAP = 24;
@@ -776,10 +1043,13 @@ export function initTournamentUi({
       return matchPositions.get(buildMatchKey(source.section, source.roundIndex, source.matchIndex)) || null;
     };
     const getSlotPresentation = (match, slotKey, player) => {
+      const identityEntry = resolveTournamentIdentityEntry(player, bracketParticipantLookup);
       if (player?.username) {
         return {
           label: player.username,
           className: 'tournament-bracket__slot-name',
+          elo: resolveTournamentDisplayElo(identityEntry),
+          isBot: isTournamentBot(identityEntry),
         };
       }
       const other = slotKey === 'A' ? match?.playerB : match?.playerA;
@@ -787,11 +1057,15 @@ export function initTournamentUi({
         return {
           label: 'BYE',
           className: 'tournament-bracket__slot-name tournament-bracket__slot-name--bye',
+          elo: null,
+          isBot: false,
         };
       }
       return {
         label: '_________',
         className: 'tournament-bracket__slot-name tournament-bracket__slot-name--placeholder',
+        elo: null,
+        isBot: false,
       };
     };
     const computeRoundPositions = (rounds, sectionKey) => {
@@ -851,8 +1125,9 @@ export function initTournamentUi({
     const buildMatchCard = (match, matchKey, side = 'winners') => {
       const isClickable = match?.status === 'active' && match?.matchId;
       const statusClass = String(match?.status || 'waiting').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const hasResetDisplay = Boolean(match?.resetMatch);
       const matchWrap = el('div', {
-        className: `tournament-bracket__match-wrap tournament-bracket__match-wrap--${side}`,
+        className: `tournament-bracket__match-wrap tournament-bracket__match-wrap--${side}${hasResetDisplay ? ' tournament-bracket__match-wrap--wide' : ''}`,
       });
       const position = matchPositions.get(matchKey);
       if (position) {
@@ -861,16 +1136,16 @@ export function initTournamentUi({
 
       const matchCard = el('button', {
         type: 'button',
-        className: `tournament-bracket__match tournament-bracket__match--${side} tournament-bracket__match--status-${statusClass}${isClickable ? ' tournament-bracket__match--clickable' : ''}`,
+        className: `tournament-bracket__match tournament-bracket__match--${side} tournament-bracket__match--status-${statusClass}${isClickable ? ' tournament-bracket__match--clickable' : ''}${hasResetDisplay ? ' tournament-bracket__match--wide' : ''}`,
       });
       if (!isClickable) {
         matchCard.disabled = true;
       }
 
-      const buildSlotScore = (wins, target, name) => {
+      const buildScoreSegment = (wins, target, name) => {
         const total = Math.max(0, Number(target) || 0);
         if (total <= 0) return null;
-        const scoreWrap = el('div', { className: 'tournament-bracket__slot-score' });
+        const segment = el('div', { className: 'tournament-bracket__slot-score-segment' });
         const filled = Math.max(0, Math.min(total, Number(wins) || 0));
         for (let index = 0; index < filled; index += 1) {
           const icon = createThroneIcon({
@@ -879,7 +1154,7 @@ export function initTournamentUi({
             title: `${name || 'Player'} win ${index + 1}`,
           });
           icon.classList.add('tournament-bracket__score-token');
-          scoreWrap.appendChild(icon);
+          segment.appendChild(icon);
         }
         for (let index = filled; index < total; index += 1) {
           const icon = createThroneIcon({
@@ -888,7 +1163,24 @@ export function initTournamentUi({
             title: `${name || 'Player'} pending win ${index + 1}`,
           });
           icon.classList.add('tournament-bracket__score-token', 'tournament-bracket__score-token--empty');
-          scoreWrap.appendChild(icon);
+          segment.appendChild(icon);
+        }
+        return segment;
+      };
+
+      const buildSlotScore = ({ wins, target, name, resetWins = null, resetTarget = 0 } = {}) => {
+        const primarySegment = buildScoreSegment(wins, target, name);
+        const secondarySegment = buildScoreSegment(resetWins, resetTarget, `${name || 'Player'} reset`);
+        if (!primarySegment && !secondarySegment) return null;
+        const scoreWrap = el('div', {
+          className: `tournament-bracket__slot-score${secondarySegment ? ' tournament-bracket__slot-score--reset' : ''}`,
+        });
+        if (primarySegment) {
+          scoreWrap.appendChild(primarySegment);
+        }
+        if (secondarySegment) {
+          scoreWrap.appendChild(el('span', { className: 'tournament-bracket__score-separator' }, '|'));
+          scoreWrap.appendChild(secondarySegment);
         }
         return scoreWrap;
       };
@@ -897,8 +1189,35 @@ export function initTournamentUi({
         const slot = el('div', { className: `tournament-bracket__slot ${slotClass}` });
         const presentation = getSlotPresentation(match, slotKey, player);
         const slotName = el('span', { className: presentation.className }, presentation.label);
-        slot.appendChild(slotName);
-        const score = buildSlotScore(wins, target, presentation.label);
+        const identity = el('div', { className: 'tournament-bracket__slot-identity' });
+        if (presentation.isBot) {
+          const botIcon = createBotIcon({
+            size: 18,
+            alt: `${presentation.label} bot`,
+            title: `${presentation.label} bot`,
+          });
+          botIcon.classList.add('tournament-bracket__slot-bot');
+          identity.appendChild(botIcon);
+        } else if (Number.isFinite(presentation.elo)) {
+          const eloBadge = createEloBadge({
+            elo: presentation.elo,
+            size: 18,
+            variant: 'light',
+            alt: `${presentation.label} Elo`,
+            title: `${presentation.label} Elo ${Math.round(presentation.elo)}`,
+          });
+          eloBadge.classList.add('tournament-bracket__slot-elo');
+          identity.appendChild(eloBadge);
+        }
+        identity.appendChild(slotName);
+        slot.appendChild(identity);
+        const score = buildSlotScore({
+          wins,
+          target,
+          name: presentation.label,
+          resetWins: slotKey === 'A' ? match?.resetMatch?.playerAScore : match?.resetMatch?.playerBScore,
+          resetTarget: match?.resetMatch?.winScoreTarget || 0,
+        });
         if (score) {
           slot.appendChild(score);
         }
@@ -933,16 +1252,13 @@ export function initTournamentUi({
       const grid = el('div', { className: `tournament-bracket__grid tournament-bracket__grid--${side}` });
       const sectionHeight = sectionHeights.get(sectionKey) || stageHeight;
       rounds.forEach((round, roundIndex) => {
-        const roundColumn = el('div', { className: 'tournament-bracket__round' });
-        const showRoundLabel = side !== 'losers';
-        if (showRoundLabel) {
-          roundColumn.appendChild(el('div', { className: 'tournament-bracket__round-label' }, round.label || 'Round'));
-        } else {
-          roundColumn.appendChild(el('div', { className: 'tournament-bracket__round-label tournament-bracket__round-label--hidden' }, ''));
-        }
-        const roundBody = el('div', { className: 'tournament-bracket__round-body' });
+        const matches = Array.isArray(round?.matches) ? round.matches : [];
+        const hasWideMatch = matches.some((match) => Boolean(match?.resetMatch));
+        const roundColumn = el('div', { className: `tournament-bracket__round${hasWideMatch ? ' tournament-bracket__round--wide' : ''}` });
+        roundColumn.appendChild(el('div', { className: 'tournament-bracket__round-label' }, round.label || 'Round'));
+        const roundBody = el('div', { className: `tournament-bracket__round-body${hasWideMatch ? ' tournament-bracket__round-body--wide' : ''}` });
         roundBody.style.height = `${sectionHeight}px`;
-        (Array.isArray(round?.matches) ? round.matches : []).forEach((match, matchIndex) => {
+        matches.forEach((match, matchIndex) => {
           const roundId = Number.isInteger(round?.roundIndex) ? round.roundIndex : roundIndex;
           roundBody.appendChild(buildMatchCard(match, buildMatchKey(sectionKey, roundId, matchIndex), side));
         });
@@ -955,6 +1271,7 @@ export function initTournamentUi({
 
     content.style.setProperty('--tournament-stage-height', `${stageHeight}px`);
     content.style.setProperty('--tournament-round-width', `${ROUND_WIDTH}px`);
+    content.style.setProperty('--tournament-round-width-wide', '336px');
     content.style.setProperty('--tournament-round-gap', `${ROUND_GAP}px`);
     content.style.setProperty('--tournament-section-gap', `${SECTION_GAP}px`);
 
@@ -1067,34 +1384,48 @@ export function initTournamentUi({
     clearNode(hostColumn);
     clearNode(sideColumn);
     clearNode(stageSurface);
-    stageSurface.hidden = true;
-    stagePlaceholder.hidden = false;
-    stagePlaceholder.removeAttribute('hidden');
-    stagePlaceholderTitle.textContent = isInTournamentGame ? 'Current Game' : 'Tournament';
+    clearNode(stagePlaceholderActions);
+    stageSurface.hidden = false;
+    stagePlaceholder.hidden = true;
+    stagePlaceholder.setAttribute('hidden', 'hidden');
+    stagePlaceholderTitle.textContent = '';
+    stagePlaceholderBody.textContent = '';
 
-    if (!currentTournament || !currentRole) {
-      stagePlaceholderBody.textContent = 'Create, join, or view a tournament to keep it here.';
+    if (!currentTournament || (!currentRole && !isReadOnlyTournamentView())) {
+      stageSurface.hidden = true;
       return;
     }
 
     const roleFlags = buildRoleFlags(currentRole);
+    const isReadOnlyView = isReadOnlyTournamentView();
+    stagePlaceholderTitle.textContent = isReadOnlyView ? '' : 'Current Game';
+    stagePlaceholderBody.textContent = isReadOnlyView
+      ? ''
+      : 'Waiting for your next tournament game.';
     const currentUserGame = currentTournament.currentUserGame || null;
     const currentConfig = normalizeTournamentConfig(currentTournament.config);
     const editableConfig = settingsDirty ? settingsDraft : currentConfig;
     const participants = Array.isArray(currentTournament.participants) ? currentTournament.participants : [];
-    const roundRobinTimer = currentTournament.phase === 'round_robin'
-      ? getRoundRobinTimeRemaining(currentTournament, getTournamentServerNowMs())
-      : null;
+    const phaseTimerText = getTournamentPhaseTimer(currentTournament, getTournamentServerNowMs());
+    const currentUserRequiresAccept = Boolean(currentUserGame?.requiresAccept && currentUserGame?.gameId && Number.isInteger(currentUserGame?.color));
+    const tournamentStatusHint = getTournamentStatusHint(currentTournament, {
+      isInTournamentGame,
+      currentUserGame,
+      currentUserRequiresAccept,
+    });
 
     if (currentTournament.phase === 'completed') {
-      stagePlaceholderTitle.textContent = '';
-      stagePlaceholderBody.textContent = '';
-      stagePlaceholder.hidden = true;
-      stagePlaceholder.setAttribute('hidden', 'hidden');
       const placements = buildCompletedPlacements(participants, currentTournament.bracket);
       const resultsWrap = el('div', { className: 'tournament-panel__results' });
       const resultsCard = el('div', { className: 'tournament-panel__results-card' });
       resultsCard.appendChild(el('div', { className: 'tournament-panel__results-title' }, 'Final Results'));
+      const resultsHeader = el('div', { className: 'tournament-panel__results-header' });
+      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--place' }, 'Placement'));
+      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--name' }, 'Name'));
+      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--losers' }, 'Deepest Losers'));
+      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--winners' }, 'Deepest Winners'));
+      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--points' }, 'Points'));
+      resultsCard.appendChild(resultsHeader);
       const resultsList = el('div', { className: 'tournament-panel__results-list' });
       placements.forEach((entry) => {
         const row = el('div', { className: 'tournament-panel__results-row' });
@@ -1110,43 +1441,72 @@ export function initTournamentUi({
           place.appendChild(icon);
         }
         row.appendChild(place);
-        row.appendChild(el('div', { className: 'tournament-panel__results-name' }, entry.participant?.username || 'Player'));
+        const nameCell = el('div', { className: 'tournament-panel__results-name' });
+        const eloValue = resolveTournamentDisplayElo(entry.participant);
+        if (isTournamentBot(entry.participant)) {
+          const botIcon = createBotIcon({
+            size: 20,
+            alt: `${entry.participant?.username || 'Bot'} bot`,
+            title: `${entry.participant?.username || 'Bot'} bot`,
+          });
+          botIcon.classList.add('tournament-panel__results-bot');
+          nameCell.appendChild(botIcon);
+        } else if (Number.isFinite(eloValue)) {
+          const eloBadge = createEloBadge({
+            elo: eloValue,
+            size: 22,
+            variant: 'light',
+            alt: `${entry.participant?.username || 'Player'} Elo`,
+            title: `${entry.participant?.username || 'Player'} Elo ${Math.round(eloValue)}`,
+          });
+          eloBadge.classList.add('tournament-panel__results-elo');
+          nameCell.appendChild(eloBadge);
+        }
+        nameCell.appendChild(el('span', { className: 'tournament-panel__results-name-label' }, entry.participant?.username || 'Player'));
+        row.appendChild(nameCell);
+        row.appendChild(el('div', { className: 'tournament-panel__results-depth' }, formatPlacementDepth(entry.deepestLosersRound, {
+          section: 'losers',
+          bracket: currentTournament?.bracket,
+        })));
+        row.appendChild(el('div', { className: 'tournament-panel__results-depth' }, formatPlacementDepth(
+          entry.deepestFinalsRound >= 0 ? entry.deepestFinalsRound : entry.deepestWinnersRound,
+          {
+            section: entry.deepestFinalsRound >= 0 ? 'finals' : 'winners',
+            bracket: currentTournament?.bracket,
+          },
+        )));
+        row.appendChild(el('div', { className: 'tournament-panel__results-points' }, formatStandingPoints(entry.points)));
         resultsList.appendChild(row);
       });
       resultsCard.appendChild(resultsList);
       resultsWrap.appendChild(resultsCard);
       stageSurface.appendChild(resultsWrap);
-      stageSurface.hidden = false;
-    } else if (isInTournamentGame && currentUserGame) {
-      stagePlaceholderBody.textContent = 'Your tournament game is live in the center panel.';
-    } else if (currentUserGame) {
-      stagePlaceholderBody.textContent = `Your next tournament board is against ${currentUserGame.opponentUsername || 'your opponent'}.`;
-    } else if (currentTournament.phase === 'elimination') {
-      stagePlaceholderBody.textContent = 'Watch an active elimination match or wait for your next board.';
-    } else {
-      stagePlaceholderBody.textContent = 'Waiting for the next tournament pairing.';
     }
 
+    const hasHost = Boolean(currentTournament.host?.userId);
     const hostCard = el('div', { className: 'tournament-panel__card tournament-panel__card--host' });
-    hostCard.appendChild(el('div', { className: 'tournament-panel__card-title' }, 'Host Controls'));
-    hostCard.appendChild(el('div', { className: 'tournament-panel__host-name' }, currentTournament.host?.username || 'Tournament Host'));
+    hostCard.appendChild(el('div', { className: 'tournament-panel__card-title' }, hasHost ? 'Host Controls' : 'Tournament Status'));
+    hostCard.appendChild(el('div', { className: 'tournament-panel__host-name' }, hasHost ? (currentTournament.host?.username || 'Tournament Host') : 'Autopilot'));
     const statsRow = el('div', { className: 'tournament-panel__stats' });
     statsRow.appendChild(el('div', { className: 'tournament-panel__stat' }, `Viewers: ${Number(currentTournament.viewerCount || 0)}`));
     hostCard.appendChild(statsRow);
 
     const settingsList = el('div', { className: 'tournament-panel__settings' });
-    const hostCanEditSettings = roleFlags.isHost && currentTournament.state === 'starting';
+    const hostCanEditSettings = !isReadOnlyView && roleFlags.isHost && currentTournament.state === 'starting';
+    const hostCanEditBreakTime = !isReadOnlyView && roleFlags.isHost && Boolean(currentTournament.canEditBreakTime) && currentTournament.state !== 'starting';
     if (hostCanEditSettings) {
-      const minutesField = el('label', { className: 'tournament-panel__setting-field' });
-      minutesField.appendChild(el('span', { className: 'tournament-panel__setting-label' }, 'Round robin'));
-      const minutesInput = el('input', {
-        className: 'tournament-panel__setting-input',
-        type: 'number',
-        min: '1',
-        max: '30',
-        value: String(editableConfig.roundRobinMinutes),
+      const { field: breakField, input: breakInput } = createTournamentNumberSettingField('Break time', {
+        value: editableConfig.breakMinutes,
+        min: 0,
+        max: 30,
       });
-      minutesField.appendChild(minutesInput);
+      settingsList.appendChild(breakField);
+
+      const { field: minutesField, input: minutesInput } = createTournamentNumberSettingField('Round robin', {
+        value: editableConfig.roundRobinMinutes,
+        min: 1,
+        max: 30,
+      });
       settingsList.appendChild(minutesField);
 
       const styleField = el('label', { className: 'tournament-panel__setting-field' });
@@ -1172,15 +1532,18 @@ export function initTournamentUi({
       });
       const syncSettingsDraft = () => {
         settingsDraft = normalizeTournamentConfig({
+          breakMinutes: breakInput.value,
           roundRobinMinutes: minutesInput.value,
           eliminationStyle: styleSelect.value,
           victoryPoints: victorySelect.value,
         });
-        settingsDirty = settingsDraft.roundRobinMinutes !== currentConfig.roundRobinMinutes
+        settingsDirty = settingsDraft.breakMinutes !== currentConfig.breakMinutes
+          || settingsDraft.roundRobinMinutes !== currentConfig.roundRobinMinutes
           || settingsDraft.eliminationStyle !== currentConfig.eliminationStyle
           || settingsDraft.victoryPoints !== currentConfig.victoryPoints;
         saveSettingsBtn.disabled = !settingsDirty;
       };
+      breakInput.addEventListener('input', syncSettingsDraft);
       minutesInput.addEventListener('input', syncSettingsDraft);
       styleSelect.addEventListener('change', syncSettingsDraft);
       victorySelect.addEventListener('change', syncSettingsDraft);
@@ -1197,17 +1560,52 @@ export function initTournamentUi({
       });
       settingsActions.appendChild(saveSettingsBtn);
       settingsList.appendChild(settingsActions);
+    } else if (hostCanEditBreakTime) {
+      appendTournamentSettingSummary(settingsList, currentConfig, { includeBreakTime: false });
+
+      const { field: breakField, input: breakInput } = createTournamentNumberSettingField('Break time', {
+        value: editableConfig.breakMinutes,
+        min: 0,
+        max: 30,
+      });
+      settingsList.appendChild(breakField);
+
+      const settingsActions = el('div', { className: 'tournament-panel__actions' });
+      const saveBreakBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Save Break Time'), {
+        variant: 'neutral',
+        position: 'relative',
+      });
+      const syncBreakDraft = () => {
+        settingsDraft = normalizeTournamentConfig({
+          ...currentConfig,
+          breakMinutes: breakInput.value,
+        });
+        settingsDirty = settingsDraft.breakMinutes !== currentConfig.breakMinutes;
+        saveBreakBtn.disabled = !settingsDirty;
+      };
+      breakInput.addEventListener('input', syncBreakDraft);
+      saveBreakBtn.disabled = !settingsDirty;
+      saveBreakBtn.addEventListener('click', async () => {
+        syncBreakDraft();
+        if (!settingsDirty) return;
+        await apiUpdateTournamentConfig({
+          tournamentId: currentTournament.id,
+          config: { breakMinutes: settingsDraft.breakMinutes },
+        });
+        settingsDirty = false;
+        await refreshCurrentTournament({ tournamentId: currentTournament.id });
+      });
+      settingsActions.appendChild(saveBreakBtn);
+      settingsList.appendChild(settingsActions);
     } else {
-      settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Round robin: ${currentConfig.roundRobinMinutes} min`));
-      settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Elimination: ${currentConfig.eliminationStyle === 'double' ? 'Double' : 'Single'}`));
-      settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Victory target: ${currentConfig.victoryPoints}`));
+      appendTournamentSettingSummary(settingsList, currentConfig);
     }
     hostCard.appendChild(settingsList);
 
     const controls = el('div', { className: 'tournament-panel__actions' });
     const alreadyPlayer = participants.some((entry) => String(entry?.userId || '') === String(getSessionInfo?.()?.userId || ''));
 
-    if (currentTournament.state === 'starting' && !alreadyPlayer) {
+    if (!isReadOnlyView && currentTournament.state === 'starting' && !alreadyPlayer) {
       const joinPlayerBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Join as Player'), {
         variant: 'neutral',
         position: 'relative',
@@ -1219,7 +1617,7 @@ export function initTournamentUi({
       controls.appendChild(joinPlayerBtn);
     }
 
-    if (roleFlags.isHost && currentTournament.state === 'starting') {
+    if (!isReadOnlyView && roleFlags.isHost && currentTournament.state === 'starting') {
       const startBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, 'Start Tournament'), {
         variant: 'danger',
         position: 'relative',
@@ -1260,7 +1658,7 @@ export function initTournamentUi({
       controls.appendChild(cancelBtn);
     }
 
-    if (roleFlags.isHost && currentTournament.canStartElimination) {
+    if (!isReadOnlyView && roleFlags.isHost && currentTournament.canStartElimination) {
       const eliminationBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, 'Start Elimination'), {
         variant: 'danger',
         position: 'relative',
@@ -1275,16 +1673,16 @@ export function initTournamentUi({
     hostCard.appendChild(controls);
 
     const messageWrap = el('div', { className: 'tournament-panel__message' });
-    messageWrap.appendChild(el('div', { className: 'tournament-panel__subheading' }, 'Host Message'));
+    messageWrap.appendChild(el('div', { className: 'tournament-panel__subheading' }, hasHost ? 'Host Message' : 'Tournament Message'));
     const messageInput = el('textarea', {
       className: 'tournament-panel__message-input',
       rows: '4',
-      placeholder: roleFlags.isHost ? 'Share a message with the tournament.' : 'No host message yet.',
+      placeholder: (!isReadOnlyView && roleFlags.isHost) ? 'Share a message with the tournament.' : (hasHost ? 'No host message yet.' : 'Tournament is running on autopilot.'),
     });
-    messageInput.value = roleFlags.isHost ? messageDraft : asText(currentTournament.message, '');
-    messageInput.readOnly = !roleFlags.isHost;
+    messageInput.value = (!isReadOnlyView && roleFlags.isHost) ? messageDraft : asText(currentTournament.message, '');
+    messageInput.readOnly = isReadOnlyView || !roleFlags.isHost;
     messageWrap.appendChild(messageInput);
-    if (roleFlags.isHost) {
+    if (!isReadOnlyView && roleFlags.isHost) {
       const saveMessageBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Save Message'), {
         variant: 'neutral',
         position: 'relative',
@@ -1309,14 +1707,17 @@ export function initTournamentUi({
     const sideTop = el('div', { className: 'tournament-panel__card tournament-panel__card--summary' });
     sideTop.appendChild(el('div', { className: 'tournament-panel__tournament-name' }, asText(currentTournament.label, 'Tournament')));
     sideTop.appendChild(el('div', { className: 'tournament-panel__status-line' }, `${formatPhaseLabel(currentTournament.phase)} | ${currentTournament.currentRoundLabel || 'Tournament'}`));
-    if (roundRobinTimer) {
-      roundRobinTimerEl = el('div', { className: 'tournament-panel__status-line' }, `Time remaining: ${roundRobinTimer}`);
+    if (phaseTimerText) {
+      roundRobinTimerEl = el('div', { className: 'tournament-panel__status-line' }, phaseTimerText);
       sideTop.appendChild(roundRobinTimerEl);
+    }
+    if (tournamentStatusHint) {
+      sideTop.appendChild(el('div', { className: 'tournament-panel__status-line' }, tournamentStatusHint));
     }
 
     const sideActions = el('div', { className: 'tournament-panel__actions tournament-panel__actions--summary' });
-    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, 'Leave Tournament'), {
-      variant: 'danger',
+    const leaveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, isReadOnlyView ? 'Close Tournament' : 'Leave Tournament'), {
+      variant: isReadOnlyView ? 'neutral' : 'danger',
       position: 'relative',
     });
     leaveBtn.addEventListener('click', () => {
@@ -1368,7 +1769,31 @@ export function initTournamentUi({
       participants.forEach((participant) => {
         const row = el('tr', { className: 'tournament-panel__participant-row' });
         const nameCell = el('td', { className: 'tournament-panel__participant-name-cell' });
-        nameCell.appendChild(el('div', { className: 'tournament-panel__participant-name' }, participant.username || 'Player'));
+        const identity = el('div', { className: 'tournament-panel__participant-identity' });
+        if (isTournamentBot(participant)) {
+          const botIcon = createBotIcon({
+            size: 20,
+            alt: `${participant.username || 'Bot'} bot`,
+            title: `${participant.username || 'Bot'} bot`,
+          });
+          botIcon.classList.add('tournament-panel__participant-bot');
+          identity.appendChild(botIcon);
+        } else {
+          const eloValue = resolveTournamentDisplayElo(participant);
+          if (Number.isFinite(eloValue)) {
+            const eloBadge = createEloBadge({
+              elo: eloValue,
+              size: 20,
+              variant: 'light',
+              alt: 'Pre-tournament ELO',
+              title: `Pre-tournament ELO: ${Math.round(eloValue).toLocaleString()}`,
+            });
+            eloBadge.classList.add('tournament-panel__participant-elo');
+            identity.appendChild(eloBadge);
+          }
+        }
+        identity.appendChild(el('div', { className: 'tournament-panel__participant-name' }, participant.username || 'Player'));
+        nameCell.appendChild(identity);
         row.appendChild(nameCell);
 
         const pointsCell = el('td', { className: 'tournament-panel__participant-points-cell' });
@@ -1376,20 +1801,7 @@ export function initTournamentUi({
         row.appendChild(pointsCell);
 
         const actionCell = el('td', { className: 'tournament-panel__participant-action-cell' });
-        if (selectingNewHost && roleFlags.isHost && String(participant.userId || '') !== String(currentTournament.host?.userId || '')) {
-          const setHostBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Set Host'), {
-            variant: 'neutral',
-            position: 'relative',
-          });
-          setHostBtn.addEventListener('click', () => {
-            assignNewHostAndLeave(participant.userId).catch((err) => {
-              try {
-                window.alert(err.message || 'Unable to transfer host.');
-              } catch (_) {}
-            });
-          });
-          actionCell.appendChild(setHostBtn);
-        } else if (roleFlags.isHost && currentTournament.state === 'starting' && String(participant.userId || '') !== String(currentTournament.host?.userId || '')) {
+        if (!isReadOnlyView && roleFlags.isHost && currentTournament.state === 'starting' && String(participant.userId || '') !== String(currentTournament.host?.userId || '')) {
           const kickBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, participant.type === 'bot' ? 'Remove Bot' : 'Remove'), {
             variant: 'neutral',
             position: 'relative',
@@ -1419,6 +1831,22 @@ export function initTournamentUi({
             }
           });
           actionCell.appendChild(watchBtn);
+        } else if (!isReadOnlyView && String(participant.userId || '') === String(getSessionInfo?.()?.userId || '') && participant.activeGame?.requiresAccept) {
+          const acceptBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, 'Accept'), {
+            variant: 'danger',
+            position: 'relative',
+          });
+          acceptBtn.addEventListener('click', async () => {
+            try {
+              await apiReady(participant.activeGame.gameId, participant.activeGame.color);
+              await refreshCurrentTournament({ tournamentId: currentTournament.id, silent: true });
+            } catch (err) {
+              try {
+                window.alert(err.message || 'Unable to accept tournament match.');
+              } catch (_) {}
+            }
+          });
+          actionCell.appendChild(acceptBtn);
         }
         row.appendChild(actionCell);
         const seedCell = el('td', { className: 'tournament-panel__participant-seed-cell' });
@@ -1499,6 +1927,7 @@ export function initTournamentUi({
     const { title, status, section } = createModalShell('Create Tournament');
     const labelInput = el('input', { type: 'text', placeholder: 'Tournament label', maxlength: '60' });
     const minutesInput = el('input', { type: 'number', min: '1', max: '30', value: '15' });
+    const breakInput = el('input', { type: 'number', min: '0', max: '30', value: '5' });
     const styleSelect = el('select');
     styleSelect.innerHTML = '<option value="single">Single Elimination</option><option value="double">Double Elimination</option>';
     const victorySelect = el('select');
@@ -1522,6 +1951,7 @@ export function initTournamentUi({
     createOverlayModal.content.appendChild(title);
     section.appendChild(row('Label', labelInput));
     section.appendChild(row('Round robin minutes', minutesInput));
+    section.appendChild(row('Break time minutes', breakInput));
     section.appendChild(row('Elimination style', styleSelect));
     section.appendChild(row('Victory points', victorySelect));
     section.appendChild(saveBtn);
@@ -1536,6 +1966,7 @@ export function initTournamentUi({
           label: labelInput.value,
           config: {
             roundRobinMinutes: Number(minutesInput.value),
+            breakMinutes: Number(breakInput.value),
             eliminationStyle: styleSelect.value,
             victoryPoints: Number(victorySelect.value),
           },
@@ -1609,8 +2040,12 @@ export function initTournamentUi({
   buildBrowserModal();
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && currentRole && currentTournament) {
-      refreshCurrentTournament({ silent: true }).catch(() => null);
+    if (!document.hidden && currentTournament) {
+      refreshCurrentTournament({
+        silent: true,
+        tournamentId: currentViewMode === 'live' ? null : currentTournament.id,
+        viewMode: currentViewMode,
+      }).catch(() => null);
     }
   });
 
@@ -1620,7 +2055,7 @@ export function initTournamentUi({
     if (typeof onSessionRefresh === 'function') {
       await onSessionRefresh().catch(() => null);
     }
-    if (currentRole && currentTournament) {
+    if (currentTournament) {
       renderPanel();
       return;
     }
@@ -1636,19 +2071,59 @@ export function initTournamentUi({
     restoreCurrentTournament: async () => {
       await refreshCurrentTournament({ silent: true });
     },
+    openHistoricalTournament: async (tournamentId, { admin = false } = {}) => {
+      if (!tournamentId) return null;
+      if (currentViewMode === 'live' && currentRole && currentTournament) {
+        throw new Error('Leave your current tournament before opening another tournament view.');
+      }
+      return refreshCurrentTournament({
+        silent: false,
+        tournamentId,
+        viewMode: admin ? 'admin' : 'archive',
+      });
+    },
+    hasPersistentTournament: () => Boolean(currentViewMode === 'live' && currentRole && currentTournament),
     handleTournamentUpdated: (payload = {}) => {
       const tournamentId = String(payload?.tournamentId || '');
       if (!currentTournament?.id || tournamentId !== String(currentTournament.id)) {
         return;
       }
-      refreshCurrentTournament({ silent: true, tournamentId: currentTournament.id }).catch(() => null);
+      refreshCurrentTournament({
+        silent: true,
+        tournamentId: currentTournament.id,
+        viewMode: currentViewMode,
+      }).catch(() => null);
     },
     openHomeIfParticipant: () => {
+      syncPanelVisibility();
       renderPanel();
     },
-    setTournamentGameActive: (inGame) => {
-      isInTournamentGame = Boolean(inGame);
+    // Used by the live game client after a tournament match ends. We refresh the
+    // tournament state immediately so the next accept/banner decision is based on
+    // the server's latest match assignment instead of waiting for poll cadence.
+    exitTournamentGameToPanel: async () => {
+      const wasInTournamentGame = isInTournamentGame;
+      isInTournamentGame = false;
+      syncPanelVisibility();
       renderPanel();
+      lastAcceptStateKey = null;
+      if (currentTournament?.id) {
+        await refreshCurrentTournament({ silent: true, tournamentId: currentTournament.id });
+        return;
+      }
+      if (wasInTournamentGame) {
+        notifyAcceptState();
+      }
+    },
+    setTournamentGameActive: (inGame) => {
+      const wasInTournamentGame = isInTournamentGame;
+      isInTournamentGame = Boolean(inGame);
+      syncPanelVisibility();
+      renderPanel();
+      if (wasInTournamentGame && !isInTournamentGame) {
+        lastAcceptStateKey = null;
+        notifyAcceptState();
+      }
       if (!isInTournamentGame && currentTournament?.id) {
         refreshCurrentTournament({ silent: true, tournamentId: currentTournament.id }).catch(() => null);
       }

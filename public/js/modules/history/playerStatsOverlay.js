@@ -497,7 +497,7 @@ export function createPlayerStatsOverlay({
 
     const eloRow = document.createElement('div');
     eloRow.className = 'history-current-elo';
-    eloRow.innerHTML = 'Current ELO: <span id="historyCurrentEloValue">—</span>';
+    eloRow.innerHTML = 'Current ELO: <span id="historyCurrentEloValue">800</span>';
     overlayEloValueEl = eloRow.querySelector('#historyCurrentEloValue');
     summaryPane.appendChild(eloRow);
 
@@ -649,7 +649,7 @@ export function createPlayerStatsOverlay({
   function updateEloDisplay() {
     if (!overlayEloValueEl) return;
     const elo = currentUser?.elo;
-    overlayEloValueEl.textContent = isFiniteNumber(elo) ? String(Math.round(elo)) : '—';
+    overlayEloValueEl.textContent = isFiniteNumber(elo) ? String(Math.round(elo)) : '800';
   }
 
   async function searchForUsername(value) {

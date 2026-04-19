@@ -62,6 +62,21 @@ export function createThroneIcon({ size = 24, alt = 'Match winner', title } = {}
   return img;
 }
 
+export function createBotIcon({ size = 20, alt = 'Bot', title } = {}) {
+  const img = document.createElement('img');
+  img.classList.add('cg-icon');
+  const src = getIconAsset('bot');
+  if (src) {
+    img.src = src;
+  }
+  img.alt = alt;
+  if (title) {
+    img.title = title;
+  }
+  applySquareSize(img, size);
+  return img;
+}
+
 export function createDrawIcon({ size = 24, alt = 'Draw', title } = {}) {
   const img = document.createElement('img');
   img.classList.add('cg-icon');

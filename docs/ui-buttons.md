@@ -94,7 +94,7 @@ Player banners and score summaries share a consistent visual language (name row,
 
 ### `createNameRow(options)`
 
-Builds a flex row containing the player name, optional Elo badge, reconnect spinner, and victory thrones. Key options:
+Builds a flex row containing the player name, optional Elo badge, reconnect spinner, and victory thrones. Ranked rows standardize the identity block as `name -> Elo badge`, regardless of top/bottom banner orientation, so the username remains the first readable anchor. The shared badge is intentionally compact: keep the badge box smaller while preserving the existing badge font size so the rating reads larger relative to the shield. Key options:
 
 | Option | Type | Description |
 | --- | --- | --- |
@@ -102,6 +102,7 @@ Builds a flex row containing the player name, optional Elo badge, reconnect spin
 | `orientation` | `'top' \| 'bottom'` | Positions victory tokens before or after the name. |
 | `height` / `fontSize` | `number` | Explicit measurements in pixels. |
 | `isRankedMatch` | `boolean` | When `true`, injects an Elo badge using the supplied `elo` rating. |
+| `showEloBadge` | `boolean` | Forces the Elo badge to render even outside ranked contexts; callers should still suppress it for bots and guest/anonymous accounts. |
 | `wins` | `object` | `{ count, size, gap, margin }` configure the throne icons. |
 | `connection` | `object` | `{ displaySeconds, size, fontSize, color }` draws a reconnect spinner + countdown when present. |
 | `assets` | `object` | Override icon factories (see below). |

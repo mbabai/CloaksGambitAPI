@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const User = require('../../../models/User');
 
+const DEFAULT_ELO = 800;
+
 function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -29,7 +31,7 @@ router.post('/', async (req, res) => {
     res.json({
       userId: user._id.toString(),
       username: user.username || username,
-      elo: Number.isFinite(user.elo) ? user.elo : null,
+      elo: Number.isFinite(user.elo) ? user.elo : DEFAULT_ELO,
       isBot: Boolean(user.isBot),
     });
   } catch (err) {

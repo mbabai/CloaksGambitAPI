@@ -11,8 +11,35 @@ const {
   applySelect,
 } = require('./inMemoryUtils');
 const { finalizeStoredClockState } = require('../utils/gameClock');
+const {
+  getAllowedTimeControls,
+  getIncrementMs,
+} = require('../utils/gameModeClock');
 
 const defaultConfig = new ServerConfig();
+const TOURNAMENT_MATCH_TYPES = Object.freeze({
+  ROUND_ROBIN: 'TOURNAMENT_ROUND_ROBIN',
+  ELIMINATION: 'TOURNAMENT_ELIMINATION',
+});
+const TOURNAMENT_ACCEPT_WINDOW_SECONDS = 30;
+
+function shouldRequireGameAccept(match) {
+  const matchType = String(match?.type || '').toUpperCase();
+  if (matchType === TOURNAMENT_MATCH_TYPES.ROUND_ROBIN) {
+    return true;
+  }
+  if (matchType !== TOURNAMENT_MATCH_TYPES.ELIMINATION) {
+    return false;
+  }
+  const player1Score = Number(match?.player1Score || 0);
+  const player2Score = Number(match?.player2Score || 0);
+  const drawCount = Number(match?.drawCount || 0);
+  return (player1Score + player2Score + drawCount) === 0;
+}
+
+function getGameAcceptWindowSeconds(match, requiresAccept = shouldRequireGameAccept(match)) {
+  return requiresAccept ? TOURNAMENT_ACCEPT_WINDOW_SECONDS : 0;
+}
 
 async function getRuntimeConfig() {
   try {
@@ -172,6 +199,15 @@ const gameSchema = new mongoose.Schema({
       message: 'Players ready must contain exactly two boolean values',
     },
   },
+  requiresAccept: {
+    type: Boolean,
+    default: false,
+  },
+  acceptWindowSeconds: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   playersNext: {
     type: [Boolean],
     default: [false, false],
@@ -239,13 +275,9 @@ const gameSchema = new mongoose.Schema({
     validate: {
       validator: async function validator(value) {
         const runtimeConfig = await getRuntimeConfig();
-        const rankedTime = runtimeConfig?.gameModeSettings?.RANKED?.TIME_CONTROL
-          ?? defaultConfig.gameModeSettings.RANKED.TIME_CONTROL;
-        const quickplayTime = runtimeConfig?.gameModeSettings?.QUICKPLAY?.TIME_CONTROL
-          ?? defaultConfig.gameModeSettings.QUICKPLAY.TIME_CONTROL;
-        return value === rankedTime || value === quickplayTime;
+        return getAllowedTimeControls(runtimeConfig).has(value);
       },
-      message: 'Time control must match either RANKED or QUICKPLAY settings from server config',
+      message: 'Time control must match a configured game-mode clock setting',
     },
   },
   increment: {
@@ -254,7 +286,7 @@ const gameSchema = new mongoose.Schema({
     validate: {
       validator: async function validator(value) {
         const runtimeConfig = await getRuntimeConfig();
-        const increment = runtimeConfig?.gameModeSettings?.INCREMENT
+        const increment = getIncrementMs(runtimeConfig)
           ?? defaultConfig.gameModeSettings.INCREMENT;
         return value === increment;
       },
@@ -379,6 +411,11 @@ const gameSchema = new mongoose.Schema({
       message: 'Draw offer cooldowns must contain exactly two entries',
     },
   },
+  tournamentScoreOutcome: {
+    type: String,
+    enum: ['double_no_show_loss'],
+    default: null,
+  },
   clockState: {
     type: clockStateSchema,
     default: null,
@@ -438,7 +475,13 @@ async function updateMatchAfterGame(game, createNextGame) {
     }
 
     if (typeof createNextGame === 'function') {
-      const nextGame = await createNextGame();
+      const requiresAccept = shouldRequireGameAccept(match);
+      const acceptWindowSeconds = getGameAcceptWindowSeconds(match, requiresAccept);
+      const nextGame = await createNextGame({
+        match,
+        requiresAccept,
+        acceptWindowSeconds,
+      });
       if (nextGame) {
         if (Array.isArray(match.games)) {
           match.games.push(nextGame._id);
@@ -481,13 +524,15 @@ gameSchema.methods.endGame = async function endGame(winner, winReason) {
   });
   await this.save();
 
-  await updateMatchAfterGame(this, async () => {
+  await updateMatchAfterGame(this, async ({ requiresAccept, acceptWindowSeconds }) => {
     const GameModel = require('./Game');
     return GameModel.create({
       players: [this.players[1], this.players[0]],
       match: this.match,
       timeControlStart: this.timeControlStart,
       increment: this.increment,
+      requiresAccept,
+      acceptWindowSeconds,
     });
   });
 
@@ -625,6 +670,10 @@ class GameDocument {
     this.players = Array.isArray(data.players) ? data.players.map(toIdString) : [];
     this.match = data.match ? toIdString(data.match) : null;
     this.playersReady = ensureTwo(data.playersReady, [false, false]);
+    this.requiresAccept = Boolean(data.requiresAccept);
+    this.acceptWindowSeconds = Number.isFinite(Number(data.acceptWindowSeconds))
+      ? Math.max(0, Number(data.acceptWindowSeconds))
+      : 0;
     this.playersNext = ensureTwo(data.playersNext, [false, false]);
     this.playerTurn = data.playerTurn ?? null;
     this.winner = data.winner ?? undefined;
@@ -647,6 +696,7 @@ class GameDocument {
     this.onDeckingPlayer = data.onDeckingPlayer ?? null;
     this.drawOffer = data.drawOffer ? cloneValue(data.drawOffer) : null;
     this.drawOfferCooldowns = ensureTwo(data.drawOfferCooldowns, [null, null]);
+    this.tournamentScoreOutcome = data.tournamentScoreOutcome || null;
     this.clockState = data.clockState ? cloneValue(data.clockState) : null;
   }
 
@@ -694,11 +744,13 @@ class GameDocument {
 
     await this.save();
     await GameModel._persistDocument(this);
-    await updateMatchAfterGame(this, async () => GameModel.create({
+    await updateMatchAfterGame(this, async ({ requiresAccept, acceptWindowSeconds }) => GameModel.create({
       players: [this.players[1], this.players[0]],
       match: this.match,
       timeControlStart: this.timeControlStart,
       increment: this.increment,
+      requiresAccept,
+      acceptWindowSeconds,
     }));
 
     return this;

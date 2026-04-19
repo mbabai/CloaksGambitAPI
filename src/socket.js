@@ -8,13 +8,35 @@ const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
 const lobbyStore = require('./state/lobby');
 const { buildSpectateSnapshot } = require('./utils/spectatorSnapshot');
-const { buildClockPayload, resolveTimeoutResult } = require('./utils/gameClock');
-const { appendLocalDebugLog } = require('./utils/localDebugLogger');
+const { buildClockPayload, resolveTimeoutResult, finalizeStoredClockState } = require('./utils/gameClock');
+const {
+  getClockSettingsForMatchType,
+  getGameModeType,
+} = require('./utils/gameModeClock');
+const {
+  appendLocalDebugLog,
+  appendNamedLocalDebugLog,
+} = require('./utils/localDebugLogger');
 const { normalizeActiveMatch, fetchMatchList } = require('./services/matches/activeMatches');
 const { getRecentServerErrors } = require('./services/adminErrorFeed');
 const { ensureAdminSocketHandshake } = require('./utils/adminAccess');
 const { resolveSessionFromSocketHandshake } = require('./utils/requestSession');
-const { removeTournamentViewerOnDisconnect } = require('./services/tournaments/liveTournaments');
+const { createBotTurnFailsafe } = require('./services/bots/turnFailsafe');
+const {
+  removeTournamentViewerOnDisconnect,
+  getTournamentDetails,
+} = require('./services/tournaments/liveTournaments');
+const DEFAULT_TOURNAMENT_MATCH_TYPES = Match.TOURNAMENT_MATCH_TYPES || {
+  ROUND_ROBIN: 'TOURNAMENT_ROUND_ROBIN',
+  ELIMINATION: 'TOURNAMENT_ELIMINATION',
+};
+
+function logTournamentFlow(event, payload = {}) {
+  appendNamedLocalDebugLog('tournaments/flow.jsonl', event, payload);
+  if (process.env.NODE_ENV !== 'test') {
+    console.info('[tournament]', event, payload);
+  }
+}
 
 async function enforceActiveGameTimeouts({
   GameModel = Game,
@@ -67,6 +89,134 @@ async function enforceActiveGameTimeouts({
   return expiredGames;
 }
 
+async function resolveTournamentAcceptForfeitColor(game, match, readyFlags, {
+  tournamentMatchTypes = DEFAULT_TOURNAMENT_MATCH_TYPES,
+  getTournamentDetailsFn = getTournamentDetails,
+} = {}) {
+  if (readyFlags[0] && !readyFlags[1]) return 0;
+  if (readyFlags[1] && !readyFlags[0]) return 1;
+  const matchType = String(match?.type || '').toUpperCase();
+  if (matchType !== tournamentMatchTypes.ELIMINATION) {
+    return null;
+  }
+  try {
+    const tournament = await getTournamentDetailsFn(String(match?.tournamentId || ''));
+    const participants = Array.isArray(tournament?.players) ? tournament.players : [];
+    const player1Seed = Number(participants.find((entry) => String(entry?.userId || '') === String(match?.player1 || ''))?.seed || 0);
+    const player2Seed = Number(participants.find((entry) => String(entry?.userId || '') === String(match?.player2 || ''))?.seed || 0);
+    const preferredUserId = (
+      Number.isFinite(player1Seed) && player1Seed > 0
+      && Number.isFinite(player2Seed) && player2Seed > 0
+      && player1Seed !== player2Seed
+    )
+      ? (player1Seed < player2Seed ? String(match.player1) : String(match.player2))
+      : String(match?.player1 || '');
+    const gamePlayers = Array.isArray(game?.players) ? game.players.map((entry) => String(entry)) : [];
+    const color = gamePlayers.findIndex((entry) => entry === preferredUserId);
+    return color === 0 || color === 1 ? color : 0;
+  } catch (err) {
+    console.error('Error resolving elimination accept forfeit winner:', err);
+    return 0;
+  }
+}
+
+async function enforceTournamentAcceptTimeoutForGame(gameId, {
+  GameModel = Game,
+  MatchModel = Match,
+  eventBusRef = eventBus,
+  getTournamentDetailsFn = getTournamentDetails,
+  tournamentMatchTypes = DEFAULT_TOURNAMENT_MATCH_TYPES,
+  finalizeClockState = finalizeStoredClockState,
+  now = Date.now(),
+} = {}) {
+  const game = await GameModel.findById(gameId);
+  if (!game?.isActive) {
+    return { handled: false, reason: 'inactive-game' };
+  }
+  const readyFlags = Array.isArray(game.playersReady)
+    ? [Boolean(game.playersReady[0]), Boolean(game.playersReady[1])]
+    : [false, false];
+  if (readyFlags[0] && readyFlags[1]) {
+    return { handled: false, reason: 'already-ready' };
+  }
+
+  const match = await MatchModel.findById(game.match);
+  if (!match?.isActive) {
+    return { handled: false, reason: 'inactive-match' };
+  }
+  const matchType = String(match.type || '').toUpperCase();
+  if (matchType !== tournamentMatchTypes.ROUND_ROBIN && matchType !== tournamentMatchTypes.ELIMINATION) {
+    return { handled: false, reason: 'non-tournament-match' };
+  }
+
+  const winReason = GAME_CONSTANTS.winReasons.TIME_CONTROL;
+  const winnerColor = await resolveTournamentAcceptForfeitColor(game, match, readyFlags, {
+    tournamentMatchTypes,
+    getTournamentDetailsFn,
+  });
+  logTournamentFlow('accept-timeout-enforce', {
+    gameId: String(gameId || ''),
+    matchId: String(match?._id || game?.match || ''),
+    tournamentId: String(match?.tournamentId || ''),
+    matchType,
+    readyFlags,
+    winnerColor,
+  });
+
+  if (matchType === tournamentMatchTypes.ROUND_ROBIN) {
+    game.tournamentScoreOutcome = winnerColor === null ? 'double_no_show_loss' : null;
+    await game.endGame(winnerColor, winReason);
+  } else {
+    if (winnerColor !== 0 && winnerColor !== 1) {
+      return { handled: false, reason: 'missing-elimination-winner' };
+    }
+    const winnerUserId = game.players?.[winnerColor]?.toString?.() || game.players?.[winnerColor] || null;
+    game.winner = winnerColor;
+    game.winReason = winReason;
+    game.endTime = new Date(now);
+    game.isActive = false;
+    game.drawOffer = null;
+    game.drawOfferCooldowns = [null, null];
+    finalizeClockState(game, {
+      now,
+      reason: 'tournament-accept-timeout',
+    });
+    await game.save();
+    const winScoreTarget = Number.isFinite(Number(match.winScoreTarget)) && Number(match.winScoreTarget) > 0
+      ? Number(match.winScoreTarget)
+      : 1;
+    if (String(match.player1 || '') === String(winnerUserId || '')) {
+      match.player1Score = Math.max(Number(match.player1Score || 0), winScoreTarget);
+    } else if (String(match.player2 || '') === String(winnerUserId || '')) {
+      match.player2Score = Math.max(Number(match.player2Score || 0), winScoreTarget);
+    }
+    await match.endMatch(winnerUserId || null);
+  }
+
+  const payloadGame = typeof game.toObject === 'function' ? game.toObject() : game;
+  const affectedUsers = Array.isArray(payloadGame?.players)
+    ? payloadGame.players.map((playerId) => playerId.toString())
+    : [];
+  eventBusRef.emit('gameChanged', {
+    game: payloadGame,
+    affectedUsers,
+  });
+  logTournamentFlow('accept-timeout-game-changed', {
+    gameId: String(payloadGame?._id || gameId || ''),
+    matchId: String(payloadGame?.match || match?._id || ''),
+    tournamentId: String(match?.tournamentId || ''),
+    winner: payloadGame?.winner ?? null,
+    winReason: payloadGame?.winReason ?? null,
+    isActive: Boolean(payloadGame?.isActive),
+  });
+
+  return {
+    handled: true,
+    matchType,
+    winnerColor,
+  };
+}
+
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: {
@@ -80,9 +230,68 @@ function initSocket(httpServer) {
   const pendingCustomInvites = new Map();
   const matchDisconnectState = new Map();
   const playerMatches = new Map();
+  const tournamentAcceptTimers = new Map();
   const DISCONNECT_LIMIT_MS = 30000;
   const MIN_DISCONNECT_GRACE_MS = 10000;
   let activeGameTimeoutSweepInFlight = false;
+  const tournamentMatchTypes = DEFAULT_TOURNAMENT_MATCH_TYPES;
+
+  function resolveGameAcceptState(game, match = null) {
+    if (typeof game?.requiresAccept === 'boolean') {
+      const requiresAccept = Boolean(game.requiresAccept);
+      return {
+        requiresAccept,
+        acceptWindowSeconds: Number.isFinite(Number(game?.acceptWindowSeconds))
+          ? Math.max(0, Number(game.acceptWindowSeconds))
+          : (requiresAccept ? 30 : 0),
+      };
+    }
+    const matchType = String(match?.type || '').toUpperCase();
+    const player1Score = Number(match?.player1Score || 0);
+    const player2Score = Number(match?.player2Score || 0);
+    const drawCount = Number(match?.drawCount || 0);
+    const requiresAccept = matchType === tournamentMatchTypes.ROUND_ROBIN
+      || (matchType === tournamentMatchTypes.ELIMINATION && (player1Score + player2Score + drawCount) === 0);
+    return {
+      requiresAccept,
+      acceptWindowSeconds: requiresAccept ? 30 : 0,
+    };
+  }
+
+  function clearTournamentAcceptTimer(gameId) {
+    const id = gameId?.toString?.() || gameId;
+    if (!id) return;
+    const handle = tournamentAcceptTimers.get(id);
+    if (handle) {
+      clearTimeout(handle);
+      tournamentAcceptTimers.delete(id);
+    }
+  }
+
+  async function enforceTournamentAcceptTimeout(gameId, acceptWindowSeconds = 30) {
+    clearTournamentAcceptTimer(gameId);
+    const handle = setTimeout(async () => {
+      try {
+        await enforceTournamentAcceptTimeoutForGame(gameId, {
+          GameModel: Game,
+          MatchModel: Match,
+          eventBusRef: eventBus,
+          getTournamentDetailsFn: getTournamentDetails,
+          tournamentMatchTypes,
+          finalizeClockState: finalizeStoredClockState,
+          now: Date.now(),
+        });
+      } catch (err) {
+        console.error('Error enforcing tournament accept timeout:', err);
+      } finally {
+        clearTournamentAcceptTimer(gameId);
+      }
+    }, Math.max(1, Number(acceptWindowSeconds) || 30) * 1000);
+    if (typeof handle?.unref === 'function') {
+      handle.unref();
+    }
+    tournamentAcceptTimers.set(String(gameId), handle);
+  }
 
   async function runActiveGameTimeoutSweep() {
     if (activeGameTimeoutSweepInFlight) return;
@@ -108,11 +317,6 @@ function initSocket(httpServer) {
   }, 1000);
   if (typeof activeGameTimeoutTimer?.unref === 'function') {
     activeGameTimeoutTimer.unref();
-  }
-  if (httpServer && typeof httpServer.on === 'function') {
-    httpServer.on('close', () => {
-      clearInterval(activeGameTimeoutTimer);
-    });
   }
 
   function toId(value) {
@@ -164,6 +368,27 @@ function initSocket(httpServer) {
     if (!sockets.length) return false;
     sockets.forEach((socket) => socket.emit(eventName, payload));
     return true;
+  }
+
+  const botTurnFailsafe = createBotTurnFailsafe({
+    GameModel: Game,
+    UserModel: User,
+    eventBusRef: eventBus,
+    ensureBotClient: async ({ difficulty, userId }) => {
+      const connected = hasConnectedUser(userId);
+      if (connected) return null;
+      const { ensureInternalBotClient } = require('./services/bots/internalBots');
+      return ensureInternalBotClient({ difficulty, userId });
+    },
+    hasConnectedUser,
+    debugLog: appendLocalDebugLog,
+  });
+
+  if (httpServer && typeof httpServer.on === 'function') {
+    httpServer.on('close', () => {
+      clearInterval(activeGameTimeoutTimer);
+      botTurnFailsafe.dispose();
+    });
   }
 
   function getMatchState(matchId) {
@@ -274,23 +499,8 @@ function initSocket(httpServer) {
 
     const config = await getServerConfig();
     let lobbyChanged = false;
-
-    const customSettings = config?.gameModeSettings?.get
-      ? (config.gameModeSettings.get('CUSTOM') || config.gameModeSettings.get('QUICKPLAY') || {})
-      : (config?.gameModeSettings?.CUSTOM || config?.gameModeSettings?.QUICKPLAY || {});
-    const quickplaySettings = config?.gameModeSettings?.get
-      ? (config.gameModeSettings.get('QUICKPLAY') || {})
-      : (config?.gameModeSettings?.QUICKPLAY || {});
-    const fallbackBase = Number(quickplaySettings?.TIME_CONTROL) || 300000;
-    const timeControl = Number(customSettings?.TIME_CONTROL ?? fallbackBase) || fallbackBase;
-    const incrementSetting = customSettings?.INCREMENT ?? (config?.gameModeSettings?.get
-      ? config.gameModeSettings.get('INCREMENT')
-      : config?.gameModeSettings?.INCREMENT);
-    const increment = Number(incrementSetting) || 0;
-
-    const typeValue = config?.gameModes?.get
-      ? (config.gameModes.get('CUSTOM') || 'CUSTOM')
-      : (config?.gameModes?.CUSTOM || 'CUSTOM');
+    const typeValue = getGameModeType(config, 'CUSTOM', 'CUSTOM');
+    const { timeControl, increment } = getClockSettingsForMatchType(config, typeValue);
 
     players.forEach((pid) => {
       const quickResult = lobbyStore.removeFromQueue('quickplay', pid);
@@ -340,6 +550,7 @@ function initSocket(httpServer) {
     eventBus.emit('players:bothNext', {
       game: typeof game.toObject === 'function' ? game.toObject() : game,
       affectedUsers: affected,
+      currentGameNumber: 1,
     });
     eventBus.emit('match:created', {
       matchId: match._id.toString(),
@@ -915,17 +1126,34 @@ function initSocket(httpServer) {
 
     if (!game) return;
 
+    if (!game.isActive || (game.playersReady?.[0] && game.playersReady?.[1])) {
+      clearTournamentAcceptTimer(game._id?.toString?.() || game._id);
+    }
+
     const matchId = game.match?.toString();
     const gameIdStr = game._id.toString();
     let finishedMatch = null;
+    let liveMatch = null;
     if (!game.isActive && matchId) {
       try {
         finishedMatch = await Match.findById(matchId).lean();
       } catch (err) {
         console.error('Failed to load finished match for socket payload:', err);
       }
+    } else if (
+      matchId
+      && typeof game?.requiresAccept !== 'boolean'
+      && Array.isArray(game?.playersReady)
+      && (!game.playersReady[0] || !game.playersReady[1])
+    ) {
+      try {
+        liveMatch = await Match.findById(matchId).lean();
+      } catch (err) {
+        console.error('Failed to load live match for accept-state payload:', err);
+      }
     }
     const players = (payload.affectedUsers || game.players || []).map(id => id.toString());
+    const acceptState = resolveGameAcceptState(game, liveMatch || finishedMatch);
     const clockPayload = buildClockPayload(game, {
       now: Date.now(),
       setupActionType: GAME_CONSTANTS.actions.SETUP,
@@ -972,7 +1200,9 @@ function initSocket(httpServer) {
         captured: masked.captured,
         stashes: masked.stashes,
         onDecks: masked.onDecks,
-        players: masked.players,
+        players: Array.isArray(masked.players)
+          ? masked.players.map((entry) => entry?.toString?.() || entry)
+          : [],
         daggers: masked.daggers,
         playerTurn: masked.playerTurn,
         onDeckingPlayer: masked.onDeckingPlayer,
@@ -983,6 +1213,8 @@ function initSocket(httpServer) {
         winner: masked.winner,
         winReason: masked.winReason,
         playersReady: game.playersReady,
+        requiresAccept: acceptState.requiresAccept,
+        acceptWindowSeconds: acceptState.acceptWindowSeconds,
         setupComplete: game.setupComplete,
         startTime: game.startTime,
         timeControlStart: game.timeControlStart,
@@ -1035,6 +1267,13 @@ function initSocket(httpServer) {
         console.error('Error emitting spectate update after game change:', err);
       });
     }
+
+    botTurnFailsafe.scheduleGame(game, {
+      anchorMs: initiator?.action === 'bot-turn-failsafe' ? Date.now() : null,
+      reason: initiator?.action || 'gameChanged',
+    }).catch((err) => {
+      console.error('Error scheduling bot-turn failsafe:', err);
+    });
   });
 
   // Relay explicit both-ready signal to affected users
@@ -1079,12 +1318,22 @@ function initSocket(httpServer) {
     }
     if (!game) return;
     const gameIdStr = game._id.toString();
+    if (payload?.requiresAccept) {
+      enforceTournamentAcceptTimeout(gameIdStr, Number(payload?.acceptWindowSeconds) || 30).catch((err) => {
+        console.error('Error scheduling tournament accept timeout:', err);
+      });
+    } else {
+      clearTournamentAcceptTimer(gameIdStr);
+    }
     (payload?.affectedUsers || game.players || []).forEach((id, idx) => {
       const userId = id.toString();
       if (hasConnectedUser(userId)) {
         emitToUser(userId, 'players:bothNext', {
           gameId: gameIdStr,
           color: idx,
+          currentGameNumber: Number.isFinite(Number(payload?.currentGameNumber))
+            ? Number(payload.currentGameNumber)
+            : 1,
           tournamentId: payload?.tournamentId || null,
           tournamentPhase: payload?.tournamentPhase || null,
           requiresAccept: Boolean(payload?.requiresAccept),
@@ -1105,6 +1354,10 @@ function initSocket(httpServer) {
     } catch (err) {
       console.error('Error emitting admin:serverError to admin namespace:', err);
     }
+  });
+
+  botTurnFailsafe.bootstrapActiveGames().catch((err) => {
+    console.error('Error bootstrapping bot-turn failsafe:', err);
   });
 
   io.on('connection', async (socket) => {
@@ -1203,8 +1456,14 @@ function initSocket(httpServer) {
         return {
           ...masked,
           _id: game._id,
+          gameId: game._id?.toString?.() || game._id,
+          matchId: game.match?.toString?.() || game.match || null,
           players: game.players.map(p => p.toString()),
           playersReady: game.playersReady,
+          requiresAccept: Boolean(game.requiresAccept),
+          acceptWindowSeconds: Number.isFinite(Number(game.acceptWindowSeconds))
+            ? Math.max(0, Number(game.acceptWindowSeconds))
+            : 0,
           startTime: game.startTime,
           timeControlStart: game.timeControlStart,
           increment: game.increment,
@@ -1517,4 +1776,6 @@ function initSocket(httpServer) {
 module.exports = initSocket;
 module.exports._private = {
   enforceActiveGameTimeouts,
+  enforceTournamentAcceptTimeoutForGame,
+  resolveTournamentAcceptForfeitColor,
 };

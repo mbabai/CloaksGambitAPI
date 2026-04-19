@@ -6,7 +6,9 @@ const Game = require('../../models/Game');
 const Tournament = require('../../models/Tournament');
 const User = require('../../models/User');
 const getServerConfig = require('../../utils/getServerConfig');
+const { getClockSettingsForMatchType } = require('../../utils/gameModeClock');
 const ensureUser = require('../../utils/ensureUser');
+const { appendNamedLocalDebugLog } = require('../../utils/localDebugLogger');
 const { buildRoundRobinStandings, toIdString, toOptionalFiniteNumber } = require('./standings');
 const { buildSingleEliminationBracket, buildDoubleEliminationBracket, getRoundLabel } = require('./bracket');
 const {
@@ -20,6 +22,14 @@ const { ensureInternalBotClient } = require('../bots/internalBots');
 const TOURNAMENTS = new Map();
 const TOURNAMENT_ALERTS = new Map();
 const ROUND_ROBIN_SCHEDULING = new Set();
+const ELIMINATION_BREAK_SCHEDULING = new Map();
+
+function logTournamentFlow(event, payload = {}) {
+  appendNamedLocalDebugLog('tournaments/flow.jsonl', event, payload);
+  if (process.env.NODE_ENV !== 'test') {
+    console.info('[tournament]', event, payload);
+  }
+}
 
 function isMongoConnected() {
   return mongoose?.connection?.readyState === 1;
@@ -72,6 +82,247 @@ function getTournamentMembershipRole(tournament, userId) {
   if (isPlayer) return 'player';
   if (isViewer) return 'viewer';
   return null;
+}
+
+function getTournamentCreator(tournament) {
+  if (tournament?.createdBy?.userId) {
+    return {
+      userId: String(tournament.createdBy.userId),
+      username: normalizeDisplayName(tournament.createdBy.username, 'Tournament Host'),
+      isGuest: Boolean(tournament.createdBy.isGuest),
+    };
+  }
+  if (tournament?.host?.userId) {
+    return {
+      userId: String(tournament.host.userId),
+      username: normalizeDisplayName(tournament.host.username, 'Tournament Host'),
+      isGuest: Boolean(tournament.host.isGuest),
+    };
+  }
+  return null;
+}
+
+function didUserCreateTournament(tournament, userId) {
+  const creatorId = String(getTournamentCreator(tournament)?.userId || '');
+  const targetId = String(userId || '');
+  return Boolean(creatorId && targetId && creatorId === targetId);
+}
+
+function didUserCompeteInTournament(tournament, userId) {
+  const targetId = String(userId || '');
+  if (!targetId) return false;
+  const entries = Array.isArray(tournament?.historicalPlayers) && tournament.historicalPlayers.length > 0
+    ? tournament.historicalPlayers
+    : (Array.isArray(tournament?.players) ? tournament.players : []);
+  return entries.some((entry) => String(entry?.userId || '') === targetId);
+}
+
+function getTournamentHistoricalPlayers(tournament) {
+  if (Array.isArray(tournament?.historicalPlayers) && tournament.historicalPlayers.length > 0) {
+    return tournament.historicalPlayers;
+  }
+  return Array.isArray(tournament?.players) ? tournament.players : [];
+}
+
+function upsertHistoricalTournamentPlayer(tournament, playerEntry) {
+  if (!tournament || !playerEntry?.userId) return;
+  tournament.historicalPlayers = Array.isArray(tournament.historicalPlayers) ? tournament.historicalPlayers : [];
+  const targetUserId = String(playerEntry.userId);
+  const existingIndex = tournament.historicalPlayers.findIndex((entry) => String(entry?.userId || '') === targetUserId);
+  if (existingIndex >= 0) {
+    tournament.historicalPlayers[existingIndex] = {
+      ...tournament.historicalPlayers[existingIndex],
+      ...playerEntry,
+    };
+    return;
+  }
+  tournament.historicalPlayers.push({ ...playerEntry });
+}
+
+function removeHistoricalTournamentPlayer(tournament, userId) {
+  const targetUserId = String(userId || '');
+  if (!targetUserId || !Array.isArray(tournament?.historicalPlayers)) return;
+  tournament.historicalPlayers = tournament.historicalPlayers.filter((entry) => String(entry?.userId || '') !== targetUserId);
+}
+
+function canAccessCompletedTournamentHistory(tournament, userId) {
+  const targetId = String(userId || '');
+  if (!targetId) return false;
+  const isCompleted = tournament?.state === 'completed' || tournament?.phase === 'completed';
+  if (!isCompleted) return false;
+  return didUserCompeteInTournament(tournament, targetId) || didUserCreateTournament(tournament, targetId);
+}
+
+function getOrdinalLabel(value) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) return String(value || '');
+  const tens = number % 100;
+  if (tens >= 11 && tens <= 13) return `${number}th`;
+  const ones = number % 10;
+  if (ones === 1) return `${number}st`;
+  if (ones === 2) return `${number}nd`;
+  if (ones === 3) return `${number}rd`;
+  return `${number}th`;
+}
+
+function getMatchLoser(match) {
+  const winnerId = String(match?.winner?.userId || '');
+  const playerA = match?.playerA || null;
+  const playerB = match?.playerB || null;
+  const playerAId = String(playerA?.userId || '');
+  const playerBId = String(playerB?.userId || '');
+  if (!winnerId || !playerAId || !playerBId) return null;
+  if (winnerId === playerAId) return playerB;
+  if (winnerId === playerBId) return playerA;
+  return null;
+}
+
+function normalizeCompletedPlacementCollections(bracket = {}) {
+  return {
+    winnersRounds: Array.isArray(bracket?.winnersRounds)
+      ? bracket.winnersRounds
+      : (Array.isArray(bracket?.rounds) ? bracket.rounds : []),
+    losersRounds: Array.isArray(bracket?.losersRounds) ? bracket.losersRounds : [],
+    finalsRounds: Array.isArray(bracket?.finalsRounds) ? bracket.finalsRounds : [],
+  };
+}
+
+function buildCompletedPlacements(participants = [], bracket = null) {
+  const allParticipants = Array.isArray(participants) ? participants.filter((entry) => entry?.userId) : [];
+  if (!allParticipants.length) return [];
+
+  const participantByUserId = new Map(allParticipants.map((entry) => [String(entry.userId), entry]));
+  const progressByUserId = new Map();
+  const ensureProgress = (userId) => {
+    const key = String(userId || '');
+    if (!key) {
+      return {
+        maxWinnersRound: -1,
+        maxLosersRound: -1,
+        maxFinalsRound: -1,
+      };
+    }
+    if (!progressByUserId.has(key)) {
+      progressByUserId.set(key, {
+        maxWinnersRound: -1,
+        maxLosersRound: -1,
+        maxFinalsRound: -1,
+      });
+    }
+    return progressByUserId.get(key);
+  };
+
+  const { winnersRounds, losersRounds, finalsRounds } = normalizeCompletedPlacementCollections(bracket);
+  winnersRounds.forEach((round, roundIndex) => {
+    (Array.isArray(round?.matches) ? round.matches : []).forEach((match) => {
+      [match?.playerA, match?.playerB].forEach((player) => {
+        const progress = ensureProgress(player?.userId);
+        progress.maxWinnersRound = Math.max(progress.maxWinnersRound, roundIndex);
+      });
+    });
+  });
+  losersRounds.forEach((round, roundIndex) => {
+    (Array.isArray(round?.matches) ? round.matches : []).forEach((match) => {
+      [match?.playerA, match?.playerB].forEach((player) => {
+        const progress = ensureProgress(player?.userId);
+        progress.maxLosersRound = Math.max(progress.maxLosersRound, roundIndex);
+      });
+    });
+  });
+  finalsRounds.forEach((round, roundIndex) => {
+    (Array.isArray(round?.matches) ? round.matches : []).forEach((match) => {
+      [match?.playerA, match?.playerB].forEach((player) => {
+        const progress = ensureProgress(player?.userId);
+        progress.maxFinalsRound = Math.max(progress.maxFinalsRound, roundIndex);
+      });
+    });
+  });
+
+  const decidingFinal = (() => {
+    if (finalsRounds.length > 0) {
+      for (let index = finalsRounds.length - 1; index >= 0; index -= 1) {
+        const match = finalsRounds[index]?.matches?.[0] || null;
+        if (match?.winner?.userId) return match;
+      }
+    }
+    const finalRound = winnersRounds[winnersRounds.length - 1] || null;
+    return finalRound?.matches?.[0] || null;
+  })();
+
+  const championId = String(decidingFinal?.winner?.userId || '');
+  const runnerUpId = String(getMatchLoser(decidingFinal)?.userId || '');
+  const buildEntry = (participant) => {
+    const progress = ensureProgress(participant?.userId);
+    const points = Number.isFinite(Number(participant?.points)) ? Number(participant.points) : null;
+    return {
+      participant,
+      deepestLosersRound: progress.maxLosersRound,
+      deepestWinnersRound: progress.maxWinnersRound,
+      deepestFinalsRound: progress.maxFinalsRound,
+      points,
+    };
+  };
+
+  const ordered = [];
+  if (championId && participantByUserId.has(championId)) {
+    ordered.push(buildEntry(participantByUserId.get(championId)));
+  }
+  if (runnerUpId && participantByUserId.has(runnerUpId) && runnerUpId !== championId) {
+    ordered.push(buildEntry(participantByUserId.get(runnerUpId)));
+  }
+
+  const remaining = allParticipants
+    .filter((entry) => {
+      const userId = String(entry.userId || '');
+      return userId && userId !== championId && userId !== runnerUpId;
+    })
+    .map(buildEntry)
+    .sort((left, right) => {
+      if (left.deepestFinalsRound !== right.deepestFinalsRound) {
+        return right.deepestFinalsRound - left.deepestFinalsRound;
+      }
+      if (left.deepestLosersRound !== right.deepestLosersRound) {
+        return right.deepestLosersRound - left.deepestLosersRound;
+      }
+      if (left.deepestWinnersRound !== right.deepestWinnersRound) {
+        return right.deepestWinnersRound - left.deepestWinnersRound;
+      }
+      const leftPoints = Number.isFinite(left.points) ? left.points : Number.NEGATIVE_INFINITY;
+      const rightPoints = Number.isFinite(right.points) ? right.points : Number.NEGATIVE_INFINITY;
+      if (leftPoints !== rightPoints) return rightPoints - leftPoints;
+      return 0;
+    });
+
+  const ranked = ordered.concat(remaining);
+  let lastComparable = null;
+  let lastPlacement = 0;
+  return ranked.map((entry, index) => {
+    const comparable = {
+      deepestFinalsRound: entry.deepestFinalsRound,
+      deepestLosersRound: entry.deepestLosersRound,
+      deepestWinnersRound: entry.deepestWinnersRound,
+      points: entry.points,
+    };
+    const isTie = Boolean(
+      lastComparable
+      && comparable.deepestFinalsRound === lastComparable.deepestFinalsRound
+      && comparable.deepestLosersRound === lastComparable.deepestLosersRound
+      && comparable.deepestWinnersRound === lastComparable.deepestWinnersRound
+      && comparable.points === lastComparable.points
+    );
+    const position = isTie ? lastPlacement : index + 1;
+    lastComparable = comparable;
+    lastPlacement = position;
+    return {
+      position,
+      label: getOrdinalLabel(position),
+      participant: entry.participant,
+      deepestFinalsRound: entry.deepestFinalsRound,
+      deepestLosersRound: entry.deepestLosersRound,
+      deepestWinnersRound: entry.deepestWinnersRound,
+      points: entry.points,
+    };
+  });
 }
 
 function isTournamentStillJoinable(tournament) {
@@ -128,7 +379,7 @@ function isTournamentTestModeEnabled() {
 }
 
 function nowIso() {
-  return new Date().toISOString();
+  return new Date(Date.now()).toISOString();
 }
 
 function makeId(prefix) {
@@ -151,6 +402,20 @@ function normalizeTournamentPhaseLabel(phase) {
   return phase === 'elimination' ? 'elimination' : 'round_robin';
 }
 
+function shouldRequireTournamentAccept(match) {
+  const matchType = String(match?.type || '').toUpperCase();
+  if (matchType === TOURNAMENT_MATCH_TYPES.ROUND_ROBIN) {
+    return true;
+  }
+  if (matchType !== TOURNAMENT_MATCH_TYPES.ELIMINATION) {
+    return false;
+  }
+  const player1Score = Number(match?.player1Score || 0);
+  const player2Score = Number(match?.player2Score || 0);
+  const drawCount = Number(match?.drawCount || 0);
+  return (player1Score + player2Score + drawCount) === 0;
+}
+
 function findMemberIndex(entries, userId) {
   const target = String(userId || '');
   if (!target) return -1;
@@ -167,7 +432,7 @@ function getActiveTournamentPlayers(tournament) {
 
 function getHostTransferCandidates(tournament, currentHostUserId) {
   const currentHostId = String(currentHostUserId || tournament?.host?.userId || '');
-  return getActiveTournamentPlayers(tournament).filter((entry) => String(entry.userId || '') !== currentHostId);
+  return getActiveTournamentPlayers(tournament).filter((entry) => String(entry?.userId || '') !== currentHostId);
 }
 
 async function resolveUserPreTournamentElo(userId) {
@@ -189,7 +454,7 @@ function summarizeTournament(tournament) {
     label: tournament.label,
     state: tournament.state,
     phase: tournament.phase,
-    hostUsername: tournament.host.username,
+    hostUsername: tournament?.host?.username || 'Autopilot',
     playerCount: tournament.players.length,
     viewerCount: tournament.viewers.length,
     createdAt: tournament.createdAt,
@@ -232,21 +497,44 @@ function toTournamentModelPayload(tournament) {
     label: tournament.label,
     state: tournament.state,
     phase: tournament.phase,
-    host: {
-      userId: mongoose.Types.ObjectId.isValid(tournament.host?.userId)
-        ? new mongoose.Types.ObjectId(tournament.host.userId)
-        : undefined,
-      username: tournament.host?.username || 'Tournament Host',
-      isGuest: Boolean(tournament.host?.isGuest),
-    },
+    host: tournament?.host?.userId
+      ? {
+          userId: mongoose.Types.ObjectId.isValid(tournament.host?.userId)
+            ? new mongoose.Types.ObjectId(tournament.host.userId)
+            : undefined,
+          username: tournament.host?.username || 'Tournament Host',
+          isGuest: Boolean(tournament.host?.isGuest),
+        }
+      : null,
+    createdBy: tournament?.createdBy?.userId
+      ? {
+          userId: mongoose.Types.ObjectId.isValid(tournament.createdBy?.userId)
+            ? new mongoose.Types.ObjectId(tournament.createdBy.userId)
+            : undefined,
+          username: tournament.createdBy?.username || 'Tournament Host',
+          isGuest: Boolean(tournament.createdBy?.isGuest),
+        }
+      : (tournament?.host?.userId
+        ? {
+            userId: mongoose.Types.ObjectId.isValid(tournament.host?.userId)
+              ? new mongoose.Types.ObjectId(tournament.host.userId)
+              : undefined,
+            username: tournament.host?.username || 'Tournament Host',
+            isGuest: Boolean(tournament.host?.isGuest),
+          }
+        : null),
     config: {
       roundRobinMinutes: Number(tournament.config?.roundRobinMinutes) || 15,
+      breakMinutes: Number.isFinite(Number(tournament.config?.breakMinutes))
+        ? Math.max(0, Math.min(30, Number(tournament.config.breakMinutes)))
+        : 5,
       eliminationStyle: tournament.config?.eliminationStyle === 'double' ? 'double' : 'single',
       victoryPoints: [3, 4, 5].includes(Number(tournament.config?.victoryPoints))
         ? Number(tournament.config.victoryPoints)
         : 3,
     },
     players: Array.isArray(tournament.players) ? tournament.players : [],
+    historicalPlayers: Array.isArray(tournament.historicalPlayers) ? tournament.historicalPlayers : [],
     viewers: Array.isArray(tournament.viewers) ? tournament.viewers : [],
     removedPlayers: Array.isArray(tournament.removedPlayers) ? tournament.removedPlayers : [],
     message: typeof tournament.message === 'string' ? tournament.message : '',
@@ -254,6 +542,7 @@ function toTournamentModelPayload(tournament) {
     currentRoundRobinRound: Number.isFinite(tournament.currentRoundRobinRound) ? tournament.currentRoundRobinRound : 0,
     roundRobinRoundsStartedAt: tournament.roundRobinRoundsStartedAt ? new Date(tournament.roundRobinRoundsStartedAt) : null,
     roundRobinCompletedAt: tournament.roundRobinCompletedAt ? new Date(tournament.roundRobinCompletedAt) : null,
+    eliminationStartsAt: tournament.eliminationStartsAt ? new Date(tournament.eliminationStartsAt) : null,
     eliminationBracket: tournament.eliminationBracket || null,
     matchIds,
     gameIds: Array.isArray(tournament.gameIds)
@@ -274,17 +563,32 @@ function fromTournamentDocument(doc) {
     label: normalizeDisplayName(doc.label, 'Tournament'),
     state: doc.state || 'starting',
     phase: doc.phase || 'lobby',
-    host: {
-      userId: doc.host?.userId ? String(doc.host.userId) : '',
-      username: normalizeDisplayName(doc.host?.username, 'Tournament Host'),
-      isGuest: Boolean(doc.host?.isGuest),
-    },
+    host: doc.host?.userId
+      ? {
+          userId: String(doc.host.userId),
+          username: normalizeDisplayName(doc.host?.username, 'Tournament Host'),
+          isGuest: Boolean(doc.host?.isGuest),
+        }
+      : null,
+    createdBy: (doc.createdBy?.userId || doc.host?.userId)
+      ? {
+          userId: String(doc.createdBy?.userId || doc.host?.userId),
+          username: normalizeDisplayName(doc.createdBy?.username || doc.host?.username, 'Tournament Host'),
+          isGuest: Boolean(doc.createdBy?.isGuest ?? doc.host?.isGuest),
+        }
+      : null,
     config: {
       roundRobinMinutes: Number(doc.config?.roundRobinMinutes) || 15,
+      breakMinutes: Number.isFinite(Number(doc.config?.breakMinutes))
+        ? Math.max(0, Math.min(30, Number(doc.config.breakMinutes)))
+        : 5,
       eliminationStyle: doc.config?.eliminationStyle === 'double' ? 'double' : 'single',
       victoryPoints: [3, 4, 5].includes(Number(doc.config?.victoryPoints)) ? Number(doc.config.victoryPoints) : 3,
     },
     players: Array.isArray(doc.players) ? doc.players : [],
+    historicalPlayers: Array.isArray(doc.historicalPlayers)
+      ? doc.historicalPlayers
+      : (Array.isArray(doc.players) ? doc.players : []),
     viewers: Array.isArray(doc.viewers) ? doc.viewers : [],
     removedPlayers: Array.isArray(doc.removedPlayers) ? doc.removedPlayers : [],
     message: typeof doc.message === 'string' ? doc.message : '',
@@ -292,6 +596,7 @@ function fromTournamentDocument(doc) {
     currentRoundRobinRound: Number.isFinite(doc.currentRoundRobinRound) ? doc.currentRoundRobinRound : 0,
     roundRobinRoundsStartedAt: doc.roundRobinRoundsStartedAt ? new Date(doc.roundRobinRoundsStartedAt).toISOString() : null,
     roundRobinCompletedAt: doc.roundRobinCompletedAt ? new Date(doc.roundRobinCompletedAt).toISOString() : null,
+    eliminationStartsAt: doc.eliminationStartsAt ? new Date(doc.eliminationStartsAt).toISOString() : null,
     eliminationBracket: doc.eliminationBracket || null,
     matchIds: Array.isArray(doc.matchIds) ? doc.matchIds.map((id) => String(id)) : [],
     gameIds: Array.isArray(doc.gameIds) ? doc.gameIds.map((id) => String(id)) : [],
@@ -333,6 +638,7 @@ async function hydrateActiveFromDatabase() {
     const normalized = fromTournamentDocument(doc);
     if (normalized?.id) {
       TOURNAMENTS.set(normalized.id, normalized);
+      scheduleTournamentEliminationBreak(normalized);
     }
   });
 }
@@ -349,7 +655,7 @@ async function listLiveTournaments({ session } = {}) {
   return rows.map((entry) => summarizeTournament(entry));
 }
 
-async function getTournamentOrThrow(tournamentId) {
+async function getTournamentOrThrow(tournamentId, { skipLifecycleAdvance = false } = {}) {
   const id = String(tournamentId || '').trim();
   if (!id) {
     const err = new Error('Tournament not found.');
@@ -358,7 +664,13 @@ async function getTournamentOrThrow(tournamentId) {
   }
 
   const cached = TOURNAMENTS.get(id);
-  if (cached) return cached;
+  if (cached) {
+    if (!skipLifecycleAdvance) {
+      await maybeAdvanceTournamentRoundRobin(id);
+      await maybeAdvanceTournamentEliminationBreak(id);
+    }
+    return TOURNAMENTS.get(id) || cached;
+  }
 
   requireMongoPersistence();
   if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
@@ -374,11 +686,16 @@ async function getTournamentOrThrow(tournamentId) {
   }
   const normalized = fromTournamentDocument(doc);
   TOURNAMENTS.set(normalized.id, normalized);
-  return normalized;
+  scheduleTournamentEliminationBreak(normalized);
+  if (!skipLifecycleAdvance) {
+    await maybeAdvanceTournamentRoundRobin(normalized.id);
+    await maybeAdvanceTournamentEliminationBreak(normalized.id);
+  }
+  return TOURNAMENTS.get(normalized.id) || normalized;
 }
 
 function canManageTournament(tournament, actingUserId) {
-  return String(tournament.host.userId) === String(actingUserId || '');
+  return Boolean(tournament?.host?.userId) && String(tournament.host.userId) === String(actingUserId || '');
 }
 
 function requireStartingState(tournament, actionLabel) {
@@ -394,11 +711,54 @@ function normalizeTournamentConfig(config = {}) {
     roundRobinMinutes: Number.isFinite(Number(config.roundRobinMinutes))
       ? Math.max(1, Math.min(30, Number(config.roundRobinMinutes)))
       : 15,
+    breakMinutes: Number.isFinite(Number(config.breakMinutes))
+      ? Math.max(0, Math.min(30, Number(config.breakMinutes)))
+      : 5,
     eliminationStyle: String(config.eliminationStyle || 'single').toLowerCase() === 'double'
       ? 'double'
       : 'single',
     victoryPoints: [3, 4, 5].includes(Number(config.victoryPoints)) ? Number(config.victoryPoints) : 3,
   };
+}
+
+function getEliminationBreakDeadlineMs(tournament) {
+  const explicitStartAt = Date.parse(tournament?.eliminationStartsAt || '');
+  if (Number.isFinite(explicitStartAt)) {
+    return explicitStartAt;
+  }
+  const completedAt = Date.parse(tournament?.roundRobinCompletedAt || '');
+  if (!Number.isFinite(completedAt)) return null;
+  const minutes = Number.isFinite(Number(tournament?.config?.breakMinutes))
+    ? Math.max(0, Math.min(30, Number(tournament.config.breakMinutes)))
+    : 5;
+  return completedAt + (minutes * 60 * 1000);
+}
+
+function clearTournamentEliminationBreakTimer(tournamentId) {
+  const id = String(tournamentId || '');
+  if (!id) return;
+  const existing = ELIMINATION_BREAK_SCHEDULING.get(id);
+  if (existing) {
+    clearTimeout(existing);
+    ELIMINATION_BREAK_SCHEDULING.delete(id);
+  }
+}
+
+function scheduleTournamentEliminationBreak(tournament) {
+  const id = String(tournament?.id || '');
+  if (!id) return;
+  clearTournamentEliminationBreakTimer(id);
+  if (tournament?.state !== 'active' || tournament?.phase !== 'round_robin_complete') return;
+  const deadlineMs = getEliminationBreakDeadlineMs(tournament);
+  if (!Number.isFinite(deadlineMs)) return;
+  const delayMs = Math.max(0, deadlineMs - Date.now());
+  const handle = setTimeout(() => {
+    ELIMINATION_BREAK_SCHEDULING.delete(id);
+    maybeAdvanceTournamentEliminationBreak(id).catch((err) => {
+      console.error('Failed to auto-start tournament elimination after break:', err);
+    });
+  }, delayMs);
+  ELIMINATION_BREAK_SCHEDULING.set(id, handle);
 }
 
 function collectTournamentMemberIds(tournament) {
@@ -435,6 +795,7 @@ async function buildHost(hostSession) {
 
 async function createTournament({ hostSession, label, config = {} }) {
   const host = await buildHost(hostSession);
+  const createdBy = { ...host };
   await assertNoConcurrentTournamentMembership(host.userId);
   const id = makeId('trn');
   const normalizedLabel = normalizeDisplayName(label, `Tournament ${new Date().toISOString().slice(0, 10)}`);
@@ -446,12 +807,15 @@ async function createTournament({ hostSession, label, config = {} }) {
     state: 'starting',
     phase: 'lobby',
     host,
+    createdBy,
     config: normalizeTournamentConfig(config),
     players: [],
+    historicalPlayers: [],
     viewers: [],
     removedPlayers: [],
     message: '',
     roundRobinCompletedAt: null,
+    eliminationStartsAt: null,
     eliminationBracket: null,
     matchIds: [],
     gameIds: [],
@@ -471,9 +835,20 @@ async function updateTournamentConfig({ tournamentId, session, config = {} }) {
     err.statusCode = 403;
     throw err;
   }
-  requireStartingState(tournament, 'Update Settings');
-  tournament.config = normalizeTournamentConfig(config);
+  const canEditAllSettings = tournament.state === 'starting';
+  const canEditBreakOnly = tournament.state === 'active' && tournament.phase === 'round_robin';
+  if (!canEditAllSettings && !canEditBreakOnly) {
+    const err = new Error('Tournament settings can no longer be changed.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const nextConfig = canEditAllSettings
+    ? { ...(tournament.config || {}), ...(config || {}) }
+    : { ...(tournament.config || {}), breakMinutes: config?.breakMinutes };
+  tournament.config = normalizeTournamentConfig(nextConfig);
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
@@ -501,7 +876,7 @@ async function joinTournamentAsPlayer({ tournamentId, session }) {
   }
 
   const preTournamentElo = await resolveUserPreTournamentElo(userId);
-  tournament.players.push({
+  const playerEntry = {
     entryId: makeId('ply'),
     type: 'human',
     userId,
@@ -510,8 +885,12 @@ async function joinTournamentAsPlayer({ tournamentId, session }) {
     preTournamentElo,
     seed: null,
     joinedAt: nowIso(),
-  });
+  };
+  tournament.players.push(playerEntry);
+  upsertHistoricalTournamentPlayer(tournament, playerEntry);
 
+  await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
@@ -562,30 +941,45 @@ async function removeTournamentViewerOnDisconnect({ userId }) {
 
 async function leaveTournament({ tournamentId, session }) {
   const tournament = await getTournamentOrThrow(tournamentId);
+  const hasStarted = hasStartedTournament(tournament);
+  const isCompletedTournament = tournament.state === 'completed' || tournament.state === 'cancelled';
   if (canManageTournament(tournament, session.userId)) {
-    const hostTransferCandidates = getHostTransferCandidates(tournament, session.userId);
-    if (hostTransferCandidates.length > 0) {
-      const err = new Error('Transfer host control before leaving this tournament.');
-      err.statusCode = 400;
-      throw err;
+    const hostUserId = String(session.userId || '');
+    const hostPlayerIndex = findMemberIndex(tournament.players, hostUserId);
+    if (hostPlayerIndex >= 0) {
+      tournament.players.splice(hostPlayerIndex, 1);
     }
-    if (!hasStartedTournament(tournament)) {
-      TOURNAMENTS.delete(String(tournament.id));
-      await removeTournamentSnapshot(tournament.id);
-      return {
-        ...cloneTournament(tournament),
-        state: 'cancelled',
-        phase: 'completed',
-        completedAt: nowIso(),
-      };
+    const hostViewerIndex = findMemberIndex(tournament.viewers, hostUserId);
+    if (hostViewerIndex >= 0) {
+      tournament.viewers.splice(hostViewerIndex, 1);
+    }
+    tournament.host = null;
+    if (!hasStarted) {
+      removeHistoricalTournamentPlayer(tournament, hostUserId);
+      if (tournament.players.length === 0 && tournament.viewers.length === 0) {
+        TOURNAMENTS.delete(String(tournament.id));
+        await removeTournamentSnapshot(tournament.id);
+        return {
+          ...cloneTournament(tournament),
+          state: 'cancelled',
+          phase: 'completed',
+          completedAt: nowIso(),
+        };
+      }
+      await persistTournamentSnapshot(tournament);
+      emitTournamentUpdated(tournament);
+      return cloneTournament(tournament);
     }
 
-    if (tournament.state !== 'completed' && tournament.state !== 'cancelled') {
-      tournament.state = 'cancelled';
-      tournament.phase = 'completed';
-      tournament.completedAt = nowIso();
+    if (isCompletedTournament) {
+      clearTournamentEliminationBreakTimer(tournament.id);
       await persistTournamentSnapshot(tournament);
+      emitTournamentUpdated(tournament);
+      return cloneTournament(tournament);
     }
+
+    await persistTournamentSnapshot(tournament);
+    emitTournamentUpdated(tournament);
     return cloneTournament(tournament);
   }
 
@@ -600,6 +994,10 @@ async function leaveTournament({ tournamentId, session }) {
     tournament.viewers.splice(viewerIndex, 1);
   }
 
+  if (!hasStarted) {
+    removeHistoricalTournamentPlayer(tournament, session.userId);
+  }
+
   if (tournament.players.length === 0 && tournament.state === 'starting') {
     TOURNAMENTS.delete(String(tournament.id));
     await removeTournamentSnapshot(tournament.id);
@@ -611,7 +1009,14 @@ async function leaveTournament({ tournamentId, session }) {
     };
   }
 
+  if (isCompletedTournament) {
+    await persistTournamentSnapshot(tournament);
+    emitTournamentUpdated(tournament);
+    return cloneTournament(tournament);
+  }
+
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
@@ -635,7 +1040,9 @@ async function cancelTournament({ tournamentId, session }) {
   tournament.state = 'cancelled';
   tournament.phase = 'completed';
   tournament.completedAt = nowIso();
+  clearTournamentEliminationBreakTimer(tournament.id);
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
@@ -672,7 +1079,7 @@ async function addBotToTournament({ tournamentId, session, botName, difficulty }
   const name = normalizeDisplayName(botName, `${definition.label} Bot`);
   const preTournamentElo = await resolveUserPreTournamentElo(botUserId);
 
-  tournament.players.push({
+  const botPlayerEntry = {
     entryId,
     type: 'bot',
     userId: botUserId,
@@ -681,7 +1088,9 @@ async function addBotToTournament({ tournamentId, session, botName, difficulty }
     preTournamentElo,
     seed: null,
     joinedAt: nowIso(),
-  });
+  };
+  tournament.players.push(botPlayerEntry);
+  upsertHistoricalTournamentPlayer(tournament, botPlayerEntry);
   tournament.viewers = (Array.isArray(tournament.viewers) ? tournament.viewers : [])
     .filter((entry) => String(entry.userId || '') !== botUserId);
 
@@ -692,6 +1101,7 @@ async function addBotToTournament({ tournamentId, session, botName, difficulty }
   });
 
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
@@ -721,6 +1131,7 @@ async function kickTournamentPlayer({ tournamentId, session, targetUserId }) {
     throw err;
   }
   const [removed] = tournament.players.splice(playerIndex, 1);
+  removeHistoricalTournamentPlayer(tournament, target);
   tournament.viewers = (Array.isArray(tournament.viewers) ? tournament.viewers : [])
     .filter((entry) => String(entry.userId || '') !== target);
   tournament.removedPlayers = Array.isArray(tournament.removedPlayers) ? tournament.removedPlayers : [];
@@ -737,6 +1148,7 @@ async function kickTournamentPlayer({ tournamentId, session, targetUserId }) {
   }
   queueTournamentAlert(target, `You were removed from tournament "${tournament.label}".`);
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
@@ -764,6 +1176,7 @@ async function reallowTournamentPlayer({ tournamentId, session, targetUserId }) 
   }
   tournament.removedPlayers.splice(existing, 1);
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
@@ -872,15 +1285,10 @@ function buildRollingRoundRobinPairings(tournament, games = []) {
 
 async function resolveTournamentGameSettings() {
   const config = await getServerConfig();
-  const rankedSettings = config?.gameModeSettings?.get
-    ? (config.gameModeSettings.get('RANKED') || {})
-    : (config?.gameModeSettings?.RANKED || {});
-  const incrementSetting = config?.gameModeSettings?.get
-    ? config.gameModeSettings.get('INCREMENT')
-    : config?.gameModeSettings?.INCREMENT;
+  const rankedClock = getClockSettingsForMatchType(config, 'RANKED');
   return {
-    timeControl: Number(rankedSettings?.TIME_CONTROL) || 180000,
-    increment: Number(incrementSetting) || 0,
+    timeControl: rankedClock.timeControl,
+    increment: rankedClock.increment,
   };
 }
 
@@ -910,12 +1318,16 @@ async function createTournamentMatch({ tournament, playerA, playerB, phase, game
   const players = Math.random() < 0.5
     ? [playerA.userId, playerB.userId]
     : [playerB.userId, playerA.userId];
+  const requiresAccept = shouldRequireTournamentAccept(match);
+  const acceptWindowSeconds = requiresAccept ? 30 : 0;
   const game = await Game.create({
     players,
     match: match._id,
     timeControlStart: gameSettings.timeControl,
     increment: gameSettings.increment,
     playersReady: [false, false],
+    requiresAccept,
+    acceptWindowSeconds,
   });
 
   match.games = Array.isArray(match.games) ? match.games : [];
@@ -931,10 +1343,11 @@ async function createTournamentMatch({ tournament, playerA, playerB, phase, game
   eventBus.emit('players:bothNext', {
     game: gamePayload,
     affectedUsers,
+    currentGameNumber: 1,
     tournamentId: tournament.id,
     tournamentPhase: normalizeTournamentPhaseLabel(phase),
-    requiresAccept: true,
-    acceptWindowSeconds: 30,
+    requiresAccept,
+    acceptWindowSeconds,
   });
   eventBus.emit('match:created', {
     matchId: String(match._id),
@@ -957,7 +1370,7 @@ async function createTournamentMatch({ tournament, playerA, playerB, phase, game
           ? 'Elimination between human players affects ELO once per matchup.'
           : 'Elimination against bots never affects ELO.')
       : 'Round robin never affects ELO.',
-    status: phase === 'elimination' ? 'pending_accept' : 'live',
+    status: requiresAccept ? 'pending_accept' : 'live',
     includesBot,
   };
 }
@@ -987,23 +1400,49 @@ async function maybeAdvanceTournamentRoundRobin(tournamentId) {
   try {
   const tournament = TOURNAMENTS.get(id);
   if (!tournament || tournament.state !== 'active' || tournament.phase !== 'round_robin') return;
-  const games = await listTournamentGames(tournament.id);
+  const games = await listTournamentGames(tournament.id, { skipLifecycleAdvance: true });
   const roundRobinGames = games.filter((game) => game?.phase === 'round_robin');
   const activeGames = roundRobinGames.filter((game) => game?.status !== 'completed').length;
   const deadlineMs = getRoundRobinDeadlineMs(tournament);
   const pairingWindowClosed = Number.isFinite(deadlineMs) ? Date.now() >= deadlineMs : false;
+  logTournamentFlow('round-robin-evaluate', {
+    tournamentId: id,
+    phase: tournament.phase,
+    state: tournament.state,
+    activeGames,
+    roundRobinGameCount: roundRobinGames.length,
+    pairingWindowClosed,
+    deadlineMs: Number.isFinite(deadlineMs) ? deadlineMs : null,
+  });
 
   if (pairingWindowClosed) {
     if (activeGames === 0) {
       tournament.phase = 'round_robin_complete';
       tournament.roundRobinCompletedAt = nowIso();
+      tournament.eliminationStartsAt = new Date(getEliminationBreakDeadlineMs({
+        ...tournament,
+        roundRobinCompletedAt: tournament.roundRobinCompletedAt,
+      }) || Date.now()).toISOString();
       await persistTournamentSnapshot(tournament);
+      emitTournamentUpdated(tournament);
+      scheduleTournamentEliminationBreak(tournament);
+      await maybeAdvanceTournamentEliminationBreak(tournament.id);
+      logTournamentFlow('round-robin-complete', {
+        tournamentId: id,
+        roundRobinCompletedAt: tournament.roundRobinCompletedAt,
+        eliminationStartsAt: tournament.eliminationStartsAt,
+      });
     }
     return;
   }
 
   const { pairings } = buildRollingRoundRobinPairings(tournament, roundRobinGames);
   if (!pairings.length) {
+    logTournamentFlow('round-robin-no-pairings', {
+      tournamentId: id,
+      activeGames,
+      roundRobinGameCount: roundRobinGames.length,
+    });
     return;
   }
 
@@ -1018,6 +1457,12 @@ async function maybeAdvanceTournamentRoundRobin(tournamentId) {
     ...generatedMatches.map((item) => item.gameId).filter(Boolean),
   ];
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
+  logTournamentFlow('round-robin-pairings-created', {
+    tournamentId: id,
+    createdMatchIds: generatedMatches.map((item) => item.matchId),
+    createdGameIds: generatedMatches.map((item) => item.gameId),
+  });
   } finally {
     ROUND_ROBIN_SCHEDULING.delete(id);
   }
@@ -1045,7 +1490,9 @@ async function startTournament({ tournamentId, session }) {
   tournament.roundRobinRounds = [];
   tournament.roundRobinRoundsStartedAt = tournament.startedAt;
   tournament.roundRobinCompletedAt = null;
+  tournament.eliminationStartsAt = null;
   tournament.eliminationBracket = null;
+  clearTournamentEliminationBreakTimer(tournament.id);
   await ensureTournamentBotClients(tournament);
   const gameSettings = await resolveTournamentGameSettings();
   const { pairings } = buildRollingRoundRobinPairings(tournament, []);
@@ -1055,6 +1502,7 @@ async function startTournament({ tournamentId, session }) {
   tournament.gameIds = generatedMatches.map((item) => item.gameId).filter(Boolean);
 
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
@@ -1104,11 +1552,15 @@ async function updateTournamentMessage({ tournamentId, session, message }) {
   }
   tournament.message = normalizeDisplayName(message, '').slice(0, 500);
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
 }
 
 function buildParticipantView(tournament, games = []) {
-  const standings = buildRoundRobinStandings(tournament?.players || [], games);
+  const participantSource = (tournament?.state === 'completed' || tournament?.phase === 'completed')
+    ? getTournamentHistoricalPlayers(tournament)
+    : (Array.isArray(tournament?.players) ? tournament.players : []);
+  const standings = buildRoundRobinStandings(participantSource, games);
   const activeGameByUserId = new Map();
 
   (Array.isArray(games) ? games : [])
@@ -1123,7 +1575,13 @@ function buildParticipantView(tournament, games = []) {
           gameId: game.gameId,
           matchId: game.matchId,
           phase: game.phase,
+          status: game.status,
           color: index,
+          requiresAccept: Boolean(game?.requiresAccept && game?.playersReady?.[index] === false),
+          acceptWindowSeconds: Number.isFinite(Number(game?.acceptWindowSeconds))
+            ? Math.max(0, Number(game.acceptWindowSeconds))
+            : 0,
+          isReady: Boolean(game?.playersReady?.[index]),
           opponentUserId: opponent?.userId || null,
           opponentUsername: opponent?.username || 'Opponent',
         });
@@ -1131,7 +1589,7 @@ function buildParticipantView(tournament, games = []) {
     });
 
   const byUserId = standings.byUserId;
-  const participants = (Array.isArray(tournament?.players) ? tournament.players : []).map((player) => {
+  const participants = participantSource.map((player) => {
     const userId = String(player?.userId || '');
     const standing = byUserId.get(userId) || {
       wins: 0,
@@ -1370,7 +1828,7 @@ function computeTournamentRoundLabel(tournament, bracket) {
     return 'Rolling Pairings';
   }
   if (tournament?.phase === 'round_robin_complete') {
-    return 'Awaiting Elimination';
+    return tournament?.eliminationStartsAt ? 'Break' : 'Awaiting Elimination';
   }
   if (tournament?.phase === 'elimination') {
     const rounds = [
@@ -1388,12 +1846,22 @@ function computeTournamentRoundLabel(tournament, bracket) {
   return 'Tournament';
 }
 
+function isRoundRobinWaitingForGames(tournament, games = []) {
+  if (tournament?.phase !== 'round_robin') return false;
+  const deadlineMs = getRoundRobinDeadlineMs(tournament);
+  if (!Number.isFinite(deadlineMs) || Date.now() < deadlineMs) return false;
+  return (Array.isArray(games) ? games : []).some((game) => (
+    game?.phase === 'round_robin' && game?.status !== 'completed'
+  ));
+}
+
 function buildTournamentClientState(tournament, games = [], { session } = {}) {
   const cloned = cloneTournament(tournament);
   const role = getTournamentMembershipRole(tournament, session?.userId);
   const participants = buildParticipantView(tournament, games);
   const bracket = buildBracketView(tournament, games);
   const currentUserGame = participants.find((entry) => String(entry.userId || '') === String(session?.userId || ''))?.activeGame || null;
+  const roundRobinWaitingForGames = isRoundRobinWaitingForGames(tournament, games);
 
   return {
     tournament: {
@@ -1401,9 +1869,12 @@ function buildTournamentClientState(tournament, games = [], { session } = {}) {
       participants,
       viewerCount: Array.isArray(tournament?.viewers) ? tournament.viewers.length : 0,
       canStartElimination: canManageTournament(tournament, session?.userId) && tournament?.phase === 'round_robin_complete',
+      canEditBreakTime: canManageTournament(tournament, session?.userId)
+        && (tournament?.state === 'starting' || tournament?.phase === 'round_robin'),
       settingsLocked: tournament?.state !== 'starting',
       currentRoundLabel: computeTournamentRoundLabel(tournament, bracket),
       currentUserGame,
+      roundRobinWaitingForGames,
       bracket,
     },
     games,
@@ -1416,11 +1887,15 @@ function cloneBracketEntrantFromPlayer(player, fallbackSeed = null) {
   if (!player?.userId) return null;
   const seed = toOptionalFiniteNumber(player.seed);
   const fallback = toOptionalFiniteNumber(fallbackSeed);
+  const preTournamentElo = Number.isFinite(Number(player?.preTournamentElo))
+    ? Number(player.preTournamentElo)
+    : null;
   return {
     entryId: player.entryId || null,
     userId: String(player.userId),
     username: player.username || 'Player',
     seed: seed ?? fallback ?? null,
+    preTournamentElo,
     type: player.type || 'human',
     difficulty: player.difficulty || null,
   };
@@ -1502,26 +1977,19 @@ function completeTournamentIfBracketFinished(tournament) {
   }
 
   if (!champion?.userId) return false;
+  clearTournamentEliminationBreakTimer(tournament.id);
   tournament.state = 'completed';
   tournament.phase = 'completed';
   tournament.completedAt = nowIso();
   return true;
 }
 
-async function startElimination({ tournamentId, session }) {
-  const tournament = await getTournamentOrThrow(tournamentId);
-  if (!canManageTournament(tournament, session.userId)) {
-    const err = new Error('Only host can move the tournament into elimination.');
-    err.statusCode = 403;
-    throw err;
-  }
-  if (tournament.state !== 'active' || tournament.phase !== 'round_robin_complete') {
-    const err = new Error('Elimination can only start after round robin is complete.');
-    err.statusCode = 400;
-    throw err;
+async function startEliminationInternal(tournament) {
+  if (!tournament || tournament.state !== 'active' || tournament.phase !== 'round_robin_complete') {
+    return cloneTournament(tournament);
   }
 
-  const games = await listTournamentGames(tournament.id);
+  const games = await listTournamentGames(tournament.id, { skipLifecycleAdvance: true });
   const standings = buildRoundRobinStandings(tournament.players, games);
   const seedByUserId = new Map();
   standings.ranked.forEach((entry, index) => {
@@ -1538,7 +2006,9 @@ async function startElimination({ tournamentId, session }) {
     .filter(Boolean)
     .sort((left, right) => Number(left.seed || 999) - Number(right.seed || 999));
 
+  clearTournamentEliminationBreakTimer(tournament.id);
   tournament.phase = 'elimination';
+  tournament.eliminationStartsAt = null;
   tournament.eliminationBracket = tournament.config?.eliminationStyle === 'double'
     ? buildDoubleEliminationBracket(seededEntrants)
     : buildSingleEliminationBracket(seededEntrants);
@@ -1547,7 +2017,43 @@ async function startElimination({ tournamentId, session }) {
   await launchPendingEliminationMatches(tournament);
   completeTournamentIfBracketFinished(tournament);
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
+}
+
+async function maybeAdvanceTournamentEliminationBreak(tournamentId) {
+  const id = String(tournamentId || '');
+  if (!id) return null;
+  const tournament = TOURNAMENTS.get(id);
+  if (!tournament || tournament.state !== 'active' || tournament.phase !== 'round_robin_complete') {
+    clearTournamentEliminationBreakTimer(id);
+    return null;
+  }
+  const deadlineMs = getEliminationBreakDeadlineMs(tournament);
+  if (!Number.isFinite(deadlineMs)) {
+    clearTournamentEliminationBreakTimer(id);
+    return null;
+  }
+  if (Date.now() < deadlineMs) {
+    scheduleTournamentEliminationBreak(tournament);
+    return cloneTournament(tournament);
+  }
+  return startEliminationInternal(tournament);
+}
+
+async function startElimination({ tournamentId, session }) {
+  const tournament = await getTournamentOrThrow(tournamentId);
+  if (!canManageTournament(tournament, session.userId)) {
+    const err = new Error('Only host can move the tournament into elimination.');
+    err.statusCode = 403;
+    throw err;
+  }
+  if (tournament.state !== 'active' || tournament.phase !== 'round_robin_complete') {
+    const err = new Error('Elimination can only start after round robin is complete.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return startEliminationInternal(tournament);
 }
 
 async function updateTournamentAfterEliminationMatchEnd(tournamentId, matchId) {
@@ -1593,26 +2099,43 @@ async function updateTournamentAfterEliminationMatchEnd(tournamentId, matchId) {
   await launchPendingEliminationMatches(tournament);
   completeTournamentIfBracketFinished(tournament);
   await persistTournamentSnapshot(tournament);
+  emitTournamentUpdated(tournament);
 }
 
-async function getTournamentDetails(tournamentId, { session } = {}) {
+async function getTournamentDetails(tournamentId, { session, accessMode = 'member' } = {}) {
   const tournament = await getTournamentOrThrow(tournamentId);
+  if (accessMode === 'admin') {
+    return cloneTournament(tournament);
+  }
   if (session?.userId && isKickedFromTournament(tournament, session.userId)) {
     const err = new Error('You were removed from this tournament by the host.');
     err.statusCode = 403;
     throw err;
   }
-  if (session?.userId && !isTournamentMember(tournament, session.userId)) {
+  if (session?.userId && isTournamentMember(tournament, session.userId)) {
+    return cloneTournament(tournament);
+  }
+  if (accessMode === 'history' && canAccessCompletedTournamentHistory(tournament, session?.userId)) {
+    return cloneTournament(tournament);
+  }
+  if (accessMode === 'history') {
+    const err = new Error('You can only open completed tournaments that you played in or hosted.');
+    err.statusCode = 403;
+    throw err;
+  }
+  if (session?.userId) {
     const err = new Error('You must join this tournament as player or viewer before opening details.');
     err.statusCode = 403;
     throw err;
   }
-  return cloneTournament(tournament);
+  const err = new Error('Tournament not found.');
+  err.statusCode = 404;
+  throw err;
 }
 
-async function getTournamentClientState(tournamentId, { session } = {}) {
-  const tournament = await getTournamentDetails(tournamentId, { session });
-  const games = await listTournamentGames(tournamentId);
+async function getTournamentClientState(tournamentId, { session, accessMode = 'member' } = {}) {
+  const tournament = await getTournamentDetails(tournamentId, { session, accessMode });
+  const games = await listTournamentGames(tournamentId, { skipLifecycleAdvance: true });
   return buildTournamentClientState(tournament, games, { session });
 }
 
@@ -1627,8 +2150,8 @@ async function getCurrentTournamentForSession({ session } = {}) {
   return getTournamentClientState(tournament.id, { session });
 }
 
-async function listTournamentGames(tournamentId) {
-  const tournament = await getTournamentOrThrow(tournamentId);
+async function listTournamentGames(tournamentId, { skipLifecycleAdvance = false } = {}) {
+  const tournament = await getTournamentOrThrow(tournamentId, { skipLifecycleAdvance });
   const items = [];
   const gameIds = new Set(Array.isArray(tournament.gameIds) ? tournament.gameIds.map((id) => String(id)) : []);
   const matchesById = new Map();
@@ -1652,6 +2175,9 @@ async function listTournamentGames(tournamentId) {
     matchesById.set(String(match._id || matchId), match);
     const type = String(match.type || '').toUpperCase();
     const isElimination = type === TOURNAMENT_MATCH_TYPES.ELIMINATION;
+    const requiresAccept = typeof game?.requiresAccept === 'boolean'
+      ? Boolean(game.requiresAccept)
+      : shouldRequireTournamentAccept(match);
     const playerIds = Array.isArray(game.players) ? game.players.map((id) => String(id)) : [];
     const p1 = tournament.players.find((entry) => String(entry.userId) === String(playerIds[0]));
     const p2 = tournament.players.find((entry) => String(entry.userId) === String(playerIds[1]));
@@ -1660,7 +2186,7 @@ async function listTournamentGames(tournamentId) {
       gameId: String(game._id),
       matchId: String(match._id),
       phase: isElimination ? 'elimination' : 'round_robin',
-      status: game.isActive ? (isElimination ? 'pending_accept' : 'live') : 'completed',
+      status: game.isActive ? (requiresAccept ? 'pending_accept' : 'live') : 'completed',
       player1Score: Number(match.player1Score || 0),
       player2Score: Number(match.player2Score || 0),
       winScoreTarget: Number(match.winScoreTarget || 0),
@@ -1685,10 +2211,15 @@ async function listTournamentGames(tournamentId) {
         ? (match.eloEligible ? 'Elimination between human players affects ELO once per matchup.' : 'Elimination against bots never affects ELO.')
         : 'Round robin never affects ELO.',
       includesBot,
+      requiresAccept,
+      acceptWindowSeconds: Number.isFinite(Number(game.acceptWindowSeconds))
+        ? Math.max(0, Number(game.acceptWindowSeconds))
+        : (requiresAccept ? 30 : 0),
       startedAt: game.startTime ? new Date(game.startTime).toISOString() : null,
       endedAt: game.endTime ? new Date(game.endTime).toISOString() : null,
       winner: typeof game.winner === 'number' ? game.winner : null,
       winReason: game.winReason || null,
+      playersReady: Array.isArray(game.playersReady) ? game.playersReady.map((entry) => Boolean(entry)) : [false, false],
     });
   }
   return items.sort((left, right) => {
@@ -1763,9 +2294,66 @@ async function deleteTournamentForAdmin(tournamentId) {
     await Match.deleteMany({ _id: { $in: Array.from(matchIds) } });
   }
 
+  clearTournamentEliminationBreakTimer(normalizedId);
   TOURNAMENTS.delete(normalizedId);
   await removeTournamentSnapshot(normalizedId);
   return { id: normalizedId, deleted: true };
+}
+
+async function listCompletedTournamentsForUser({ session } = {}) {
+  const userId = String(session?.userId || '');
+  if (!userId) {
+    return [];
+  }
+
+  const cachedRows = Array.from(TOURNAMENTS.values())
+    .filter((entry) => entry?.state === 'completed' || entry?.phase === 'completed')
+    .map((entry) => cloneTournament(entry));
+
+  let rows = cachedRows;
+  if (!(process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) && isMongoConnected()) {
+    const docs = await Tournament.find({ state: 'completed' }).sort({ completedAt: -1, createdAt: -1 }).lean();
+    const byId = new Map();
+    docs.forEach((doc) => {
+      const normalized = fromTournamentDocument(doc);
+      if (normalized?.id) byId.set(normalized.id, normalized);
+    });
+    cachedRows.forEach((row) => {
+      if (row?.id) byId.set(String(row.id), row);
+    });
+    rows = Array.from(byId.values());
+  }
+
+  const visibleRows = rows
+    .filter((row) => canAccessCompletedTournamentHistory(row, userId))
+    .sort((left, right) => {
+      const leftCompleted = Date.parse(left?.completedAt || left?.createdAt || 0);
+      const rightCompleted = Date.parse(right?.completedAt || right?.createdAt || 0);
+      return rightCompleted - leftCompleted;
+    });
+
+  const historyRows = [];
+  for (const row of visibleRows) {
+    const clientState = await getTournamentClientState(row.id, { session, accessMode: 'history' });
+    const placements = buildCompletedPlacements(clientState?.tournament?.participants, clientState?.tournament?.bracket);
+    const placement = placements.find((entry) => String(entry?.participant?.userId || '') === userId) || null;
+    const hosted = didUserCreateTournament(row, userId);
+    const competed = didUserCompeteInTournament(row, userId);
+    historyRows.push({
+      id: row.id,
+      label: row.label,
+      state: row.state,
+      phase: row.phase,
+      createdAt: row.createdAt,
+      completedAt: row.completedAt,
+      hosted,
+      competed,
+      placement: Number.isInteger(placement?.position) ? placement.position : null,
+      placementLabel: placement?.label || (hosted && !competed ? 'Hosted' : null),
+    });
+  }
+
+  return historyRows;
 }
 
 function getTournamentBotDifficultyOptions() {
@@ -1778,6 +2366,8 @@ function getTournamentBotDifficultyOptions() {
 }
 
 function resetForTests() {
+  ELIMINATION_BREAK_SCHEDULING.forEach((handle) => clearTimeout(handle));
+  ELIMINATION_BREAK_SCHEDULING.clear();
   TOURNAMENTS.clear();
   TOURNAMENT_ALERTS.clear();
 }
@@ -1793,6 +2383,14 @@ eventBus.on('gameChanged', async (payload) => {
     if (!matchId) return;
     const match = await Match.findById(matchId).lean();
     if (!match?.tournamentId) return;
+    logTournamentFlow('round-robin-game-changed', {
+      tournamentId: String(match.tournamentId),
+      matchId,
+      gameId: String(game._id || ''),
+      isActive: Boolean(game.isActive),
+      winner: game.winner ?? null,
+      winReason: game.winReason ?? null,
+    });
     await maybeAdvanceTournamentRoundRobin(String(match.tournamentId));
   } catch (err) {
     console.error('Failed to advance tournament round robin after game change:', err);
@@ -1832,11 +2430,13 @@ module.exports = {
   reallowTournamentPlayer,
   startTournament,
   maybeAdvanceTournamentRoundRobin,
+  maybeAdvanceTournamentEliminationBreak,
   startElimination,
   transferTournamentHost,
   updateTournamentMessage,
   listTournamentGames,
   listAllTournamentsForAdmin,
+  listCompletedTournamentsForUser,
   deleteTournamentForAdmin,
   getTournamentBotDifficultyOptions,
   resetForTests,

@@ -11,10 +11,23 @@ export async function apiReady(gameId, color) {
 }
 
 export async function apiNext(gameId, color) {
-  return authFetch('/api/v1/gameAction/next', {
+  const res = await authFetch('/api/v1/gameAction/next', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = null;
+  }
+  if (!res.ok) {
+    const error = new Error((data && data.message) || 'Failed to advance to the next game');
+    error.response = res;
+    error.data = data;
+    throw error;
+  }
+  return data || {};
 }
 
 export async function apiSetup(payload) {
@@ -271,6 +284,18 @@ export async function apiReallowTournamentPlayer(payload = {}) {
 
 export async function apiGetTournamentDetails(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/details', payload);
+}
+
+export async function apiGetTournamentHistory() {
+  return sendTournamentRequest('/api/v1/tournaments/history', {}, { method: 'GET' });
+}
+
+export async function apiGetTournamentHistoryDetails(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/history/details', payload);
+}
+
+export async function apiGetAdminTournamentDetails(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/admin/details', payload);
 }
 
 export async function apiTransferTournamentHost(payload = {}) {

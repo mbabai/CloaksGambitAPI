@@ -581,6 +581,10 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       const wrap = document.createElement('div');
       wrap.className = 'row';
       wrap.style.flexWrap = 'wrap';
+      wrap.style.cursor = 'pointer';
+      const openTournament = () => {
+        window.location.href = `/?adminTournamentId=${encodeURIComponent(row.id)}`;
+      };
       const meta = document.createElement('div');
       meta.style.display = 'flex';
       meta.style.flexDirection = 'column';
@@ -591,8 +595,16 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         <span>Host: ${row.host?.username || 'Unknown'} · Players: ${Array.isArray(row.players) ? row.players.length : 0}</span>
       `;
       wrap.appendChild(meta);
+      wrap.addEventListener('click', openTournament);
+      const viewBtn = createButton({ label: 'View', variant: 'neutral', position: 'relative' });
+      viewBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openTournament();
+      });
+      wrap.appendChild(viewBtn);
       const deleteBtn = createButton({ label: 'Delete', variant: 'danger', position: 'relative' });
-      deleteBtn.addEventListener('click', async () => {
+      deleteBtn.addEventListener('click', async (event) => {
+        event.stopPropagation();
         const confirmed = window.confirm(`Delete tournament \"${row.label || row.id}\" and all related matches/games?`);
         if (!confirmed) return;
         try {

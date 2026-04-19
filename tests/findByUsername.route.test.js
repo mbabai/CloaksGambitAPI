@@ -97,4 +97,23 @@ describe('findByUsername route', () => {
     expect(bot.statusCode).toBe(404);
     expect(bot.payload).toEqual({ message: 'User not found' });
   });
+
+  test('defaults missing elo values to 800', async () => {
+    User.findOne.mockReturnValue(createLeanChain({
+      _id: 'u3',
+      username: 'Chateau',
+      elo: undefined,
+      isBot: false,
+    }));
+
+    const response = await callPost(handler, { username: 'Chateau' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toEqual({
+      userId: 'u3',
+      username: 'Chateau',
+      elo: 800,
+      isBot: false,
+    });
+  });
 });

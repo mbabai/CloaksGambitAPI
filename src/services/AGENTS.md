@@ -13,7 +13,8 @@
 
 ## Bots
 - `bots/registry.js` ensures durable bot users and creates auth tokens for them.
-- `bots/internalBots.js` launches socket-connected internal bot clients after the server starts listening.
+- `bots/internalBots.js` launches socket-connected internal bot clients after the server starts listening and reuses/reconnects the shared built-in client when later code targets that same bot user.
+- `bots/turnFailsafe.js` schedules a five-second watchdog for stalled bot-owned game states, wakes disconnected bots, and replays the current `gameChanged` snapshot through the normal socket path.
 - Shared bot behavior lives under `shared/bots/`, not only here.
 
 ## Guest Cleanup

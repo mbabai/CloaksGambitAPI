@@ -26,6 +26,7 @@
   - live game updates and finished-game broadcasts.
   - spectator rooms and admin metrics.
   - user presence, disconnect timers, and custom invite flow.
+  - the bot-turn failsafe that reschedules stalled bot-owned game states after five seconds and replays the current `gameChanged` snapshot.
 
 ## Auth and Identity
 - HTTP auth routes live in `src/routes/auth/google.js`.
@@ -38,6 +39,7 @@
 - The auth/session path now repairs real-user cookies in development and keeps `ensureUser()` from turning real accounts back into guests.
 - The browser no longer mirrors JWT auth into `localStorage` for fetch or socket auth. Requests and sockets now rely on server-owned cookies, while harmless UX state such as queue timers can still live in local storage.
 - Startup Mongo behavior changed in March 2026 to stop mutating Atlas URIs and instead retry with explicit `dbName` plus optional `authSource=admin`.
+- Bot recovery now includes a five-second server-side failsafe in `src/services/bots/turnFailsafe.js`, wired from `src/socket.js`. If a bot-owned game state stays unchanged for five seconds, sockets rebroadcast the current game snapshot and restart a disconnected internal bot client if needed.
 
 ## Editing Guidance
 - If you add a new startup dependency, make sure it behaves sensibly when Mongo is unavailable locally. Production exits on startup failure; development generally logs and keeps the server alive.

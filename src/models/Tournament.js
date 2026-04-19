@@ -18,16 +18,26 @@ const tournamentSchema = new mongoose.Schema({
     default: 'lobby',
   },
   host: {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    username: { type: String, required: true },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false, default: null },
+    username: { type: String, required: false, default: null },
+    isGuest: { type: Boolean, default: false },
+  },
+  createdBy: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false, default: null },
+    username: { type: String, required: false, default: null },
     isGuest: { type: Boolean, default: false },
   },
   config: {
     roundRobinMinutes: { type: Number, min: 1, max: 30, default: 15 },
+    breakMinutes: { type: Number, min: 0, max: 30, default: 5 },
     eliminationStyle: { type: String, enum: ['single', 'double'], default: 'single' },
     victoryPoints: { type: Number, enum: [3, 4, 5], default: 3 },
   },
   players: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: [],
+  },
+  historicalPlayers: {
     type: [mongoose.Schema.Types.Mixed],
     default: [],
   },
@@ -56,6 +66,10 @@ const tournamentSchema = new mongoose.Schema({
     default: null,
   },
   roundRobinCompletedAt: {
+    type: Date,
+    default: null,
+  },
+  eliminationStartsAt: {
     type: Date,
     default: null,
   },

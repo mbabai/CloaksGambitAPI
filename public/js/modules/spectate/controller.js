@@ -9,6 +9,7 @@ import {
   advanceClockSnapshot,
 } from '../utils/clockState.js';
 import { setBannerState, applyBannerVariant } from '../ui/banners.js';
+import { createButton } from '../ui/buttons.js';
 import { createOverlay } from '../ui/overlays.js';
 import { deriveSpectateView } from './viewModel.js';
 import { formatMatchTypeLabel } from './activeMatches.js';
@@ -284,9 +285,9 @@ export function createSpectateController(options) {
   }
 
   function resolveSpectatePlayer(snapshot, id, fallbackLabel) {
-    if (!id) return { name: fallbackLabel, elo: null };
+    if (!id) return { name: fallbackLabel, elo: 800, showBadge: false };
     const key = String(id);
-    if (!key) return { name: fallbackLabel, elo: null };
+    if (!key) return { name: fallbackLabel, elo: 800, showBadge: false };
     const playersMap = snapshot?.players || {};
     const entry = playersMap[key] || playersMap[id] || null;
     const registeredUsername = getUsername(key);
@@ -299,8 +300,8 @@ export function createSpectateController(options) {
       ? registeredUsername
       : (entry?.username || registeredUsername || fallbackLabel);
     setUsername(key, username, { priority: hasTournamentAlias ? 20 : 0 });
-    const elo = Number.isFinite(entry?.elo) ? entry.elo : null;
-    return { name: username, elo };
+    const elo = Number.isFinite(entry?.elo) ? entry.elo : 800;
+    return { name: username, elo, showBadge: !entry?.isBot && !entry?.isGuest };
   }
 
   function renderSpectateMeta(snapshot) {
@@ -428,6 +429,13 @@ export function createSpectateController(options) {
     }
   }
 
+  function acknowledgeSpectateCompletedGame() {
+    if (spectateState.lastCompletedGame) {
+      spectateState.lastCompletedGame.acknowledged = true;
+    }
+    hideSpectateGameBanner();
+  }
+
   function showSpectateGameBanner(snapshot) {
     if (!snapshot) {
       hideSpectateGameBanner();
@@ -521,13 +529,30 @@ export function createSpectateController(options) {
       ? 'Match complete. Close the spectate view to exit.'
       : 'Awaiting the next game…';
 
+    footer.textContent = match?.isActive === false
+      ? 'Match complete.'
+      : 'Click Next when you are ready to move on.';
+
+    const nextBtn = createButton({
+      label: match?.isActive === false ? 'Close' : 'Next',
+      variant: 'primary',
+      position: 'relative',
+    });
+    nextBtn.style.setProperty('--cg-button-padding', '8px 18px');
+    nextBtn.style.setProperty('--cg-button-border', '2px solid var(--CG-deep-gold)');
+    nextBtn.style.margin = '10px auto 0';
+    nextBtn.addEventListener('click', () => {
+      acknowledgeSpectateCompletedGame();
+    });
+
     card.appendChild(title);
     card.appendChild(desc);
     card.appendChild(footer);
+    card.appendChild(nextBtn);
     if (content) {
       content.appendChild(card);
     }
-    overlay.show();
+    overlay.show({ initialFocus: nextBtn });
   }
 
   function updateSpectateGameBanner(rawSnapshot, displaySnapshot) {
@@ -541,6 +566,14 @@ export function createSpectateController(options) {
     }
 
     if (rawSnapshot?.game && rawSnapshot.game.isActive) {
+      if (
+        spectateState.lastCompletedGame
+        && spectateState.lastCompletedGame.acknowledged !== true
+        && (!matchId || !spectateState.lastCompletedGame.matchId || spectateState.lastCompletedGame.matchId === matchId)
+      ) {
+        showSpectateGameBanner(spectateState.lastCompletedGame.snapshot);
+        return;
+      }
       spectateState.lastCompletedGame = null;
       hideSpectateGameBanner();
       return;
@@ -548,9 +581,14 @@ export function createSpectateController(options) {
 
     if (rawSnapshot?.game && rawSnapshot.game.isActive === false) {
       const snapshotForDisplay = displaySnapshot || rawSnapshot;
+      const currentCompletedGameId = normalizeId(snapshotForDisplay?.game?._id || rawSnapshot?.game?._id);
+      const previousCompletedGameId = normalizeId(spectateState.lastCompletedGame?.snapshot?.game?._id);
       spectateState.lastCompletedGame = {
         matchId,
         snapshot: snapshotForDisplay,
+        acknowledged: currentCompletedGameId && currentCompletedGameId === previousCompletedGameId
+          ? Boolean(spectateState.lastCompletedGame?.acknowledged)
+          : false,
       };
       showSpectateGameBanner(snapshotForDisplay);
       return;
@@ -559,6 +597,7 @@ export function createSpectateController(options) {
     if (!rawSnapshot?.game) {
       if (
         spectateState.lastCompletedGame
+        && spectateState.lastCompletedGame.acknowledged !== true
         && (!matchId || !spectateState.lastCompletedGame.matchId || spectateState.lastCompletedGame.matchId === matchId)
       ) {
         showSpectateGameBanner(spectateState.lastCompletedGame.snapshot);
@@ -568,6 +607,7 @@ export function createSpectateController(options) {
         spectateState.lastCompletedGame = {
           matchId,
           snapshot: displaySnapshot,
+          acknowledged: false,
         };
         showSpectateGameBanner(displaySnapshot);
         return;
@@ -578,6 +618,7 @@ export function createSpectateController(options) {
       spectateState.lastCompletedGame = {
         matchId,
         snapshot: displaySnapshot,
+        acknowledged: false,
       };
       showSpectateGameBanner(displaySnapshot);
       return;
@@ -634,6 +675,8 @@ export function createSpectateController(options) {
       isRankedMatch,
       eloTop: black.elo,
       eloBottom: white.elo,
+      showEloTop: Boolean(black.showBadge),
+      showEloBottom: Boolean(white.showBadge),
       playerIdTop: topPlayerId,
       playerIdBottom: bottomPlayerId,
     };

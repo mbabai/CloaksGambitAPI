@@ -8,6 +8,30 @@ const CONTROLLER_MAP = {
   medium: MediumBotController,
 };
 
+function toId(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value);
+  }
+  if (typeof value.toString === 'function') {
+    const normalized = value.toString();
+    return normalized === '[object Object]' ? null : normalized;
+  }
+  return null;
+}
+
+function normalizeGamePayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const gameId = toId(payload.gameId ?? payload._id ?? payload.id);
+  if (!gameId) return null;
+  const matchId = toId(payload.matchId ?? payload.match);
+  return {
+    ...payload,
+    gameId,
+    ...(matchId ? { matchId } : {}),
+  };
+}
+
 async function postAuthedJSON(serverUrl, path, token, body) {
   const res = await fetch(`${serverUrl.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`, {
     method: 'POST',
@@ -59,19 +83,23 @@ class BotClient {
       console.error('[bot] connect_error', err?.message || err);
     });
     this.socket.on('initialState', (payload) => {
+      const normalizedGames = Array.isArray(payload?.games)
+        ? payload.games.map((game) => normalizeGamePayload(game)).filter(Boolean)
+        : [];
       console.log('[bot] initialState received', {
-        games: payload?.games?.map(game => game?.gameId || game?.matchId) || [],
+        games: normalizedGames.map((game) => game.gameId || game.matchId),
       });
-      payload?.games?.forEach(game => this.handleUpdate(game));
+      normalizedGames.forEach((game) => this.handleUpdate(game));
     });
     this.socket.on('game:update', (payload) => {
+      const normalizedPayload = normalizeGamePayload(payload);
       console.log('[bot] game:update received', {
-        gameId: payload?.gameId,
-        playerTurn: payload?.playerTurn,
-        setupComplete: payload?.setupComplete,
-        playersReady: payload?.playersReady,
+        gameId: normalizedPayload?.gameId,
+        playerTurn: normalizedPayload?.playerTurn,
+        setupComplete: normalizedPayload?.setupComplete,
+        playersReady: normalizedPayload?.playersReady,
       });
-      this.handleUpdate(payload);
+      this.handleUpdate(normalizedPayload);
     });
     this.socket.on('game:finished', (payload) => {
       this.handleGameFinished(payload).catch((err) => {
@@ -86,7 +114,7 @@ class BotClient {
   }
 
   async handleGameFinished(payload) {
-    const gameId = payload?.gameId;
+    const gameId = toId(payload?.gameId ?? payload?._id ?? payload?.id);
     if (!gameId) return;
     const keyPrefix = `${gameId}:`;
     const controllers = Array.from(this.games.entries()).filter(([key]) => String(key).startsWith(keyPrefix));
@@ -140,9 +168,10 @@ class BotClient {
   }
 
   handleUpdate(payload) {
-    if (!payload?.gameId) return;
-    const normalizedPlayers = Array.isArray(payload.players)
-      ? payload.players.map(id => (id != null ? id.toString() : ''))
+    const normalizedPayload = normalizeGamePayload(payload);
+    if (!normalizedPayload?.gameId) return;
+    const normalizedPlayers = Array.isArray(normalizedPayload.players)
+      ? normalizedPayload.players.map(id => (id != null ? id.toString() : ''))
       : [];
     const myUserId = this.userId != null ? this.userId.toString() : '';
     const myColors = normalizedPlayers.reduce((acc, id, idx) => {
@@ -152,13 +181,13 @@ class BotClient {
     const targetColors = myColors.length ? myColors : [null];
 
     targetColors.forEach((forcedColor) => {
-      const key = `${payload.gameId}:${forcedColor === null ? 'auto' : forcedColor}`;
+      const key = `${normalizedPayload.gameId}:${forcedColor === null ? 'auto' : forcedColor}`;
       let controller = this.games.get(key);
       if (!controller) {
         if (!this.socket) return;
         controller = new this.ControllerClass(
           this.serverUrl,
-          payload.gameId,
+          normalizedPayload.gameId,
           this.userId,
           this.token,
           this.socket,
@@ -166,7 +195,7 @@ class BotClient {
         );
         this.games.set(key, controller);
       }
-      controller.handleUpdate(payload).catch(err => console.error('Failed update', err));
+      controller.handleUpdate(normalizedPayload).catch(err => console.error('Failed update', err));
     });
   }
 }

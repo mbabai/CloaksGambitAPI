@@ -5,6 +5,8 @@ const User = require('../models/User');
 const { buildClockPayload } = require('./gameClock');
 const constants = require('../../shared/constants/game.json');
 
+const DEFAULT_ELO = 800;
+
 async function buildSpectateSnapshot(matchId) {
   if (!matchId) return null;
   const normalizedId = matchId.toString();
@@ -78,14 +80,16 @@ async function buildSpectateSnapshot(matchId) {
   }
 
   const users = await User.find({ _id: { $in: Array.from(playerIds) } })
-    .select('_id username elo')
+    .select('_id username elo isBot isGuest')
     .lean();
   const playersMap = {};
   users.forEach((user) => {
     if (!user || !user._id) return;
     playersMap[user._id.toString()] = {
       username: user.username || null,
-      elo: Number.isFinite(user.elo) ? user.elo : null,
+      elo: Number.isFinite(user.elo) ? user.elo : DEFAULT_ELO,
+      isBot: Boolean(user.isBot),
+      isGuest: Boolean(user.isGuest),
     };
   });
 

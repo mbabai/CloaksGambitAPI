@@ -7,7 +7,9 @@
 ## Read These First For Recent Gameplay Refactors
 - `docs/board-annotations-clock-rules-execplan.md`: documents the live rules cleanup, spectator/board annotation work, and the first clock authority consolidation.
 - `docs/clock-authority-debug-execplan.md`: documents the follow-up refactor that moved live clocks onto persisted `game.clockState`.
+- `docs/bot-turn-failsafe-execplan.md`: documents the five-second server-side recovery path for stalled bot-owned game states.
 - `docs/canvas-game-view-execplan.md`: documents the shared Canvas board surface, the new `gameView` client abstraction, and the first player/spectator/replay migration onto explicit view modes.
+- `docs/tournaments.md`: current tournament behavior, client/server ownership boundaries, accept/next flow, autopilot, and bracket rules.
 
 ## Documentation Maintenance Rules
 - If auth behavior changes, update the relevant subtree docs in `src/routes/auth/AGENTS.md`, `src/utils/AGENTS.md`, and any user-facing notes in `README.md`.

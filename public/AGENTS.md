@@ -13,6 +13,7 @@
   - `components/` for shared UI primitives like `boardView`
   - `render/` for board/bars/stash visuals
   - `spectate/` for spectator state and view modeling
+  - `tournaments/` for the persistent tournament panel, bracket, and tournament-specific client helpers
   - `ui/` for overlay/button/icon helpers
   - `utils/` for cookies, clocks, time control, and asset preloading
 
@@ -31,6 +32,8 @@
 - The board Canvas must paint in the same order as the old DOM board: squares first, marble texture over the board, then borders/labels/pieces. Drawing the texture underneath opaque squares makes the board look flatter and loses the original grey marble feel.
 - Keep the board container below overlay buttons in stacking order. The board hit layer is intentionally interactive, so `gameView` should own z-index ordering for board vs. bars vs. setup/action buttons.
 - `public/js/modules/utils/clockState.js` should be used to animate from the server clock snapshot, not to replace server clock authority.
+- `public/js/modules/tournaments/ui.js` owns the tournament browser/panel/bracket and publishes tournament accept-needed state, but it does not own the purple accept banner itself.
+- `public/js/modules/tournaments/acceptScheduler.js` owns the client-side grace period between a completed tournament match and the next accept banner. Keep accept countdown/grace math there instead of duplicating it in `public/index.js`.
 
 ## Server Contract Notes
 - Live updates come from Socket.IO:
@@ -44,6 +47,8 @@
 
 ## Editing Guidance
 - If you split more code out of `public/index.js`, keep the public behavior unchanged first and move logic second.
+- Tournament game exits should go through `tournamentUiController.exitTournamentGameToPanel()` so the panel refreshes immediately and the next accept decision comes from fresh server state.
+- Do not reintroduce the generic non-tournament `Match Complete` summary for the last game of a tournament match. Tournament players should return to the panel first and only then see any next-match accept flow.
 - If you change auth or socket payloads, verify both the live board and the spectate flow.
 - If you change browser-side rule presentation, cross-check `rules.md` and the server routes so the UI text still matches the backend.
 - The player history overlay uses `.player-history-sections` as the desktop scroll container. Do not bind wheel handling to individual game-square rows or turn the match list into a separate nested desktop scroll pane unless the layout is being redesigned on purpose.

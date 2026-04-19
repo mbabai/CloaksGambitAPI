@@ -77,11 +77,36 @@ describe('users/getDetails route', () => {
       _id: userId,
       userId,
       username: 'Unavailable Player',
-      elo: null,
+      elo: 800,
       isBot: false,
       isGuest: true,
       photoUrl: '',
       missing: true,
+    });
+  });
+
+  test('defaults missing elo values to 800 for existing users', async () => {
+    const userId = '507f191e810c19729de860ea';
+    User.findById.mockReturnValue({
+      lean: jest.fn().mockResolvedValue({
+        _id: userId,
+        username: 'Chateau',
+        elo: undefined,
+        isBot: false,
+        isGuest: false,
+        photoUrl: '',
+      }),
+    });
+
+    const response = await callPost(handler, { userId });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({
+      userId,
+      username: 'Chateau',
+      elo: 800,
+      isBot: false,
+      isGuest: false,
     });
   });
 });

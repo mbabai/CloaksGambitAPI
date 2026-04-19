@@ -63,4 +63,42 @@ describe('BotClient match continuation', () => {
       }),
     );
   });
+
+  test('hydrates live games from initialState-style payloads that only expose _id', async () => {
+    const client = new BotClient('http://127.0.0.1:3100', 'bot-token', 'bot-user', 'medium');
+    const controllerHandleUpdate = jest.fn().mockResolvedValue(undefined);
+
+    class FakeController {
+      constructor(serverUrl, gameId, userId, token, socket, forcedColor) {
+        this.serverUrl = serverUrl;
+        this.gameId = gameId;
+        this.userId = userId;
+        this.token = token;
+        this.socket = socket;
+        this.color = forcedColor;
+      }
+
+      handleUpdate(payload) {
+        return controllerHandleUpdate(payload);
+      }
+    }
+
+    client.ControllerClass = FakeController;
+    client.socket = {};
+
+    client.handleUpdate({
+      _id: 'game-3',
+      match: 'match-3',
+      players: ['bot-user', 'human-user'],
+      playerTurn: 0,
+    });
+
+    expect(client.games.has('game-3:0')).toBe(true);
+    expect(controllerHandleUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      gameId: 'game-3',
+      matchId: 'match-3',
+      players: ['bot-user', 'human-user'],
+      playerTurn: 0,
+    }));
+  });
 });

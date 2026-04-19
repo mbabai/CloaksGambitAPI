@@ -12,6 +12,18 @@ let runtimeServerUrl = '';
 
 const DEFAULT_DIFFICULTIES = ['easy', 'medium'];
 
+function findDifficultyClientByUserId(userId) {
+  const normalizedUserId = typeof userId === 'string' ? userId.trim() : '';
+  if (!normalizedUserId) return null;
+  for (const client of activeDifficultyClients.values()) {
+    const candidateId = typeof client?.userId === 'string' ? client.userId.trim() : '';
+    if (candidateId && candidateId === normalizedUserId) {
+      return client;
+    }
+  }
+  return null;
+}
+
 function parseDifficulties() {
   const configured = process.env.BOT_DIFFICULTIES || process.env.BOT_DIFFICULTY;
   if (!configured) {
@@ -104,6 +116,18 @@ async function ensureInternalBotClient({ difficulty = 'easy', userId, token = nu
 
   if (startPromise) {
     await startPromise.catch(() => null);
+  }
+
+  const sharedClient = findDifficultyClientByUserId(normalizedUserId);
+  if (sharedClient) {
+    if (!sharedClient?.socket?.connected && typeof sharedClient?.socket?.connect === 'function') {
+      try {
+        sharedClient.socket.connect();
+      } catch (err) {
+        console.error('[bot-runtime] failed to reconnect shared bot client', err);
+      }
+    }
+    return sharedClient;
   }
 
   const serverUrl = runtimeServerUrl || resolveServerUrl();

@@ -34,7 +34,9 @@ export function renderBars({
     connectionBottom = null,
     isRankedMatch = false,
     eloTop = null,
-    eloBottom = null
+    eloBottom = null,
+    showEloTop = false,
+    showEloBottom = false
   } = state;
 
   if (!topBar || !bottomBar) return;
@@ -66,7 +68,9 @@ export function renderBars({
       height: nameBarH,
       fontSize: nameFont,
       isRankedMatch,
+      showEloBadge: isTopBar ? showEloTop : showEloBottom,
       elo: eloValue,
+      eloVariant: 'light',
       wins: {
         count: winCount,
         size: Math.floor(nameBarH * 0.9),

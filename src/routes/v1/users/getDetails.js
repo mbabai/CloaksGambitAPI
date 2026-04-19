@@ -5,12 +5,14 @@ const User = require('../../../models/User');
 const { isAdminSession } = require('../../../utils/adminAccess');
 const { resolveSessionFromRequest } = require('../../../utils/requestSession');
 
+const DEFAULT_ELO = 800;
+
 function buildUnavailableUserProfile(userId) {
   return {
     _id: userId,
     userId,
     username: 'Unavailable Player',
-    elo: null,
+    elo: DEFAULT_ELO,
     isBot: false,
     isGuest: true,
     photoUrl: '',
@@ -44,7 +46,7 @@ router.post('/', async (req, res) => {
       _id: user._id,
       userId: user._id.toString(),
       username: user.username,
-      elo: user.elo,
+      elo: Number.isFinite(user.elo) ? user.elo : DEFAULT_ELO,
       isBot: Boolean(user.isBot),
       isGuest: Boolean(user.isGuest),
       photoUrl: user.photoUrl || '',

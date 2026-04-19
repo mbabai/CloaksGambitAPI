@@ -47,6 +47,13 @@ function compareNumberDesc(left, right) {
   return 0;
 }
 
+function compareNumberAsc(left, right) {
+  const delta = toFiniteNumber(left) - toFiniteNumber(right);
+  if (delta < 0) return -1;
+  if (delta > 0) return 1;
+  return 0;
+}
+
 function computePerformanceRating(entry) {
   const totalGames = toFiniteNumber(entry?.totalGames);
   if (totalGames <= 0) {
@@ -66,10 +73,10 @@ function comparePrimaryStandingMetrics(left, right) {
 
 function compareFinalStandingMetrics(left, right) {
   return comparePrimaryStandingMetrics(left, right)
-    || compareNumberDesc(left?.headToHeadPoints, right?.headToHeadPoints)
-    || compareNumberDesc(left?.performanceRating, right?.performanceRating)
+    || compareNumberAsc(left?.totalGames, right?.totalGames)
     || compareNumberDesc(left?.preTournamentElo, right?.preTournamentElo)
     || (Date.parse(left?.joinedAt || 0) - Date.parse(right?.joinedAt || 0))
+    || String(left?.entryId || '').localeCompare(String(right?.entryId || ''))
     || (toFiniteNumber(left?.rosterIndex) - toFiniteNumber(right?.rosterIndex))
     || String(left?.userId || '').localeCompare(String(right?.userId || ''));
 }
@@ -131,6 +138,8 @@ function buildRoundRobinStandings(players = [], games = []) {
     let firstScoreAgainst = 0;
     let secondScoreAgainst = 0;
 
+    const isDoubleNoShowLoss = String(game?.tournamentScoreOutcome || '') === 'double_no_show_loss';
+
     if (game?.winner === 0) {
       first.wins += 1;
       second.losses += 1;
@@ -141,6 +150,11 @@ function buildRoundRobinStandings(players = [], games = []) {
       first.losses += 1;
       firstScoreAgainst = 0;
       secondScoreAgainst = 1;
+    } else if (isDoubleNoShowLoss) {
+      first.losses += 1;
+      second.losses += 1;
+      firstScoreAgainst = 0;
+      secondScoreAgainst = 0;
     } else {
       first.draws += 1;
       second.draws += 1;
