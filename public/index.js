@@ -2474,7 +2474,9 @@ logBootConstantsOnce();
       clockBaseGameId = null;
     }
     if (clockBaseSnapshot) {
-      const display = advanceClockSnapshot(clockBaseSnapshot, Date.now());
+      const display = advanceClockSnapshot(clockBaseSnapshot, Date.now(), {
+        startsAt: gameStartTime,
+      });
       whiteTimeMs = display.whiteMs;
       blackTimeMs = display.blackMs;
       activeColor = display.activeColor;
@@ -2503,7 +2505,9 @@ logBootConstantsOnce();
   function tickClock() {
     const now = Date.now();
     if (clockBaseSnapshot) {
-      const display = advanceClockSnapshot(clockBaseSnapshot, now);
+      const display = advanceClockSnapshot(clockBaseSnapshot, now, {
+        startsAt: gameStartTime,
+      });
       whiteTimeMs = display.whiteMs;
       blackTimeMs = display.blackMs;
       activeColor = display.activeColor;
@@ -3134,7 +3138,11 @@ logBootConstantsOnce();
             if (remaining === 0) {
               try { await apiReady(nextGameId, color); } catch (e) { console.error('Failed to ready after next', e); }
             }
-          }, { gameId: nextGameId, currentGameNumber });
+          }, {
+            gameId: nextGameId,
+            currentGameNumber,
+            countdownEndsAt: payload?.startTime || null,
+          });
         } catch (e) { console.error('players:bothNext handler failed', e); }
       },
       async onBothReady(payload) {
@@ -4940,7 +4948,15 @@ logBootConstantsOnce();
     runAttempt(attempts);
   }
 
-  function showMatchFoundBanner(startSeconds, onTick, { gameId = null, currentGameNumber = 1 } = {}) {
+  function showMatchFoundBanner(
+    startSeconds,
+    onTick,
+    {
+      gameId = null,
+      currentGameNumber = 1,
+      countdownEndsAt = null,
+    } = {},
+  ) {
     const overlay = ensureBannerOverlay();
     setActiveBanner('match-found', gameId || null);
     const { content, dialog, closeButton } = overlay;
@@ -4988,24 +5004,43 @@ logBootConstantsOnce();
       overlay.hide();
     }
 
-    let remaining = startSeconds;
-    countEl.textContent = String(remaining);
+    const resolvedCountdownEndMs = (() => {
+      const parsed = Date.parse(countdownEndsAt);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+      return Date.now() + (Math.max(1, Number(startSeconds) || 3) * 1000);
+    })();
+    let remaining = Math.max(0, Math.ceil((resolvedCountdownEndMs - Date.now()) / 1000));
+    let lastRenderedRemaining = null;
+    countEl.textContent = String(Math.max(1, remaining));
     overlay.show({ initialFocus: closeButton && !closeButton.hidden ? closeButton : null });
+
+    if (remaining <= 0) {
+      if (typeof onTick === 'function') {
+        try { onTick(0); } catch (_) {}
+      }
+      closeBanner();
+      return;
+    }
 
     if (bannerInterval) clearInterval(bannerInterval);
     bannerInterval = setInterval(() => {
-      remaining -= 1;
-      if (typeof onTick === 'function') {
-        try { onTick(remaining); } catch (_) {}
+      remaining = Math.max(0, Math.ceil((resolvedCountdownEndMs - Date.now()) / 1000));
+      if (remaining !== lastRenderedRemaining) {
+        lastRenderedRemaining = remaining;
+        if (typeof onTick === 'function') {
+          try { onTick(remaining); } catch (_) {}
+        }
       }
-      if (remaining < 0) {
+      if (remaining <= 0) {
         clearInterval(bannerInterval);
         bannerInterval = null;
         closeBanner();
         return;
       }
-      countEl.textContent = remaining === 0 ? 'Go!' : String(remaining);
-    }, 1000);
+      countEl.textContent = String(remaining);
+    }, 100);
   }
 
   function showTournamentAcceptBanner({ gameId, color, startSeconds = 30 } = {}) {

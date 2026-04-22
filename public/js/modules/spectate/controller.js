@@ -204,7 +204,9 @@ export function createSpectateController(options) {
   }
 
   function updateSpectateClockDisplay() {
-    spectateState.clockDisplay = advanceClockSnapshot(spectateState.clockBase, Date.now());
+    spectateState.clockDisplay = advanceClockSnapshot(spectateState.clockBase, Date.now(), {
+      startsAt: spectateState.data?.game?.startTime || null,
+    });
     updateSpectateClockElements();
   }
 

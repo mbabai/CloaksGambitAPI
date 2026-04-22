@@ -211,7 +211,7 @@ export function normalizeClockSnapshot(snapshot, {
   };
 }
 
-export function advanceClockSnapshot(base, now = Date.now()) {
+export function advanceClockSnapshot(base, now = Date.now(), { startsAt = null } = {}) {
   if (!base) {
     return {
       whiteMs: 0,
@@ -221,7 +221,12 @@ export function advanceClockSnapshot(base, now = Date.now()) {
     };
   }
 
-  const elapsed = Math.max(0, now - (base.receivedAt || now));
+  const receivedAt = base.receivedAt || now;
+  const startTs = parseTimestamp(startsAt);
+  const anchor = Number.isFinite(startTs)
+    ? Math.max(receivedAt, startTs)
+    : receivedAt;
+  const elapsed = Math.max(0, now - anchor);
   const whiteMs = Math.max(0, Math.round(
     (base.whiteMs || 0) - (base.tickingWhite ? elapsed : 0)
   ));

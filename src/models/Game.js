@@ -22,6 +22,7 @@ const TOURNAMENT_MATCH_TYPES = Object.freeze({
   ELIMINATION: 'TOURNAMENT_ELIMINATION',
 });
 const TOURNAMENT_ACCEPT_WINDOW_SECONDS = 30;
+const MATCH_FOUND_COUNTDOWN_MS = 3000;
 
 function shouldRequireGameAccept(match) {
   const matchType = String(match?.type || '').toUpperCase();
@@ -915,7 +916,17 @@ class GameModel {
   }
 
   static async create(data) {
-    const doc = this._ensureDocument(data);
+    const payload = data && typeof data === 'object'
+      ? { ...data }
+      : {};
+
+    if (payload.startTime == null && !payload.requiresAccept) {
+      const createdAt = cloneDate(payload.createdAt) || new Date();
+      payload.createdAt = createdAt;
+      payload.startTime = new Date(createdAt.getTime() + MATCH_FOUND_COUNTDOWN_MS);
+    }
+
+    const doc = this._ensureDocument(payload);
     await doc.save();
     return doc;
   }

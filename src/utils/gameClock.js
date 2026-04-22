@@ -361,7 +361,14 @@ function advanceStoredClockState(game, { now = Date.now(), setupActionType } = {
     return null;
   }
 
-  const lastUpdatedAt = toTimestamp(state.lastUpdatedAt) || now;
+  const startTs = toTimestamp(game?.startTime);
+  const lastUpdatedAt = (() => {
+    const stored = toTimestamp(state.lastUpdatedAt) || now;
+    if (Number.isFinite(startTs) && stored < startTs) {
+      return startTs;
+    }
+    return stored;
+  })();
   const elapsed = Math.max(0, now - lastUpdatedAt);
   if (elapsed > 0) {
     if (state.tickingWhite) {
@@ -463,7 +470,14 @@ function getLiveClockStateSnapshot(game, { now = Date.now(), setupActionType } =
   if (game?.clockState && typeof game.clockState === 'object') {
     const base = cloneClockState(game.clockState);
     if (base) {
-      const lastUpdatedAt = base.lastUpdatedAt || now;
+      const startTs = toTimestamp(game?.startTime);
+      const lastUpdatedAt = (() => {
+        const stored = base.lastUpdatedAt || now;
+        if (Number.isFinite(startTs) && stored < startTs) {
+          return startTs;
+        }
+        return stored;
+      })();
       const elapsed = Math.max(0, now - lastUpdatedAt);
       if (elapsed > 0) {
         if (base.tickingWhite) {

@@ -1331,6 +1331,7 @@ function initSocket(httpServer) {
         emitToUser(userId, 'players:bothNext', {
           gameId: gameIdStr,
           color: idx,
+          startTime: game.startTime || null,
           currentGameNumber: Number.isFinite(Number(payload?.currentGameNumber))
             ? Number(payload.currentGameNumber)
             : 1,
