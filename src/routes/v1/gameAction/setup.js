@@ -57,6 +57,9 @@ router.post('/', async (req, res) => {
     if (!onDeck || !onDeck.identity || onDeck.color !== normalizedColor) {
       return res.status(400).json({ message: 'Must provide a valid onDeck piece' });
     }
+    if (onDeck.identity === config.identities.get('KING')) {
+      return res.status(400).json({ message: 'KING cannot be placed on deck' });
+    }
 
     // Check for king and validate piece positions
     let hasKing = false;

@@ -14,6 +14,7 @@ const {
   clearCookie,
   resolveSessionFromRequest,
 } = require('../../utils/requestSession');
+const { resolveTooltipsEnabled } = require('../../utils/userPreferences');
 
 const router = express.Router();
 
@@ -272,6 +273,7 @@ router.get('/session', async (req, res) => {
         email: session.user?.email || '',
         isGuest: false,
         authenticated: true,
+        tooltipsEnabled: resolveTooltipsEnabled(session.user || session),
       });
     }
 
@@ -282,6 +284,7 @@ router.get('/session', async (req, res) => {
       email: null,
       isGuest: true,
       authenticated: false,
+      tooltipsEnabled: undefined,
     });
   } catch (err) {
     console.error('Failed to resolve session', err);

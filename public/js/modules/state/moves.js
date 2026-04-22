@@ -1,3 +1,5 @@
+import { canPieceBePlacedOnDeck } from '../interactions/legalSourceHighlights.js';
+
 export function getPieceAt(workingRank, workingOnDeck, workingStash, target) {
   if (!target) return null;
   if (target.type === 'board') return workingRank[target.index] || null;
@@ -15,6 +17,9 @@ export function setPieceAt(workingRank, workingOnDeckRef, workingStash, target, 
 export function performMove(workingRank, workingOnDeckRef, workingStash, origin, dest) {
   const pieceFrom = getPieceAt(workingRank, workingOnDeckRef.value, workingStash, origin);
   if (!pieceFrom) return false;
+  if (dest?.type === 'deck' && !canPieceBePlacedOnDeck(pieceFrom)) {
+    return false;
+  }
   const pieceTo = getPieceAt(workingRank, workingOnDeckRef.value, workingStash, dest);
   setPieceAt(workingRank, workingOnDeckRef, workingStash, origin, pieceTo || null);
   setPieceAt(workingRank, workingOnDeckRef, workingStash, dest, pieceFrom);

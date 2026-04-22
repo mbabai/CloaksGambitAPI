@@ -1,5 +1,4 @@
 const ANNOTATION_STROKE = 'rgba(196, 151, 255, 0.8)';
-const ANNOTATION_FILL = 'rgba(196, 151, 255, 0.3)';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function clamp(value, min, max) {
@@ -263,13 +262,13 @@ export function getSnappedAnnotationSquare(origin, hovered, rows, cols) {
 function createCircle(svg, square, squareSize) {
   const circle = createSvgElement('circle');
   const { x: cx, y: cy } = getSquareCenter(square, squareSize);
-  const radius = Math.max(8, Math.floor(squareSize * 0.34));
+  const radius = Math.max(12, Math.floor(squareSize * 0.42));
   circle.setAttribute('cx', `${cx}`);
   circle.setAttribute('cy', `${cy}`);
   circle.setAttribute('r', `${radius}`);
   circle.setAttribute('fill', 'none');
   circle.setAttribute('stroke', ANNOTATION_STROKE);
-  circle.setAttribute('stroke-width', `${Math.max(4, Math.floor(squareSize * 0.11))}`);
+  circle.setAttribute('stroke-width', `${Math.max(6, Math.floor(squareSize * 0.16))}`);
   circle.setAttribute('stroke-linecap', 'round');
   circle.setAttribute('stroke-linejoin', 'round');
   svg.appendChild(circle);

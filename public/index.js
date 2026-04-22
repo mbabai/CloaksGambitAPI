@@ -16,6 +16,14 @@ import { randomizeSetup } from '/js/modules/setup/randomize.js';
 import { DRAG_PX_THRESHOLD as DRAG_PX_THRESHOLD_CFG, DRAG_PX_THRESHOLD_TOUCH as DRAG_PX_THRESHOLD_TOUCH_CFG, CLICK_TIME_MAX_MS as CLICK_TIME_MAX_MS_CFG } from '/js/modules/interactions/config.js';
 import { getPieceAt as getPieceAtM, setPieceAt as setPieceAtM, performMove as performMoveM } from '/js/modules/state/moves.js';
 import { Declaration, uiToServerCoords, isWithinPieceRange, isPathClear } from '/js/modules/interactions/moveRules.js';
+import {
+  canPieceBePlacedOnDeck,
+  getDeckDestinationHighlight,
+  getLegalBoardDestinationCells,
+  getLegalBoardSourceCells,
+  getSetupBoardDestinationIndexes,
+  resolveActiveTurnColor,
+} from '/js/modules/interactions/legalSourceHighlights.js';
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId, getMatchResult } from '/js/modules/history/dashboard.js';
 import { createPlayerStatsOverlay } from '/js/modules/history/playerStatsOverlay.js';
@@ -27,8 +35,12 @@ import {
   createThroneIcon
 } from '/js/modules/ui/icons.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
+import { TOOLTIP_TEXT } from '/js/modules/ui/tooltipContent.js';
 import { getMatchCountdownBannerTitle, shouldPreserveMatchCountdownBanner } from '/js/modules/ui/matchCountdown.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
+import { createToastSystem } from '/js/modules/ui/toasts.js';
+import { createGameToastSnapshot, deriveGameToastFeedback } from '/js/modules/ui/gameToastEvents.js';
+import { applyTooltipAttributes, initTooltipSystem, setTooltipsEnabled } from '/js/modules/ui/tooltips.js';
 import { initTournamentUi } from '/js/modules/tournaments/ui.js';
 import { createTournamentAcceptScheduler } from '/js/modules/tournaments/acceptScheduler.js';
 import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
@@ -184,6 +196,46 @@ logBootConstantsOnce();
   const ACCOUNT_ICON_SRC = getAvatarAsset('account') || '/assets/images/account.png';
   const LOGGED_IN_AVATAR_SRC = getAvatarAsset('loggedInDefault') || '/assets/images/cloakHood.jpg';
   const GOOGLE_ICON_SRC = getIconAsset('google') || '/assets/images/google-icon.png';
+  const TOOLTIP_COOKIE_NAME = 'cgTooltipsEnabled';
+  const TOAST_NOTIFICATIONS_COOKIE_NAME = 'cgToastNotificationsEnabled';
+  const TOOLTIP_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+
+  function normalizeTooltipPreference(value, fallback = true) {
+    if (value === true || value === false) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true' || normalized === '1' || normalized === 'on' || normalized === 'yes') {
+        return true;
+      }
+      if (normalized === 'false' || normalized === '0' || normalized === 'off' || normalized === 'no') {
+        return false;
+      }
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value !== 0;
+    }
+    return fallback;
+  }
+
+  function readTooltipPreferenceCookie() {
+    return normalizeTooltipPreference(getCookie(TOOLTIP_COOKIE_NAME), true);
+  }
+
+  function persistTooltipPreferenceCookie(enabled) {
+    setCookie(TOOLTIP_COOKIE_NAME, enabled ? 'true' : 'false', TOOLTIP_COOKIE_MAX_AGE_SECONDS);
+  }
+
+  function readToastNotificationsPreferenceCookie() {
+    return normalizeTooltipPreference(getCookie(TOAST_NOTIFICATIONS_COOKIE_NAME), true);
+  }
+
+  function persistToastNotificationsPreferenceCookie(enabled) {
+    setCookie(TOAST_NOTIFICATIONS_COOKIE_NAME, enabled ? 'true' : 'false', TOOLTIP_COOKIE_MAX_AGE_SECONDS);
+  }
+
+  initTooltipSystem({ enabled: readTooltipPreferenceCookie() });
 
   upgradeButton(document.getElementById('googleLoginBtn'), {
     variant: 'neutral',
@@ -1108,12 +1160,145 @@ logBootConstantsOnce();
     return true;
   }
 
+  async function saveTooltipPreference(enabled) {
+    const previousEnabled = normalizeTooltipPreference(sessionInfo.tooltipsEnabled, true);
+    const nextEnabled = normalizeTooltipPreference(enabled, true);
+    updateSessionInfo({ tooltipsEnabled: nextEnabled });
+
+    if (!(sessionInfo.authenticated && sessionInfo.userId)) {
+      return nextEnabled;
+    }
+
+    try {
+      const res = await authFetch('/api/v1/users/update', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: sessionInfo.userId,
+          tooltipsEnabled: nextEnabled,
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Failed to update tooltip setting.');
+      }
+      const updated = await res.json().catch(() => null);
+      const resolvedEnabled = normalizeTooltipPreference(updated?.tooltipsEnabled, nextEnabled);
+      updateSessionInfo({ tooltipsEnabled: resolvedEnabled });
+      return resolvedEnabled;
+    } catch (error) {
+      updateSessionInfo({ tooltipsEnabled: previousEnabled });
+      throw error;
+    }
+  }
+
+  async function saveToastNotificationsPreference(enabled) {
+    const nextEnabled = normalizeTooltipPreference(enabled, true);
+    updateSessionInfo({ toastNotificationsEnabled: nextEnabled });
+    return nextEnabled;
+  }
+
+  function createAccountToggleRow({
+    id,
+    label,
+    description = '',
+    checked = true,
+    onChange,
+  }) {
+    const row = document.createElement('div');
+    row.className = 'menu-button menu-button--split account-setting-row';
+    row.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+
+    const textWrap = document.createElement('div');
+    textWrap.className = 'account-setting-row__text';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'account-setting-row__label';
+    labelEl.textContent = label;
+    textWrap.appendChild(labelEl);
+
+    if (description) {
+      const descriptionEl = document.createElement('span');
+      descriptionEl.className = 'account-setting-row__description';
+      descriptionEl.textContent = description;
+      textWrap.appendChild(descriptionEl);
+    }
+
+    const control = document.createElement('button');
+    control.type = 'button';
+    control.id = id;
+    control.className = 'account-setting-row__toggle';
+    control.setAttribute('aria-label', label);
+
+    const thumb = document.createElement('span');
+    thumb.className = 'account-setting-row__toggle-thumb';
+    control.appendChild(thumb);
+
+    row.appendChild(textWrap);
+    row.appendChild(control);
+
+    let lastCommittedValue = Boolean(checked);
+
+    function applyToggleState(value) {
+      const normalizedValue = Boolean(value);
+      control.classList.toggle('account-setting-row__toggle--checked', normalizedValue);
+      control.setAttribute('aria-pressed', normalizedValue ? 'true' : 'false');
+    }
+
+    applyToggleState(lastCommittedValue);
+
+    async function commitToggle(nextValue) {
+      control.disabled = true;
+      row.classList.add('account-setting-row--pending');
+      try {
+        const committedValue = typeof onChange === 'function'
+          ? await onChange(nextValue)
+          : nextValue;
+        lastCommittedValue = normalizeTooltipPreference(committedValue, nextValue);
+        applyToggleState(lastCommittedValue);
+      } catch (error) {
+        console.error('Failed to update tooltip setting', error);
+        applyToggleState(lastCommittedValue);
+        alert(error?.message || 'Failed to update tooltip setting. Please try again.');
+      } finally {
+        control.disabled = false;
+        row.classList.remove('account-setting-row--pending');
+      }
+    }
+
+    if (typeof onChange === 'function') {
+      control.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        await commitToggle(!lastCommittedValue);
+      });
+      row.addEventListener('click', async (event) => {
+        if (event.target && event.target.closest && event.target.closest('.account-setting-row__toggle')) {
+          return;
+        }
+        await commitToggle(!lastCommittedValue);
+      });
+    }
+
+    return { row, control };
+  }
+
   function updateSessionInfo(partial = {}, { syncCookies = false } = {}) {
     if (partial.userId !== undefined) {
       sessionInfo.userId = partial.userId ? String(partial.userId) : null;
     }
     if (partial.username !== undefined) {
       sessionInfo.username = typeof partial.username === 'string' ? partial.username : '';
+    }
+    if (partial.tooltipsEnabled !== undefined) {
+      sessionInfo.tooltipsEnabled = normalizeTooltipPreference(partial.tooltipsEnabled, true);
+      persistTooltipPreferenceCookie(sessionInfo.tooltipsEnabled);
+      setTooltipsEnabled(sessionInfo.tooltipsEnabled);
+    }
+    if (partial.toastNotificationsEnabled !== undefined) {
+      sessionInfo.toastNotificationsEnabled = normalizeTooltipPreference(partial.toastNotificationsEnabled, true);
+      persistToastNotificationsPreferenceCookie(sessionInfo.toastNotificationsEnabled);
     }
 
     let recomputeAuth = false;
@@ -1211,9 +1396,16 @@ logBootConstantsOnce();
 
       const displayName = userDetails?.username || sessionInfo.username || storedName || '';
       const eloValue = Number.isFinite(userDetails?.elo) ? userDetails.elo : 800;
+      const tooltipsEnabled = normalizeTooltipPreference(
+        userDetails?.tooltipsEnabled,
+        sessionInfo.tooltipsEnabled
+      );
 
       if (displayName && displayName !== sessionInfo.username) {
         updateSessionInfo({ username: displayName });
+      }
+      if (tooltipsEnabled !== sessionInfo.tooltipsEnabled) {
+        updateSessionInfo({ tooltipsEnabled });
       }
 
       if (statsOverlayController) {
@@ -1318,10 +1510,26 @@ logBootConstantsOnce();
       logoutLabel.style.textAlign = 'left';
       logoutBtn.appendChild(logoutLabel);
       logoutBtn.appendChild(googleImg);
+      logoutBtn.style.marginTop = 'auto';
+
+      const tooltipToggle = createAccountToggleRow({
+        id: 'accountTooltipsToggle',
+        label: 'Tooltips',
+        checked: tooltipsEnabled,
+        onChange: saveTooltipPreference,
+      });
+      const toastNotificationsToggle = createAccountToggleRow({
+        id: 'accountToastNotificationsToggle',
+        label: 'Toast Notifications',
+        checked: normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true),
+        onChange: saveToastNotificationsPreference,
+      });
 
       accountPanelContent.appendChild(usernameRow);
       accountPanelContent.appendChild(statsBtn);
       accountPanelContent.appendChild(tournamentsBtn);
+      accountPanelContent.appendChild(tooltipToggle.row);
+      accountPanelContent.appendChild(toastNotificationsToggle.row);
       accountPanelContent.appendChild(logoutBtn);
 
       accountBtnImg.src = LOGGED_IN_AVATAR_SRC;
@@ -1412,7 +1620,7 @@ logBootConstantsOnce();
         closeStatsOverlay();
       }
       const guestName = sessionInfo.username || storedName || '';
-      accountPanelContent.style.alignItems = 'flex-end';
+      accountPanelContent.style.alignItems = 'stretch';
       accountPanelContent.style.gap = '8px';
       accountPanelContent.innerHTML = '';
 
@@ -1443,6 +1651,22 @@ logBootConstantsOnce();
       loginMessage.className = 'menu-message';
       loginMessage.textContent = 'Log in to see account history, statistics, elo, and participate in ranked matches.';
       accountPanelContent.appendChild(loginMessage);
+
+      const tooltipToggle = createAccountToggleRow({
+        id: 'guestTooltipsToggle',
+        label: 'Tooltips',
+        checked: normalizeTooltipPreference(sessionInfo.tooltipsEnabled, true),
+        onChange: saveTooltipPreference,
+      });
+      const toastNotificationsToggle = createAccountToggleRow({
+        id: 'guestToastNotificationsToggle',
+        label: 'Toast Notifications',
+        checked: normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true),
+        onChange: saveToastNotificationsPreference,
+      });
+      accountPanelContent.appendChild(tooltipToggle.row);
+      accountPanelContent.appendChild(toastNotificationsToggle.row);
+
       accountBtnImg.src = ACCOUNT_ICON_SRC;
       setCookie('photo', '', 0);
       if (usernameDisplay) {
@@ -1473,6 +1697,12 @@ logBootConstantsOnce();
         if (sessionData.username !== undefined) updates.username = sessionData.username;
         if (sessionData.isGuest !== undefined) updates.isGuest = Boolean(sessionData.isGuest);
         if (sessionData.authenticated !== undefined) updates.authenticated = Boolean(sessionData.authenticated);
+        if (sessionData.tooltipsEnabled !== undefined) {
+          updates.tooltipsEnabled = sessionData.tooltipsEnabled;
+        } else if (sessionData.isGuest || sessionData.authenticated === false) {
+          updates.tooltipsEnabled = readTooltipPreferenceCookie();
+        }
+        updates.toastNotificationsEnabled = readToastNotificationsPreferenceCookie();
         updateSessionInfo(updates, { syncCookies: Boolean(sessionData.isGuest) });
       }
     } catch (err) {
@@ -1497,6 +1727,8 @@ logBootConstantsOnce();
         username: fallbackName || '',
         authenticated: false,
         isGuest: true,
+        tooltipsEnabled: readTooltipPreferenceCookie(),
+        toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
       });
     }
 
@@ -1638,6 +1870,8 @@ logBootConstantsOnce();
     username: '',
     isGuest: true,
     authenticated: false,
+    tooltipsEnabled: readTooltipPreferenceCookie(),
+    toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
   };
 
   let playerNames = ['Anonymous0', 'Anonymous1'];
@@ -1679,6 +1913,8 @@ logBootConstantsOnce();
   let currentDrawOffer = null; // { player, createdAt }
   let drawOfferCooldowns = [null, null]; // ms timestamps when players may re-offer
   let drawCooldownTimeout = null;
+  let gameToastSystem = null;
+  let lastGameToastSnapshot = null;
 
   const DEFAULT_TIME_SETTINGS = {
     quickplayMs: 300000,
@@ -1738,6 +1974,143 @@ logBootConstantsOnce();
   // Track server truth and optimistic intent to avoid flicker
   const queuedState = { quickplay: false, ranked: false, bots: false };
   let pendingAction = null; // 'join' | 'leave' | null
+
+  function ensureGameToastSystem() {
+    if (!playAreaRoot) return null;
+    if (!gameToastSystem) {
+      gameToastSystem = createToastSystem({
+        container: playAreaRoot,
+        onPulseChange: () => {
+          if (isPlayAreaVisible) {
+            renderBoardAndBars();
+          }
+        },
+        isToastStillValid: (toast) => {
+          if (toast?.appearance !== 'board-turn') {
+            return true;
+          }
+          if (currentPlayerTurn !== 0 && currentPlayerTurn !== 1) {
+            return false;
+          }
+          const viewerColor = currentIsWhite ? 0 : 1;
+          const expectedText = currentPlayerTurn === viewerColor ? 'Your turn!' : 'Opponent\'s turn';
+          return toast.text === expectedText;
+        },
+      });
+    } else {
+      gameToastSystem.attach(playAreaRoot);
+    }
+    return gameToastSystem;
+  }
+
+  function getGameToastPulseRenderState() {
+    const pulseState = gameToastSystem?.getPulseState?.() || { daggerKeys: [], capturedKeys: [] };
+    const pulsingDaggerColors = (Array.isArray(pulseState.daggerKeys) ? pulseState.daggerKeys : [])
+      .map((key) => Number.parseInt(String(key), 10))
+      .filter((color) => color === 0 || color === 1);
+    const pulsingCapturedByColor = [[], []];
+
+    (Array.isArray(pulseState.capturedKeys) ? pulseState.capturedKeys : []).forEach((key) => {
+      const [colorText, indexText] = String(key).split(':');
+      const color = Number.parseInt(colorText, 10);
+      const index = Number.parseInt(indexText, 10);
+      if ((color === 0 || color === 1) && Number.isInteger(index) && index >= 0) {
+        pulsingCapturedByColor[color].push(index);
+      }
+    });
+
+    return {
+      pulsingDaggerColors,
+      pulsingCapturedByColor,
+    };
+  }
+
+  function queueGameToastFeedback(feedback) {
+    const system = ensureGameToastSystem();
+    if (!system || !feedback) return;
+
+    if (normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true)) {
+      system.enqueueAll(feedback.toasts);
+    }
+
+    const pulseEntries = [];
+    (feedback.pulses?.daggerColors || []).forEach((entry) => {
+      if (!entry || (entry.color !== 0 && entry.color !== 1)) return;
+      pulseEntries.push({
+        channel: 'dagger',
+        key: String(entry.color),
+        durationMs: entry.durationMs,
+      });
+    });
+    (feedback.pulses?.captured || []).forEach((entry) => {
+      if (!entry || (entry.color !== 0 && entry.color !== 1)) return;
+      if (!Number.isInteger(entry.index) || entry.index < 0) return;
+      pulseEntries.push({
+        channel: 'captured',
+        key: `${entry.color}:${entry.index}`,
+        durationMs: entry.durationMs,
+      });
+    });
+    system.triggerPulses(pulseEntries);
+  }
+
+  function syncVisibleTurnAnnouncement(gameLike) {
+    const system = ensureGameToastSystem();
+    if (!system) return;
+    const currentTurn = gameLike?.playerTurn;
+    const viewerColor = currentIsWhite ? 0 : 1;
+    const expectedText = (currentTurn === 0 || currentTurn === 1)
+      ? (currentTurn === viewerColor ? 'Your turn!' : 'Opponent\'s turn')
+      : null;
+
+    system.dismissWhere((toast) => (
+      toast?.appearance === 'board-turn'
+      && toast.text !== expectedText
+    ));
+  }
+
+  function syncGameToastSnapshot(gameLike, options = {}) {
+    const nextSnapshot = createGameToastSnapshot(gameLike);
+    if (!nextSnapshot) {
+      if (options.reset !== false) {
+        lastGameToastSnapshot = null;
+      }
+      return;
+    }
+
+    syncVisibleTurnAnnouncement(gameLike);
+
+    if (!options.silent) {
+      const feedback = deriveGameToastFeedback({
+        previous: lastGameToastSnapshot,
+        current: nextSnapshot,
+        viewerColor: currentIsWhite ? 0 : 1,
+        viewMode: 'player',
+      });
+      queueGameToastFeedback(feedback);
+    }
+
+    lastGameToastSnapshot = nextSnapshot;
+  }
+
+  function clearGameToastFeedback({ resetSnapshot = false } = {}) {
+    if (gameToastSystem) {
+      gameToastSystem.clear();
+    }
+    if (resetSnapshot) {
+      lastGameToastSnapshot = null;
+    }
+  }
+
+  function showIllegalMoveToast() {
+    const system = ensureGameToastSystem();
+    if (!system) return;
+    system.enqueue({
+      text: 'Illegal move!',
+      tone: 'danger',
+      durationMs: 1000,
+    });
+  }
 
   function isBombActive() {
     return lastAction && lastAction.type === ACTIONS.BOMB;
@@ -2452,6 +2825,7 @@ logBootConstantsOnce();
               ensurePlayAreaRoot();
               layoutPlayArea();
               renderBoardAndBars();
+              syncGameToastSnapshot(latest, { silent: true });
             }
           } catch (_) {}
         }
@@ -2614,6 +2988,7 @@ logBootConstantsOnce();
             ensurePlayAreaRoot();
             layoutPlayArea();
             renderBoardAndBars();
+            syncGameToastSnapshot(payload);
           }
         } catch (e) {
           console.error('Error handling game:update', e);
@@ -5393,6 +5768,7 @@ logBootConstantsOnce();
     stashRoot.style.position = 'absolute';
     playAreaRoot.appendChild(stashRoot);
 
+    ensureGameToastSystem();
     window.addEventListener('resize', layoutPlayArea);
     return playAreaRoot;
   }
@@ -5451,6 +5827,7 @@ logBootConstantsOnce();
     if (!isPlayAreaVisible) return;
     if (playAreaRoot) playAreaRoot.style.display = 'none';
     isPlayAreaVisible = false;
+    clearGameToastFeedback();
   }
 
   // Tournament accept and tournament match-complete flows should transition the
@@ -5494,6 +5871,7 @@ logBootConstantsOnce();
     drawOfferCooldowns = [null, null];
     clearDrawCooldownTimeout();
     locallyAcceptedTournamentGames.clear();
+    clearGameToastFeedback({ resetSnapshot: true });
     if (tournamentParticipantMode && tournamentUiController) {
       tournamentAcceptScheduler.releaseGrace();
       Promise.resolve(
@@ -5540,6 +5918,46 @@ logBootConstantsOnce();
       if (lastAction.player === topColor) showChallengeTop = true;
       if (lastAction.player === bottomColor) showChallengeBottom = true;
     }
+
+    const viewerColor = currentIsWhite ? 0 : 1;
+    const responseContext = latestMoveContext || getLatestMoveContext({
+      actions: actionHistory,
+      moves: moveHistory,
+    });
+    const {
+      responseWindowOpen,
+    } = getResponseWindowState({
+      isMyTurn: currentPlayerTurn === viewerColor && !isInSetup,
+      isInSetup,
+      currentOnDeckingPlayer,
+      myColor: viewerColor,
+      lastMove,
+      lastAction,
+      lastMoveAction,
+      latestMoveContext: responseContext,
+    });
+    const activeTurnColor = resolveActiveTurnColor({
+      currentPlayerTurn,
+      currentOnDeckingPlayer,
+      isInSetup,
+      gameFinished,
+    });
+    const highlightedBoardSources = (
+      !gameFinished
+      && !isInSetup
+      && currentOnDeckingPlayer === null
+      && !responseWindowOpen
+      && !isBombActive()
+      && currentPlayerTurn === viewerColor
+    )
+      ? getLegalBoardSourceCells({
+          currentBoard,
+          currentIsWhite,
+          playerColor: viewerColor,
+          rows: currentRows,
+          cols: currentCols,
+        })
+      : [];
 
     // Use modular bars and stash renderers
     const topClr = currentIsWhite ? 1 : 0;
@@ -5600,6 +6018,7 @@ logBootConstantsOnce();
     const eloBottom = playerElos[bottomIdx];
     const showEloTop = Boolean(topPlayerId) && !isKnownBotId(topPlayerId) && !isKnownGuestId(topPlayerId);
     const showEloBottom = Boolean(bottomPlayerId) && !isKnownBotId(bottomPlayerId) && !isKnownGuestId(bottomPlayerId);
+    const toastPulseState = getGameToastPulseRenderState();
     const bars = gameView.render({
       sizes: {
         rows: currentRows,
@@ -5618,11 +6037,13 @@ logBootConstantsOnce();
         pendingMoveFrom,
         challengeRemoved,
         draggingOrigin: dragging?.origin || null,
+        highlightedSourceCells: highlightedBoardSources,
       },
       barsState: {
         currentIsWhite,
         currentCaptured,
         currentDaggers,
+        activeColor: activeTurnColor,
         showChallengeTop,
         showChallengeBottom,
         clockTop: formatClock(topMs),
@@ -5640,10 +6061,12 @@ logBootConstantsOnce();
         showEloTop,
         showEloBottom,
         playerIdTop: topPlayerId,
-        playerIdBottom: bottomPlayerId
+        playerIdBottom: bottomPlayerId,
+        pulsingDaggerColors: toastPulseState.pulsingDaggerColors,
+        pulsingCapturedByColor: toastPulseState.pulsingCapturedByColor,
       },
       viewMode: 'player',
-      viewerColor: currentIsWhite ? 0 : 1,
+      viewerColor,
       labelFont,
       fileLetters,
       readOnly: false,
@@ -5667,6 +6090,9 @@ logBootConstantsOnce();
 
     renderDrawOfferPrompt();
 
+    const readyVisible = (isInSetup && isSetupCompletable());
+    const randomVisible = (isInSetup && !readyVisible);
+
     renderStashModule({
       container: stashRoot,
       sizes: {
@@ -5680,8 +6106,10 @@ logBootConstantsOnce();
       state: {
         currentIsWhite,
         isInSetup,
+        workingRank,
         workingStash,
         workingOnDeck,
+        setupIsCompletable: readyVisible,
         currentStashes,
         currentOnDecks,
         currentOnDeckingPlayer,
@@ -5693,6 +6121,7 @@ logBootConstantsOnce();
       identityMap: PIECE_IMAGES,
       onAttachHandlers: (el, target) => attachInteractiveHandlers(el, target)
     });
+    syncBoardMoveTargetHighlights(getCurrentMoveTargetHighlights());
 
     // Challenge and Bomb buttons anchored to the stash area
     (function renderStashButtons() {
@@ -5771,7 +6200,7 @@ logBootConstantsOnce();
       }
 
       // Bomb button (upper left)
-      renderGameButton({
+      const bombBtn = renderGameButton({
         id: 'bombBtn',
         root: playAreaRoot,
         boardLeft: stashLeft + btnW / 2,
@@ -5793,9 +6222,10 @@ logBootConstantsOnce();
         width: btnW,
         height: btnH
       });
+      applyTooltipAttributes(bombBtn, TOOLTIP_TEXT.bombButton);
 
       // Pass button (uses challenge styling, upper left)
-      renderGameButton({
+      const passBtn = renderGameButton({
         id: 'passBtn',
         root: playAreaRoot,
         boardLeft: stashLeft + btnW / 2,
@@ -5817,9 +6247,10 @@ logBootConstantsOnce();
         width: btnW,
         height: btnH
       });
+      applyTooltipAttributes(passBtn, TOOLTIP_TEXT.passButton);
 
       // Challenge button (upper right)
-      renderGameButton({
+      const challengeBtn = renderGameButton({
         id: 'challengeBtn',
         root: playAreaRoot,
         boardLeft: stashLeft + stashWidth - btnW / 2,
@@ -5841,6 +6272,7 @@ logBootConstantsOnce();
         width: btnW,
         height: btnH
       });
+      applyTooltipAttributes(challengeBtn, TOOLTIP_TEXT.challengeButton);
 
       const deckEl = refs.deckEl;
       const fallbackDeckSize = Math.max(1, currentSquareSize || btnW);
@@ -5859,7 +6291,7 @@ logBootConstantsOnce();
       const canResign = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId);
       const canOfferDraw = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId) && !hasPendingDrawOffer && !cooldownActive;
 
-      renderGameButton({
+      const resignBtn = renderGameButton({
         id: 'resignBtn',
         root: playAreaRoot,
         boardLeft: deckCenterX,
@@ -5876,11 +6308,12 @@ logBootConstantsOnce();
         width: resignW,
         height: resignH
       });
+      applyTooltipAttributes(resignBtn, TOOLTIP_TEXT.resignButton);
 
       const drawGap = Math.max(2, Math.round(resignH * 0.05));
       const drawTop = resignTop + resignH + drawGap;
 
-      renderGameButton({
+      const drawBtn = renderGameButton({
         id: 'drawBtn',
         root: playAreaRoot,
         boardLeft: deckCenterX,
@@ -5897,6 +6330,7 @@ logBootConstantsOnce();
         width: resignW,
         height: resignH
       });
+      applyTooltipAttributes(drawBtn, TOOLTIP_TEXT.drawButton);
     })();
 
     // After board render, apply any pending move overlay bubbles
@@ -5922,9 +6356,6 @@ logBootConstantsOnce();
       gameView.clearBubbleOverlays();
     }
 
-    const readyVisible = (isInSetup && isSetupCompletable());
-    const randomVisible = (isInSetup && !readyVisible);
-
     // Ready button overlay when setup is completable
     renderReadyButton({
       root: playAreaRoot,
@@ -5933,6 +6364,7 @@ logBootConstantsOnce();
       boardWidth: bW,
       boardHeight: bH,
       isVisible: readyVisible,
+      isHighlighted: readyVisible,
       onClick: async () => {
         try {
           const payload = buildSetupPayload();
@@ -7132,6 +7564,143 @@ logBootConstantsOnce();
     } catch (_) { return null; }
   }
 
+  function getCurrentMoveTargetHighlights() {
+    if (gameFinished || !currentRows || !currentCols) {
+      return [];
+    }
+
+    const origin = dragging?.origin || selected;
+    if (!origin) {
+      return [];
+    }
+
+    if (isInSetup) {
+      const piece = getPieceAt(origin);
+      if (!piece) {
+        return [];
+      }
+      const highlights = getSetupBoardDestinationIndexes({
+        workingRank,
+        origin,
+      }).map((destination) => ({
+        targetType: 'board',
+        uiR: currentRows - 1,
+        uiC: destination.index,
+        isCapture: destination.isCapture,
+        matchesTrueIdentity: destination.matchesTrueIdentity,
+        opacity: destination.opacity,
+      }));
+      const deckHighlight = getDeckDestinationHighlight({
+        origin,
+        piece,
+        deckPiece: workingOnDeck,
+      });
+      if (deckHighlight) {
+        highlights.push(deckHighlight);
+      }
+      return highlights;
+    }
+
+    const myColorIdx = currentIsWhite ? 0 : 1;
+    if (currentOnDeckingPlayer !== null) {
+      if (currentOnDeckingPlayer !== myColorIdx || origin.type !== 'stash') {
+        return [];
+      }
+      const piece = currentStashes?.[myColorIdx]?.[origin.index] || dragging?.piece || null;
+      const deckHighlight = getDeckDestinationHighlight({
+        origin,
+        piece,
+        deckPiece: currentOnDecks?.[myColorIdx] || null,
+      });
+      return deckHighlight ? [deckHighlight] : [];
+    }
+
+    if (isBombActive() || origin.type !== 'boardAny') {
+      return [];
+    }
+
+    const piece = getBoardPieceAtUI(origin.uiR, origin.uiC);
+    if (!piece || piece.color !== myColorIdx || currentPlayerTurn !== myColorIdx) {
+      return [];
+    }
+
+    return getLegalBoardDestinationCells({
+      currentBoard,
+      currentIsWhite,
+      rows: currentRows,
+      cols: currentCols,
+      originUI: { uiR: origin.uiR, uiC: origin.uiC },
+      piece,
+    });
+  }
+
+  function clearBoardMoveTargetMarker(cellEl) {
+    if (!cellEl) return;
+    try {
+      const markers = cellEl.querySelectorAll('[data-move-target-marker="1"]');
+      markers.forEach((marker) => {
+        try {
+          marker.remove();
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
+  function setBoardMoveTargetMarker(cellEl, highlight) {
+    if (!cellEl || !highlight) return;
+    clearBoardMoveTargetMarker(cellEl);
+
+    const marker = document.createElement('span');
+    marker.dataset.moveTargetMarker = '1';
+    marker.className = highlight.isCapture
+      ? 'cg-move-target-marker cg-move-target-marker--capture'
+      : 'cg-move-target-marker';
+    marker.style.setProperty(
+      '--cg-move-target-opacity',
+      String(Number.isFinite(Number(highlight.opacity)) ? Number(highlight.opacity) : 0.4),
+    );
+    cellEl.appendChild(marker);
+  }
+
+  function syncBoardMoveTargetHighlights(highlights = []) {
+    const boardCellEntries = [];
+    try {
+      if (Array.isArray(refs.boardCells)) {
+        refs.boardCells.forEach((row) => {
+          if (!Array.isArray(row)) return;
+          row.forEach((entry) => {
+            if (entry?.el) boardCellEntries.push(entry.el);
+          });
+        });
+      }
+      if (Array.isArray(refs.bottomCells)) {
+        refs.bottomCells.forEach((entry) => {
+          if (entry?.el) boardCellEntries.push(entry.el);
+        });
+      }
+      if (refs.deckEl) {
+        boardCellEntries.push(refs.deckEl);
+      }
+    } catch (_) {}
+
+    boardCellEntries.forEach((cellEl) => clearBoardMoveTargetMarker(cellEl));
+
+    if (!Array.isArray(highlights) || highlights.length === 0) {
+      return;
+    }
+
+    highlights.forEach((highlight) => {
+      if (!highlight) return;
+      const cellEl = highlight.targetType === 'deck'
+        ? refs.deckEl || null
+        : (isInSetup
+          ? refs.bottomCells?.[highlight.uiC]?.el || null
+          : refs.boardCells?.[highlight.uiR]?.[highlight.uiC]?.el || null);
+      if (!cellEl) return;
+      setBoardMoveTargetMarker(cellEl, highlight);
+    });
+  }
+
   function handleGameClick(sourceTarget) {
     if (isBombActive()) { selected = null; renderBoardAndBars(); return; }
     // Select/deselect and wait for second click to choose destination
@@ -7146,6 +7715,18 @@ logBootConstantsOnce();
     }
     // Second click: move attempt to destination
     if (selected.type === 'boardAny' && sourceTarget.type === 'boardAny') {
+      if (selected.uiR === sourceTarget.uiR && selected.uiC === sourceTarget.uiC) {
+        selected = null;
+        renderBoardAndBars();
+        return;
+      }
+      const targetPiece = getBoardPieceAtUI(sourceTarget.uiR, sourceTarget.uiC);
+      const myColorIdx = currentIsWhite ? 0 : 1;
+      if (targetPiece && targetPiece.color === myColorIdx && currentPlayerTurn === myColorIdx) {
+        selected = { ...sourceTarget };
+        renderBoardAndBars();
+        return;
+      }
       const moved = attemptInGameMove(selected, sourceTarget);
       selected = null;
       renderBoardAndBars();
@@ -7163,6 +7744,7 @@ logBootConstantsOnce();
       const myColorIdx = currentIsWhite ? 0 : 1;
       if (!(currentPlayerTurn === 0 || currentPlayerTurn === 1) || currentPlayerTurn !== myColorIdx) return false;
       if (!(origin && origin.type === 'boardAny' && dest && dest.type === 'boardAny')) return false;
+      if (origin.uiR === dest.uiR && origin.uiC === dest.uiC) return false;
       const fromS = uiToServerCoords(origin.uiR, origin.uiC, currentRows, currentCols, currentIsWhite);
       const toS = uiToServerCoords(dest.uiR, dest.uiC, currentRows, currentCols, currentIsWhite);
       const from = { row: fromS.serverRow, col: fromS.serverCol };
@@ -7176,7 +7758,10 @@ logBootConstantsOnce();
         if (!isPathClear(currentBoard, from, to, d)) continue;
         legal.push(d);
       }
-      if (legal.length === 0) return false;
+      if (legal.length === 0) {
+        showIllegalMoveToast();
+        return false;
+      }
 
       // If single legal declaration or non-king with distance criteria, auto-commit
       const dx = Math.abs(dest.uiR - origin.uiR);
@@ -7385,7 +7970,7 @@ logBootConstantsOnce();
     if (selected.type === 'stash' && target.type === 'deck') {
       const ord = selected.index;
       const piece = currentStashes?.[myColorIdx]?.[ord];
-      if (piece) {
+      if (piece && canPieceBePlacedOnDeck(piece)) {
         currentStashes = currentStashes.map((arr, idx) => {
           if (idx !== myColorIdx) return arr;
           const clone = Array.isArray(arr) ? arr.slice() : [];
@@ -7492,6 +8077,7 @@ logBootConstantsOnce();
       lastClientX: startCX,
       lastClientY: startCY,
     };
+    syncBoardMoveTargetHighlights(getCurrentMoveTargetHighlights());
     suppressMouseUntil = Date.now() + 700; // extend suppression window during drag
     // if (DRAG_DEBUG) console.log('[drag] ghost init', { x: startCX, y: startCY, origin });
     // Do not re-render here; we dim the origin element directly to avoid disrupting touch event streams
@@ -7560,7 +8146,7 @@ logBootConstantsOnce();
             try {
               const ord = dragging.origin.index;
               const piece = dragging.piece;
-              if (piece) {
+              if (piece && canPieceBePlacedOnDeck(piece)) {
                 currentStashes = currentStashes.map((arr, idx) => {
                   if (idx !== myColorIdx) return arr;
                   const clone = Array.isArray(arr) ? arr.slice() : [];

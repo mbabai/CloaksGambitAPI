@@ -121,6 +121,7 @@ export function createNameRow({
   showEloBadge = isRankedMatch,
   elo = null,
   eloVariant = 'dark',
+  isActive = false,
   wins = {},
   connection = null
 } = {}) {
@@ -135,6 +136,9 @@ export function createNameRow({
 
   const nameWrap = doc.createElement('div');
   nameWrap.classList.add('cg-name-row__label');
+  if (isActive) {
+    nameWrap.classList.add('cg-name-row__label--active');
+  }
   nameWrap.style.setProperty('--cg-name-row-color', textColor);
   nameWrap.style.setProperty('--cg-name-row-font-size', `${clampNumber(fontSize, 14)}px`);
   nameWrap.style.setProperty('--cg-name-row-font-weight', fontWeight);

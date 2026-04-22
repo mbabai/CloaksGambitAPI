@@ -14,7 +14,7 @@
   - `render/` for board/bars/stash visuals
   - `spectate/` for spectator state and view modeling
   - `tournaments/` for the persistent tournament panel, bracket, and tournament-specific client helpers
-  - `ui/` for overlay/button/icon helpers
+  - `ui/` for overlay/button/icon/toast helpers
   - `utils/` for cookies, clocks, time control, and asset preloading
 
 ## Session and Token Behavior
@@ -27,6 +27,8 @@
 - `public/js/modules/gameView/view.js` is now the shared single-board surface for live play, spectate, and replay/admin uses. It composes the board, bars, overlays, and visibility mode.
 - `public/js/modules/components/boardView.js` is the board-only wrapper used underneath `gameView`. It now renders through Canvas, keeps a lightweight hit layer for interactions, and exposes geometry plus bubble-overlay helpers.
 - `public/js/modules/board/scene.js` remains the renderer-neutral board scene builder. `public/js/modules/render/board.js` now paints that scene onto Canvas instead of rebuilding visible DOM squares.
+- `public/js/modules/ui/toasts.js` owns the non-blocking game-area toast host plus the timed pulse state for dagger and captured-piece highlights. Keep the queueing/timing logic there instead of re-implementing timers in `public/index.js` or the spectate controller.
+- `public/js/modules/ui/gameToastEvents.js` is the pure snapshot-diff helper that decides which toasts and pulse triggers a game update should produce. If you change when bombs, challenges, turn switches, dagger gains, or captured-piece pulses surface, update that helper and its focused Jest coverage together.
 - Visibility rules live in `public/js/modules/gameView/modes.js`. Use explicit `player`, `spectator`, and `god` modes rather than ad hoc masking in individual screens.
 - Board annotations still attach to the board container, so keep the board surface positioned and sized through the shared wrappers instead of bypassing them.
 - The board Canvas must paint in the same order as the old DOM board: squares first, marble texture over the board, then borders/labels/pieces. Drawing the texture underneath opaque squares makes the board look flatter and loses the original grey marble feel.

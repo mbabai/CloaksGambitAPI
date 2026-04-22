@@ -11,6 +11,8 @@ import {
 import { setBannerState, applyBannerVariant } from '../ui/banners.js';
 import { createButton } from '../ui/buttons.js';
 import { createOverlay } from '../ui/overlays.js';
+import { createToastSystem } from '../ui/toasts.js';
+import { createGameToastSnapshot, deriveGameToastFeedback } from '../ui/gameToastEvents.js';
 import { deriveSpectateView } from './viewModel.js';
 import { formatMatchTypeLabel } from './activeMatches.js';
 
@@ -140,6 +142,27 @@ export function createSpectateController(options) {
         annotationsEnabled: true,
       })
     : null;
+  const toastSystem = playAreaEl
+    ? createToastSystem({
+        container: playAreaEl,
+        onPulseChange: () => {
+          if (overlayEl && !overlayEl.hidden && spectateState.data) {
+            renderSpectateBoard(spectateState.data);
+          }
+        },
+        isToastStillValid: (toast) => {
+          if (toast?.appearance !== 'board-turn') {
+            return true;
+          }
+          const currentTurn = spectateState.data?.game?.playerTurn;
+          if (currentTurn !== 0 && currentTurn !== 1) {
+            return false;
+          }
+          const expectedText = currentTurn === 0 ? 'White\'s turn' : 'Black\'s turn';
+          return toast.text === expectedText;
+        },
+      })
+    : null;
 
   const boardView = gameView ? gameView.boardView : null;
 
@@ -158,6 +181,7 @@ export function createSpectateController(options) {
     clockRefs: { top: null, bottom: null },
     lastBoardGame: null,
     lastCompletedGame: null,
+    feedbackSnapshot: null,
   };
 
   function stopSpectateClockTimer() {
@@ -248,6 +272,101 @@ export function createSpectateController(options) {
     }
   }
 
+  function getSpectateToastPulseRenderState() {
+    const pulseState = toastSystem?.getPulseState?.() || { daggerKeys: [], capturedKeys: [] };
+    const pulsingDaggerColors = (Array.isArray(pulseState.daggerKeys) ? pulseState.daggerKeys : [])
+      .map((key) => Number.parseInt(String(key), 10))
+      .filter((color) => color === 0 || color === 1);
+    const pulsingCapturedByColor = [[], []];
+
+    (Array.isArray(pulseState.capturedKeys) ? pulseState.capturedKeys : []).forEach((key) => {
+      const [colorText, indexText] = String(key).split(':');
+      const color = Number.parseInt(colorText, 10);
+      const index = Number.parseInt(indexText, 10);
+      if ((color === 0 || color === 1) && Number.isInteger(index) && index >= 0) {
+        pulsingCapturedByColor[color].push(index);
+      }
+    });
+
+    return {
+      pulsingDaggerColors,
+      pulsingCapturedByColor,
+    };
+  }
+
+  function queueSpectateToastFeedback(feedback) {
+    if (!toastSystem || !feedback) return;
+    toastSystem.enqueueAll(feedback.toasts);
+
+    const pulseEntries = [];
+    (feedback.pulses?.daggerColors || []).forEach((entry) => {
+      if (!entry || (entry.color !== 0 && entry.color !== 1)) return;
+      pulseEntries.push({
+        channel: 'dagger',
+        key: String(entry.color),
+        durationMs: entry.durationMs,
+      });
+    });
+    (feedback.pulses?.captured || []).forEach((entry) => {
+      if (!entry || (entry.color !== 0 && entry.color !== 1)) return;
+      if (!Number.isInteger(entry.index) || entry.index < 0) return;
+      pulseEntries.push({
+        channel: 'captured',
+        key: `${entry.color}:${entry.index}`,
+        durationMs: entry.durationMs,
+      });
+    });
+
+    toastSystem.triggerPulses(pulseEntries);
+  }
+
+  function syncSpectateTurnAnnouncement(gameLike) {
+    if (!toastSystem) return;
+    const currentTurn = gameLike?.playerTurn;
+    const expectedText = currentTurn === 0
+      ? 'White\'s turn'
+      : currentTurn === 1
+        ? 'Black\'s turn'
+        : null;
+
+    toastSystem.dismissWhere((toast) => (
+      toast?.appearance === 'board-turn'
+      && toast.text !== expectedText
+    ));
+  }
+
+  function syncSpectateToastSnapshot(gameLike, options = {}) {
+    const nextSnapshot = createGameToastSnapshot(gameLike);
+    if (!nextSnapshot) {
+      if (options.reset !== false) {
+        spectateState.feedbackSnapshot = null;
+      }
+      return;
+    }
+
+    syncSpectateTurnAnnouncement(gameLike);
+
+    if (!options.silent) {
+      const feedback = deriveGameToastFeedback({
+        previous: spectateState.feedbackSnapshot,
+        current: nextSnapshot,
+        viewMode: 'spectator',
+      });
+      queueSpectateToastFeedback(feedback);
+    }
+
+    spectateState.feedbackSnapshot = nextSnapshot;
+  }
+
+  function clearSpectateToastFeedback({ resetSnapshot = false } = {}) {
+    if (toastSystem) {
+      toastSystem.clear();
+    }
+    if (resetSnapshot) {
+      spectateState.feedbackSnapshot = null;
+    }
+  }
+
   function clearSpectateBubbles() {
     if (gameView) {
       gameView.clearBubbleOverlays();
@@ -281,6 +400,7 @@ export function createSpectateController(options) {
     spectateState.data = null;
     spectateState.lastBoardGame = null;
     spectateState.lastCompletedGame = null;
+    clearSpectateToastFeedback({ resetSnapshot: true });
     hideSpectateGameBanner();
   }
 
@@ -643,6 +763,7 @@ export function createSpectateController(options) {
     const p2Score = Number(match.player2Score || 0);
     const daggers = Array.isArray(game.daggers) ? game.daggers : [0, 0];
     const captured = Array.isArray(game.captured) ? game.captured : [[], []];
+    const setupComplete = Array.isArray(game.setupComplete) ? game.setupComplete : [false, false];
     const lastAction = Array.isArray(game.actions) ? game.actions[game.actions.length - 1] : null;
     const challengeActive = lastAction?.type === ACTIONS.CHALLENGE;
     const lastActionPlayer = normalizeActionPlayer(lastAction?.player, playerIdRefs);
@@ -654,6 +775,15 @@ export function createSpectateController(options) {
       || describeTimeControl(game.timeControlStart, game.increment);
     const whiteMs = Number.isFinite(displayClocks.whiteMs) ? displayClocks.whiteMs : 0;
     const blackMs = Number.isFinite(displayClocks.blackMs) ? displayClocks.blackMs : 0;
+    const activeColor = (
+      setupComplete[0]
+      && setupComplete[1]
+      && game.isActive
+      && Number.isInteger(snapshot?.clocks?.activeColor)
+    )
+      ? snapshot.clocks.activeColor
+      : null;
+    const toastPulseState = getSpectateToastPulseRenderState();
 
     const topPlayerId = normalizeId(blackId);
     const bottomPlayerId = normalizeId(whiteId);
@@ -661,6 +791,7 @@ export function createSpectateController(options) {
       currentIsWhite: true,
       currentCaptured: captured,
       currentDaggers: daggers,
+      activeColor,
       showChallengeTop,
       showChallengeBottom,
       clockTop: formatClock(blackMs),
@@ -679,6 +810,8 @@ export function createSpectateController(options) {
       showEloBottom: Boolean(white.showBadge),
       playerIdTop: topPlayerId,
       playerIdBottom: bottomPlayerId,
+      pulsingDaggerColors: toastPulseState.pulsingDaggerColors,
+      pulsingCapturedByColor: toastPulseState.pulsingCapturedByColor,
     };
   }
 
@@ -780,6 +913,7 @@ export function createSpectateController(options) {
     if (!overlayEl || overlayEl.hidden) return;
     const displaySnapshot = getSpectateDisplaySnapshot(snapshot);
     spectateState.data = displaySnapshot;
+    syncSpectateToastSnapshot(snapshot?.game || null, { reset: false });
     syncSpectateClocks(snapshot);
     renderSpectateTitle(displaySnapshot);
     renderSpectateMeta(displaySnapshot);

@@ -7,9 +7,10 @@ export function renderReadyButton({
   boardWidth,
   boardHeight,
   isVisible,
+  isHighlighted = false,
   onClick
 }) {
-  return renderButton({
+  const button = renderButton({
     id: 'setupReadyBtn',
     root,
     boardLeft,
@@ -22,6 +23,10 @@ export function renderReadyButton({
     size: 'large',
     onClick
   });
+  if (button) {
+    button.classList.toggle('cg-ready-button--highlighted', Boolean(isHighlighted));
+  }
+  return button;
 }
 
 

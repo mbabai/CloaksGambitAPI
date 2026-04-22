@@ -5,6 +5,8 @@ import {
   createDaggerCounter,
   createChallengeBubbleElement
 } from '../ui/banners.js';
+import { TOOLTIP_TEXT } from '../ui/tooltipContent.js';
+import { applyTooltipAttributes } from '../ui/tooltips.js';
 import { groupCapturedPiecesByColor } from '../utils/captured.js';
 
 export function renderBars({
@@ -21,6 +23,7 @@ export function renderBars({
     currentIsWhite,
     currentCaptured,
     currentDaggers,
+    activeColor = null,
     showChallengeTop = false,
     showChallengeBottom = false,
     clockTop = '5:00',
@@ -36,7 +39,9 @@ export function renderBars({
     eloTop = null,
     eloBottom = null,
     showEloTop = false,
-    showEloBottom = false
+    showEloBottom = false,
+    pulsingDaggerColors = [],
+    pulsingCapturedByColor = [[], []],
   } = state;
 
   if (!topBar || !bottomBar) return;
@@ -60,6 +65,14 @@ export function renderBars({
   const nameFont = Math.max(14, Math.floor(0.030 * H));
   const clockFont = Math.max(12, Math.floor(0.026 * H));
   const iconFont = Math.max(12, Math.floor(0.024 * H));
+  const topColor = currentIsWhite ? 1 : 0;
+  const bottomColor = currentIsWhite ? 0 : 1;
+  const pulsingDaggerColorSet = new Set(
+    Array.isArray(pulsingDaggerColors) ? pulsingDaggerColors : []
+  );
+  const pulsingCapturedIndexSets = [0, 1].map((colorIdx) => new Set(
+    Array.isArray(pulsingCapturedByColor?.[colorIdx]) ? pulsingCapturedByColor[colorIdx] : []
+  ));
 
   function buildNameRow({ isTopBar, showChallengeBubble, winCount, connection, eloValue, nameText }) {
     const row = createNameRow({
@@ -71,6 +84,7 @@ export function renderBars({
       showEloBadge: isTopBar ? showEloTop : showEloBottom,
       elo: eloValue,
       eloVariant: 'light',
+      isActive: activeColor === (isTopBar ? topColor : bottomColor),
       wins: {
         count: winCount,
         size: Math.floor(nameBarH * 0.9),
@@ -152,7 +166,7 @@ export function renderBars({
     });
   }
 
-  function buildDaggers(count) {
+  function buildDaggers(count, colorIdx) {
     const counter = createDaggerCounter({
       count,
       size: Math.floor(rowH),
@@ -160,28 +174,42 @@ export function renderBars({
       alt: 'Dagger token'
     });
     counter.style.fontSize = iconFont + 'px';
+    applyTooltipAttributes(counter, TOOLTIP_TEXT.daggerToken);
+    if (pulsingDaggerColorSet.has(colorIdx)) {
+      Array.from(counter.children || []).forEach((token) => {
+        token.classList.add('cg-feedback-pulse-target', 'cg-feedback-pulse-target--active');
+      });
+    }
     return counter;
   }
 
   function makeCapturedForColor(colorIdx) {
     const strip = document.createElement('div');
+    strip.classList.add('cg-captured-strip');
     strip.style.display = 'flex';
     strip.style.alignItems = 'center';
     strip.style.gap = '0px';
+    applyTooltipAttributes(strip, TOOLTIP_TEXT.capturedPieces);
     const pieces = (capturedByColor?.[colorIdx] || []);
+    const pulsingIndexes = pulsingCapturedIndexSets[colorIdx] || new Set();
     pieces.forEach((piece, idx) => {
       const cap = Math.floor(0.6 * s);
       const img = makePieceGlyph(piece, cap, identityMap);
       if (img) {
         const wrap = document.createElement('div');
+        wrap.classList.add('cg-captured-strip__piece');
         const overlap = Math.floor(0.1 * cap);
         wrap.style.width = cap + 'px';
         wrap.style.height = cap + 'px';
         wrap.style.display = 'flex';
         wrap.style.alignItems = 'center';
         wrap.style.justifyContent = 'center';
+        applyTooltipAttributes(wrap, TOOLTIP_TEXT.capturedPieces);
         if (idx > 0) {
           wrap.style.marginLeft = (-overlap) + 'px';
+        }
+        if (pulsingIndexes.has(idx)) {
+          wrap.classList.add('cg-feedback-pulse-target', 'cg-feedback-pulse-target--active');
         }
         wrap.appendChild(img);
         strip.appendChild(wrap);
@@ -224,13 +252,12 @@ export function renderBars({
     row.style.alignItems = 'center';
     row.style.justifyContent = 'space-between';
     if (isTopBar) {
-      const topColor = currentIsWhite ? 1 : 0;
       row.appendChild(makeCapturedForColor(topColor));
       const right = document.createElement('div');
       right.style.display = 'flex';
       right.style.alignItems = 'center';
       right.style.gap = '6px';
-      right.appendChild(buildDaggers(currentDaggers?.[topColor] || 0));
+      right.appendChild(buildDaggers(currentDaggers?.[topColor] || 0, topColor));
       const clock = buildClock({ isWhite: topColor === 0, text: clockTop });
       right.appendChild(clock);
       row.appendChild(right);
@@ -238,14 +265,13 @@ export function renderBars({
       barEl.appendChild(row);
       topClockEl = clock;
     } else {
-      const bottomColor = currentIsWhite ? 0 : 1;
       const left = document.createElement('div');
       left.style.display = 'flex';
       left.style.alignItems = 'center';
       left.style.gap = '6px';
       const clock = buildClock({ isWhite: bottomColor === 0, text: clockBottom });
       left.appendChild(clock);
-      left.appendChild(buildDaggers(currentDaggers?.[bottomColor] || 0));
+      left.appendChild(buildDaggers(currentDaggers?.[bottomColor] || 0, bottomColor));
       row.appendChild(left);
       row.appendChild(makeCapturedForColor(bottomColor));
       const spacer = Math.max(4, Math.floor(0.012 * H));

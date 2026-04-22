@@ -23,6 +23,10 @@ function getCellPiece({
   return currentBoard?.[srcR]?.[srcC] || null;
 }
 
+function toHighlightKey(uiR, uiC) {
+  return `${uiR}:${uiC}`;
+}
+
 export function buildBoardScene({
   sizes,
   state,
@@ -41,6 +45,7 @@ export function buildBoardScene({
     pendingMoveFrom,
     challengeRemoved,
     draggingOrigin,
+    highlightedSourceCells,
   } = state || {};
   const {
     showDeploymentLines = true,
@@ -53,6 +58,13 @@ export function buildBoardScene({
 
   const boardTextureSrc = (ASSET_MANIFEST?.textures && ASSET_MANIFEST.textures.boardMarble)
     || '/assets/images/MarbleTexture.svg';
+  const legalSourceKeys = new Set(
+    Array.isArray(highlightedSourceCells)
+      ? highlightedSourceCells
+          .filter((cell) => Number.isInteger(cell?.uiR) && Number.isInteger(cell?.uiC))
+          .map((cell) => toHighlightKey(cell.uiR, cell.uiC))
+      : [],
+  );
 
   const cells = [];
   for (let r = 0; r < rows; r += 1) {
@@ -124,6 +136,7 @@ export function buildBoardScene({
         selectedBottomPiece: Boolean(selected && selected.type === 'board' && selected.index === c && r === rows - 1),
         selectedBoardCell: Boolean(selected && selected.type === 'boardAny' && selected.uiR === r && selected.uiC === c),
         isBottomSetupCell: Boolean(isInSetup && r === rows - 1),
+        legalSourceHighlight: legalSourceKeys.has(toHighlightKey(r, c)),
       });
     }
   }

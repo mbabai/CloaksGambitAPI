@@ -26,7 +26,7 @@ Contents
 2 Bombs 💣
 
 Setup
-Choose one player as white, the other as black, giving each player all 8 of their respective pieces. Before play, Each player places 5 of their pieces on their first row on their side of the 5x6 board. One of these 5 must be their ♔ (king). Place 1 additional piece "on deck" (the dark square behind the 5x6 board). The other 2 pieces are placed to the side. All pieces should be placed so that only the owner of those pieces can see what the piece is.
+Choose one player as white, the other as black, giving each player all 8 of their respective pieces. Before play, Each player places 5 of their pieces on their first row on their side of the 5x6 board. One of these 5 must be their ♔ (king). Place 1 additional non-king piece "on deck" (the dark square behind the 5x6 board). The other 2 pieces are placed to the side. All pieces should be placed so that only the owner of those pieces can see what the piece is.
 If you want some real fun, have your opponent blindly select these pieces, giving both players a random setup. This will lead to 3,240,000 possible starting configurations - go wild!
 
 Play
@@ -114,7 +114,8 @@ Not by declaring them as a bomb. However, as a bluff (declaring it as another pi
 ### Current On-Deck Behavior
 - `setup.js` requires one real on-deck piece during initial setup.
 - Failed move challenges and failed bomb challenges send the original declarer into the on-deck phase, which matches the gold-standard rules.
-- `onDeck.js` takes a matching piece out of the player's stash and replaces `game.onDecks[color]`.
+- The king may never be placed on deck, either during initial setup or during a later on-deck refresh.
+- `onDeck.js` takes a matching non-king piece out of the player's stash and replaces `game.onDecks[color]`.
 
 ### Bomb/Challenge Notes In Code
 - `bomb.js` only allows bombs against pending non-king moves and only when the defender controls the target square.

@@ -5,7 +5,7 @@ export function getCookie(name) {
 
 export function setCookie(name, value, maxAgeSeconds) {
   const parts = [name + '=' + encodeURIComponent(value), 'Path=/', 'SameSite=Lax'];
-  if (maxAgeSeconds) parts.push('Max-Age=' + maxAgeSeconds);
+  if (maxAgeSeconds !== undefined && maxAgeSeconds !== null) parts.push('Max-Age=' + maxAgeSeconds);
   document.cookie = parts.join('; ');
 }
 

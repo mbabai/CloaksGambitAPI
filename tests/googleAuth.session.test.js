@@ -87,6 +87,7 @@ describe('google auth session route', () => {
       username: 'Murelious',
       email: 'm@example.com',
       isGuest: false,
+      tooltipsEnabled: false,
       photoUrl: '/profile.png',
     });
     ensureUser.mockResolvedValue({
@@ -106,6 +107,7 @@ describe('google auth session route', () => {
       username: 'Murelious',
       isGuest: false,
       authenticated: true,
+      tooltipsEnabled: false,
     });
     expect(response.cookies.some((cookie) => cookie.name === 'cgToken' && cookie.value === 'dev-token')).toBe(true);
   });
@@ -141,6 +143,7 @@ describe('google auth session route', () => {
       username: 'Murelious',
       isGuest: false,
       authenticated: true,
+      tooltipsEnabled: true,
     });
     expect(response.cookies.some((cookie) => cookie.name === 'cgToken' && cookie.value === 'dev-token')).toBe(true);
   });

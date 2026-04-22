@@ -1,4 +1,10 @@
 import { pieceGlyph as makePieceGlyph } from './pieceGlyph.js';
+import {
+  getOnDeckLegalSources,
+  getSetupLegalSources,
+} from '../interactions/legalSourceHighlights.js';
+import { TOOLTIP_TEXT } from '../ui/tooltipContent.js';
+import { applyTooltipAttributes } from '../ui/tooltips.js';
 
 export function renderStash({
   container,
@@ -9,7 +15,20 @@ export function renderStash({
   onAttachHandlers
 }) {
   const { squareSize: s, boardWidth: bW, boardHeight: bH, boardLeft: leftPx, boardTop: topPx, playAreaHeight: H } = sizes;
-  const { currentIsWhite, isInSetup, workingStash, workingOnDeck, currentStashes, currentOnDecks, selected, dragging, currentOnDeckingPlayer, gameFinished } = state;
+  const {
+    currentIsWhite,
+    isInSetup,
+    workingRank,
+    workingStash,
+    workingOnDeck,
+    setupIsCompletable = false,
+    currentStashes,
+    currentOnDecks,
+    selected,
+    dragging,
+    currentOnDeckingPlayer,
+    gameFinished,
+  } = state;
 
   if (!container) return;
 
@@ -80,6 +99,20 @@ export function renderStash({
   const stash = isInSetup
     ? workingStash
     : (Array.isArray(currentStashes?.[bottomColor]) ? currentStashes[bottomColor] : []);
+  const legalSources = isInSetup
+    ? getSetupLegalSources({
+        workingRank,
+        workingStash: stash,
+        workingOnDeck,
+        isSetupCompletable: setupIsCompletable,
+      })
+    : (isOnDeckTurn
+      ? getOnDeckLegalSources({ stash })
+      : { stashIndexes: [], highlightDeck: false });
+  const legalStashIndexes = new Set(legalSources.stashIndexes || []);
+  const stashTooltipText = isInSetup
+    ? TOOLTIP_TEXT.setupStash
+    : (isOnDeckTurn ? TOOLTIP_TEXT.onDeckStash : '');
   // Map UI slots (excluding center on-deck) to sequential stash pieces
   const uiToOrdinal = { 0: 0, 1: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7 };
   for (let i = 0; i < widthsTop.length; i++) {
@@ -105,12 +138,17 @@ export function renderStash({
       refs.deckEl = el;
       el.style.zIndex = '10'; // ensure on-deck sits above other stash slots/pieces
       if (isOnDeckTurn && !gameFinished) el.classList.add('onDeckGlow');
+      if (legalSources.highlightDeck) el.classList.add('cg-piece-source-highlight');
       if ((isInSetup || isOnDeckTurn) && onAttachHandlers) onAttachHandlers(el, { type: 'deck', index: 0 });
       if (selected && selected.type === 'deck') {
         el.style.filter = 'drop-shadow(0 0 15px rgba(255, 200, 0, 0.9))';
       }
     } else {
       const ord = uiToOrdinal[i];
+      if (stashTooltipText && stash[ord]) {
+        applyTooltipAttributes(el, stashTooltipText);
+      }
+      if (legalStashIndexes.has(ord) && stash[ord]) el.classList.add('cg-piece-source-highlight');
       if ((isInSetup || isOnDeckTurn) && onAttachHandlers) onAttachHandlers(el, { type: 'stash', index: ord });
       refs.stashSlots[ord] = { el, ordinal: ord };
       if (selected && selected.type === 'stash' && selected.index === ord) {
@@ -136,6 +174,10 @@ export function renderStash({
       content.style.opacity = '0.5';
     }
     const el = makeSlot(x, y, false, false, content);
+    if (stashTooltipText && piece) {
+      applyTooltipAttributes(el, stashTooltipText);
+    }
+    if (legalStashIndexes.has(ord) && piece) el.classList.add('cg-piece-source-highlight');
     if ((isInSetup || isOnDeckTurn) && onAttachHandlers) onAttachHandlers(el, { type: 'stash', index: ord });
     refs.stashSlots[ord] = { el, ordinal: ord };
     if (selected && selected.type === 'stash' && selected.index === ord) {

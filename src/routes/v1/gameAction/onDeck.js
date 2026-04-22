@@ -74,6 +74,9 @@ router.post('/', async (req, res) => {
     }
 
     const identity = parseInt(piece.identity, 10);
+    if (identity === config.identities.get('KING')) {
+      return res.status(400).json({ message: 'KING cannot be placed on deck' });
+    }
     const stash = game.stashes[normalizedColor];
     const index = stash.findIndex(
       (p) => p.identity === identity && p.color === normalizedColor

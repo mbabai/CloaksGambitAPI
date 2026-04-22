@@ -4,6 +4,8 @@ import { buildBoardScene } from '../board/scene.js';
 import { createBoardAnnotations } from './boardAnnotations.js';
 import { createImageCache } from '../render/imageCache.js';
 import { getBubbleAsset } from '../ui/icons.js';
+import { getThoughtBubbleTooltipText } from '../ui/tooltipContent.js';
+import { applyTooltipAttributes } from '../ui/tooltips.js';
 
 function createBoardLayer(className) {
   const element = document.createElement('div');
@@ -40,6 +42,10 @@ function createBubbleNode({ type, squareSize, interactive, onBubbleClick, uiR, u
   img.style.width = `${Math.floor(squareSize * 1.08)}px`;
   img.style.height = 'auto';
   img.style.pointerEvents = interactive ? 'auto' : 'none';
+  const tooltipText = getThoughtBubbleTooltipText(type);
+  if (tooltipText) {
+    applyTooltipAttributes(img, tooltipText);
+  }
   if (interactive) {
     img.style.cursor = 'pointer';
     img.addEventListener('click', (event) => {
@@ -196,6 +202,9 @@ export function createBoardView({
       hitCell.style.border = '0';
       hitCell.style.background = 'transparent';
       hitCell.style.touchAction = 'none';
+      if (cellModel.legalSourceHighlight) {
+        hitCell.classList.add('cg-piece-source-highlight');
+      }
 
       if (cellModel.isBottomSetupCell && typeof attachHandlers === 'function') {
         attachHandlers(hitCell, { type: 'board', index: cellModel.uiCol });

@@ -107,6 +107,31 @@ describe('users/getDetails route', () => {
       elo: 800,
       isBot: false,
       isGuest: false,
+      tooltipsEnabled: true,
+    });
+  });
+
+  test('returns stored tooltip preference when present', async () => {
+    const userId = '507f191e810c19729de860ea';
+    User.findById.mockReturnValue({
+      lean: jest.fn().mockResolvedValue({
+        _id: userId,
+        username: 'Chateau',
+        elo: 920,
+        isBot: false,
+        isGuest: false,
+        tooltipsEnabled: false,
+        photoUrl: '',
+      }),
+    });
+
+    const response = await callPost(handler, { userId });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toMatchObject({
+      userId,
+      username: 'Chateau',
+      tooltipsEnabled: false,
     });
   });
 });

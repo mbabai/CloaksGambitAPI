@@ -28,6 +28,7 @@
 - Failed bomb challenges send the bomb declarer into the on-deck phase.
 - `pass.js` resolves a bomb by removing the attacking piece from the original `from` square because the move never resolves onto `to`.
 - `setup.js` now requires a real `onDeck` piece and no longer injects fake placeholder stash pieces.
+- Neither `setup.js` nor `onDeck.js` allows the king to be placed on deck.
 
 ## Clock and Event Rules
 - Every mutating live route should call `ensureStoredClockState()` on entry and `transitionStoredClockState()` when handing control to the next actor.

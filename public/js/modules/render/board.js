@@ -22,6 +22,9 @@ function getBoardPalette(scope) {
     textureAlpha: 0.45,
     textureFallback: 'rgba(224, 224, 224, 0.16)',
     selectionGlow: 'rgba(255, 200, 0, 0.92)',
+    sourceHighlight: 'rgba(255, 214, 102, 0.98)',
+    sourceHighlightGlow: 'rgba(255, 215, 0, 0.42)',
+    sourceHighlightShine: 'rgba(255, 255, 255, 0.95)',
   };
 }
 
@@ -178,10 +181,42 @@ function drawCellGrid(ctx, cell, palette) {
   ctx.restore();
 }
 
+function drawLegalSourceUnderline(ctx, cell, palette) {
+  if (!cell.legalSourceHighlight) return;
+
+  const underlineWidth = cell.width * 0.68;
+  const underlineHeight = Math.max(3, cell.height * 0.045);
+  const underlineX = cell.centerX - (underlineWidth / 2);
+  const underlineY = cell.y + (cell.height * 0.79);
+  const shineWidth = underlineWidth * 0.36;
+  const shineHeight = Math.max(6, underlineHeight * 2.2);
+  const shineX = underlineX + (underlineWidth * 0.08);
+  const shineY = underlineY - ((shineHeight - underlineHeight) / 2);
+
+  ctx.save();
+  ctx.fillStyle = palette.sourceHighlight;
+  ctx.shadowColor = palette.sourceHighlightGlow;
+  ctx.shadowBlur = Math.max(8, cell.width * 0.12);
+  ctx.fillRect(underlineX, underlineY, underlineWidth, underlineHeight);
+  ctx.restore();
+
+  const shineGradient = ctx.createLinearGradient(shineX, 0, shineX + shineWidth, 0);
+  shineGradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
+  shineGradient.addColorStop(0.5, palette.sourceHighlightShine);
+  shineGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+  ctx.save();
+  ctx.fillStyle = shineGradient;
+  ctx.filter = 'blur(1px)';
+  ctx.fillRect(shineX, shineY, shineWidth, shineHeight);
+  ctx.restore();
+}
+
 function drawCellForeground(ctx, imageCache, identityMap, cell, labelFont, palette) {
   ctx.save();
   drawSquareLabel(ctx, cell, labelFont, palette);
   drawCapturedPiece(ctx, imageCache, identityMap, cell);
+  drawLegalSourceUnderline(ctx, cell, palette);
   drawMainPiece(ctx, imageCache, identityMap, cell, palette);
   ctx.restore();
 }
