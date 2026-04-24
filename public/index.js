@@ -3,10 +3,10 @@ import { pieceGlyph as modulePieceGlyph } from '/js/modules/render/pieceGlyph.js
 import { createGameView } from '/js/modules/gameView/view.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
-import { PIECE_IMAGES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
+import { PIECE_IMAGES, IDENTITIES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog, apiGetTournamentHistory } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiEnterTutorial, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiAdvanceTutorial, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog, apiGetTournamentHistory } from '/js/modules/api/game.js';
 import { createLocalGameLogger } from '/js/modules/debug/localGameLogger.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
@@ -160,6 +160,10 @@ logBootConstantsOnce();
   const menuContainer = document.getElementById('menuContainer');
   const menuMain = document.getElementById('menuMain');
   const accountBtn = upgradeButton(document.getElementById('accountBtn'), {
+    variant: 'neutral',
+    position: 'relative'
+  });
+  const tutorialBtn = upgradeButton(document.getElementById('tutorialBtn'), {
     variant: 'neutral',
     position: 'relative'
   });
@@ -1019,6 +1023,14 @@ logBootConstantsOnce();
     rankedLeaderboardBtn.addEventListener('click', ev => {
       ev.stopPropagation();
       openRankedLeaderboard();
+    });
+  }
+
+  if (tutorialBtn) {
+    tutorialBtn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      closeMenu();
+      showTutorialStartPrompt();
     });
   }
 
@@ -1882,6 +1894,7 @@ logBootConstantsOnce();
   const connectionStatusByPlayer = new Map();
   let customInvitePrompt = null;
   let botMatchPrompt = null;
+  let tutorialStartPrompt = null;
   let activeIncomingInvite = null;
   const pendingOutgoingInvites = new Map();
   let lastInviteTargetName = null;
@@ -1915,6 +1928,15 @@ logBootConstantsOnce();
   let drawCooldownTimeout = null;
   let gameToastSystem = null;
   let lastGameToastSnapshot = null;
+  let tutorialConfig = null;
+  let tutorialConfigPromise = null;
+  let tutorialState = null;
+  let tutorialOverlayEl = null;
+  let tutorialOverlayBodyEl = null;
+  let tutorialOverlayActionsEl = null;
+  let tutorialOverlayLayout = null;
+  let tutorialOverlayStepKey = null;
+  let tutorialOverlayPageIndex = 0;
 
   const DEFAULT_TIME_SETTINGS = {
     quickplayMs: 300000,
@@ -1974,6 +1996,462 @@ logBootConstantsOnce();
   // Track server truth and optimistic intent to avoid flicker
   const queuedState = { quickplay: false, ranked: false, bots: false };
   let pendingAction = null; // 'join' | 'leave' | null
+
+  const TUTORIAL_TEXT_URL = '/tutorials/intro.json';
+  const TUTORIAL_STEPS = Object.freeze({
+    SETUP: 1,
+    FIRST_TURN: 3,
+    POST_ROOK_MOVE: 5,
+    POST_BOT_BLUFF: 6,
+    CHALLENGE_BOT_BLUFF: 7,
+    MOVE_BISHOP: 8,
+    EXPLAIN_BOT_FAILED_CHALLENGE: 9,
+    AFTER_BOT_FAILED_CHALLENGE: 10,
+    ON_DECK_ROOK: 11,
+    BEFORE_BOT_ROOK_CAPTURE: 12,
+    AFTER_BOT_ROOK_CAPTURE: 13,
+    DECLARE_BOMB: 14,
+    AFTER_BOMB_DECLARATION: 15,
+    ON_DECK_ANY: 16,
+    BLUFF_WITH_LEFT_ROOK: 17,
+    BEFORE_BOT_CHALLENGE_SUCCESS: 18,
+    AFTER_BOT_CHALLENGE_SUCCESS: 19,
+    AFTER_BOT_KING_MOVE: 20,
+    EXPLAIN_TRUE_KING_RISK: 21,
+    EXPLAIN_WIN_CONDITIONS: 22,
+    CAPTURE_KING_WITH_ROOK: 23,
+    BEFORE_FINAL_CHALLENGE: 24,
+    AFTER_FINAL_CHALLENGE: 25,
+    CONGRATULATIONS: 26,
+    SHOW_FINISH_BANNER: 27,
+  });
+  const TUTORIAL_SETUP_IDENTITIES = Object.freeze([
+    IDENTITIES.KING,
+    IDENTITIES.ROOK,
+    IDENTITIES.KNIGHT,
+    IDENTITIES.BISHOP,
+    IDENTITIES.BISHOP,
+  ]);
+  const TUTORIAL_MOVE_BY_STEP = new Map([
+    [TUTORIAL_STEPS.FIRST_TURN, {
+      from: { row: 0, col: 1 },
+      to: { row: 3, col: 1 },
+      declaration: IDENTITIES.ROOK,
+    }],
+    [TUTORIAL_STEPS.MOVE_BISHOP, {
+      from: { row: 0, col: 4 },
+      to: { row: 2, col: 2 },
+      declaration: IDENTITIES.BISHOP,
+    }],
+    [TUTORIAL_STEPS.BLUFF_WITH_LEFT_ROOK, {
+      from: { row: 3, col: 1 },
+      to: { row: 5, col: 3 },
+      declaration: IDENTITIES.BISHOP,
+    }],
+    [TUTORIAL_STEPS.CAPTURE_KING_WITH_ROOK, {
+      from: { row: 2, col: 2 },
+      to: { row: 5, col: 2 },
+      declaration: IDENTITIES.ROOK,
+    }],
+  ]);
+
+  function normalizeTutorialState(value) {
+    if (!value || typeof value !== 'object' || value.active === false) {
+      return null;
+    }
+    const step = Number(value.step);
+    if (!Number.isFinite(step)) {
+      return null;
+    }
+    return {
+      active: true,
+      id: typeof value.id === 'string' && value.id.trim() ? value.id.trim() : 'intro',
+      step,
+      hideClocks: value.hideClocks !== false,
+    };
+  }
+
+  function getTutorialStepPages(stepConfig) {
+    if (!stepConfig || typeof stepConfig !== 'object') {
+      return [];
+    }
+    if (!Array.isArray(stepConfig.pages) || stepConfig.pages.length === 0) {
+      return [stepConfig];
+    }
+    return stepConfig.pages
+      .map((page) => {
+        if (!page) return null;
+        if (typeof page === 'string') {
+          return { html: page };
+        }
+        return typeof page === 'object' ? page : null;
+      })
+      .filter(Boolean);
+  }
+
+  async function loadTutorialConfig() {
+    if (tutorialConfig) {
+      return tutorialConfig;
+    }
+    if (!tutorialConfigPromise) {
+      tutorialConfigPromise = fetch(TUTORIAL_TEXT_URL, { credentials: 'same-origin' })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Failed to load tutorial copy (${response.status})`);
+          }
+          const payload = await response.json();
+          tutorialConfig = payload && typeof payload === 'object' ? payload : { steps: {} };
+          return tutorialConfig;
+        })
+        .catch((err) => {
+          tutorialConfigPromise = null;
+          throw err;
+        });
+    }
+    return tutorialConfigPromise;
+  }
+
+  function isTutorialActive() {
+    return Boolean(tutorialState && tutorialState.active);
+  }
+
+  function getTutorialServerStep() {
+    return isTutorialActive() ? Number(tutorialState.step) : null;
+  }
+
+  function shouldHideTutorialClocks() {
+    return Boolean(tutorialState && tutorialState.hideClocks);
+  }
+
+  function getTutorialSetupDraftCompatibility() {
+    if (!isTutorialActive() || getTutorialServerStep() !== TUTORIAL_STEPS.SETUP) {
+      return { compatible: true, complete: false };
+    }
+    for (let index = 0; index < TUTORIAL_SETUP_IDENTITIES.length; index += 1) {
+      const piece = workingRank[index];
+      if (piece && piece.identity !== TUTORIAL_SETUP_IDENTITIES[index]) {
+        return { compatible: false, complete: false };
+      }
+    }
+    if (workingOnDeck && workingOnDeck.identity !== IDENTITIES.BOMB) {
+      return { compatible: false, complete: false };
+    }
+    const complete = TUTORIAL_SETUP_IDENTITIES.every((identity, index) => (
+      workingRank[index] && workingRank[index].identity === identity
+    )) && Boolean(workingOnDeck && workingOnDeck.identity === IDENTITIES.BOMB);
+    return { compatible: true, complete };
+  }
+
+  function isTutorialSetupDraftCompatible() {
+    return getTutorialSetupDraftCompatibility().compatible;
+  }
+
+  function isTutorialSetupDraftComplete() {
+    return getTutorialSetupDraftCompatibility().complete;
+  }
+
+  function getTutorialExpectedBoardMove() {
+    if (!isTutorialActive()) {
+      return null;
+    }
+    return TUTORIAL_MOVE_BY_STEP.get(getTutorialServerStep()) || null;
+  }
+
+  function doesSourceTargetMatchServerSquare(target, square) {
+    if (!target || target.type !== 'boardAny' || !square) {
+      return false;
+    }
+    const coords = uiToServerCoords(target.uiR, target.uiC, currentRows, currentCols, currentIsWhite);
+    return coords.serverRow === square.row && coords.serverCol === square.col;
+  }
+
+  function isTutorialExpectedBoardOriginSelected() {
+    const expectedMove = getTutorialExpectedBoardMove();
+    if (!expectedMove || !selected || selected.type !== 'boardAny') {
+      return false;
+    }
+    return doesSourceTargetMatchServerSquare(selected, expectedMove.from);
+  }
+
+  function getTutorialDisplayedStepNumber() {
+    const serverStep = getTutorialServerStep();
+    if (!serverStep) {
+      return null;
+    }
+    if (serverStep === TUTORIAL_STEPS.SETUP) {
+      return isTutorialSetupDraftComplete() ? 2 : 1;
+    }
+    if (serverStep === TUTORIAL_STEPS.FIRST_TURN) {
+      return isTutorialExpectedBoardOriginSelected() ? 4 : 3;
+    }
+    return serverStep;
+  }
+
+  function tutorialAllowsChallenge() {
+    return isTutorialActive() && getTutorialServerStep() === TUTORIAL_STEPS.CHALLENGE_BOT_BLUFF;
+  }
+
+  function tutorialShowsChallenge() {
+    if (!isTutorialActive()) {
+      return false;
+    }
+    const step = getTutorialServerStep();
+    if (step === TUTORIAL_STEPS.CHALLENGE_BOT_BLUFF) {
+      return true;
+    }
+    if (step === TUTORIAL_STEPS.DECLARE_BOMB) {
+      return true;
+    }
+    return step === TUTORIAL_STEPS.POST_BOT_BLUFF && tutorialOverlayPageIndex >= 1;
+  }
+
+  function tutorialAllowsBomb() {
+    return isTutorialActive() && getTutorialServerStep() === TUTORIAL_STEPS.DECLARE_BOMB;
+  }
+
+  function isTutorialOnDeckChoiceAllowed(piece) {
+    if (!piece) {
+      return false;
+    }
+    const step = getTutorialServerStep();
+    if (step === TUTORIAL_STEPS.ON_DECK_ROOK) {
+      return piece.identity === IDENTITIES.ROOK;
+    }
+    if (step === TUTORIAL_STEPS.ON_DECK_ANY) {
+      return piece.identity !== IDENTITIES.KING;
+    }
+    return false;
+  }
+
+  function ensureTutorialOverlay() {
+    if (tutorialOverlayEl && tutorialOverlayEl.isConnected) {
+      return tutorialOverlayEl;
+    }
+
+    tutorialOverlayEl = document.createElement('div');
+    tutorialOverlayEl.id = 'cgTutorialTooltip';
+    tutorialOverlayEl.className = 'cg-tutorial-tooltip';
+    tutorialOverlayEl.hidden = true;
+    tutorialOverlayEl.setAttribute('aria-live', 'polite');
+
+    tutorialOverlayBodyEl = document.createElement('div');
+    tutorialOverlayBodyEl.className = 'cg-tutorial-tooltip__body';
+    tutorialOverlayEl.appendChild(tutorialOverlayBodyEl);
+
+    tutorialOverlayActionsEl = document.createElement('div');
+    tutorialOverlayActionsEl.className = 'cg-tutorial-tooltip__actions';
+    tutorialOverlayEl.appendChild(tutorialOverlayActionsEl);
+
+    document.body.appendChild(tutorialOverlayEl);
+    return tutorialOverlayEl;
+  }
+
+  function hideTutorialOverlay() {
+    if (!tutorialOverlayEl) {
+      return;
+    }
+    tutorialOverlayEl.hidden = true;
+    tutorialOverlayEl.classList.remove(
+      'cg-tutorial-tooltip--visible',
+      'cg-tutorial-tooltip--rect',
+      'cg-tutorial-tooltip--has-next'
+    );
+    tutorialOverlayEl.style.left = '';
+    tutorialOverlayEl.style.top = '';
+    tutorialOverlayEl.style.width = '';
+    tutorialOverlayEl.style.maxWidth = '';
+    tutorialOverlayEl.style.height = '';
+    tutorialOverlayEl.style.maxHeight = '';
+    tutorialOverlayEl.style.overflowY = '';
+    if (tutorialOverlayBodyEl) {
+      tutorialOverlayBodyEl.innerHTML = '';
+    }
+    if (tutorialOverlayActionsEl) {
+      tutorialOverlayActionsEl.innerHTML = '';
+    }
+  }
+
+  function clearTutorialState() {
+    tutorialState = null;
+    tutorialOverlayStepKey = null;
+    tutorialOverlayPageIndex = 0;
+    hideTutorialOverlay();
+  }
+
+  async function advanceTutorialFromUi() {
+    if (!lastGameId || !isTutorialActive()) {
+      return;
+    }
+    try {
+      const response = await apiAdvanceTutorial(lastGameId, myColor);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error?.message || 'Failed to advance tutorial.');
+      }
+    } catch (err) {
+      console.error('Tutorial advance failed', err);
+    }
+  }
+
+  function parseTutorialSquare(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const match = value.trim().toUpperCase().match(/^([A-Z])([1-9]\d*)$/);
+    if (!match) {
+      return null;
+    }
+    const file = match[1].charCodeAt(0) - 'A'.charCodeAt(0);
+    const rank = parseInt(match[2], 10);
+    if (
+      file < 0
+      || file >= currentCols
+      || rank < 1
+      || rank > currentRows
+    ) {
+      return null;
+    }
+    const serverRow = rank - 1;
+    const serverCol = file;
+    const ui = serverToUICoords(serverRow, serverCol);
+    return { uiR: ui.uiR, uiC: ui.uiC };
+  }
+
+  function parseTutorialSquareRect(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const parts = value.split('-').map((part) => part.trim()).filter(Boolean);
+    if (parts.length !== 2) {
+      return null;
+    }
+    const first = parseTutorialSquare(parts[0]);
+    const second = parseTutorialSquare(parts[1]);
+    if (!first || !second) {
+      return null;
+    }
+    return {
+      minR: Math.min(first.uiR, second.uiR),
+      maxR: Math.max(first.uiR, second.uiR),
+      minC: Math.min(first.uiC, second.uiC),
+      maxC: Math.max(first.uiC, second.uiC),
+    };
+  }
+
+  function positionTutorialOverlay(overlay, positionConfig = {}) {
+    if (!overlay) {
+      return;
+    }
+
+    overlay.classList.remove('cg-tutorial-tooltip--rect');
+    overlay.style.left = '';
+    overlay.style.top = '';
+    overlay.style.width = '';
+    overlay.style.maxWidth = '';
+    overlay.style.height = '';
+    overlay.style.maxHeight = '';
+    overlay.style.overflowY = '';
+
+    const squareRect = parseTutorialSquareRect(positionConfig.squareRect);
+    if (squareRect && tutorialOverlayLayout?.playAreaRect) {
+      const layout = tutorialOverlayLayout;
+      const squareSize = layout.squareSize || 0;
+      overlay.classList.add('cg-tutorial-tooltip--rect');
+      overlay.style.left = `${Math.round(layout.playAreaRect.left + layout.boardLeft + squareRect.minC * squareSize)}px`;
+      overlay.style.top = `${Math.round(layout.playAreaRect.top + layout.boardTop + squareRect.minR * squareSize)}px`;
+      overlay.style.width = `${Math.round((squareRect.maxC - squareRect.minC + 1) * squareSize)}px`;
+      overlay.style.maxWidth = overlay.style.width;
+      overlay.style.height = `${Math.round((squareRect.maxR - squareRect.minR + 1) * squareSize)}px`;
+      overlay.style.maxHeight = overlay.style.height;
+      overlay.style.overflowY = 'auto';
+      return;
+    }
+  }
+
+  function renderTutorialOverlay() {
+    if (!isTutorialActive() || !isPlayAreaVisible || !tutorialConfig) {
+      hideTutorialOverlay();
+      return;
+    }
+
+    const displayedStep = getTutorialDisplayedStepNumber();
+    if (!displayedStep || displayedStep >= TUTORIAL_STEPS.SHOW_FINISH_BANNER) {
+      hideTutorialOverlay();
+      return;
+    }
+
+    const stepConfig = tutorialConfig?.steps?.[String(displayedStep)];
+    if (!stepConfig) {
+      hideTutorialOverlay();
+      return;
+    }
+
+    const stepKey = String(displayedStep);
+    if (tutorialOverlayStepKey !== stepKey) {
+      tutorialOverlayStepKey = stepKey;
+      tutorialOverlayPageIndex = 0;
+    }
+
+    const pages = getTutorialStepPages(stepConfig);
+    if (pages.length === 0) {
+      hideTutorialOverlay();
+      return;
+    }
+
+    tutorialOverlayPageIndex = Math.max(0, Math.min(tutorialOverlayPageIndex, pages.length - 1));
+    const pageConfig = pages[tutorialOverlayPageIndex] || stepConfig;
+    const hasLocalNext = tutorialOverlayPageIndex < pages.length - 1;
+    const showAdvanceButton = Boolean(pageConfig.showNextButton ?? stepConfig.showNextButton);
+    const showNextButton = hasLocalNext || showAdvanceButton;
+
+    const overlay = ensureTutorialOverlay();
+    overlay.classList.toggle('cg-tutorial-tooltip--has-next', showNextButton);
+    tutorialOverlayBodyEl.innerHTML = pageConfig.html || stepConfig.html || '';
+    tutorialOverlayActionsEl.innerHTML = '';
+
+    if (showNextButton) {
+      const nextBtn = createButton({
+        label: 'Next',
+        variant: 'primary',
+        position: 'relative'
+      });
+      nextBtn.classList.add('cg-tutorial-tooltip__next');
+      nextBtn.addEventListener('click', () => {
+        if (hasLocalNext) {
+          tutorialOverlayPageIndex += 1;
+          renderBoardAndBars();
+          return;
+        }
+        nextBtn.disabled = true;
+        advanceTutorialFromUi().finally(() => {
+          nextBtn.disabled = false;
+        });
+      });
+      tutorialOverlayActionsEl.appendChild(nextBtn);
+    }
+
+    positionTutorialOverlay(overlay, {
+      squareRect: pageConfig.squareRect ?? stepConfig.squareRect,
+    });
+    overlay.hidden = false;
+    overlay.classList.add('cg-tutorial-tooltip--visible');
+  }
+
+  function syncTutorialState(nextTutorialState) {
+    tutorialState = normalizeTutorialState(nextTutorialState);
+    if (!isTutorialActive()) {
+      hideTutorialOverlay();
+      return;
+    }
+    loadTutorialConfig()
+      .then(() => {
+        renderTutorialOverlay();
+      })
+      .catch((err) => {
+        console.error('Failed to load tutorial copy', err);
+        hideTutorialOverlay();
+      });
+  }
 
   function ensureGameToastSystem() {
     if (!playAreaRoot) return null;
@@ -2107,6 +2585,16 @@ logBootConstantsOnce();
     if (!system) return;
     system.enqueue({
       text: 'Illegal move!',
+      tone: 'danger',
+      durationMs: 1000,
+    });
+  }
+
+  function showWrongMoveToast() {
+    const system = ensureGameToastSystem();
+    if (!system) return;
+    system.enqueue({
+      text: 'Wrong move',
       tone: 'danger',
       durationMs: 1000,
     });
@@ -2377,6 +2865,14 @@ logBootConstantsOnce();
       return;
     }
 
+    if (match.isTutorial) {
+      expectedTimeControl = null;
+      expectedIncrement = timeSettings.incrementMs;
+      renderBoardAndBars();
+      updateClockDisplay();
+      return;
+    }
+
     const type = typeof match.type === 'string' ? match.type.toUpperCase() : '';
     if (type === 'QUICKPLAY' || type === 'AI') {
       expectedTimeControl = timeSettings.quickplayMs;
@@ -2413,6 +2909,17 @@ logBootConstantsOnce();
   }
 
   function updateClockDisplay() {
+    if (shouldHideTutorialClocks()) {
+      if (topClockEl) {
+        topClockEl.textContent = '';
+      }
+      if (bottomClockEl) {
+        bottomClockEl.textContent = '';
+      }
+      updateClockGlow();
+      return;
+    }
+
     const topColor = currentIsWhite ? 1 : 0;
     const bottomColor = currentIsWhite ? 0 : 1;
     if (topClockEl) {
@@ -2430,6 +2937,10 @@ logBootConstantsOnce();
   function updateClockGlow() {
     if (topClockEl) topClockEl.classList.remove(CLOCK_ACTIVE_CLASS);
     if (bottomClockEl) bottomClockEl.classList.remove(CLOCK_ACTIVE_CLASS);
+
+    if (shouldHideTutorialClocks()) {
+      return;
+    }
 
     const isPlayersClock = Boolean(
       Array.isArray(currentPlayerIds)
@@ -2548,6 +3059,14 @@ logBootConstantsOnce();
   }
 
   function recomputeClocksFromServer(serverClockSnapshot = null, { gameId = null } = {}) {
+    if (shouldHideTutorialClocks()) {
+      clockBaseSnapshot = null;
+      clockBaseGameId = gameId != null ? String(gameId) : null;
+      stopClockInterval();
+      updateClockDisplay();
+      return;
+    }
+
     const fallbackLabel = getClockLabel();
     const normalizedServerClock = normalizeClockSnapshot(serverClockSnapshot, {
       receivedAt: Date.now(),
@@ -2772,10 +3291,12 @@ logBootConstantsOnce();
             isReady = Array.isArray(latest?.playersReady) && colorIdx > -1
               ? Boolean(latest.playersReady[colorIdx])
               : false;
+            const tutorialReconnectState = normalizeTutorialState(latest?.tutorial || null);
+            const isTutorialReconnect = Boolean(latest?.isTutorial || tutorialReconnectState?.active);
             const requiresTournamentAccept = resolveTournamentGameRequiresAccept(latest, currentMatch);
             currentIsWhite = (colorIdx === 0);
 
-            if (colorIdx > -1 && !isReady) {
+            if (colorIdx > -1 && !isReady && !isTutorialReconnect) {
               if (tournamentParticipantMode) {
                 if (requiresTournamentAccept) {
                   if (tournamentUiController) {
@@ -2799,7 +3320,9 @@ logBootConstantsOnce();
             // Adopt masked state immediately if present, and enter setup if needed
           try {
             if (Array.isArray(latest?.board)) {
-              if (colorIdx > -1 && !isReady) {
+              const tutorialReconnectState = normalizeTutorialState(latest?.tutorial || null);
+              const isTutorialReconnect = Boolean(latest?.isTutorial || tutorialReconnectState?.active);
+              if (colorIdx > -1 && !isReady && !isTutorialReconnect) {
                 return;
               }
               if (tournamentParticipantMode && tournamentUiController) {
@@ -3001,6 +3524,7 @@ logBootConstantsOnce();
       onGameFinished(payload) {
         console.log('[socket] game:finished', payload);
         const finishSnapshot = payload && payload.game ? payload.game : payload;
+        const finishedTutorialState = normalizeTutorialState(payload?.tutorial || finishSnapshot?.tutorial || null);
         logGameSnapshot('game:finished', finishSnapshot);
         clearTournamentGameHydration();
         emitLocalClockDebug('client-game-finished-received', {
@@ -3021,6 +3545,11 @@ logBootConstantsOnce();
         drawOfferCooldowns = [null, null];
         clearDrawCooldownTimeout();
         renderBoardAndBars();
+        if (finishedTutorialState && finishedTutorialState.step < TUTORIAL_STEPS.SHOW_FINISH_BANNER) {
+          syncTutorialState(finishedTutorialState);
+          renderTutorialOverlay();
+          return;
+        }
         (async () => {
           try {
             const winnerIdx = payload?.winner;
@@ -3874,6 +4403,171 @@ logBootConstantsOnce();
     if (input.value) {
       input.setSelectionRange(0, input.value.length);
     }
+  }
+
+  function showTutorialStartPrompt() {
+    if (tutorialStartPrompt && tutorialStartPrompt.overlay && tutorialStartPrompt.overlay.isOpen()) {
+      try {
+        tutorialStartPrompt.confirmBtn?.focus();
+      } catch (_) {}
+      return;
+    }
+
+    const prompt = {};
+    const overlay = createOverlay({
+      baseClass: 'cg-overlay cg-overlay--banner bot-overlay',
+      dialogClass: 'cg-overlay__dialog cg-overlay__dialog--banner bot-overlay__dialog',
+      contentClass: 'cg-overlay__content cg-overlay__content--banner bot-overlay__content',
+      backdropClass: 'cg-overlay__backdrop cg-overlay__backdrop--banner bot-overlay__backdrop',
+      closeButtonClass: 'cg-overlay__close cg-overlay__close--banner bot-overlay__close',
+      closeLabel: 'Close tutorial prompt',
+      closeText: 'x',
+      openClass: 'cg-overlay--open cg-overlay--banner-open bot-overlay--open',
+      bodyOpenClass: 'cg-overlay-open bot-overlay-open',
+      closeOnBackdrop: true,
+      trapFocus: true,
+      onHide() {
+        if (tutorialStartPrompt === prompt) {
+          tutorialStartPrompt = null;
+        }
+      }
+    });
+
+    tutorialStartPrompt = prompt;
+    prompt.overlay = overlay;
+
+    const { content, dialog, closeButton } = overlay;
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+
+    function closePrompt({ restoreFocus = true } = {}) {
+      try {
+        overlay.hide({ restoreFocus });
+      } catch (_) {
+        overlay.hide();
+      }
+    }
+
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => closePrompt({ restoreFocus: true });
+    }
+
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const card = document.createElement('div');
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '360px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = cardGap + 'px';
+
+    const title = document.createElement('div');
+    title.textContent = 'Play Tutorial';
+    title.style.fontSize = clamp(Math.round(24 * modalScale), 16, 24) + 'px';
+    title.style.fontWeight = '700';
+
+    const description = document.createElement('div');
+    description.textContent = 'Start the guided tutorial match against Tutorial Bot?';
+    description.style.fontSize = clamp(Math.round(16 * modalScale), 12, 16) + 'px';
+    description.style.lineHeight = '1.4';
+
+    const statusEl = document.createElement('div');
+    statusEl.style.minHeight = clamp(Math.round(18 * modalScale), 14, 18) + 'px';
+    statusEl.style.fontSize = clamp(Math.round(14 * modalScale), 12, 14) + 'px';
+    statusEl.style.fontWeight = '600';
+    statusEl.style.color = 'var(--CG-light-gold)';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
+    buttons.style.justifyContent = 'center';
+
+    const cancelBtn = createButton({
+      label: 'No',
+      variant: 'danger',
+      position: 'relative'
+    });
+    cancelBtn.style.flex = '1';
+    cancelBtn.style.minWidth = '0';
+    cancelBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
+    cancelBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    cancelBtn.style.setProperty('--cg-button-font-weight', '700');
+
+    const confirmBtn = createButton({
+      label: 'Yes',
+      variant: 'primary',
+      position: 'relative'
+    });
+    confirmBtn.style.flex = '1';
+    confirmBtn.style.minWidth = '0';
+    confirmBtn.style.setProperty('--cg-button-padding', `${clamp(Math.round(10 * modalScale), 6, 10)}px ${clamp(Math.round(16 * modalScale), 10, 16)}px`);
+    confirmBtn.style.fontSize = clamp(Math.round(18 * modalScale), 12, 18) + 'px';
+    confirmBtn.style.setProperty('--cg-button-font-weight', '700');
+
+    function setStatus(message, tone = 'info') {
+      statusEl.textContent = message || '';
+      if (!message) return;
+      statusEl.style.color = tone === 'error'
+        ? 'var(--CG-scarlet, #ff6b6b)'
+        : 'var(--CG-light-gold)';
+    }
+
+    function setLoading(loading) {
+      confirmBtn.disabled = loading;
+      cancelBtn.disabled = loading;
+      confirmBtn.textContent = loading ? 'Starting...' : 'Yes';
+    }
+
+    async function handleStart() {
+      setStatus('Starting tutorial...');
+      setLoading(true);
+      try {
+        const result = await apiEnterTutorial();
+        if (result && (result.userId || result.username)) {
+          updateSessionInfo({
+            ...(result.userId ? { userId: result.userId } : {}),
+            ...(result.username ? { username: result.username } : {}),
+          }, { syncCookies: Boolean(result?.userId) });
+          userId = sessionInfo.userId || result.userId || userId;
+        }
+        loadTutorialConfig().catch((err) => {
+          console.error('Failed to preload tutorial copy', err);
+        });
+        closePrompt({ restoreFocus: true });
+      } catch (err) {
+        const message = (err && err.data && err.data.message) || err?.message || 'Failed to start tutorial.';
+        setStatus(message, 'error');
+        setLoading(false);
+      }
+    }
+
+    cancelBtn.addEventListener('click', () => closePrompt({ restoreFocus: true }));
+    confirmBtn.addEventListener('click', () => { handleStart(); });
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(confirmBtn);
+    card.appendChild(title);
+    card.appendChild(description);
+    card.appendChild(statusEl);
+    card.appendChild(buttons);
+    content.innerHTML = '';
+    content.appendChild(card);
+
+    prompt.overlay = overlay;
+    prompt.confirmBtn = confirmBtn;
+
+    overlay.show({ initialFocus: confirmBtn });
   }
 
   function showBotMatchPrompt() {
@@ -5838,6 +6532,7 @@ logBootConstantsOnce();
     if (isPlayAreaVisible) return;
     isPlayAreaVisible = true;
     playAreaRoot.style.display = 'block';
+    renderTutorialOverlay();
   }
 
   function hideQueuer() {
@@ -5862,6 +6557,7 @@ logBootConstantsOnce();
     if (!isPlayAreaVisible) return;
     if (playAreaRoot) playAreaRoot.style.display = 'none';
     isPlayAreaVisible = false;
+    hideTutorialOverlay();
     clearGameToastFeedback();
   }
 
@@ -5907,6 +6603,7 @@ logBootConstantsOnce();
     clearDrawCooldownTimeout();
     locallyAcceptedTournamentGames.clear();
     clearGameToastFeedback({ resetSnapshot: true });
+    clearTutorialState();
     if (tournamentParticipantMode && tournamentUiController) {
       tournamentAcceptScheduler.releaseGrace();
       Promise.resolve(
@@ -5939,6 +6636,14 @@ logBootConstantsOnce();
       currentCols,
       currentRows
     );
+    tutorialOverlayLayout = {
+      playAreaRect: playAreaRoot.getBoundingClientRect(),
+      boardLeft: leftPx,
+      boardTop: topPx,
+      boardWidth: bW,
+      boardHeight: bH,
+      squareSize: s,
+    };
     currentSquareSize = s;
     // Label font scales with play area height for consistency
     const labelFont = Math.max(10, Math.floor(0.024 * playAreaRoot.clientHeight));
@@ -5977,22 +6682,44 @@ logBootConstantsOnce();
       isInSetup,
       gameFinished,
     });
-    const highlightedBoardSources = (
-      !gameFinished
+    const tutorialExpectedMove = getTutorialExpectedBoardMove();
+    const tutorialSourceHighlightAllowed = Boolean(
+      tutorialExpectedMove
+      && !gameFinished
       && !isInSetup
       && currentOnDeckingPlayer === null
-      && !responseWindowOpen
       && !isBombActive()
       && currentPlayerTurn === viewerColor
-    )
-      ? getLegalBoardSourceCells({
-          currentBoard,
-          currentIsWhite,
-          playerColor: viewerColor,
-          rows: currentRows,
-          cols: currentCols,
-        })
-      : [];
+    );
+    let highlightedBoardSources = [];
+    if (
+      tutorialSourceHighlightAllowed
+      || (
+        !gameFinished
+        && !isInSetup
+        && currentOnDeckingPlayer === null
+        && !responseWindowOpen
+        && !isBombActive()
+        && currentPlayerTurn === viewerColor
+      )
+    ) {
+      highlightedBoardSources = getLegalBoardSourceCells({
+        currentBoard,
+        currentIsWhite,
+        playerColor: viewerColor,
+        rows: currentRows,
+        cols: currentCols,
+      });
+      if (tutorialExpectedMove) {
+        highlightedBoardSources = highlightedBoardSources.filter((cell) => {
+          const coords = uiToServerCoords(cell.uiR, cell.uiC, currentRows, currentCols, currentIsWhite);
+          return (
+            coords.serverRow === tutorialExpectedMove.from.row
+            && coords.serverCol === tutorialExpectedMove.from.col
+          );
+        });
+      }
+    }
 
     // Use modular bars and stash renderers
     const topClr = currentIsWhite ? 1 : 0;
@@ -6000,6 +6727,7 @@ logBootConstantsOnce();
     const topMs = getDisplayClockMsForColor(topClr);
     const bottomMs = getDisplayClockMsForColor(bottomClr);
     const clockLabel = getClockLabel();
+    const hideTutorialClocks = shouldHideTutorialClocks();
     const topIdx = currentIsWhite ? 1 : 0;
     const bottomIdx = currentIsWhite ? 0 : 1;
     const matchType = typeof currentMatch?.type === 'string'
@@ -6081,9 +6809,9 @@ logBootConstantsOnce();
         activeColor: activeTurnColor,
         showChallengeTop,
         showChallengeBottom,
-        clockTop: formatClock(topMs),
-        clockBottom: formatClock(bottomMs),
-        clockLabel,
+        clockTop: hideTutorialClocks ? '' : formatClock(topMs),
+        clockBottom: hideTutorialClocks ? '' : formatClock(bottomMs),
+        clockLabel: hideTutorialClocks ? '' : clockLabel,
         nameTop: playerNames[topIdx] || ('Anonymous' + topIdx),
         nameBottom: playerNames[bottomIdx] || ('Anonymous' + bottomIdx),
         winsTop,
@@ -6126,7 +6854,7 @@ logBootConstantsOnce();
     renderDrawOfferPrompt();
 
     const readyVisible = (isInSetup && isSetupCompletable());
-    const randomVisible = (isInSetup && !readyVisible);
+    const randomVisible = (isInSetup && !readyVisible && !isTutorialActive());
 
     renderStashModule({
       container: stashRoot,
@@ -6234,6 +6962,13 @@ logBootConstantsOnce();
         }
       }
 
+      if (isTutorialActive()) {
+        canChallenge = tutorialShowsChallenge();
+        canBomb = tutorialAllowsBomb();
+        canPass = false;
+      }
+      const challengeDisabled = isTutorialActive() && !tutorialAllowsChallenge();
+
       // Bomb button (upper left)
       const bombBtn = renderGameButton({
         id: 'bombBtn',
@@ -6295,7 +7030,9 @@ logBootConstantsOnce();
         text: 'Challenge',
         variant: 'primary',
         visible: canChallenge,
+        disabled: challengeDisabled,
         onClick: () => {
+          if (challengeDisabled) return;
           if (!lastGameId) return;
           emitLocalClockDebug('client-action-submit', {
             action: 'challenge',
@@ -6323,8 +7060,12 @@ logBootConstantsOnce();
       const resignTop = deckBottom + gapBelowDeck;
       const resignW = Math.max(1, Math.round(btnW * 0.65));
       const resignH = Math.max(1, Math.round(btnH * 0.5));
-      const canResign = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId);
-      const canOfferDraw = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId) && !hasPendingDrawOffer && !cooldownActive;
+      let canResign = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId);
+      let canOfferDraw = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId) && !hasPendingDrawOffer && !cooldownActive;
+      if (isTutorialActive()) {
+        canResign = false;
+        canOfferDraw = false;
+      }
 
       const resignBtn = renderGameButton({
         id: 'resignBtn',
@@ -6442,6 +7183,8 @@ logBootConstantsOnce();
         renderBoardAndBars();
       }
     });
+
+    renderTutorialOverlay();
   }
 
   function renderDrawOfferPrompt() {
@@ -7182,6 +7925,11 @@ logBootConstantsOnce();
         }
         scheduleDrawCooldownCheck();
       }
+      if (Object.prototype.hasOwnProperty.call(u, 'tutorial')) {
+        syncTutorialState(u.tutorial || null);
+      } else if (!u?.isTutorial) {
+        clearTutorialState();
+      }
       if (u.timeControlStart !== undefined) {
         const parsedTime = coerceMilliseconds(u.timeControlStart);
         if (parsedTime !== null) {
@@ -7744,6 +8492,15 @@ logBootConstantsOnce();
       const myColorIdx = currentIsWhite ? 0 : 1;
       // Only allow selecting if it's your turn and you tapped your piece
       if (!p || p.color !== myColorIdx || currentPlayerTurn !== myColorIdx) { selected = null; renderBoardAndBars(); return; }
+      const tutorialExpectedMove = getTutorialExpectedBoardMove();
+      if (isTutorialActive()) {
+        if (!tutorialExpectedMove || !doesSourceTargetMatchServerSquare(sourceTarget, tutorialExpectedMove.from)) {
+          showWrongMoveToast();
+          selected = null;
+          renderBoardAndBars();
+          return;
+        }
+      }
       selected = { ...sourceTarget };
       renderBoardAndBars();
       return;
@@ -7755,10 +8512,22 @@ logBootConstantsOnce();
         renderBoardAndBars();
         return;
       }
+      const tutorialExpectedMove = getTutorialExpectedBoardMove();
+      if (isTutorialActive() && tutorialExpectedMove && !doesSourceTargetMatchServerSquare(sourceTarget, tutorialExpectedMove.to)) {
+        selected = null;
+        showWrongMoveToast();
+        renderBoardAndBars();
+        return;
+      }
       const targetPiece = getBoardPieceAtUI(sourceTarget.uiR, sourceTarget.uiC);
       const myColorIdx = currentIsWhite ? 0 : 1;
       if (targetPiece && targetPiece.color === myColorIdx && currentPlayerTurn === myColorIdx) {
-        selected = { ...sourceTarget };
+        if (isTutorialActive()) {
+          selected = null;
+          showWrongMoveToast();
+        } else {
+          selected = { ...sourceTarget };
+        }
         renderBoardAndBars();
         return;
       }
@@ -7784,6 +8553,20 @@ logBootConstantsOnce();
       const toS = uiToServerCoords(dest.uiR, dest.uiC, currentRows, currentCols, currentIsWhite);
       const from = { row: fromS.serverRow, col: fromS.serverCol };
       const to = { row: toS.serverRow, col: toS.serverCol };
+      const tutorialExpectedMove = getTutorialExpectedBoardMove();
+      if (
+        isTutorialActive()
+        && (
+          !tutorialExpectedMove
+          || from.row !== tutorialExpectedMove.from.row
+          || from.col !== tutorialExpectedMove.from.col
+          || to.row !== tutorialExpectedMove.to.row
+          || to.col !== tutorialExpectedMove.to.col
+        )
+      ) {
+        showWrongMoveToast();
+        return false;
+      }
       const target = currentBoard?.[to.row]?.[to.col];
       if (target && target.color === myColorIdx) return false;
       const decls = [Declaration.KNIGHT, Declaration.KING, Declaration.BISHOP, Declaration.ROOK];
@@ -8006,6 +8789,12 @@ logBootConstantsOnce();
       const ord = selected.index;
       const piece = currentStashes?.[myColorIdx]?.[ord];
       if (piece && canPieceBePlacedOnDeck(piece)) {
+        if (isTutorialActive() && !isTutorialOnDeckChoiceAllowed(piece)) {
+          selected = null;
+          showWrongMoveToast();
+          renderBoardAndBars();
+          return;
+        }
         currentStashes = currentStashes.map((arr, idx) => {
           if (idx !== myColorIdx) return arr;
           const clone = Array.isArray(arr) ? arr.slice() : [];
@@ -8182,21 +8971,26 @@ logBootConstantsOnce();
               const ord = dragging.origin.index;
               const piece = dragging.piece;
               if (piece && canPieceBePlacedOnDeck(piece)) {
-                currentStashes = currentStashes.map((arr, idx) => {
-                  if (idx !== myColorIdx) return arr;
-                  const clone = Array.isArray(arr) ? arr.slice() : [];
-                  clone[ord] = null;
-                  return clone;
-                });
-                currentOnDecks = currentOnDecks.map((p, idx) => (idx === myColorIdx ? piece : p));
-                currentOnDeckingPlayer = null;
-                if (lastGameId) {
-                  emitLocalClockDebug('client-action-submit', {
-                    action: 'onDeck',
-                    color: myColorIdx,
-                    identity: piece.identity,
+                if (isTutorialActive() && !isTutorialOnDeckChoiceAllowed(piece)) {
+                  selected = null;
+                  showWrongMoveToast();
+                } else {
+                  currentStashes = currentStashes.map((arr, idx) => {
+                    if (idx !== myColorIdx) return arr;
+                    const clone = Array.isArray(arr) ? arr.slice() : [];
+                    clone[ord] = null;
+                    return clone;
                   });
-                  apiOnDeck(lastGameId, myColorIdx, { identity: piece.identity }).catch(err => console.error('onDeck failed', err));
+                  currentOnDecks = currentOnDecks.map((p, idx) => (idx === myColorIdx ? piece : p));
+                  currentOnDeckingPlayer = null;
+                  if (lastGameId) {
+                    emitLocalClockDebug('client-action-submit', {
+                      action: 'onDeck',
+                      color: myColorIdx,
+                      identity: piece.identity,
+                    });
+                    apiOnDeck(lastGameId, myColorIdx, { identity: piece.identity }).catch(err => console.error('onDeck failed', err));
+                  }
                 }
               }
             } catch (err) { console.error('onDeck local update failed', err); }
@@ -8257,10 +9051,34 @@ logBootConstantsOnce();
 
   function getPieceAt(target) { return getPieceAtM(workingRank, workingOnDeck, workingStash, target); }
   function setPieceAt(target, piece) { const ref = { value: workingOnDeck }; setPieceAtM(workingRank, ref, workingStash, target, piece); workingOnDeck = ref.value; }
+  function snapshotWorkingSetupState() {
+    return {
+      rank: workingRank.slice(),
+      onDeck: workingOnDeck,
+      stash: workingStash.slice(),
+    };
+  }
+
+  function restoreWorkingSetupState(snapshot) {
+    if (!snapshot) return;
+    workingRank = snapshot.rank.slice();
+    workingOnDeck = snapshot.onDeck;
+    workingStash = snapshot.stash.slice();
+  }
+
   function performMove(origin, dest) {
+    const before = isTutorialActive() && getTutorialServerStep() === TUTORIAL_STEPS.SETUP
+      ? snapshotWorkingSetupState()
+      : null;
     const ref = { value: workingOnDeck };
     const moved = performMoveM(workingRank, ref, workingStash, origin, dest);
     workingOnDeck = ref.value;
+    if (moved && before && !isTutorialSetupDraftCompatible()) {
+      restoreWorkingSetupState(before);
+      showWrongMoveToast();
+      try { if (playAreaRoot) renderBoardAndBars(); } catch (_) {}
+      return false;
+    }
     try { if (moved && playAreaRoot) renderBoardAndBars(); } catch (_) {}
     return moved;
   }

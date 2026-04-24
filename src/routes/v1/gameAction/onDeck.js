@@ -11,6 +11,10 @@ const {
   summarizeClockState,
 } = require('../../../utils/gameClock');
 const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
+const {
+  validateTutorialOnDeck,
+  advanceTutorialAfterOnDeck,
+} = require('../../../services/tutorials/runtime');
 
 router.post('/', async (req, res) => {
   try {
@@ -74,6 +78,15 @@ router.post('/', async (req, res) => {
     }
 
     const identity = parseInt(piece.identity, 10);
+    const tutorialValidationMessage = validateTutorialOnDeck(game, {
+      color: normalizedColor,
+      piece: { identity },
+      config,
+    });
+    if (tutorialValidationMessage) {
+      return res.status(400).json({ message: tutorialValidationMessage });
+    }
+
     if (identity === config.identities.get('KING')) {
       return res.status(400).json({ message: 'KING cannot be placed on deck' });
     }
@@ -111,6 +124,8 @@ router.post('/', async (req, res) => {
       timestamp: new Date(),
     });
     // On deck placement does not affect the inactivity counter
+
+    advanceTutorialAfterOnDeck(game);
 
     await game.save();
 

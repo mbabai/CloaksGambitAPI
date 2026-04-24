@@ -123,6 +123,10 @@ export async function apiEnterBotQueue(payload = {}) {
   return sendQueueRequest('/api/v1/lobby/enterBot', payload);
 }
 
+export async function apiEnterTutorial(payload = {}) {
+  return sendQueueRequest('/api/v1/lobby/enterTutorial', payload);
+}
+
 export async function apiGetBotCatalog() {
   const res = await authFetch('/api/v1/bots/catalog');
   if (!res.ok) return null;
@@ -175,6 +179,13 @@ export async function apiOnDeck(gameId, color, piece) {
   return authFetch('/api/v1/gameAction/onDeck', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color, piece })
+  });
+}
+
+export async function apiAdvanceTutorial(gameId, color) {
+  return authFetch('/api/v1/gameAction/tutorialAdvance', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gameId, color })
   });
 }
 

@@ -26,6 +26,7 @@ const {
   removeTournamentViewerOnDisconnect,
   getTournamentDetails,
 } = require('./services/tournaments/liveTournaments');
+const { buildTutorialPayload } = require('./services/tutorials/runtime');
 const DEFAULT_TOURNAMENT_MATCH_TYPES = Match.TOURNAMENT_MATCH_TYPES || {
   ROUND_ROBIN: 'TOURNAMENT_ROUND_ROBIN',
   ELIMINATION: 'TOURNAMENT_ELIMINATION',
@@ -1191,6 +1192,7 @@ function initSocket(httpServer) {
       }
       const idx = game.players.findIndex(p => p.toString() === playerId);
       const masked = maskGameForColor(JSON.parse(JSON.stringify(game)), idx);
+      const tutorialPayload = buildTutorialPayload(game);
       emitToUser(playerId, 'game:update', {
         matchId,
         gameId: gameIdStr,
@@ -1220,6 +1222,7 @@ function initSocket(httpServer) {
         timeControlStart: game.timeControlStart,
         increment: game.increment,
         clocks: clockPayload,
+        tutorial: tutorialPayload,
       });
     });
 
@@ -1250,6 +1253,7 @@ function initSocket(httpServer) {
           timeControlStart: game.timeControlStart,
           increment: game.increment,
           clocks: clockPayload,
+          tutorial: buildTutorialPayload(game),
         });
       });
 
@@ -1472,6 +1476,7 @@ function initSocket(httpServer) {
             now: Date.now(),
             setupActionType: GAME_CONSTANTS.actions.SETUP,
           }),
+          tutorial: buildTutorialPayload(game),
         };
       });
 

@@ -191,6 +191,10 @@ const matchSchema = new mongoose.Schema({
     default: null,
     min: 1,
   },
+  isTutorial: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 matchSchema.virtual('duration').get(function duration() {
@@ -219,7 +223,7 @@ matchSchema.methods.endMatch = async function endMatch(winnerId = null) {
 
   const rankedMode = defaultConfig.gameModes.get('RANKED');
   const applyTournamentEliminationElo = this.type === TOURNAMENT_MATCH_TYPES.ELIMINATION && this.eloEligible === true;
-  if (this.type === rankedMode || applyTournamentEliminationElo) {
+  if (!this.isTutorial && (this.type === rankedMode || applyTournamentEliminationElo)) {
     let player1Start = Number.isFinite(this.player1StartElo) ? this.player1StartElo : null;
     let player2Start = Number.isFinite(this.player2StartElo) ? this.player2StartElo : null;
 
@@ -348,6 +352,7 @@ class MatchDocument {
     this.eloEligible = data.eloEligible ?? null;
     this.winScoreTarget = Number.isFinite(Number(data.winScoreTarget)) ? Number(data.winScoreTarget) : null;
     this.createdAt = cloneDate(data.createdAt) || new Date();
+    this.isTutorial = Boolean(data.isTutorial);
   }
 
   get duration() {
@@ -402,7 +407,7 @@ class MatchDocument {
 
     const rankedMode = defaultConfig.gameModes.get('RANKED');
     const applyTournamentEliminationElo = this.type === TOURNAMENT_MATCH_TYPES.ELIMINATION && this.eloEligible === true;
-    if (this.type === rankedMode || applyTournamentEliminationElo) {
+    if (!this.isTutorial && (this.type === rankedMode || applyTournamentEliminationElo)) {
       let player1Start = Number.isFinite(this.player1StartElo) ? this.player1StartElo : null;
       let player2Start = Number.isFinite(this.player2StartElo) ? this.player2StartElo : null;
 
@@ -526,6 +531,10 @@ class MatchModel {
   static async _persistDocument(doc) {
     const key = toIdString(doc?._id);
     if (!key) return;
+
+    if (doc?.isTutorial) {
+      return;
+    }
 
     if (!mongoose.connection || mongoose.connection.readyState !== 1) {
       return;

@@ -1,3 +1,5 @@
+import { IDENTITIES } from '../constants.js';
+
 function resolveCssColor(scope, name, fallback) {
   try {
     const root = scope || document.documentElement;
@@ -147,12 +149,14 @@ function drawCapturedPiece(ctx, imageCache, identityMap, cell) {
   if (!cell.capturedPiece) return;
   const size = Math.floor(cell.width * 0.9);
   const rightOffset = cell.width * 0.15;
+  const preserveVisibleIdentity = Number(cell.capturedPiece.identity) !== IDENTITIES.UNKNOWN;
+  const clipBottom = preserveVisibleIdentity ? size * 0.52 : size * 0.32;
 
   ctx.save();
   ctx.translate(cell.centerX + rightOffset, cell.centerY - (cell.height * 0.04));
   ctx.rotate(Math.PI / 6);
   ctx.beginPath();
-  ctx.rect(-size * 0.42, -size * 0.52, size * 0.84, size * 0.84);
+  ctx.rect(-size * 0.42, -size * 0.52, size * 0.84, clipBottom + (size * 0.52));
   ctx.clip();
   drawPieceImage(ctx, imageCache, identityMap, cell.capturedPiece, -size / 2, -size / 2, size);
   ctx.restore();
@@ -215,9 +219,14 @@ function drawLegalSourceUnderline(ctx, cell, palette) {
 function drawCellForeground(ctx, imageCache, identityMap, cell, labelFont, palette) {
   ctx.save();
   drawSquareLabel(ctx, cell, labelFont, palette);
-  drawCapturedPiece(ctx, imageCache, identityMap, cell);
   drawLegalSourceUnderline(ctx, cell, palette);
+  if (cell.capturedPieceLayer !== 'front') {
+    drawCapturedPiece(ctx, imageCache, identityMap, cell);
+  }
   drawMainPiece(ctx, imageCache, identityMap, cell, palette);
+  if (cell.capturedPieceLayer === 'front') {
+    drawCapturedPiece(ctx, imageCache, identityMap, cell);
+  }
   ctx.restore();
 }
 

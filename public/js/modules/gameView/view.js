@@ -76,7 +76,7 @@ export function createGameView({
 
     boardView.render({
       sizes,
-      state: boardState,
+      state: { ...boardState, viewerColor },
       fileLetters,
       labelFont,
       onAttachHandlers,

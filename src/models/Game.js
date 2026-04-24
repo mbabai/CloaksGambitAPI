@@ -421,6 +421,14 @@ const gameSchema = new mongoose.Schema({
     type: clockStateSchema,
     default: null,
   },
+  isTutorial: {
+    type: Boolean,
+    default: false,
+  },
+  tutorialState: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
 });
 
 async function updateMatchAfterGame(game, createNextGame) {
@@ -430,6 +438,25 @@ async function updateMatchAfterGame(game, createNextGame) {
     if (!match) return;
 
     if (!match.isActive) {
+      return;
+    }
+
+    if (game.isTutorial) {
+      if (game.winner === 0 || game.winner === 1) {
+        const winnerId = game.players?.[game.winner];
+        const winnerStr = toIdString(winnerId);
+        if (winnerStr === toIdString(match.player1)) {
+          match.player1Score = (match.player1Score || 0) + 1;
+        } else if (winnerStr === toIdString(match.player2)) {
+          match.player2Score = (match.player2Score || 0) + 1;
+        }
+      } else if (game.winner === null) {
+        match.drawCount = (match.drawCount || 0) + 1;
+      }
+      const winnerId = game.winner === 0 || game.winner === 1
+        ? game.players?.[game.winner]
+        : null;
+      await match.endMatch(winnerId || null);
       return;
     }
 
@@ -699,6 +726,8 @@ class GameDocument {
     this.drawOfferCooldowns = ensureTwo(data.drawOfferCooldowns, [null, null]);
     this.tournamentScoreOutcome = data.tournamentScoreOutcome || null;
     this.clockState = data.clockState ? cloneValue(data.clockState) : null;
+    this.isTutorial = Boolean(data.isTutorial);
+    this.tutorialState = data.tutorialState ? cloneValue(data.tutorialState) : null;
   }
 
   markModified() {
@@ -837,6 +866,10 @@ class GameModel {
   static async _persistDocument(doc) {
     const key = toIdString(doc?._id);
     if (!key) return;
+
+    if (doc?.isTutorial) {
+      return;
+    }
 
     if (!mongoose.connection || mongoose.connection.readyState !== 1) {
       return;

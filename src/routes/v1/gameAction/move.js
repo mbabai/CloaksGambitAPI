@@ -18,6 +18,10 @@ const {
   isDeclaredMoveLegal,
   resolvePendingMove,
 } = require('../../../services/game/liveGameRules');
+const {
+  validateTutorialMove,
+  advanceTutorialAfterMove,
+} = require('../../../services/tutorials/runtime');
 
 router.post('/', async (req, res) => {
   try {
@@ -129,6 +133,17 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Invalid declaration' });
     }
 
+    const tutorialValidationMessage = validateTutorialMove(game, {
+      from: { row: fromRow, col: fromCol },
+      to: { row: toRow, col: toCol },
+      declaration: parsedDeclaration,
+      color: normalizedColor,
+      config,
+    });
+    if (tutorialValidationMessage) {
+      return res.status(400).json({ message: tutorialValidationMessage });
+    }
+
     if (!isDeclaredMoveLegal(
       game.board,
       { row: fromRow, col: fromCol },
@@ -170,6 +185,8 @@ router.post('/', async (req, res) => {
       to: { row: toRow, col: toCol },
       declaration: parseInt(declaration, 10)
     });
+
+    advanceTutorialAfterMove(game);
 
     await game.save();
 

@@ -230,6 +230,7 @@ function normalizeActiveMatch(source = {}) {
   normalized.player2StartElo = player2Start !== null ? player2Start : null;
   normalized.player1EndElo = player1End !== null ? player1End : null;
   normalized.player2EndElo = player2End !== null ? player2End : null;
+  normalized.isTutorial = Boolean(source.isTutorial);
 
   if (Array.isArray(source.games)) {
     normalized.games = source.games.slice();
@@ -421,7 +422,9 @@ async function fetchMatchList(options = {}) {
     : 1;
 
   const normalizedMatches = Array.isArray(rawMatches)
-    ? rawMatches.map((match) => normalizeActiveMatch(match)).filter(Boolean)
+    ? rawMatches
+        .map((match) => normalizeActiveMatch(match))
+        .filter((match) => Boolean(match) && !match.isTutorial)
     : [];
 
   if (!includeUsers || normalizedMatches.length === 0) {

@@ -29,6 +29,8 @@ const ASSET_MANIFEST = deepFreeze({
   },
   "ui": {
     "challengeBubbles": {
+      "left": "/assets/images/UI/BubbleSpeechLeftChallenge.svg",
+      "right": "/assets/images/UI/BubbleSpeechRightChallenge.svg",
       "top": "/assets/images/UI/BubbleSpeechTopChallenge.svg",
       "bottom": "/assets/images/UI/BubbleSpeechBottomChallenge.svg"
     }

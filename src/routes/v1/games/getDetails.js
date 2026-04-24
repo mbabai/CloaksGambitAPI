@@ -5,6 +5,7 @@ const maskGameForColor = require('../../../utils/gameView');
 const { resolveGameViewerContext } = require('../../../utils/gameAccess');
 const getServerConfig = require('../../../utils/getServerConfig');
 const { buildClockPayload } = require('../../../utils/gameClock');
+const { buildTutorialPayload } = require('../../../services/tutorials/runtime');
 
 router.post('/', async (req, res) => {
   try {
@@ -25,6 +26,7 @@ router.post('/', async (req, res) => {
       return res.json({
         ...game,
         clocks,
+        tutorial: buildTutorialPayload(game),
       });
     }
 
@@ -34,6 +36,7 @@ router.post('/', async (req, res) => {
     res.json({
       ...masked,
       clocks,
+      tutorial: buildTutorialPayload(game),
     });
   } catch (err) {
     res.status(500).json({ message: err.message });

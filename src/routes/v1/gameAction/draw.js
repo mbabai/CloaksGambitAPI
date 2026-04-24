@@ -3,6 +3,7 @@ const router = express.Router();
 const getServerConfig = require('../../../utils/getServerConfig');
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const { emitGameChanged } = require('../../../utils/gameRouteEvents');
+const { isTutorialGame } = require('../../../services/tutorials/runtime');
 
 const DRAW_COOLDOWN_MS = 10000;
 
@@ -19,6 +20,10 @@ router.post('/', async (req, res) => {
     const context = await requireGamePlayerContext(req, res, { gameId, color });
     if (!context) return;
     const { game, color: normalizedColor } = context;
+
+    if (isTutorialGame(game)) {
+      return res.status(400).json({ message: 'Draw offers are not available during the tutorial.' });
+    }
 
     const normalizedAction = typeof action === 'string' ? action.toLowerCase() : '';
     if (!['offer', 'accept', 'decline'].includes(normalizedAction)) {

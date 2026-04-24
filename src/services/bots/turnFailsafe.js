@@ -105,6 +105,10 @@ async function executeQuery(query, { select = '', lean = true } = {}) {
 }
 
 async function resolveActionableBotTargets(game, { UserModel = User } = {}) {
+  if (game?.isTutorial) {
+    return [];
+  }
+
   const players = Array.isArray(game?.players)
     ? game.players.map((entry) => toId(entry))
     : [];

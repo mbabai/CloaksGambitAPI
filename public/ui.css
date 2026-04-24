@@ -871,6 +871,12 @@ body.history-overlay-open {
   overflow: visible;
 }
 
+.cg-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+  filter: grayscale(0.25);
+}
+
 .cg-button--primary {
   --cg-button-background: var(--CG-purple-pressed);
 }
@@ -910,6 +916,74 @@ body.history-overlay-open {
 .cg-tooltip--visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+.cg-tutorial-tooltip {
+  position: fixed;
+  left: 50%;
+  top: clamp(18px, 8vh, 64px);
+  z-index: 4100;
+  width: min(420px, calc(100vw - 24px));
+  padding: 12px 14px;
+  box-sizing: border-box;
+  border: 2px solid #b0851e;
+  border-radius: 10px;
+  background: rgba(91, 32, 182, 0.92);
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.4;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateX(-50%) translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.cg-tutorial-tooltip--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.cg-tutorial-tooltip--rect {
+  transform: translateY(4px);
+}
+
+.cg-tutorial-tooltip--rect.cg-tutorial-tooltip--visible {
+  transform: translateY(0);
+}
+
+.cg-tutorial-tooltip__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cg-tutorial-tooltip__body p {
+  margin: 0;
+}
+
+.cg-tutorial-tooltip__actions {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-end;
+  margin-top: 0;
+}
+
+.cg-tutorial-tooltip__next {
+  min-width: 96px;
+  --cg-button-padding: 8px 18px;
+  --cg-button-font-weight: 700;
+}
+
+.cg-tutorial-tooltip--has-next .cg-tutorial-tooltip__body {
+  padding-bottom: 44px;
 }
 
 .cg-ready-button--highlighted {
@@ -1703,11 +1777,11 @@ body.history-overlay-open {
   top: 50%;
   transform: translate(-50%, -50%) translateY(var(--cg-challenge-bubble-offset-y, 0));
   z-index: var(--cg-challenge-bubble-z-index, 10);
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .cg-challenge-bubble img {
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 @media (max-width: 720px) {

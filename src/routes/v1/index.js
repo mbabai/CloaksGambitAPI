@@ -43,6 +43,7 @@ const gameActionResign = require('./gameAction/resign');
 const gameActionDraw = require('./gameAction/draw');
 const gameActionReady = require('./gameAction/ready');
 const gameActionNext = require('./gameAction/next');
+const gameActionTutorialAdvance = require('./gameAction/tutorialAdvance');
 
 // Lobby routes
 const lobbyGet = require('./lobby/get');
@@ -52,6 +53,7 @@ const lobbyEnterRanked = require('./lobby/enterRanked');
 const lobbyExitRanked = require('./lobby/exitRanked');
 const { router: lobbyMatchmaking } = require('./lobby/matchmaking');
 const lobbyEnterBot = require('./lobby/enterBot');
+const lobbyEnterTutorial = require('./lobby/enterTutorial');
 const tournamentsRouter = require('./tournaments');
 
 // Bot routes
@@ -101,6 +103,7 @@ router.use('/gameAction/resign', gameActionResign);
 router.use('/gameAction/draw', gameActionDraw);
 router.use('/gameAction/ready', gameActionReady);
 router.use('/gameAction/next', gameActionNext);
+router.use('/gameAction/tutorialAdvance', gameActionTutorialAdvance);
 
 // Lobby routes
 router.use('/lobby/get', lobbyGet);
@@ -109,6 +112,7 @@ router.use('/lobby/exitQuickplay', lobbyExitQuickplay);
 router.use('/lobby/enterRanked', lobbyEnterRanked);
 router.use('/lobby/exitRanked', lobbyExitRanked);
 router.use('/lobby/enterBot', lobbyEnterBot);
+router.use('/lobby/enterTutorial', lobbyEnterTutorial);
 router.use('/lobby/matchmaking', lobbyMatchmaking);
 router.use('/tournaments', tournamentsRouter);
 

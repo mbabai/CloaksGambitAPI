@@ -14,6 +14,7 @@ const {
   isPendingMove,
 } = require('../../../services/game/liveGameRules');
 const { emitGameChanged } = require('../../../utils/gameRouteEvents');
+const { isTutorialGame } = require('../../../services/tutorials/runtime');
 
 router.post('/', async (req, res) => {
   try {
@@ -21,6 +22,10 @@ router.post('/', async (req, res) => {
     const context = await requireGamePlayerContext(req, res, { gameId, color });
     if (!context) return;
     const { game, color: normalizedColor } = context;
+
+    if (isTutorialGame(game)) {
+      return res.status(400).json({ message: 'Pass is not available during the tutorial.' });
+    }
 
     const config = await getServerConfig();
     const now = Date.now();

@@ -197,7 +197,8 @@ export function renderButton({
   width,
   height,
   fontSize,
-  zIndex
+  zIndex,
+  disabled = false
 }) {
   const existing = id ? document.getElementById(id) : null;
   if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
@@ -246,7 +247,8 @@ export function renderButton({
     left,
     top,
     zIndex: zIndex === undefined ? 5 : zIndex,
-    onClick
+    onClick,
+    disabled
   });
 
   root.appendChild(button);

@@ -14,6 +14,10 @@ const {
   getLastMove,
   isPendingMove,
 } = require('../../../services/game/liveGameRules');
+const {
+  validateTutorialBomb,
+  advanceTutorialAfterBomb,
+} = require('../../../services/tutorials/runtime');
 
 router.post('/', async (req, res) => {
   try {
@@ -66,6 +70,13 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Cannot bomb a declared king move' });
     }
 
+    const tutorialValidationMessage = validateTutorialBomb(game, {
+      color: normalizedColor,
+    });
+    if (tutorialValidationMessage) {
+      return res.status(400).json({ message: tutorialValidationMessage });
+    }
+
     await game.addAction(config.actions.get('BOMB'), normalizedColor, {});
     // Bomb does not alter the inactivity counter
 
@@ -78,6 +89,8 @@ router.post('/', async (req, res) => {
       setupActionType: config.actions.get('SETUP'),
       reason: 'bomb',
     });
+
+    advanceTutorialAfterBomb(game);
 
     await game.save();
 

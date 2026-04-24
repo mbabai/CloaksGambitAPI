@@ -46,6 +46,7 @@ export function buildBoardScene({
     challengeRemoved,
     draggingOrigin,
     highlightedSourceCells,
+    viewerColor,
   } = state || {};
   const {
     showDeploymentLines = true,
@@ -84,6 +85,31 @@ export function buildBoardScene({
         isInSetup,
         workingRank,
       });
+      const capturedPiece = isPendingCaptureSquare
+        ? transformPiece(pendingCapture.piece, {
+            uiRow: r,
+            uiCol: c,
+            serverRow,
+            serverCol,
+            state,
+            isCaptured: true,
+          })
+        : null;
+      const visiblePiece = transformPiece(basePiece, {
+        uiRow: r,
+        uiCol: c,
+        serverRow,
+        serverCol,
+        state,
+        isCaptured: false,
+      });
+      const capturedPieceLayer = (
+        (viewerColor === 0 || viewerColor === 1)
+        && capturedPiece
+        && visiblePiece
+        && capturedPiece.color === viewerColor
+        && visiblePiece.color !== viewerColor
+      ) ? 'front' : 'behind';
       const isDraggedBoardOrigin = Boolean(
         draggingOrigin
         && (
@@ -103,25 +129,10 @@ export function buildBoardScene({
         serverRow,
         serverCol,
         light,
-        piece: transformPiece(basePiece, {
-          uiRow: r,
-          uiCol: c,
-          serverRow,
-          serverCol,
-          state,
-          isCaptured: false,
-        }),
+        piece: visiblePiece,
         pieceOpacity: isDraggedBoardOrigin ? 0.45 : 1,
-        capturedPiece: isPendingCaptureSquare
-          ? transformPiece(pendingCapture.piece, {
-              uiRow: r,
-              uiCol: c,
-              serverRow,
-              serverCol,
-              state,
-              isCaptured: true,
-            })
-          : null,
+        capturedPiece,
+        capturedPieceLayer,
         fileLabel: r === rows - 1
           ? ((fileLetters && fileLetters[currentIsWhite ? c : (cols - 1 - c)]) || '')
           : '',

@@ -11,6 +11,10 @@ const {
   summarizeClockState,
 } = require('../../../utils/gameClock');
 const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
+const {
+  validateTutorialSetup,
+  advanceTutorialAfterSetup,
+} = require('../../../services/tutorials/runtime');
 
 router.post('/', async (req, res) => {
   try {
@@ -23,6 +27,10 @@ router.post('/', async (req, res) => {
       color: normalizedColor,
       ...requesterDetails,
     });
+
+    if (!game.isActive) {
+      return res.status(400).json({ message: 'Game is not active' });
+    }
 
     // Check if setup is already complete for this color
     if (game.setupComplete[normalizedColor]) {
@@ -109,6 +117,16 @@ router.post('/', async (req, res) => {
     // Check if we have a king
     if (!hasKing) {
       return res.status(400).json({ message: 'Setup must include a KING piece' });
+    }
+
+    const tutorialValidationMessage = validateTutorialSetup(game, {
+      pieces,
+      onDeck,
+      color: normalizedColor,
+      config,
+    });
+    if (tutorialValidationMessage) {
+      return res.status(400).json({ message: tutorialValidationMessage });
     }
 
     // Validate against stash
@@ -201,6 +219,8 @@ router.post('/', async (req, res) => {
     if (game.setupComplete[0] && game.setupComplete[1]) {
       game.playerTurn = 0;
     }
+
+    advanceTutorialAfterSetup(game);
 
     transitionStoredClockState(game, {
       actingColor: normalizedColor,

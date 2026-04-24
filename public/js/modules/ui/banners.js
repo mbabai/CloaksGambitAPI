@@ -12,6 +12,8 @@ import {
   createReconnectSpinner as defaultCreateReconnectSpinner,
   createChallengeBubble as defaultCreateChallengeBubble
 } from './icons.js';
+import { TOOLTIP_TEXT } from './tooltipContent.js';
+import { applyTooltipAttributes } from './tooltips.js';
 
 const DEFAULT_BANNER_ASSETS = Object.freeze({
   createEloBadge: defaultCreateEloBadge,
@@ -337,6 +339,7 @@ export function createChallengeBubbleElement({
     return null;
   }
   bubble.classList.add('cg-challenge-bubble');
+  applyTooltipAttributes(bubble, TOOLTIP_TEXT.challengeBubble);
   const offsetValue = typeof offsetY === 'number' ? `${offsetY}px` : offsetY || '0';
   bubble.style.setProperty('--cg-challenge-bubble-offset-y', offsetValue);
   bubble.style.setProperty('--cg-challenge-bubble-z-index', String(zIndex));

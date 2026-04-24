@@ -32,6 +32,10 @@ function normalizeSetupFlags(flags) {
   ];
 }
 
+function areClocksDisabled(game) {
+  return Boolean(game?.isTutorial);
+}
+
 function resolveStartTimeMs(game) {
   if (!game) return null;
 
@@ -294,6 +298,9 @@ function deriveClockActivity({
 }
 
 function bootstrapStoredClockState(game, { now = Date.now(), setupActionType } = {}) {
+  if (areClocksDisabled(game)) {
+    return null;
+  }
   const baseTime = Number(game?.timeControlStart);
   const increment = Number(game?.increment);
   const computed = computeGameClockState({
@@ -329,6 +336,14 @@ function ensureStoredClockState(game, { now = Date.now(), setupActionType } = {}
     return null;
   }
 
+  if (areClocksDisabled(game)) {
+    if (game.clockState !== null) {
+      game.clockState = null;
+      markClockStateModified(game);
+    }
+    return null;
+  }
+
   if (!game.clockState || typeof game.clockState !== 'object') {
     game.clockState = bootstrapStoredClockState(game, { now, setupActionType });
     markClockStateModified(game);
@@ -356,6 +371,9 @@ function ensureStoredClockState(game, { now = Date.now(), setupActionType } = {}
 }
 
 function advanceStoredClockState(game, { now = Date.now(), setupActionType } = {}) {
+  if (areClocksDisabled(game)) {
+    return null;
+  }
   const state = ensureStoredClockState(game, { now, setupActionType });
   if (!state) {
     return null;
@@ -403,6 +421,9 @@ function transitionStoredClockState(
     reason = 'transition',
   } = {},
 ) {
+  if (areClocksDisabled(game)) {
+    return null;
+  }
   const before = summarizeClockState(game?.clockState);
   const state = advanceStoredClockState(game, { now, setupActionType });
   if (!state) {
@@ -442,6 +463,9 @@ function transitionStoredClockState(
 }
 
 function finalizeStoredClockState(game, { now = Date.now(), setupActionType, reason = 'finalize' } = {}) {
+  if (areClocksDisabled(game)) {
+    return null;
+  }
   const before = summarizeClockState(game?.clockState);
   const state = advanceStoredClockState(game, { now, setupActionType });
   if (!state) {
@@ -467,6 +491,9 @@ function finalizeStoredClockState(game, { now = Date.now(), setupActionType, rea
 }
 
 function getLiveClockStateSnapshot(game, { now = Date.now(), setupActionType } = {}) {
+  if (areClocksDisabled(game)) {
+    return null;
+  }
   if (game?.clockState && typeof game.clockState === 'object') {
     const base = cloneClockState(game.clockState);
     if (base) {
@@ -538,6 +565,9 @@ function describeTimeControl(baseMs, incMs) {
 }
 
 function buildClockPayload(game, { now = Date.now(), setupActionType } = {}) {
+  if (areClocksDisabled(game)) {
+    return null;
+  }
   const baseTime = Number(game?.timeControlStart);
   const increment = Number(game?.increment);
   const label = describeTimeControl(
@@ -569,6 +599,9 @@ function buildClockPayload(game, { now = Date.now(), setupActionType } = {}) {
 }
 
 function resolveTimeoutResult(game, { now = Date.now(), setupActionType } = {}) {
+  if (areClocksDisabled(game)) {
+    return { expired: false, winner: null, draw: false, clock: null };
+  }
   const baseTime = Number(game?.timeControlStart);
   if (!Number.isFinite(baseTime) || baseTime <= 0) {
     return { expired: false, winner: null, draw: false, clock: null };
@@ -612,6 +645,7 @@ module.exports = {
   toTimestamp,
   normalizePlayer,
   normalizeSetupFlags,
+  areClocksDisabled,
   resolveStartTimeMs,
   calculateElapsedMs,
   computeGameClockState,

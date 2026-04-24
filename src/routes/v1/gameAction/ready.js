@@ -12,6 +12,7 @@ const {
   summarizeClockState,
 } = require('../../../utils/gameClock');
 const { appendLocalDebugLog } = require('../../../utils/localDebugLogger');
+const { isTutorialGame } = require('../../../services/tutorials/runtime');
 
 router.post('/', async (req, res) => {
   try {
@@ -19,6 +20,9 @@ router.post('/', async (req, res) => {
     const context = await requireGamePlayerContext(req, res, { gameId, color });
     if (!context) return;
     const { game, requesterDetails, color: normalizedColor } = context;
+    if (isTutorialGame(game)) {
+      return res.status(400).json({ message: 'Ready is not used during the tutorial.' });
+    }
     debugLog('Ready endpoint called with:', {
       gameId,
       color: normalizedColor,

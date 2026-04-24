@@ -3,36 +3,40 @@ const router = express.Router();
 const getServerConfig = require('../../../utils/getServerConfig');
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const { emitGameChanged } = require('../../../utils/gameRouteEvents');
-const { applyChallengeAction } = require('../../../services/game/challengeAction');
-const {
-  validateTutorialChallenge,
-  advanceTutorialAfterChallenge,
-} = require('../../../services/tutorials/runtime');
+const { advanceTutorialStep, isTutorialGame } = require('../../../services/tutorials/runtime');
 
 router.post('/', async (req, res) => {
   try {
     const { gameId, color } = req.body;
     const context = await requireGamePlayerContext(req, res, { gameId, color });
     if (!context) return;
-    const { game, color: normalizedColor } = context;
+    const { game, color: normalizedColor, requesterDetails } = context;
 
-    const config = await getServerConfig();
-    const tutorialValidationMessage = validateTutorialChallenge(game, {
-      color: normalizedColor,
-    });
-    if (tutorialValidationMessage) {
-      return res.status(400).json({ message: tutorialValidationMessage });
+    if (!isTutorialGame(game)) {
+      return res.status(400).json({ message: 'This game is not a tutorial game.' });
     }
 
-    const result = await applyChallengeAction(game, normalizedColor, config, {
-      gameId,
+    const config = await getServerConfig();
+    const tutorial = await advanceTutorialStep(game, {
+      color: normalizedColor,
+      config,
       now: Date.now(),
     });
-    advanceTutorialAfterChallenge(game, { success: result.success });
-    await game.save();
 
-    emitGameChanged(game);
-    res.json(result);
+    emitGameChanged(game, {
+      initiator: {
+        action: 'tutorial-advance',
+        userId: requesterDetails.userId,
+        username: requesterDetails.username,
+        isBot: requesterDetails.isBot,
+        botDifficulty: requesterDetails.botDifficulty,
+      },
+    });
+
+    res.json({
+      message: 'Tutorial advanced',
+      tutorial,
+    });
   } catch (err) {
     const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
     res.status(statusCode).json({ message: err.message });
