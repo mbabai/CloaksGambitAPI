@@ -49,6 +49,8 @@ describe('match countdown banner title', () => {
     expect(source).toContain('const shouldPreserveCountdownBanner = shouldPreserveMatchCountdownBanner({');
     expect(source).toContain('if (!shouldPreserveCountdownBanner) {');
     expect(source).toContain('const currentGameNumber = Number.isFinite(Number(payload?.currentGameNumber))');
-    expect(source).toContain('}, { gameId: nextGameId, currentGameNumber });');
+    expect(source).toContain('gameId: nextGameId,');
+    expect(source).toContain('currentGameNumber,');
+    expect(source).toContain('countdownEndsAt: payload?.startTime || null,');
   });
 });
