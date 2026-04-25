@@ -2,10 +2,12 @@ const { io } = require('socket.io-client');
 const { BaseBotController, GAME_CONSTANTS } = require('./baseBot');
 const { EasyBotController } = require('./easyBot');
 const { MediumBotController } = require('./mediumBot');
+const { HardBotController } = require('./hardBot');
 
 const CONTROLLER_MAP = {
   easy: EasyBotController,
   medium: MediumBotController,
+  hard: HardBotController,
 };
 
 function toId(value) {

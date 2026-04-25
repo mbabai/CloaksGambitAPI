@@ -1,0 +1,85 @@
+{
+  "evaluation": {
+    "win": 1000000,
+    "loss": -1000000,
+    "pieceBalance": 95,
+    "kingAdvance": 10,
+    "kingAdvanceFullBoardPieces": 10,
+    "kingAdvanceEndgamePieces": 2,
+    "kingAdvancePieceExponent": 2,
+    "kingFullyWalledOff": 800,
+    "kingWall": 180,
+    "kingThreatPenalty": 75,
+    "activity": 16,
+    "trueActivityMultiplier": 3,
+    "bluffActivityMultiplier": 1,
+    "bombActivityMultiplier": 0.5,
+    "nonKingActivityMultiplier": 1.6,
+    "kingActivityMultiplier": 0.25,
+    "protection": 18,
+    "threat": 34,
+    "exposure": 15,
+    "bombThreatGood": 20,
+    "enemyDagger": 140,
+    "ownDagger": -190,
+    "trueMove": 45,
+    "trueWasBluff": 90,
+    "capture": 45,
+    "bombCaptureRiskPenalty": 2200,
+    "bombCaptureRiskExponent": 2,
+    "certainBombCaptureThreshold": 0.995,
+    "certainBombCapturePenalty": -1000000,
+    "trueKingChallengeReward": 0,
+    "kingTrueMoveMultiplier": 0.2,
+    "kingNonThroneMovePenalty": -260,
+    "kingNonForwardMovePenalty": -120,
+    "kingDeclarationNonThronePenalty": -180
+  },
+  "pieceValues": {
+    "KING": 1000,
+    "BOMB": 150,
+    "ROOK": 100,
+    "BISHOP": 100,
+    "KNIGHT": 100,
+    "UNKNOWN": 100
+  },
+  "beliefs": {
+    "declarationMultiplier": 3.2,
+    "changedDeclarationMultiplier": 0.55,
+    "unmovedForwardBombMultiplier": 0.42,
+    "blockedKingMultiplier": 1.8,
+    "onDeckKingProbability": 0
+  },
+  "selection": {
+    "temperature": 135,
+    "randomActionChance": 0.06,
+    "topK": 8
+  },
+  "challenge": {
+    "temperature": 170,
+    "declarationChangeSuspicion": 0.18,
+    "minimumChallengeChance": 0.005,
+    "maximumChallengeChance": 0.97,
+    "oneDaggerMaxChallengeChance": 0.24,
+    "twoDaggerMaxChallengeChance": 0.045,
+    "ownDaggerEvPenalty": 420,
+    "ownDaggerPenaltyBase": 4.5,
+    "ownDaggerProbabilityBase": 0.22,
+    "opponentDaggerEvBonus": 80,
+    "opponentDaggerBonusBase": 2
+  },
+  "bomb": {
+    "temperature": 160,
+    "minimumBluffChance": 0.02,
+    "maximumBluffChance": 0.72
+  },
+  "setup": {
+    "bombBoardChance": 0.47,
+    "bombOnDeckChance": 0.47,
+    "bombStashChance": 0.06
+  },
+  "onDeck": {
+    "bombChancePerBoardPiece": 0.1,
+    "varianceChoiceChance": 0.8
+  }
+}

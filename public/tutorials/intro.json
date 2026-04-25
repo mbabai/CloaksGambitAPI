@@ -24,13 +24,31 @@
     "5": {
       "squareRect": "C5-E4",
       "showNextButton": true,
-      "pages": [
-        "Excellent, now it is your opponent's turn.",
-        "You can see that you 'declared' your move as a rook. You didn't need to do that, but this is a 'true move'.",
-        "Let's see how your opponent responds."
-      ]
+      "html": "Excellent, now it is your opponent's turn."
     },
     "6": {
+      "squareRect": "C5-E2",
+      "showNextButton": false,
+      "pages": [
+        "Yep, looks like they're also bringing some pieces forward. They claim it's their rook, but we don't know for sure.",
+        "You see, in cloaks' gambit, pieces are not always what they appear to be.",
+        "Go ahead and move your king forward one space, from A1 to A2."
+      ]
+    },
+    "7": {
+      "squareRect": "C5-E2",
+      "showNextButton": false,
+      "pages": [
+        "You'll see that there are two thought bubbles above your piece. Unlike when you moved the rook before, this move could be either a king OR a rook. You can 'declare' whichever you want. When you move a piece in a way that could be consistent with only one piece type, the declaration will be automatic.",
+        "Every piece is what you declare it to be, until proven otherwise. For now, let's not give away our king's position, and in fact, we can throw our opponent off: click the rook bubble."
+      ]
+    },
+    "8": {
+      "squareRect": "C5-E2",
+      "showNextButton": true,
+      "html": "Let's see how your opponent responds."
+    },
+    "9": {
       "squareRect": "A3-D2",
       "showNextButton": true,
       "pages": [
@@ -39,12 +57,12 @@
         "If you are correct, your opponent loses that piece. If you are wrong, you get a dagger token. Get 3 daggers and you lose the game."
       ]
     },
-    "7": {
+    "10": {
       "squareRect": "A3-E3",
       "showNextButton": false,
-      "html": "While you also have the option to just ignore their move and make your own move, let's go ahead and challenge this knight. It sure looks suspicious to me."
+      "html": "While you also have the option to just ignore their move and make your own move. Let's go ahead and challenge this knight. It sure looks suspicious to me."
     },
-    "8": {
+    "11": {
       "squareRect": "A4-B2",
       "showNextButton": false,
       "pages": [
@@ -52,12 +70,12 @@
         "Let's bring our other pieces into the fray. Move your rightmost bishop (e1) to the center (c3)."
       ]
     },
-    "9": {
+    "12": {
       "squareRect": "A2-E2",
       "showNextButton": true,
       "html": "Good choice. Note that the opponent can also challenge you. Let's see what happens there."
     },
-    "10": {
+    "13": {
       "squareRect": "D4-E2",
       "showNextButton": true,
       "pages": [
@@ -65,7 +83,7 @@
         "Your bishop was replaced with the piece you had on-deck, in this case the bomb. This keeps your opponent guessing,  never knowing exactly what you have."
       ]
     },
-    "11": {
+    "14": {
       "squareRect": "D4-E2",
       "showNextButton": false,
       "pages": [
@@ -73,17 +91,17 @@
         "It can be the same bishop you just took off the board, or something else. For now, put your rook on-deck."
       ]
     },
-    "12": {
+    "15": {
       "squareRect": "D4-E2",
       "showNextButton": true,
       "html": "The challenge didn't count as a move, so even though they failed their challenge, your opponent still gets a chance to move. Let's see what this bot does."
     },
-    "13": {
+    "16": {
       "squareRect": "C5-E4",
       "showNextButton": true,
       "html": "Look at that, after a failed challenge, your opponent is trying to capture your piece. Little do they know that it is a bomb!"
     },
-    "14": {
+    "17": {
       "squareRect": "A5-E5",
       "showNextButton": false,
       "pages": [
@@ -91,7 +109,7 @@
         "If you're wrong, you take a dagger. Since you have a bomb here, declaring bomb has zero risk. Go ahead and click 'Bomb'."
       ]
     },
-    "15": {
+    "18": {
       "squareRect": "D5-E3",
       "showNextButton": true,
       "pages": [
@@ -100,12 +118,12 @@
         "If they pass, they still lose their piece and never know for sure. All pieces are what they are declared to be until proven otherwise!"
       ]
     },
-    "16": {
+    "19": {
       "squareRect": "A5-E5",
       "showNextButton": false,
       "html": "He took the risk and got the dagger! Good thing you didn't challenge earlier. It really was a rook. Go ahead and pick any piece to go on deck."
     },
-    "17": {
+    "20": {
       "squareRect": "D5-E3",
       "showNextButton": false,
       "pages": [
@@ -113,22 +131,22 @@
         "Bluff with your left rook (b4). Pretend it's a bishop and capture the piece on d6."
       ]
     },
-    "18": {
+    "21": {
       "squareRect": "A5-E5",
       "showNextButton": true,
       "html": "Let's see if they call your bluff..."
     },
-    "19": {
+    "22": {
       "squareRect": "A4-E4",
       "showNextButton": true,
       "html": "Ah, he called your bluff. You can't win them all, but it's ok. Let's see what it does next."
     },
-    "20": {
+    "23": {
       "squareRect": "D5-E3",
       "showNextButton": true,
       "html": "That starts to make sense. That might actually be its king, which is why the bot had to challenge to avoid losing outright. It also could have declared bomb."
     },
-    "21": {
+    "24": {
       "squareRect": "D5-E3",
       "showNextButton": true,
       "pages": [
@@ -136,7 +154,7 @@
         "Kings are special like that. They are also immune to bombs, so you cannot declare bomb if the attacking declaration was a king."
       ]
     },
-    "22": {
+    "25": {
       "squareRect": "A5-E4",
       "showNextButton": true,
       "pages": [
@@ -145,17 +163,17 @@
         "Lastly, you can win on time-control, if your opponent's clock runs out of time. This tutorial game has no clock, but normally you have to make your moves within a certain time limit, like chess."
       ]
     },
-    "23": {
+    "26": {
       "squareRect": "D5-E4",
       "showNextButton": false,
       "html": "Well, if that really IS the king, we can take it without a bluff! Go ahead and capture it with your rook, c3 to c6."
     },
-    "24": {
+    "27": {
       "squareRect": "D5-E4",
       "showNextButton": true,
       "html": "Let's see what he does."
     },
-    "25": {
+    "28": {
       "squareRect": "A3-E3",
       "showNextButton": true,
       "pages": [
@@ -163,12 +181,12 @@
         "We can also see that it WAS the real king. Good thing we attacked instead of challenging it."
       ]
     },
-    "26": {
+    "29": {
       "squareRect": "A5-E5",
       "showNextButton": true,
       "html": "Congratulations for winning your first game. Now go out there and rank up!"
     },
-    "27": {
+    "30": {
       "showNextButton": false,
       "html": ""
     }

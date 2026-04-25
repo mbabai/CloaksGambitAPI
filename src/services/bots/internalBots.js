@@ -10,7 +10,7 @@ const activeDifficultyClients = new Map();
 const activeInstanceClients = new Map();
 let runtimeServerUrl = '';
 
-const DEFAULT_DIFFICULTIES = ['easy', 'medium'];
+const DEFAULT_DIFFICULTIES = ['easy', 'medium', 'hard'];
 
 function findDifficultyClientByUserId(userId) {
   const normalizedUserId = typeof userId === 'string' ? userId.trim() : '';

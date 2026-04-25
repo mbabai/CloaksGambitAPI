@@ -42,7 +42,11 @@ jest.mock('../src/utils/authTokens', () => ({
 }));
 
 const User = require('../src/models/User');
-const { ensureBotUserInstance } = require('../src/services/bots/registry');
+const {
+  ensureBotUserInstance,
+  getBuiltinBotDefinition,
+  listBuiltinBotCatalog,
+} = require('../src/services/bots/registry');
 
 describe('bot registry instance users', () => {
   beforeEach(() => {
@@ -70,5 +74,18 @@ describe('bot registry instance users', () => {
     expect(first.user.username).not.toBe(second.user.username);
     expect(first.user.botDifficulty).toBe('medium');
     expect(second.user.botDifficulty).toBe('medium');
+  });
+
+  test('keeps hard bot listed but unavailable', () => {
+    const hard = getBuiltinBotDefinition('hard');
+    const catalogHard = listBuiltinBotCatalog().find((item) => item.id === 'hard');
+
+    expect(hard.playable).toBe(false);
+    expect(hard.unavailableMessage).toBe('Hard bot under construction');
+    expect(catalogHard).toEqual(expect.objectContaining({
+      id: 'hard',
+      playable: false,
+      unavailableMessage: 'Hard bot under construction',
+    }));
   });
 });

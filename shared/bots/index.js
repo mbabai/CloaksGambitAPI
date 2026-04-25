@@ -2,6 +2,7 @@ const { GAME_CONSTANTS, BotClient, startBotClient } = require('./client');
 const { BaseBotController } = require('./baseBot');
 const { EasyBotController } = require('./easyBot');
 const { MediumBotController } = require('./mediumBot');
+const { HardBotController } = require('./hardBot');
 
 module.exports = {
   GAME_CONSTANTS,
@@ -10,4 +11,5 @@ module.exports = {
   BaseBotController,
   EasyBotController,
   MediumBotController,
+  HardBotController,
 };

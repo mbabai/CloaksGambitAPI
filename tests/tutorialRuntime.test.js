@@ -133,7 +133,7 @@ describe('tutorial runtime', () => {
     }));
   });
 
-  test('advanceTutorialStep scripts the first bot bluff after the player rook move', async () => {
+  test('advanceTutorialStep scripts the bot rook advance after the player rook move', async () => {
     const game = buildTutorialGame(config);
     prepareIntroTutorialGame(game, config);
     seedWhiteTutorialSetup(game, config);
@@ -167,6 +167,52 @@ describe('tutorial runtime', () => {
 
     expect(game.board[3][1]).toEqual(expect.objectContaining({ color: 0, identity: sharedConstants.identities.ROOK }));
     expect(game.board[0][1]).toBeNull();
+    expect(game.moves).toHaveLength(2);
+    expect(game.moves[0].state).toBe(sharedConstants.moveStates.RESOLVED);
+    expect(game.moves[1]).toEqual(expect.objectContaining({
+      player: 1,
+      from: { row: 5, col: 0 },
+      to: { row: 4, col: 0 },
+      declaration: sharedConstants.identities.ROOK,
+      state: sharedConstants.moveStates.PENDING,
+    }));
+    expect(getTutorialStep(game)).toBe(TUTORIAL_STEPS.MOVE_KING_AS_ROOK);
+  });
+
+  test('advanceTutorialStep scripts the first bot bluff after the king is declared as a rook', async () => {
+    const game = buildTutorialGame(config);
+    prepareIntroTutorialGame(game, config);
+    seedWhiteTutorialSetup(game, config);
+
+    game.moves.push({
+      player: 0,
+      from: { row: 0, col: 0 },
+      to: { row: 1, col: 0 },
+      declaration: sharedConstants.identities.ROOK,
+      state: sharedConstants.moveStates.PENDING,
+      timestamp: new Date('2026-04-22T12:01:00Z'),
+    });
+    game.actions.push({
+      type: sharedConstants.actions.MOVE,
+      player: 0,
+      details: {
+        from: { row: 0, col: 0 },
+        to: { row: 1, col: 0 },
+        declaration: sharedConstants.identities.ROOK,
+      },
+      timestamp: new Date('2026-04-22T12:01:00Z'),
+    });
+    game.playerTurn = 1;
+    setTutorialStep(game, TUTORIAL_STEPS.POST_KING_ROOK_MOVE);
+
+    await advanceTutorialStep(game, {
+      color: 0,
+      config,
+      now: new Date('2026-04-22T12:01:05Z').getTime(),
+    });
+
+    expect(game.board[1][0]).toEqual(expect.objectContaining({ color: 0, identity: sharedConstants.identities.KING }));
+    expect(game.board[0][0]).toBeNull();
     expect(game.moves).toHaveLength(2);
     expect(game.moves[0].state).toBe(sharedConstants.moveStates.RESOLVED);
     expect(game.moves[1]).toEqual(expect.objectContaining({

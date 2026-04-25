@@ -69,6 +69,39 @@ logBootConstantsOnce();
     position: 'relative'
   });
   const modeSelect = document.getElementById('modeSelect');
+  const SAVED_GAME_TYPE_COOKIE = 'cgGameType';
+  const SAVED_BOT_TYPE_COOKIE = 'cgBotType';
+  const SELECTION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+  const VALID_GAME_TYPES = new Set(['quickplay', 'ranked', 'custom', 'bots', 'spectate']);
+
+  function saveSelectionCookie(name, value) {
+    if (!name || !value) return;
+    setCookie(name, value, SELECTION_COOKIE_MAX_AGE_SECONDS);
+  }
+
+  function restoreSelectValue(selectEl, value) {
+    if (!selectEl || !value) return false;
+    const hasOption = Array.from(selectEl.options || []).some(option => option.value === value);
+    if (!hasOption) return false;
+    selectEl.value = value;
+    return true;
+  }
+
+  function restoreSavedGameType() {
+    const savedMode = getCookie(SAVED_GAME_TYPE_COOKIE);
+    if (!VALID_GAME_TYPES.has(savedMode)) return;
+    restoreSelectValue(modeSelect, savedMode);
+  }
+
+  restoreSavedGameType();
+  if (modeSelect) {
+    modeSelect.addEventListener('change', () => {
+      const mode = modeSelect.value;
+      if (VALID_GAME_TYPES.has(mode)) {
+        saveSelectionCookie(SAVED_GAME_TYPE_COOKIE, mode);
+      }
+    });
+  }
 
   const isLocalDevelopmentHost = (() => {
     const { hostname = '', protocol = '' } = window.location || {};
@@ -2002,28 +2035,31 @@ logBootConstantsOnce();
     SETUP: 1,
     FIRST_TURN: 3,
     POST_ROOK_MOVE: 5,
-    POST_BOT_BLUFF: 6,
-    CHALLENGE_BOT_BLUFF: 7,
-    MOVE_BISHOP: 8,
-    EXPLAIN_BOT_FAILED_CHALLENGE: 9,
-    AFTER_BOT_FAILED_CHALLENGE: 10,
-    ON_DECK_ROOK: 11,
-    BEFORE_BOT_ROOK_CAPTURE: 12,
-    AFTER_BOT_ROOK_CAPTURE: 13,
-    DECLARE_BOMB: 14,
-    AFTER_BOMB_DECLARATION: 15,
-    ON_DECK_ANY: 16,
-    BLUFF_WITH_LEFT_ROOK: 17,
-    BEFORE_BOT_CHALLENGE_SUCCESS: 18,
-    AFTER_BOT_CHALLENGE_SUCCESS: 19,
-    AFTER_BOT_KING_MOVE: 20,
-    EXPLAIN_TRUE_KING_RISK: 21,
-    EXPLAIN_WIN_CONDITIONS: 22,
-    CAPTURE_KING_WITH_ROOK: 23,
-    BEFORE_FINAL_CHALLENGE: 24,
-    AFTER_FINAL_CHALLENGE: 25,
-    CONGRATULATIONS: 26,
-    SHOW_FINISH_BANNER: 27,
+    MOVE_KING_AS_ROOK: 6,
+    CHOOSE_KING_DECLARATION: 7,
+    POST_KING_ROOK_MOVE: 8,
+    POST_BOT_BLUFF: 9,
+    CHALLENGE_BOT_BLUFF: 10,
+    MOVE_BISHOP: 11,
+    EXPLAIN_BOT_FAILED_CHALLENGE: 12,
+    AFTER_BOT_FAILED_CHALLENGE: 13,
+    ON_DECK_ROOK: 14,
+    BEFORE_BOT_ROOK_CAPTURE: 15,
+    AFTER_BOT_ROOK_CAPTURE: 16,
+    DECLARE_BOMB: 17,
+    AFTER_BOMB_DECLARATION: 18,
+    ON_DECK_ANY: 19,
+    BLUFF_WITH_LEFT_ROOK: 20,
+    BEFORE_BOT_CHALLENGE_SUCCESS: 21,
+    AFTER_BOT_CHALLENGE_SUCCESS: 22,
+    AFTER_BOT_KING_MOVE: 23,
+    EXPLAIN_TRUE_KING_RISK: 24,
+    EXPLAIN_WIN_CONDITIONS: 25,
+    CAPTURE_KING_WITH_ROOK: 26,
+    BEFORE_FINAL_CHALLENGE: 27,
+    AFTER_FINAL_CHALLENGE: 28,
+    CONGRATULATIONS: 29,
+    SHOW_FINISH_BANNER: 30,
   });
   const TUTORIAL_SETUP_IDENTITIES = Object.freeze([
     IDENTITIES.KING,
@@ -2036,6 +2072,11 @@ logBootConstantsOnce();
     [TUTORIAL_STEPS.FIRST_TURN, {
       from: { row: 0, col: 1 },
       to: { row: 3, col: 1 },
+      declaration: IDENTITIES.ROOK,
+    }],
+    [TUTORIAL_STEPS.MOVE_KING_AS_ROOK, {
+      from: { row: 0, col: 0 },
+      to: { row: 1, col: 0 },
       declaration: IDENTITIES.ROOK,
     }],
     [TUTORIAL_STEPS.MOVE_BISHOP, {
@@ -2173,6 +2214,24 @@ logBootConstantsOnce();
     return doesSourceTargetMatchServerSquare(selected, expectedMove.from);
   }
 
+  function isTutorialExpectedDeclarationChoicePending() {
+    const expectedMove = getTutorialExpectedBoardMove();
+    if (!expectedMove || !postMoveOverlay?.interactive || !lastChoiceOrigin) {
+      return false;
+    }
+    const originTarget = {
+      type: 'boardAny',
+      uiR: lastChoiceOrigin.uiR,
+      uiC: lastChoiceOrigin.uiC,
+    };
+    return doesSourceTargetMatchServerSquare(originTarget, expectedMove.from)
+      && doesSourceTargetMatchServerSquare({
+        type: 'boardAny',
+        uiR: postMoveOverlay.uiR,
+        uiC: postMoveOverlay.uiC,
+      }, expectedMove.to);
+  }
+
   function getTutorialDisplayedStepNumber() {
     const serverStep = getTutorialServerStep();
     if (!serverStep) {
@@ -2184,7 +2243,23 @@ logBootConstantsOnce();
     if (serverStep === TUTORIAL_STEPS.FIRST_TURN) {
       return isTutorialExpectedBoardOriginSelected() ? 4 : 3;
     }
+    if (serverStep === TUTORIAL_STEPS.MOVE_KING_AS_ROOK) {
+      return isTutorialExpectedDeclarationChoicePending()
+        ? TUTORIAL_STEPS.CHOOSE_KING_DECLARATION
+        : TUTORIAL_STEPS.MOVE_KING_AS_ROOK;
+    }
     return serverStep;
+  }
+
+  function tutorialAllowsDeclarationBubbleClick() {
+    if (!isTutorialActive()) {
+      return true;
+    }
+    if (!isTutorialExpectedDeclarationChoicePending()) {
+      return false;
+    }
+    return getTutorialServerStep() === TUTORIAL_STEPS.MOVE_KING_AS_ROOK
+      && tutorialOverlayPageIndex >= 1;
   }
 
   function tutorialAllowsChallenge() {
@@ -3810,6 +3885,9 @@ logBootConstantsOnce();
 
   queueBtn.addEventListener('click', async function() {
     let mode = modeSelect.value;
+    if (VALID_GAME_TYPES.has(mode)) {
+      saveSelectionCookie(SAVED_GAME_TYPE_COOKIE, mode);
+    }
 
     if (mode === 'spectate') {
       openSpectatePicker();
@@ -4710,12 +4788,7 @@ logBootConstantsOnce();
 
     async function handleStart() {
       const difficulty = select.value || 'easy';
-      if (difficulty === 'hard') {
-        const label = difficulty.charAt(0).toUpperCase() + difficulty.slice(1);
-        window.alert(`${label} bot still under construction`);
-        return;
-      }
-
+      saveSelectionCookie(SAVED_BOT_TYPE_COOKIE, difficulty);
       setStatus('Starting match…');
       setLoading(true);
       try {
@@ -4756,6 +4829,10 @@ logBootConstantsOnce();
     prompt.setStatus = setStatus;
     prompt.setLoading = setLoading;
     prompt.select = select;
+    restoreSelectValue(select, getCookie(SAVED_BOT_TYPE_COOKIE));
+    select.addEventListener('change', () => {
+      saveSelectionCookie(SAVED_BOT_TYPE_COOKIE, select.value);
+    });
 
     overlay.show({ initialFocus: select });
     select.focus();
@@ -4919,19 +4996,30 @@ logBootConstantsOnce();
       return [
         { id: 'easy', label: 'Easy', playable: true },
         { id: 'medium', label: 'Medium', playable: true },
-        { id: 'hard', label: 'Hard', playable: false, unavailableMessage: 'Hard bot still under construction.' },
+        { id: 'hard', label: 'Hard', playable: false, unavailableMessage: 'Hard bot under construction' },
       ];
     }
 
     function fillBotOptions(items = []) {
       const normalized = Array.isArray(items) && items.length ? items : getFallbackBotCatalogItems();
       prompt.botItems = normalized
-        .map((item) => ({
-          id: String(item?.id || ''),
-          label: String(item?.label || item?.id || 'Bot'),
-          playable: item?.playable !== false,
-          unavailableMessage: item?.unavailableMessage || null,
-        }))
+        .map((item) => {
+          const id = String(item?.id || '');
+          if (id === 'hard') {
+            return {
+              id,
+              label: String(item?.label || item?.id || 'Bot'),
+              playable: false,
+              unavailableMessage: 'Hard bot under construction',
+            };
+          }
+          return {
+            id,
+            label: String(item?.label || item?.id || 'Bot'),
+            playable: item?.playable !== false,
+            unavailableMessage: item?.unavailableMessage || null,
+          };
+        })
         .filter((item) => item.id);
       select.innerHTML = '';
       prompt.botItems.forEach((item) => {
@@ -4942,6 +5030,7 @@ logBootConstantsOnce();
       });
       if (prompt.botItems.length) {
         select.value = prompt.botItems[0].id;
+        restoreSelectValue(select, getCookie(SAVED_BOT_TYPE_COOKIE));
       }
     }
 
@@ -4978,6 +5067,7 @@ logBootConstantsOnce();
         window.alert(selectedBot.unavailableMessage || `${selectedBot.label} bot is not available yet.`);
         return;
       }
+      saveSelectionCookie(SAVED_BOT_TYPE_COOKIE, selectedBot.id);
 
       setStatus(`Starting match vs ${selectedBot.label}...`);
       matchStarting = true;
@@ -5003,6 +5093,9 @@ logBootConstantsOnce();
         ev.preventDefault();
         handleStart();
       }
+    });
+    select.addEventListener('change', () => {
+      saveSelectionCookie(SAVED_BOT_TYPE_COOKIE, select.value);
     });
 
     buttons.appendChild(cancelBtn);
@@ -7111,12 +7204,17 @@ logBootConstantsOnce();
 
     // After board render, apply any pending move overlay bubbles
     if (!isInSetup && postMoveOverlay) {
+      const bubblesInteractive = Boolean(postMoveOverlay.interactive)
+        && tutorialAllowsDeclarationBubbleClick();
       gameView.setBubbleOverlays([{
         uiR: postMoveOverlay.uiR,
         uiC: postMoveOverlay.uiC,
         types: postMoveOverlay.types,
-        interactive: Boolean(postMoveOverlay.interactive),
+        interactive: bubblesInteractive,
         onBubbleClick: ({ type }) => {
+          if (!bubblesInteractive) {
+            return;
+          }
           const decl = type.includes('king')
             ? Declaration.KING
             : (type.includes('bishop')
@@ -8653,7 +8751,7 @@ logBootConstantsOnce();
       // Lock interactions while awaiting choice
       currentPlayerTurn = null;
       // Show the optimistic placement with choice bubbles
-      lastChoiceOrigin = { uiR: origin.uiR, uiC: origin.uiC };
+      lastChoiceOrigin = { type: 'boardAny', uiR: origin.uiR, uiC: origin.uiC };
       renderBoardAndBars();
       return true;
     } catch (e) { console.error('attemptInGameMove failed', e); return false; }
@@ -8721,6 +8819,22 @@ logBootConstantsOnce();
       const from = { row: fromS.serverRow, col: fromS.serverCol };
       const to = { row: toS.serverRow, col: toS.serverCol };
       const myColorIdx = currentIsWhite ? 0 : 1;
+      const tutorialExpectedMove = getTutorialExpectedBoardMove();
+      if (
+        isTutorialActive()
+        && tutorialExpectedMove
+        && (
+          from.row !== tutorialExpectedMove.from.row
+          || from.col !== tutorialExpectedMove.from.col
+          || to.row !== tutorialExpectedMove.to.row
+          || to.col !== tutorialExpectedMove.to.col
+          || declaration !== tutorialExpectedMove.declaration
+        )
+      ) {
+        showWrongMoveToast();
+        renderBoardAndBars();
+        return;
+      }
       // Only show final speech and send to server; piece already optimistically placed
       // Always force the speech bubble so rook/bishop choices mirror king behavior
       showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration, { alwaysShow: true });

@@ -105,6 +105,22 @@ describe('enter bot route', () => {
     expect(ensureBotUser).not.toHaveBeenCalled();
   });
 
+  test('rejects unavailable hard bot selections with the construction message', async () => {
+    getBuiltinBotDefinition.mockReturnValue({
+      id: 'hard',
+      playable: false,
+      unavailableMessage: 'Hard bot under construction',
+    });
+
+    const response = await request(createApp())
+      .post('/api/v1/lobby/enterBot')
+      .send({ botId: 'hard' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ message: 'Hard bot under construction' });
+    expect(ensureBotUser).not.toHaveBeenCalled();
+  });
+
   test('creates bot matches with the quickplay clock and AI match type', async () => {
     getBuiltinBotDefinition.mockReturnValue({
       id: 'easy',

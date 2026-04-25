@@ -27,7 +27,7 @@ const BOT_DEFINITIONS = {
     email: 'hard.bot@cg-bots.local',
     elo: 1600,
     playable: false,
-    unavailableMessage: 'Hard bot still under construction.',
+    unavailableMessage: 'Hard bot under construction',
   },
 };
 

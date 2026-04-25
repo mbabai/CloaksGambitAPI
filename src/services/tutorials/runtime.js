@@ -8,28 +8,30 @@ const TUTORIAL_STEPS = Object.freeze({
   SETUP: 1,
   FIRST_TURN: 3,
   POST_ROOK_MOVE: 5,
-  POST_BOT_BLUFF: 6,
-  CHALLENGE_BOT_BLUFF: 7,
-  MOVE_BISHOP: 8,
-  EXPLAIN_BOT_FAILED_CHALLENGE: 9,
-  AFTER_BOT_FAILED_CHALLENGE: 10,
-  ON_DECK_ROOK: 11,
-  BEFORE_BOT_ROOK_CAPTURE: 12,
-  AFTER_BOT_ROOK_CAPTURE: 13,
-  DECLARE_BOMB: 14,
-  AFTER_BOMB_DECLARATION: 15,
-  ON_DECK_ANY: 16,
-  BLUFF_WITH_LEFT_ROOK: 17,
-  BEFORE_BOT_CHALLENGE_SUCCESS: 18,
-  AFTER_BOT_CHALLENGE_SUCCESS: 19,
-  AFTER_BOT_KING_MOVE: 20,
-  EXPLAIN_TRUE_KING_RISK: 21,
-  EXPLAIN_WIN_CONDITIONS: 22,
-  CAPTURE_KING_WITH_ROOK: 23,
-  BEFORE_FINAL_CHALLENGE: 24,
-  AFTER_FINAL_CHALLENGE: 25,
-  CONGRATULATIONS: 26,
-  SHOW_FINISH_BANNER: 27,
+  MOVE_KING_AS_ROOK: 6,
+  POST_KING_ROOK_MOVE: 8,
+  POST_BOT_BLUFF: 9,
+  CHALLENGE_BOT_BLUFF: 10,
+  MOVE_BISHOP: 11,
+  EXPLAIN_BOT_FAILED_CHALLENGE: 12,
+  AFTER_BOT_FAILED_CHALLENGE: 13,
+  ON_DECK_ROOK: 14,
+  BEFORE_BOT_ROOK_CAPTURE: 15,
+  AFTER_BOT_ROOK_CAPTURE: 16,
+  DECLARE_BOMB: 17,
+  AFTER_BOMB_DECLARATION: 18,
+  ON_DECK_ANY: 19,
+  BLUFF_WITH_LEFT_ROOK: 20,
+  BEFORE_BOT_CHALLENGE_SUCCESS: 21,
+  AFTER_BOT_CHALLENGE_SUCCESS: 22,
+  AFTER_BOT_KING_MOVE: 23,
+  EXPLAIN_TRUE_KING_RISK: 24,
+  EXPLAIN_WIN_CONDITIONS: 25,
+  CAPTURE_KING_WITH_ROOK: 26,
+  BEFORE_FINAL_CHALLENGE: 27,
+  AFTER_FINAL_CHALLENGE: 28,
+  CONGRATULATIONS: 29,
+  SHOW_FINISH_BANNER: 30,
 });
 
 function createTutorialError(message) {
@@ -198,6 +200,7 @@ function validateExpectedMove(step, from, to, declaration, config) {
   const identities = config.identities;
   const expected = new Map([
     [TUTORIAL_STEPS.FIRST_TURN, { from: { row: 0, col: 1 }, to: { row: 3, col: 1 }, declaration: identities.get('ROOK') }],
+    [TUTORIAL_STEPS.MOVE_KING_AS_ROOK, { from: { row: 0, col: 0 }, to: { row: 1, col: 0 }, declaration: identities.get('ROOK') }],
     [TUTORIAL_STEPS.MOVE_BISHOP, { from: { row: 0, col: 4 }, to: { row: 2, col: 2 }, declaration: identities.get('BISHOP') }],
     [TUTORIAL_STEPS.BLUFF_WITH_LEFT_ROOK, { from: { row: 3, col: 1 }, to: { row: 5, col: 3 }, declaration: identities.get('BISHOP') }],
     [TUTORIAL_STEPS.CAPTURE_KING_WITH_ROOK, { from: { row: 2, col: 2 }, to: { row: 5, col: 2 }, declaration: identities.get('ROOK') }],
@@ -282,6 +285,8 @@ function advanceTutorialAfterMove(game) {
   const step = getTutorialStep(game);
   if (step === TUTORIAL_STEPS.FIRST_TURN) {
     setTutorialStep(game, TUTORIAL_STEPS.POST_ROOK_MOVE);
+  } else if (step === TUTORIAL_STEPS.MOVE_KING_AS_ROOK) {
+    setTutorialStep(game, TUTORIAL_STEPS.POST_KING_ROOK_MOVE);
   } else if (step === TUTORIAL_STEPS.MOVE_BISHOP) {
     setTutorialStep(game, TUTORIAL_STEPS.EXPLAIN_BOT_FAILED_CHALLENGE);
   } else if (step === TUTORIAL_STEPS.BLUFF_WITH_LEFT_ROOK) {
@@ -381,6 +386,15 @@ async function advanceTutorialStep(game, { color, config, now = Date.now() }) {
   const step = getTutorialStep(game);
   switch (step) {
     case TUTORIAL_STEPS.POST_ROOK_MOVE:
+      await recordScriptedMove(game, {
+        player: 1,
+        from: { row: 5, col: 0 },
+        to: { row: 4, col: 0 },
+        declaration: identities.get('ROOK'),
+      }, config, now);
+      setTutorialStep(game, TUTORIAL_STEPS.MOVE_KING_AS_ROOK);
+      break;
+    case TUTORIAL_STEPS.POST_KING_ROOK_MOVE:
       await recordScriptedMove(game, {
         player: 1,
         from: { row: 5, col: 4 },
