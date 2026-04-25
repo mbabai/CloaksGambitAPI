@@ -924,6 +924,7 @@ body.history-overlay-open {
   top: clamp(18px, 8vh, 64px);
   z-index: 4100;
   width: min(420px, calc(100vw - 24px));
+  max-height: calc(100vh - 88px);
   padding: 12px 14px;
   box-sizing: border-box;
   border: 2px solid #b0851e;
@@ -939,6 +940,7 @@ body.history-overlay-open {
   transition: opacity 0.12s ease, transform 0.12s ease;
   display: flex;
   flex-direction: column;
+  overflow: visible;
 }
 
 .cg-tutorial-tooltip--visible {
@@ -955,11 +957,14 @@ body.history-overlay-open {
 }
 
 .cg-tutorial-tooltip__body {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .cg-tutorial-tooltip__body p {
@@ -968,22 +973,81 @@ body.history-overlay-open {
 
 .cg-tutorial-tooltip__actions {
   position: absolute;
-  right: 12px;
-  bottom: 10px;
+  right: -44px;
+  bottom: -20px;
   display: flex;
   justify-content: flex-end;
   align-items: flex-end;
   margin-top: 0;
+  z-index: 2;
 }
 
 .cg-tutorial-tooltip__next {
-  min-width: 96px;
+  min-width: 88px;
+  min-height: 40px;
   --cg-button-padding: 8px 18px;
   --cg-button-font-weight: 700;
 }
 
 .cg-tutorial-tooltip--has-next .cg-tutorial-tooltip__body {
-  padding-bottom: 44px;
+  padding-bottom: 0;
+}
+
+.cg-tutorial-tooltip--body-overflowing .cg-tutorial-tooltip__body {
+  padding-bottom: 28px;
+}
+
+.cg-tutorial-tooltip__scroll-cue {
+  position: absolute;
+  left: 50%;
+  bottom: -14px;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.28),
+    0 4px 10px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+.cg-tutorial-tooltip__scroll-cue::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #ffffff;
+  border-bottom: 2px solid #ffffff;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.cg-tutorial-tooltip__scroll-cue[hidden] {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .cg-tutorial-tooltip {
+    max-height: calc(100vh - 76px);
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+
+  .cg-tutorial-tooltip__actions {
+    right: -38px;
+    bottom: -18px;
+  }
+
+  .cg-tutorial-tooltip__next {
+    min-width: 76px;
+    min-height: 38px;
+    --cg-button-padding: 7px 14px;
+  }
 }
 
 .cg-ready-button--highlighted {
@@ -2014,9 +2078,21 @@ body.history-overlay-open {
   display: none;
 }
 
+.tournament-panel__tabs {
+  display: none;
+}
+
+.tournament-panel__tab[hidden],
+.tournament-panel__column[hidden],
+.tournament-panel__stage-placeholder[hidden],
+.tournament-panel__stage-surface[hidden] {
+  display: none !important;
+}
+
 .tournament-panel__layout {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr) 380px;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 16px;
   height: 100%;
 }
@@ -2038,15 +2114,44 @@ body.history-overlay-open {
 }
 
 .tournament-panel__column--host,
-.tournament-panel__column--side {
+.tournament-panel__column--side,
+.tournament-panel__column--participants {
   display: flex;
   flex-direction: column;
   gap: 16px;
   min-height: 0;
 }
 
+.tournament-panel__column--host {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+}
+
 .tournament-panel__column--center {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   min-height: 0;
+}
+
+.tournament-panel__column--side {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.tournament-panel__column--participants {
+  grid-column: 3;
+  grid-row: 2;
+  min-height: 0;
+}
+
+.tournament-panel--prestart .tournament-panel__layout {
+  grid-template-columns: minmax(260px, 420px) minmax(320px, 520px);
+  justify-content: center;
+}
+
+.tournament-panel--prestart .tournament-panel__column--side,
+.tournament-panel--prestart .tournament-panel__column--participants {
+  grid-column: 2;
 }
 
 .tournament-panel__stage-frame {
@@ -2869,10 +2974,179 @@ body.history-overlay-open {
 @media (max-width: 1100px) {
   .tournament-panel {
     inset: 72px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tournament-panel__tabs {
+    pointer-events: auto;
+    display: flex;
+    flex: 0 0 auto;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 0 2px 2px;
+    scrollbar-width: none;
+  }
+
+  .tournament-panel__tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tournament-panel__tab {
+    flex: 1 0 auto;
+    min-height: 42px;
+    border: 1px solid rgba(255, 215, 0, 0.52);
+    border-radius: 14px;
+    background: rgba(15, 10, 28, 0.84);
+    color: rgba(255, 255, 255, 0.84);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 8px 12px;
+  }
+
+  .tournament-panel__tab--active {
+    border-color: rgba(255, 215, 0, 0.9);
+    background: rgba(255, 215, 0, 0.14);
+    color: var(--CG-white);
   }
 
   .tournament-panel__layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(220px, 42vh) auto auto;
+    pointer-events: auto;
+    display: flex;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+    gap: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .tournament-panel__layout::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tournament-panel--prestart .tournament-panel__layout {
+    grid-template-columns: none;
+    justify-content: flex-start;
+  }
+
+  .tournament-panel__column,
+  .tournament-panel__column--host,
+  .tournament-panel__column--center,
+  .tournament-panel__column--side,
+  .tournament-panel__column--participants {
+    flex: 0 0 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    padding: 0 2px 4px;
+    box-sizing: border-box;
+  }
+
+  .tournament-panel__card {
+    border-radius: 18px;
+    padding: 16px;
+  }
+
+  .tournament-panel__host-name,
+  .tournament-panel__tournament-name {
+    font-size: 18px;
+  }
+
+  .tournament-panel__actions .tournament-modal__button {
+    flex: 1 1 132px;
+    min-width: 0;
+  }
+
+  .tournament-panel__message-input {
+    min-height: 96px;
+  }
+
+  .tournament-panel__stage-frame {
+    min-height: 100%;
+  }
+
+  .tournament-panel__card--roster {
+    min-height: 100%;
+  }
+
+  .tournament-panel__roster-table,
+  .tournament-panel__roster-table tbody,
+  .tournament-panel__participant-row,
+  .tournament-panel__participant-row td {
+    display: block;
+  }
+
+  .tournament-panel__roster-table thead {
+    display: none;
+  }
+
+  .tournament-panel__roster-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tournament-panel__participant-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name seed"
+      "points action";
+    gap: 8px 12px;
+    padding: 10px;
+    border: 1px solid rgba(255, 215, 0, 0.22);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .tournament-panel__participant-row td {
+    padding: 0 !important;
+  }
+
+  .tournament-panel__participant-name-cell {
+    grid-area: name;
+  }
+
+  .tournament-panel__participant-points-cell {
+    grid-area: points;
+    text-align: left;
+  }
+
+  .tournament-panel__participant-points-cell::before {
+    content: "Points ";
+    margin-right: 4px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255, 215, 0, 0.72);
+  }
+
+  .tournament-panel__participant-action-cell {
+    grid-area: action;
+    justify-self: end;
+    align-self: center;
+  }
+
+  .tournament-panel__participant-seed-cell {
+    grid-area: seed;
+    display: flex;
+    justify-content: flex-end;
+    align-self: start;
+  }
+
+  .tournament-panel__participant-action-cell .tournament-modal__button {
+    max-width: none;
+    min-width: 92px;
   }
 }

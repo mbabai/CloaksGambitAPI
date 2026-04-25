@@ -1966,10 +1966,12 @@ logBootConstantsOnce();
   let tutorialState = null;
   let tutorialOverlayEl = null;
   let tutorialOverlayBodyEl = null;
+  let tutorialOverlayScrollCueEl = null;
   let tutorialOverlayActionsEl = null;
   let tutorialOverlayLayout = null;
   let tutorialOverlayStepKey = null;
   let tutorialOverlayPageIndex = 0;
+  let tutorialOverlayOverflowFrame = null;
 
   const DEFAULT_TIME_SETTINGS = {
     quickplayMs: 300000,
@@ -2311,7 +2313,24 @@ logBootConstantsOnce();
 
     tutorialOverlayBodyEl = document.createElement('div');
     tutorialOverlayBodyEl.className = 'cg-tutorial-tooltip__body';
+    tutorialOverlayBodyEl.addEventListener('scroll', scheduleTutorialOverflowSync, { passive: true });
     tutorialOverlayEl.appendChild(tutorialOverlayBodyEl);
+
+    tutorialOverlayScrollCueEl = document.createElement('button');
+    tutorialOverlayScrollCueEl.type = 'button';
+    tutorialOverlayScrollCueEl.className = 'cg-tutorial-tooltip__scroll-cue';
+    tutorialOverlayScrollCueEl.setAttribute('aria-label', 'Scroll tutorial text to bottom');
+    tutorialOverlayScrollCueEl.hidden = true;
+    tutorialOverlayScrollCueEl.addEventListener('click', () => {
+      if (!tutorialOverlayBodyEl) {
+        return;
+      }
+      tutorialOverlayBodyEl.scrollTo({
+        top: tutorialOverlayBodyEl.scrollHeight,
+        behavior: 'smooth',
+      });
+    });
+    tutorialOverlayEl.appendChild(tutorialOverlayScrollCueEl);
 
     tutorialOverlayActionsEl = document.createElement('div');
     tutorialOverlayActionsEl.className = 'cg-tutorial-tooltip__actions';
@@ -2329,7 +2348,9 @@ logBootConstantsOnce();
     tutorialOverlayEl.classList.remove(
       'cg-tutorial-tooltip--visible',
       'cg-tutorial-tooltip--rect',
-      'cg-tutorial-tooltip--has-next'
+      'cg-tutorial-tooltip--has-next',
+      'cg-tutorial-tooltip--body-overflowing',
+      'cg-tutorial-tooltip--body-scroll-more'
     );
     tutorialOverlayEl.style.left = '';
     tutorialOverlayEl.style.top = '';
@@ -2340,9 +2361,13 @@ logBootConstantsOnce();
     tutorialOverlayEl.style.overflowY = '';
     if (tutorialOverlayBodyEl) {
       tutorialOverlayBodyEl.innerHTML = '';
+      tutorialOverlayBodyEl.scrollTop = 0;
     }
     if (tutorialOverlayActionsEl) {
       tutorialOverlayActionsEl.innerHTML = '';
+    }
+    if (tutorialOverlayScrollCueEl) {
+      tutorialOverlayScrollCueEl.hidden = true;
     }
   }
 
@@ -2351,6 +2376,29 @@ logBootConstantsOnce();
     tutorialOverlayStepKey = null;
     tutorialOverlayPageIndex = 0;
     hideTutorialOverlay();
+  }
+
+  function updateTutorialOverflowState() {
+    tutorialOverlayOverflowFrame = null;
+    if (!tutorialOverlayEl || !tutorialOverlayBodyEl || tutorialOverlayEl.hidden) {
+      return;
+    }
+    const overflowAllowance = 2;
+    const hasOverflow = tutorialOverlayBodyEl.scrollHeight > tutorialOverlayBodyEl.clientHeight + overflowAllowance;
+    const canScrollMore = hasOverflow
+      && tutorialOverlayBodyEl.scrollTop + tutorialOverlayBodyEl.clientHeight < tutorialOverlayBodyEl.scrollHeight - overflowAllowance;
+    tutorialOverlayEl.classList.toggle('cg-tutorial-tooltip--body-overflowing', hasOverflow);
+    tutorialOverlayEl.classList.toggle('cg-tutorial-tooltip--body-scroll-more', canScrollMore);
+    if (tutorialOverlayScrollCueEl) {
+      tutorialOverlayScrollCueEl.hidden = !canScrollMore;
+    }
+  }
+
+  function scheduleTutorialOverflowSync() {
+    if (tutorialOverlayOverflowFrame !== null) {
+      return;
+    }
+    tutorialOverlayOverflowFrame = window.requestAnimationFrame(updateTutorialOverflowState);
   }
 
   async function advanceTutorialFromUi() {
@@ -2438,7 +2486,6 @@ logBootConstantsOnce();
       overlay.style.maxWidth = overlay.style.width;
       overlay.style.height = `${Math.round((squareRect.maxR - squareRect.minR + 1) * squareSize)}px`;
       overlay.style.maxHeight = overlay.style.height;
-      overlay.style.overflowY = 'auto';
       return;
     }
   }
@@ -2480,8 +2527,13 @@ logBootConstantsOnce();
     const showNextButton = hasLocalNext || showAdvanceButton;
 
     const overlay = ensureTutorialOverlay();
+    overlay.classList.remove(
+      'cg-tutorial-tooltip--body-overflowing',
+      'cg-tutorial-tooltip--body-scroll-more'
+    );
     overlay.classList.toggle('cg-tutorial-tooltip--has-next', showNextButton);
     tutorialOverlayBodyEl.innerHTML = pageConfig.html || stepConfig.html || '';
+    tutorialOverlayBodyEl.scrollTop = 0;
     tutorialOverlayActionsEl.innerHTML = '';
 
     if (showNextButton) {
@@ -2510,6 +2562,7 @@ logBootConstantsOnce();
     });
     overlay.hidden = false;
     overlay.classList.add('cg-tutorial-tooltip--visible');
+    scheduleTutorialOverflowSync();
   }
 
   function syncTutorialState(nextTutorialState) {

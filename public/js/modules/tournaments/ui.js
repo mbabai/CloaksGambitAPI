@@ -159,6 +159,18 @@ function getTournamentStatusHint(tournament, {
   return 'Waiting for next match.';
 }
 
+function shouldShowTournamentStage(tournament, {
+  isInTournamentGame = false,
+  currentUserGame = null,
+  isReadOnlyView = false,
+} = {}) {
+  if (!tournament) return false;
+  if (isReadOnlyView) return tournament.phase === 'completed' || Boolean(tournament.bracket);
+  if (tournament.phase === 'completed') return true;
+  if (isInTournamentGame || currentUserGame?.gameId) return true;
+  return tournament.state !== 'starting';
+}
+
 function normalizeTournamentConfig(config = {}) {
   return {
     roundRobinMinutes: Number.isFinite(Number(config?.roundRobinMinutes))
@@ -491,6 +503,16 @@ export function initTournamentUi({
   const hostColumn = el('aside', { className: 'tournament-panel__column tournament-panel__column--host' });
   const centerColumn = el('section', { className: 'tournament-panel__column tournament-panel__column--center' });
   const sideColumn = el('aside', { className: 'tournament-panel__column tournament-panel__column--side' });
+  const participantColumn = el('aside', { className: 'tournament-panel__column tournament-panel__column--participants' });
+  const panelTabs = el('div', { className: 'tournament-panel__tabs', role: 'tablist', 'aria-label': 'Tournament sections' });
+  const panelSections = [
+    { key: 'setup', label: 'Setup', column: hostColumn },
+    { key: 'game', label: 'Game', column: centerColumn },
+    { key: 'status', label: 'Status', column: sideColumn },
+    { key: 'participants', label: 'Participants', column: participantColumn },
+  ];
+  const panelTabButtons = new Map();
+  let activePanelSection = 'setup';
   const stageFrame = el('div', { className: 'tournament-panel__stage-frame' });
   const stagePlaceholder = el('div', { className: 'tournament-panel__stage-placeholder' });
   const stagePlaceholderTitle = el('div', { className: 'tournament-panel__stage-title' }, 'Current Game');
@@ -506,6 +528,25 @@ export function initTournamentUi({
   panelLayout.appendChild(hostColumn);
   panelLayout.appendChild(centerColumn);
   panelLayout.appendChild(sideColumn);
+  panelLayout.appendChild(participantColumn);
+  panelSections.forEach(({ key, label, column }) => {
+    column.dataset.tournamentSection = key;
+    column.setAttribute('role', 'tabpanel');
+    column.setAttribute('aria-label', label);
+    const tab = el('button', {
+      type: 'button',
+      className: 'tournament-panel__tab',
+      role: 'tab',
+      'aria-controls': `tournament-panel-section-${key}`,
+    }, label);
+    column.id = `tournament-panel-section-${key}`;
+    tab.addEventListener('click', () => {
+      setActivePanelSection(key, { scroll: true });
+    });
+    panelTabButtons.set(key, tab);
+    panelTabs.appendChild(tab);
+  });
+  panelRoot.appendChild(panelTabs);
   panelRoot.appendChild(panelLayout);
   document.body.appendChild(panelRoot);
 
@@ -636,6 +677,76 @@ export function initTournamentUi({
       }).catch(() => null);
     }, 10000);
   }
+
+  function setActivePanelSection(sectionKey, { scroll = false } = {}) {
+    const target = panelSections.find((section) => section.key === sectionKey && !section.column.hidden);
+    const nextKey = target ? target.key : 'setup';
+    activePanelSection = nextKey;
+    panelSections.forEach(({ key, column }) => {
+      const active = key === nextKey;
+      column.classList.toggle('tournament-panel__column--active', active);
+      const tab = panelTabButtons.get(key);
+      if (tab) {
+        tab.classList.toggle('tournament-panel__tab--active', active);
+        tab.setAttribute('aria-selected', active ? 'true' : 'false');
+        tab.tabIndex = active ? 0 : -1;
+      }
+    });
+    if (scroll && target) {
+      target.column.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
+    }
+  }
+
+  function syncActivePanelSectionFromScroll() {
+    const layoutRect = panelLayout.getBoundingClientRect();
+    if (!layoutRect.width) return;
+    const layoutCenter = layoutRect.left + (layoutRect.width / 2);
+    let bestSection = null;
+    let bestDistance = Infinity;
+    panelSections.forEach((section) => {
+      if (section.column.hidden) return;
+      const rect = section.column.getBoundingClientRect();
+      if (!rect.width) return;
+      const distance = Math.abs((rect.left + (rect.width / 2)) - layoutCenter);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestSection = section;
+      }
+    });
+    if (bestSection && bestSection.key !== activePanelSection) {
+      setActivePanelSection(bestSection.key);
+    }
+  }
+
+  function syncPanelSections({ showStage = true } = {}) {
+    centerColumn.hidden = !showStage;
+    const gameTab = panelTabButtons.get('game');
+    if (gameTab) {
+      gameTab.hidden = !showStage;
+    }
+    panelRoot.classList.toggle('tournament-panel--prestart', !showStage);
+    if (!showStage && activePanelSection === 'game') {
+      setActivePanelSection('setup');
+      return;
+    }
+    setActivePanelSection(activePanelSection);
+  }
+
+  function syncPanelTabLabels(roleFlags = {}) {
+    const setupTab = panelTabButtons.get('setup');
+    if (!setupTab) return;
+    setupTab.textContent = roleFlags.isHost ? 'Admin' : 'Config';
+    hostColumn.setAttribute('aria-label', roleFlags.isHost ? 'Admin' : 'Config');
+  }
+
+  let panelScrollFrame = null;
+  panelLayout.addEventListener('scroll', () => {
+    if (panelScrollFrame) return;
+    panelScrollFrame = window.requestAnimationFrame(() => {
+      panelScrollFrame = null;
+      syncActivePanelSectionFromScroll();
+    });
+  }, { passive: true });
 
   function syncPanelVisibility() {
     const visible = Boolean(currentTournament && (currentRole || isReadOnlyTournamentView()));
@@ -1383,6 +1494,7 @@ export function initTournamentUi({
     stopRoundRobinTimer();
     clearNode(hostColumn);
     clearNode(sideColumn);
+    clearNode(participantColumn);
     clearNode(stageSurface);
     clearNode(stagePlaceholderActions);
     stageSurface.hidden = false;
@@ -1392,17 +1504,26 @@ export function initTournamentUi({
     stagePlaceholderBody.textContent = '';
 
     if (!currentTournament || (!currentRole && !isReadOnlyTournamentView())) {
+      syncPanelSections({ showStage: false });
       stageSurface.hidden = true;
       return;
     }
 
     const roleFlags = buildRoleFlags(currentRole);
     const isReadOnlyView = isReadOnlyTournamentView();
-    stagePlaceholderTitle.textContent = isReadOnlyView ? '' : 'Current Game';
-    stagePlaceholderBody.textContent = isReadOnlyView
+    syncPanelTabLabels(roleFlags);
+    const currentUserGame = currentTournament.currentUserGame || null;
+    const showStageSection = shouldShowTournamentStage(currentTournament, {
+      isInTournamentGame,
+      currentUserGame,
+      isReadOnlyView,
+    });
+    syncPanelSections({ showStage: showStageSection });
+    stageSurface.hidden = !showStageSection;
+    stagePlaceholderTitle.textContent = (!showStageSection || isReadOnlyView) ? '' : 'Current Game';
+    stagePlaceholderBody.textContent = (!showStageSection || isReadOnlyView)
       ? ''
       : 'Waiting for your next tournament game.';
-    const currentUserGame = currentTournament.currentUserGame || null;
     const currentConfig = normalizeTournamentConfig(currentTournament.config);
     const editableConfig = settingsDirty ? settingsDraft : currentConfig;
     const participants = Array.isArray(currentTournament.participants) ? currentTournament.participants : [];
@@ -1860,7 +1981,7 @@ export function initTournamentUi({
       rosterList.appendChild(table);
     }
     rosterCard.appendChild(rosterList);
-    sideColumn.appendChild(rosterCard);
+    participantColumn.appendChild(rosterCard);
     startRoundRobinTimer();
   }
 
