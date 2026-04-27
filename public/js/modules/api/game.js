@@ -127,6 +127,30 @@ export async function apiEnterTutorial(payload = {}) {
   return sendQueueRequest('/api/v1/lobby/enterTutorial', payload);
 }
 
+export async function apiLeaveTutorial(gameId) {
+  const res = await authFetch('/api/v1/lobby/leaveTutorial', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gameId })
+  });
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = null;
+  }
+
+  if (!res.ok) {
+    const error = new Error((data && data.message) || 'Failed to leave tutorial');
+    error.response = res;
+    error.data = data;
+    throw error;
+  }
+
+  return data || {};
+}
+
 export async function apiGetBotCatalog() {
   const res = await authFetch('/api/v1/bots/catalog');
   if (!res.ok) return null;

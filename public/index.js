@@ -6,7 +6,7 @@ import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { PIECE_IMAGES, IDENTITIES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiEnterTutorial, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiAdvanceTutorial, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog, apiGetTournamentHistory } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiEnterTutorial, apiLeaveTutorial, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiAdvanceTutorial, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog, apiGetTournamentHistory } from '/js/modules/api/game.js';
 import { createLocalGameLogger } from '/js/modules/debug/localGameLogger.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
@@ -5666,6 +5666,114 @@ logBootConstantsOnce();
     });
   }
 
+  function showLeaveTutorialConfirm() {
+    if (!lastGameId || gameFinished || !isTutorialActive()) return;
+    const overlay = ensureBannerOverlay();
+    const { content, dialog, closeButton } = overlay;
+    setBannerKeyListener(null);
+    if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+    content.innerHTML = '';
+    dialog.style.alignItems = 'center';
+    dialog.style.justifyContent = 'center';
+    if (closeButton) {
+      closeButton.hidden = false;
+      closeButton.onclick = () => { closeBanner(); };
+    }
+
+    const viewportBasis = Math.min(window.innerWidth || 0, window.innerHeight || 0) || 0;
+    const modalScale = clamp(viewportBasis ? viewportBasis / 720 : 1, 0.6, 1);
+    const cardPadY = clamp(Math.round(22 * modalScale), 14, 22);
+    const cardPadX = clamp(Math.round(28 * modalScale), 18, 28);
+    const cardGap = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const card = document.createElement('div');
+    card.style.padding = `${cardPadY}px ${cardPadX}px`;
+    card.style.border = '2px solid var(--CG-deep-gold)';
+    card.style.background = 'var(--CG-deep-purple)';
+    card.style.color = 'var(--CG-white)';
+    card.style.textAlign = 'center';
+    card.style.boxShadow = '0 12px 32px rgba(0,0,0,0.45)';
+    card.style.maxWidth = '360px';
+    card.style.width = '90%';
+    card.style.display = 'flex';
+    card.style.flexDirection = 'column';
+    card.style.gap = cardGap + 'px';
+
+    const message = document.createElement('div');
+    message.textContent = 'Leave tutorial?';
+    message.style.fontSize = clamp(Math.round(20 * modalScale), 14, 20) + 'px';
+    message.style.fontWeight = '600';
+    message.style.lineHeight = '1.4';
+
+    const buttons = document.createElement('div');
+    buttons.style.display = 'flex';
+    buttons.style.gap = clamp(Math.round(12 * modalScale), 8, 12) + 'px';
+    buttons.style.justifyContent = 'center';
+
+    const btnPadY = clamp(Math.round(10 * modalScale), 6, 10);
+    const btnPadX = clamp(Math.round(16 * modalScale), 10, 16);
+    const btnFontSize = clamp(Math.round(18 * modalScale), 12, 18);
+
+    const noBtn = createButton({
+      label: 'No',
+      variant: 'primary',
+      position: 'relative'
+    });
+    noBtn.style.flex = '1';
+    noBtn.style.minWidth = '0';
+    noBtn.style.setProperty('--cg-button-padding', `${btnPadY}px ${btnPadX}px`);
+    noBtn.style.fontSize = btnFontSize + 'px';
+    noBtn.style.setProperty('--cg-button-font-weight', '700');
+    noBtn.style.setProperty('--cg-button-background', 'var(--CG-forest)');
+
+    const yesBtn = createButton({
+      label: 'Yes',
+      variant: 'danger',
+      position: 'relative'
+    });
+    yesBtn.style.flex = '1';
+    yesBtn.style.minWidth = '0';
+    yesBtn.style.setProperty('--cg-button-padding', `${btnPadY}px ${btnPadX}px`);
+    yesBtn.style.fontSize = btnFontSize + 'px';
+    yesBtn.style.setProperty('--cg-button-font-weight', '700');
+
+    buttons.appendChild(noBtn);
+    buttons.appendChild(yesBtn);
+    card.appendChild(message);
+    card.appendChild(buttons);
+    content.appendChild(card);
+    overlay.show({ initialFocus: noBtn });
+
+    function closeBanner() {
+      if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+      content.innerHTML = '';
+      overlay.hide();
+      setBannerKeyListener(null);
+    }
+
+    noBtn.addEventListener('click', () => {
+      closeBanner();
+    });
+
+    yesBtn.addEventListener('click', async () => {
+      if (!lastGameId) return;
+      noBtn.disabled = true;
+      yesBtn.disabled = true;
+      noBtn.style.opacity = '0.7';
+      yesBtn.style.opacity = '0.7';
+      yesBtn.textContent = 'Leaving...';
+      try {
+        await apiLeaveTutorial(lastGameId);
+        closeBanner();
+        returnToLobby();
+      } catch (err) {
+        console.error('Leave tutorial failed', err);
+        closeBanner();
+        returnToLobby();
+      }
+    });
+  }
+
   function doesTournamentMatchRequireAccept(match) {
     const matchType = typeof match?.type === 'string'
       ? match.type.toUpperCase()
@@ -7032,6 +7140,96 @@ logBootConstantsOnce();
     });
     syncBoardMoveTargetHighlights(getCurrentMoveTargetHighlights());
 
+    const bothSetupDone = setupComplete && setupComplete.length >= 2 && Boolean(setupComplete[0]) && Boolean(setupComplete[1]);
+    const selfIdx = currentIsWhite ? 0 : 1;
+    const now = Date.now();
+    const cooldownUntil = Array.isArray(drawOfferCooldowns) ? drawOfferCooldowns[selfIdx] : null;
+    const cooldownActive = Number.isFinite(cooldownUntil) && cooldownUntil > now;
+    const hasPendingDrawOffer = Boolean(currentDrawOffer && currentDrawOffer.player !== undefined && currentDrawOffer.player !== null);
+    let canResign = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId);
+    let canOfferDraw = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId) && !hasPendingDrawOffer && !cooldownActive;
+    const canLeaveTutorial = isTutorialActive() && !gameFinished && Boolean(lastGameId);
+    if (canLeaveTutorial) {
+      canResign = false;
+      canOfferDraw = false;
+    }
+
+    const topControlH = clamp(Math.round(s * 0.42), 28, 36);
+    const topControlW = clamp(Math.round(bW * 0.22), 82, 108);
+    const topControlGap = clamp(Math.round(topControlW * 0.12), 8, 14);
+    const topBarTopPx = topBar
+      ? (parseInt(topBar.style.top, 10) || topBar.offsetTop || 0)
+      : 0;
+    const topControlLeft = Math.max(8, Math.round(leftPx - 3));
+    const topControlTop = Math.max(0, topBarTopPx + 3);
+    const topControlFontSize = clamp(Math.round(topControlH * 0.42), 12, 15);
+    const leaveTutorialW = clamp(Math.round(bW * 0.32), 118, 148);
+
+    const leaveTutorialBtn = renderGameButton({
+      id: 'leaveTutorialBtn',
+      root: playAreaRoot,
+      boardLeft: topControlLeft + leaveTutorialW / 2,
+      boardTop: topControlTop + topControlH / 2,
+      boardWidth: 0,
+      boardHeight: 0,
+      text: 'Leave tutorial',
+      variant: 'danger',
+      visible: canLeaveTutorial,
+      onClick: () => {
+        if (!canLeaveTutorial) return;
+        showLeaveTutorialConfirm();
+      },
+      width: leaveTutorialW,
+      height: topControlH,
+      fontSize: topControlFontSize,
+      zIndex: 20
+    });
+    if (leaveTutorialBtn) {
+      leaveTutorialBtn.setAttribute('aria-label', 'Leave tutorial');
+    }
+
+    const resignBtn = renderGameButton({
+      id: 'resignBtn',
+      root: playAreaRoot,
+      boardLeft: topControlLeft + topControlW / 2,
+      boardTop: topControlTop + topControlH / 2,
+      boardWidth: 0,
+      boardHeight: 0,
+      text: 'Resign',
+      variant: 'dark',
+      visible: canResign,
+      onClick: () => {
+        if (!canResign) return;
+        showResignConfirm();
+      },
+      width: topControlW,
+      height: topControlH,
+      fontSize: topControlFontSize,
+      zIndex: 20
+    });
+    applyTooltipAttributes(resignBtn, TOOLTIP_TEXT.resignButton);
+
+    const drawBtn = renderGameButton({
+      id: 'drawBtn',
+      root: playAreaRoot,
+      boardLeft: topControlLeft + topControlW + topControlGap + topControlW / 2,
+      boardTop: topControlTop + topControlH / 2,
+      boardWidth: 0,
+      boardHeight: 0,
+      text: 'Draw',
+      variant: 'neutral',
+      visible: canOfferDraw,
+      onClick: () => {
+        if (!canOfferDraw) return;
+        showDrawConfirm();
+      },
+      width: topControlW,
+      height: topControlH,
+      fontSize: topControlFontSize,
+      zIndex: 20
+    });
+    applyTooltipAttributes(drawBtn, TOOLTIP_TEXT.drawButton);
+
     // Challenge and Bomb buttons anchored to the stash area
     (function renderStashButtons() {
       const children = Array.from(stashRoot.children || []);
@@ -7039,8 +7237,6 @@ logBootConstantsOnce();
         renderGameButton({ id: 'challengeBtn', visible: false });
         renderGameButton({ id: 'bombBtn', visible: false });
         renderGameButton({ id: 'passBtn', visible: false });
-        renderGameButton({ id: 'resignBtn', visible: false });
-        renderGameButton({ id: 'drawBtn', visible: false });
         return;
       }
 
@@ -7070,12 +7266,6 @@ logBootConstantsOnce();
       let canChallenge = false;
       let canBomb = false;
       let canPass = false;
-      const bothSetupDone = setupComplete && setupComplete.length >= 2 && Boolean(setupComplete[0]) && Boolean(setupComplete[1]);
-      const selfIdx = currentIsWhite ? 0 : 1;
-      const now = Date.now();
-      const cooldownUntil = Array.isArray(drawOfferCooldowns) ? drawOfferCooldowns[selfIdx] : null;
-      const cooldownActive = Number.isFinite(cooldownUntil) && cooldownUntil > now;
-      const hasPendingDrawOffer = Boolean(currentDrawOffer && currentDrawOffer.player !== undefined && currentDrawOffer.player !== null);
       const responseContext = latestMoveContext || getLatestMoveContext({
         actions: actionHistory,
         moves: moveHistory,
@@ -7191,68 +7381,6 @@ logBootConstantsOnce();
         height: btnH
       });
       applyTooltipAttributes(challengeBtn, TOOLTIP_TEXT.challengeButton);
-
-      const deckEl = refs.deckEl;
-      const fallbackDeckSize = Math.max(1, currentSquareSize || btnW);
-      const deckWidth = deckEl ? (parseInt(deckEl.style.width, 10) || deckEl.offsetWidth || fallbackDeckSize) : fallbackDeckSize;
-      const deckHeight = deckEl ? (parseInt(deckEl.style.height, 10) || deckEl.offsetHeight || fallbackDeckSize) : fallbackDeckSize;
-      const deckLeft = deckEl
-        ? (parseInt(deckEl.style.left, 10) || deckEl.offsetLeft || (stashLeft + stashWidth / 2 - deckWidth / 2))
-        : (stashLeft + stashWidth / 2 - deckWidth / 2);
-      const deckTop = deckEl ? (parseInt(deckEl.style.top, 10) || deckEl.offsetTop || stashTop) : stashTop;
-      const deckCenterX = deckLeft + deckWidth / 2;
-      const deckBottom = deckTop + deckHeight;
-      const gapBelowDeck = Math.max(2, Math.round(deckHeight * 0.02));
-      const resignTop = deckBottom + gapBelowDeck;
-      const resignW = Math.max(1, Math.round(btnW * 0.65));
-      const resignH = Math.max(1, Math.round(btnH * 0.5));
-      let canResign = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId);
-      let canOfferDraw = bothSetupDone && !isInSetup && !gameFinished && Boolean(lastGameId) && !hasPendingDrawOffer && !cooldownActive;
-      if (isTutorialActive()) {
-        canResign = false;
-        canOfferDraw = false;
-      }
-
-      const resignBtn = renderGameButton({
-        id: 'resignBtn',
-        root: playAreaRoot,
-        boardLeft: deckCenterX,
-        boardTop: resignTop + resignH / 2,
-        boardWidth: 0,
-        boardHeight: 0,
-        text: 'Resign',
-        variant: 'dark',
-        visible: canResign,
-        onClick: () => {
-          if (!canResign) return;
-          showResignConfirm();
-        },
-        width: resignW,
-        height: resignH
-      });
-      applyTooltipAttributes(resignBtn, TOOLTIP_TEXT.resignButton);
-
-      const drawGap = Math.max(2, Math.round(resignH * 0.05));
-      const drawTop = resignTop + resignH + drawGap;
-
-      const drawBtn = renderGameButton({
-        id: 'drawBtn',
-        root: playAreaRoot,
-        boardLeft: deckCenterX,
-        boardTop: drawTop + resignH / 2,
-        boardWidth: 0,
-        boardHeight: 0,
-        text: 'Draw',
-        variant: 'neutral',
-        visible: canOfferDraw,
-        onClick: () => {
-          if (!canOfferDraw) return;
-          showDrawConfirm();
-        },
-        width: resignW,
-        height: resignH
-      });
-      applyTooltipAttributes(drawBtn, TOOLTIP_TEXT.drawButton);
     })();
 
     // After board render, apply any pending move overlay bubbles

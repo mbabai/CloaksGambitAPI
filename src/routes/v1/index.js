@@ -54,6 +54,7 @@ const lobbyExitRanked = require('./lobby/exitRanked');
 const { router: lobbyMatchmaking } = require('./lobby/matchmaking');
 const lobbyEnterBot = require('./lobby/enterBot');
 const lobbyEnterTutorial = require('./lobby/enterTutorial');
+const lobbyLeaveTutorial = require('./lobby/leaveTutorial');
 const tournamentsRouter = require('./tournaments');
 
 // Bot routes
@@ -113,6 +114,7 @@ router.use('/lobby/enterRanked', lobbyEnterRanked);
 router.use('/lobby/exitRanked', lobbyExitRanked);
 router.use('/lobby/enterBot', lobbyEnterBot);
 router.use('/lobby/enterTutorial', lobbyEnterTutorial);
+router.use('/lobby/leaveTutorial', lobbyLeaveTutorial);
 router.use('/lobby/matchmaking', lobbyMatchmaking);
 router.use('/tournaments', tournamentsRouter);
 

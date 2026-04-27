@@ -750,7 +750,7 @@ body.history-overlay-open {
 .cg-overlay--banner,
 .banner-overlay {
   --cg-overlay-padding: 0;
-  --cg-overlay-z-index: 3200;
+  --cg-overlay-z-index: 4200;
 }
 
 .cg-overlay__backdrop--banner,
