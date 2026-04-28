@@ -310,11 +310,29 @@
       .menu-button.active { background: var(--purple-pressed); }
       .menu-footer {
         padding: 16px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
       }
       .menu-footer a {
         display: block;
       }
-      .menu-footer img {
+      .menu-footer .discord-link {
+        color: var(--CG-white);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        font-size: 20px;
+        line-height: 1;
+        text-decoration: none;
+      }
+      .menu-footer .discord-link img {
+        display: block;
+        width: 28px;
+        height: auto;
+      }
+      .menu-footer .marcell-link img {
         display: block;
         width: 100%;
         height: auto;
@@ -564,7 +582,8 @@
           <a class="menu-button" href="https://forms.gle/72X9cXCe5BM4MN6S7" target="_blank" rel="noopener">Feedback <img src="assets/images/feedback.png" alt="Feedback" /></a>
         </div>
         <div class="menu-footer">
-          <a href="https://bymarcell.com" target="_blank" rel="noopener"><img src="assets/images/ByMarcellLogoWhiteText.svg" alt="by Marcell" /></a>
+          <a class="discord-link" href="https://discord.gg/7bwcX7zf" target="_blank" rel="noopener"><img src="assets/images/DiscordSymbolWhite.svg" alt="" aria-hidden="true" /><span>Discord</span></a>
+          <a class="marcell-link" href="https://bymarcell.com" target="_blank" rel="noopener"><img src="assets/images/ByMarcellLogoWhiteText.svg" alt="by Marcell" /></a>
         </div>
       </nav>
       <div id="menuAccountPanel" class="menu-panel" style="display:none">
