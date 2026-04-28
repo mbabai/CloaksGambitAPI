@@ -7,6 +7,95 @@ const ui = manifest.ui || {};
 const bubbles = manifest.bubbles || {};
 
 const challengeBubbles = ui.challengeBubbles || {};
+const PROCEDURAL_UI_BASE = '/assets/images/UI/Procedural';
+const PROCEDURAL_IDENTITY_BASE = '/assets/images/Pieces/Procedural';
+const PROCEDURAL_BUBBLE_BACKGROUNDS = Object.freeze({
+  speechLeft: `${PROCEDURAL_UI_BASE}/BubbleSpeechLeft.svg`,
+  thoughtLeft: `${PROCEDURAL_UI_BASE}/BubbleThoughtLeft.svg`,
+  thoughtRight: `${PROCEDURAL_UI_BASE}/BubbleThoughtRight.svg`
+});
+const DECLARATION_BUBBLE_ICONS = Object.freeze({
+  king: `${PROCEDURAL_IDENTITY_BASE}/HeartIdentity.svg`,
+  rook: `${PROCEDURAL_IDENTITY_BASE}/SwordIdentity.svg`,
+  bishop: `${PROCEDURAL_IDENTITY_BASE}/SpearIdentity.svg`,
+  knight: `${PROCEDURAL_IDENTITY_BASE}/ScytheIdentity.svg`,
+  bomb: `${PROCEDURAL_IDENTITY_BASE}/PoisonIdentity.svg`
+});
+const PROCEDURAL_BUBBLE_ICON_PLACEMENTS = Object.freeze({
+  speechLeft: {
+    left: 43,
+    top: 44,
+    width: 46,
+    height: 51
+  },
+  thoughtLeft: {
+    left: 42,
+    top: 46,
+    width: 50,
+    height: 52
+  },
+  thoughtRight: {
+    left: 58,
+    top: 46,
+    width: 50,
+    height: 52
+  }
+});
+const PROCEDURAL_BUBBLE_ICON_ADJUSTMENTS = Object.freeze({
+  king: {
+    scale: 0.94
+  },
+  rook: {
+    top: -1
+  },
+  bishop: {
+    left: 1,
+    top: -1
+  },
+  knight: {
+    left: -1
+  },
+  bomb: {
+    scale: 0.94
+  }
+});
+const PROCEDURAL_IDENTITY_VIEWBOX = Object.freeze({
+  width: 210,
+  height: 250
+});
+const PROCEDURAL_BUBBLE_ICON_BOUNDS = Object.freeze({
+  king: {
+    x: 4.261,
+    y: 36.684,
+    width: 201.478,
+    height: 176.632
+  },
+  rook: {
+    x: 4.97,
+    y: 4.726,
+    width: 200.06,
+    height: 241.947
+  },
+  bishop: {
+    x: 23.831,
+    y: 5.247,
+    width: 150.049,
+    height: 240.85
+  },
+  knight: {
+    x: 3.99,
+    y: 1.486,
+    width: 193.428,
+    height: 244.487
+  },
+  bomb: {
+    x: 24.392,
+    y: 37.114,
+    width: 159.716,
+    height: 174.272
+  }
+});
+const PROCEDURAL_BUBBLE_IMAGE_CACHE = new Map();
 
 function applySquareSize(element, size) {
   if (!element || !Number.isFinite(size)) return;
@@ -31,6 +120,195 @@ export function getChallengeBubbleAsset(position) {
 
 export function getBubbleAsset(type) {
   return bubbles && Object.prototype.hasOwnProperty.call(bubbles, type) ? bubbles[type] : null;
+}
+
+function getDeclarationKeyFromBubbleType(type) {
+  if (typeof type !== 'string') return null;
+  if (type.includes('king')) return 'king';
+  if (type.includes('rook')) return 'rook';
+  if (type.includes('bishop')) return 'bishop';
+  if (type.includes('knight')) return 'knight';
+  if (type.includes('bomb')) return 'bomb';
+  return null;
+}
+
+function getBubbleBackgroundFromType(type) {
+  if (typeof type !== 'string') return null;
+  if (type.includes('SpeechLeft')) return PROCEDURAL_BUBBLE_BACKGROUNDS.speechLeft;
+  if (type.includes('ThoughtRight')) return PROCEDURAL_BUBBLE_BACKGROUNDS.thoughtRight;
+  if (type.includes('ThoughtLeft')) return PROCEDURAL_BUBBLE_BACKGROUNDS.thoughtLeft;
+  return null;
+}
+
+function getBubblePlacementKeyFromType(type) {
+  if (typeof type !== 'string') return null;
+  if (type.includes('SpeechLeft')) return 'speechLeft';
+  if (type.includes('ThoughtRight')) return 'thoughtRight';
+  if (type.includes('ThoughtLeft')) return 'thoughtLeft';
+  return null;
+}
+
+export function getProceduralBubbleAsset(type) {
+  const declarationKey = getDeclarationKeyFromBubbleType(type);
+  const background = getBubbleBackgroundFromType(type);
+  const placementKey = getBubblePlacementKeyFromType(type);
+  const icon = declarationKey ? DECLARATION_BUBBLE_ICONS[declarationKey] : null;
+  if (!background || !icon) return null;
+  return {
+    kind: 'proceduralBubble',
+    background,
+    icon,
+    declarationKey,
+    placementKey
+  };
+}
+
+export function getBubbleAssetSources(type) {
+  const procedural = getProceduralBubbleAsset(type);
+  if (procedural) return [procedural.background, procedural.icon];
+  const src = getBubbleAsset(type);
+  return src ? [src] : [];
+}
+
+function applyBubbleVisualSize(element, size) {
+  if (!element || !Number.isFinite(size)) return;
+  const clamped = Math.max(0, Number(size));
+  element.style.width = `${clamped}px`;
+  element.style.height = `${clamped}px`;
+}
+
+function applyPercentStyle(element, property, value) {
+  element.style[property] = `${Number(value).toFixed(2).replace(/\.00$/, '')}%`;
+}
+
+function applyBubbleIconDimension(element, property, valuePercent, size) {
+  if (Number.isFinite(size) && size > 0) {
+    element.style[property] = `${Math.round((Number(size) * valuePercent) / 100)}px`;
+    return;
+  }
+  applyPercentStyle(element, property, valuePercent);
+}
+
+function getBubbleIconFit(placement, bounds, adjustment = {}) {
+  const centerX = placement.left + (adjustment.left || 0);
+  const centerY = placement.top + (adjustment.top || 0);
+  const fitWidth = placement.width + (adjustment.width || 0);
+  const fitHeight = placement.height + (adjustment.height || 0);
+  const scale = Math.min(fitWidth / bounds.width, fitHeight / bounds.height) * (adjustment.scale || 1);
+  const iconWidth = PROCEDURAL_IDENTITY_VIEWBOX.width * scale;
+  const iconHeight = PROCEDURAL_IDENTITY_VIEWBOX.height * scale;
+  const visibleCenterX = (bounds.x + (bounds.width / 2)) * scale;
+  const visibleCenterY = (bounds.y + (bounds.height / 2)) * scale;
+
+  return {
+    left: centerX - visibleCenterX,
+    top: centerY - visibleCenterY,
+    width: iconWidth,
+    height: iconHeight
+  };
+}
+
+function applyBubbleIconFit(element, placement, bounds, adjustment = {}, size = null) {
+  const fit = getBubbleIconFit(placement, bounds, adjustment);
+  applyBubbleIconDimension(element, 'left', fit.left, size);
+  applyBubbleIconDimension(element, 'top', fit.top, size);
+  applyBubbleIconDimension(element, 'width', fit.width, size);
+  applyBubbleIconDimension(element, 'height', fit.height, size);
+}
+
+function getBubbleImage(src, onLoad) {
+  if (!src) return null;
+  let image = PROCEDURAL_BUBBLE_IMAGE_CACHE.get(src);
+  if (!image) {
+    image = new Image();
+    image.decoding = 'async';
+    image.draggable = false;
+    image.src = src;
+    PROCEDURAL_BUBBLE_IMAGE_CACHE.set(src, image);
+  }
+  if (!(image.complete && image.naturalWidth > 0) && typeof onLoad === 'function') {
+    image.addEventListener('load', onLoad, { once: true });
+    image.addEventListener('error', onLoad, { once: true });
+  }
+  return image;
+}
+
+function applyBubbleCanvasSize(canvas, size) {
+  const cssSize = Math.max(1, Number.isFinite(Number(size)) ? Number(size) : 1);
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const pixelSize = Math.max(1, Math.round(cssSize * dpr));
+  canvas.width = pixelSize;
+  canvas.height = pixelSize;
+  canvas.style.width = `${Math.round(cssSize)}px`;
+  canvas.style.height = `${Math.round(cssSize)}px`;
+  return { cssSize, dpr };
+}
+
+function drawProceduralBubbleCanvas(canvas, procedural, size, placement, bounds, adjustment) {
+  if (!canvas || !procedural) return;
+  const { cssSize, dpr } = applyBubbleCanvasSize(canvas, size);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const redraw = () => drawProceduralBubbleCanvas(canvas, procedural, size, placement, bounds, adjustment);
+  const background = getBubbleImage(procedural.background, redraw);
+  const icon = getBubbleImage(procedural.icon, redraw);
+  const fit = getBubbleIconFit(placement, bounds, adjustment);
+  const toPx = (value) => Math.round((cssSize * value) / 100);
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssSize, cssSize);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  if (background?.complete && background.naturalWidth > 0) {
+    ctx.drawImage(background, 0, 0, cssSize, cssSize);
+  }
+  if (icon?.complete && icon.naturalWidth > 0) {
+    ctx.drawImage(
+      icon,
+      toPx(fit.left),
+      toPx(fit.top),
+      toPx(fit.width),
+      toPx(fit.height)
+    );
+  }
+}
+
+export function createBubbleVisual({ type, size, alt = '' } = {}) {
+  const procedural = getProceduralBubbleAsset(type);
+  if (procedural) {
+    const placement = PROCEDURAL_BUBBLE_ICON_PLACEMENTS[procedural.placementKey]
+      || PROCEDURAL_BUBBLE_ICON_PLACEMENTS.thoughtLeft;
+    const bounds = PROCEDURAL_BUBBLE_ICON_BOUNDS[procedural.declarationKey]
+      || {
+        x: 0,
+        y: 0,
+        width: PROCEDURAL_IDENTITY_VIEWBOX.width,
+        height: PROCEDURAL_IDENTITY_VIEWBOX.height
+      };
+    const adjustment = PROCEDURAL_BUBBLE_ICON_ADJUSTMENTS[procedural.declarationKey] || {};
+    const canvas = document.createElement('canvas');
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', alt);
+    canvas.style.display = 'inline-block';
+    canvas.style.flex = '0 0 auto';
+    canvas.style.pointerEvents = 'none';
+    drawProceduralBubbleCanvas(canvas, procedural, Number(size), placement, bounds, adjustment);
+    return canvas;
+  }
+
+  const src = getBubbleAsset(type);
+  if (!src) return null;
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = alt;
+  img.draggable = false;
+  if (Number.isFinite(size)) {
+    img.style.width = `${Math.max(0, Number(size))}px`;
+    img.style.height = 'auto';
+  }
+  return img;
 }
 
 export function createEloBadgeIcon({ size, alt = 'Ranked Elo' } = {}) {

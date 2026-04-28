@@ -66,10 +66,10 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Must provide a valid onDeck piece' });
     }
     if (onDeck.identity === config.identities.get('KING')) {
-      return res.status(400).json({ message: 'KING cannot be placed on deck' });
+      return res.status(400).json({ message: 'Heart cannot be placed on deck' });
     }
 
-    // Check for king and validate piece positions
+    // Check for Heart and validate piece positions
     let hasKing = false;
     const pieceCounts = new Map();
     const usedColumns = new Set();
@@ -97,7 +97,7 @@ router.post('/', async (req, res) => {
       const identityKey = piece.identity;
       pieceCounts.set(identityKey, (pieceCounts.get(identityKey) || 0) + 1);
 
-      // Check for king
+      // Check for Heart
       if (piece.identity === config.identities.get('KING')) {
         hasKing = true;
       }
@@ -114,9 +114,9 @@ router.post('/', async (req, res) => {
     const onDeckIdentity = onDeck.identity;
     pieceCounts.set(onDeckIdentity, (pieceCounts.get(onDeckIdentity) || 0) + 1);
 
-    // Check if we have a king
+    // Check if we have a Heart
     if (!hasKing) {
-      return res.status(400).json({ message: 'Setup must include a KING piece' });
+      return res.status(400).json({ message: 'Setup must include a Heart piece' });
     }
 
     const tutorialValidationMessage = validateTutorialSetup(game, {

@@ -177,7 +177,7 @@ function validateTutorialSetup(game, { pieces, onDeck, color, config }) {
     return 'Tutorial setup requires the fixed tutorial layout.';
   }
   if (!onDeck || onDeck.identity !== identities.get('BOMB') || onDeck.color !== color) {
-    return 'Tutorial setup requires the bomb on deck.';
+    return 'Tutorial setup requires Poison on deck.';
   }
 
   for (const piece of pieces) {
@@ -239,11 +239,11 @@ function validateTutorialChallenge(game, { color }) {
 function validateTutorialBomb(game, { color }) {
   if (!isTutorialGame(game)) return null;
   if (color !== 0) {
-    return 'Only the white player may declare bomb in the tutorial.';
+    return 'Only the white player may declare Poison in the tutorial.';
   }
   return getTutorialStep(game) === TUTORIAL_STEPS.DECLARE_BOMB
     ? null
-    : 'Bomb is not available right now in the tutorial.';
+    : 'Poison is not available right now in the tutorial.';
 }
 
 function validateTutorialOnDeck(game, { color, piece, config }) {
@@ -261,12 +261,12 @@ function validateTutorialOnDeck(game, { color, piece, config }) {
   if (step === TUTORIAL_STEPS.ON_DECK_ROOK) {
     return identity === config.identities.get('ROOK')
       ? null
-      : 'The tutorial requires placing the rook on deck.';
+      : 'The tutorial requires placing the Sword on deck.';
   }
 
   if (step === TUTORIAL_STEPS.ON_DECK_ANY) {
     return identity === config.identities.get('KING')
-      ? 'The king cannot be placed on deck.'
+      ? 'The Heart cannot be placed on deck.'
       : null;
   }
 
@@ -432,7 +432,7 @@ async function advanceTutorialStep(game, { color, config, now = Date.now() }) {
     case TUTORIAL_STEPS.AFTER_BOMB_DECLARATION: {
       const result = await applyChallengeAction(game, 1, config, { now });
       if (result.success !== false) {
-        throw new Error('Tutorial expected the scripted bomb challenge to fail.');
+        throw new Error('Tutorial expected the scripted Poison challenge to fail.');
       }
       setTutorialStep(game, TUTORIAL_STEPS.ON_DECK_ANY);
       break;

@@ -119,7 +119,7 @@ describe('king deck restrictions', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.payload.message).toBe('KING cannot be placed on deck');
+    expect(response.payload.message).toBe('Heart cannot be placed on deck');
     expect(game.save).not.toHaveBeenCalled();
   });
 
@@ -146,7 +146,7 @@ describe('king deck restrictions', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.payload.message).toBe('KING cannot be placed on deck');
+    expect(response.payload.message).toBe('Heart cannot be placed on deck');
     expect(game.save).not.toHaveBeenCalled();
   });
 });

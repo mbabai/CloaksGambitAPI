@@ -1,5 +1,6 @@
 import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { pieceGlyph as modulePieceGlyph } from '/js/modules/render/pieceGlyph.js';
+import { getPieceAssetSources, getSinglePieceSrc, resolvePieceAsset } from '/js/modules/render/pieceAssets.js';
 import { createGameView } from '/js/modules/gameView/view.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
@@ -31,7 +32,8 @@ import {
   ASSET_MANIFEST,
   getIconAsset,
   getAvatarAsset,
-  getBubbleAsset,
+  getBubbleAssetSources,
+  createBubbleVisual,
   createThroneIcon
 } from '/js/modules/ui/icons.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
@@ -6423,13 +6425,13 @@ logBootConstantsOnce();
     } else {
       switch (reason) {
         case 0:
-          descText = `${winnerName} (${colorStr}) won by capturing ${loserName}'s king.`;
+          descText = `${winnerName} (${colorStr}) won by capturing ${loserName}'s Heart.`;
           break;
         case 1:
-          descText = `${winnerName} (${colorStr}) won by advancing their king to the final rank.`;
+          descText = `${winnerName} (${colorStr}) won by advancing their Heart to the final rank.`;
           break;
         case 2:
-          descText = `${winnerName} (${colorStr}) won because ${loserName} challenged the true king.`;
+          descText = `${winnerName} (${colorStr}) won because ${loserName} challenged the true Heart.`;
           break;
         case 3:
           descText = `${winnerName} (${colorStr}) won because ${loserName} accumulated 3 dagger tokens.`;
@@ -6713,7 +6715,7 @@ logBootConstantsOnce();
       const suppress = (now < suppressMouseUntil) || !!dragging;
       // Do NOT suppress clicks on non-preview bubble overlays (choice or post-move)
       const t = ev.target;
-      const isBubbleOverlay = t && t.closest && t.closest('img[data-bubble]:not([data-preview])');
+      const isBubbleOverlay = t && t.closest && t.closest('[data-bubble]:not([data-preview])');
       if (suppress && !isBubbleOverlay) { try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {} }
     }, true);
 
@@ -7230,7 +7232,7 @@ logBootConstantsOnce();
     });
     applyTooltipAttributes(drawBtn, TOOLTIP_TEXT.drawButton);
 
-    // Challenge and Bomb buttons anchored to the stash area
+    // Challenge and Poison buttons anchored to the stash area
     (function renderStashButtons() {
       const children = Array.from(stashRoot.children || []);
       if (children.length === 0) {
@@ -7305,7 +7307,7 @@ logBootConstantsOnce();
       }
       const challengeDisabled = isTutorialActive() && !tutorialAllowsChallenge();
 
-      // Bomb button (upper left)
+      // Poison button (upper left)
       const bombBtn = renderGameButton({
         id: 'bombBtn',
         root: playAreaRoot,
@@ -7313,7 +7315,7 @@ logBootConstantsOnce();
         boardTop: stashTop + btnH / 2,
         boardWidth: 0,
         boardHeight: 0,
-        text: 'Bomb!',
+        text: 'Poison!',
         variant: 'danger',
         visible: canBomb,
         onClick: () => {
@@ -7323,7 +7325,7 @@ logBootConstantsOnce();
             color: myColor,
           });
           applyLocalMoveClock();
-          apiBomb(lastGameId, myColor).catch(err => console.error('Bomb failed', err));
+          apiBomb(lastGameId, myColor).catch(err => console.error('Poison failed', err));
         },
         width: btnW,
         height: btnH
@@ -7693,7 +7695,7 @@ logBootConstantsOnce();
       const pieces = capturedByColor?.[colorIdx] || [];
       pieces.forEach(piece => {
         const cap = Math.floor(0.365 * s); // ~36.5% of square
-        const img = modulePieceGlyph(piece, cap, PIECE_IMAGES);
+        const img = modulePieceGlyph(piece, cap, PIECE_IMAGES, { showLabel: false });
         if (img) {
           const wrap = document.createElement('div');
           wrap.style.width = cap + 'px';
@@ -7900,7 +7902,7 @@ logBootConstantsOnce();
       // Fallback to inline image if module import failed
       if (!piece) return null;
       const size = Math.floor(target * 0.9);
-      const src = PIECE_IMAGES?.[piece.identity]?.[piece.color];
+      const src = getSinglePieceSrc(resolvePieceAsset(piece, PIECE_IMAGES));
       if (!src) return null;
       const img = document.createElement('img');
       img.src = src;
@@ -7914,27 +7916,22 @@ logBootConstantsOnce();
 
   function makeBubbleImg(type, square, opts) {
     try {
-      const src = getBubbleAsset(type);
-      if (!src) return null;
-      const img = document.createElement('img');
-      img.dataset.bubble = '1';
-      if (opts && opts.preview) img.dataset.preview = '1';
-      img.dataset.bubbleType = type;
-      img.draggable = false;
-      img.style.position = 'absolute';
+      const size = Math.floor(square * 1.08);
+      const bubble = createBubbleVisual({ type, size, alt: '' });
+      if (!bubble) return null;
+      bubble.dataset.bubble = '1';
+      if (opts && opts.preview) bubble.dataset.preview = '1';
+      bubble.dataset.bubbleType = type;
+      bubble.style.position = 'absolute';
       // Default: previews are non-interactive; overlays can be clickable and are enabled by caller
-      img.style.pointerEvents = (opts && opts.preview) ? 'none' : 'auto';
-      img.style.zIndex = '20';
-      // Shrink ~15% from previous size (1.2x -> 1.02x square)
-      img.style.width = Math.floor(square * 1.08) + 'px';
-      img.style.height = 'auto';
+      bubble.style.pointerEvents = (opts && opts.preview) ? 'none' : 'auto';
+      bubble.style.zIndex = '20';
       const offsetX = Math.floor(square * 0.6); // push further to sides
       const offsetY = Math.floor(square * 0.5); // raise above piece
-      if (type.endsWith('Right')) { img.style.right = (-offsetX) + 'px'; img.style.left = 'auto'; }
-      else { img.style.left = (-offsetX) + 'px'; img.style.right = 'auto'; }
-      img.style.top = (-offsetY) + 'px';
-      img.src = (BUBBLE_PRELOAD[type] && BUBBLE_PRELOAD[type].src) || src;
-      return img;
+      if (type.endsWith('Right')) { bubble.style.right = (-offsetX) + 'px'; bubble.style.left = 'auto'; }
+      else { bubble.style.left = (-offsetX) + 'px'; bubble.style.right = 'auto'; }
+      bubble.style.top = (-offsetY) + 'px';
+      return bubble;
     } catch (_) { return null; }
   }
 
@@ -7943,23 +7940,26 @@ logBootConstantsOnce();
     Object.keys(PIECE_IMAGES || {}).forEach(function(id){
       PIECE_PRELOAD[id] = {};
       Object.keys(PIECE_IMAGES[id] || {}).forEach(function(color){
-        const src = PIECE_IMAGES[id][color];
-        const img = new Image();
-        img.draggable = false; img.decoding = 'async';
-        img.src = src;
-        PIECE_PRELOAD[id][color] = img;
+        const sources = getPieceAssetSources(PIECE_IMAGES[id][color]);
+        PIECE_PRELOAD[id][color] = sources.map(function(src) {
+          const img = new Image();
+          img.draggable = false; img.decoding = 'async';
+          img.src = src;
+          return img;
+        });
       });
     });
   }
 
   function preloadBubbleImages() {
     Object.keys(ASSET_MANIFEST?.bubbles || {}).forEach(function(k){
-      const src = getBubbleAsset(k);
-      if (!src) return;
-      const img = new Image();
-      img.draggable = false; img.decoding = 'async';
-      img.src = src;
-      BUBBLE_PRELOAD[k] = img;
+      const sources = getBubbleAssetSources(k);
+      BUBBLE_PRELOAD[k] = sources.map(function(src) {
+        const img = new Image();
+        img.draggable = false; img.decoding = 'async';
+        img.src = src;
+        return img;
+      });
     });
   }
 
@@ -8031,7 +8031,7 @@ logBootConstantsOnce();
         const dx = Math.abs(destUI.uiR - originUI.uiR);
         const dy = Math.abs(destUI.uiC - originUI.uiC);
         const movedDistance = Math.max(dx, dy);
-        // During drag preview, always show thought bubbles for rook/bishop/knight
+        // During drag preview, always show thought bubbles for Sword/Spear/Scythe
         if (d === Declaration.KNIGHT) return ['knightThoughtLeft'];
         if (d === Declaration.ROOK && movedDistance > 1) return ['rookThoughtLeft'];
         if (d === Declaration.BISHOP && movedDistance > 1) return ['bishopThoughtLeft'];
@@ -8052,7 +8052,7 @@ logBootConstantsOnce();
 
   function bubbleTypesForMove(originUI, destUI, declaration) {
     // Always show a speech bubble for the declared type so that
-    // one-square rook or bishop moves retain their bubble after server updates.
+    // one-square Sword or Spear moves retain their bubble after server updates.
     if (declaration === Declaration.KNIGHT) return ['knightSpeechLeft'];
     if (declaration === Declaration.ROOK) return ['rookSpeechLeft'];
     if (declaration === Declaration.BISHOP) return ['bishopSpeechLeft'];
@@ -8544,12 +8544,12 @@ logBootConstantsOnce();
       if (Date.now() < suppressMouseUntil) return;
       if (isInSetup) return; // not in setup
       if (currentOnDeckingPlayer !== null) return; // disable board moves during on-deck phase
-      if (isBombActive()) return; // lock movement during bomb
+      if (isBombActive()) return; // lock movement during Poison
       const myColorIdx = currentIsWhite ? 0 : 1;
       const piece = getBoardPieceAtUI(uiR, uiC);
       // If user clicked a bubble overlay inside this cell, let it handle the click
       const t = e.target;
-      if (t && t.closest && t.closest('img[data-bubble]:not([data-preview])')) {
+      if (t && t.closest && t.closest('[data-bubble]:not([data-preview])')) {
         return;
       }
       e.preventDefault(); e.stopPropagation();
@@ -8579,12 +8579,12 @@ logBootConstantsOnce();
       if (gameFinished) return;
       if (isInSetup) return;
       if (currentOnDeckingPlayer !== null) return; // disable during on-deck phase
-      if (isBombActive()) return; // lock movement during bomb
+      if (isBombActive()) return; // lock movement during Poison
       const myColorIdx = currentIsWhite ? 0 : 1;
       const piece = getBoardPieceAtUI(uiR, uiC);
       // Allow bubble overlay touches to pass through for tap/click handling
       const tEl = e.target;
-      if (tEl && tEl.closest && tEl.closest('img[data-bubble]:not([data-preview])')) {
+      if (tEl && tEl.closest && tEl.closest('[data-bubble]:not([data-preview])')) {
         return;
       }
       try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
@@ -8860,7 +8860,7 @@ logBootConstantsOnce();
         return false;
       }
 
-      // If single legal declaration or non-king with distance criteria, auto-commit
+      // If single legal declaration or non-Heart with distance criteria, auto-commit
       const dx = Math.abs(dest.uiR - origin.uiR);
       const dy = Math.abs(dest.uiC - origin.uiC);
       const movedDistance = Math.max(dx, dy);
@@ -8900,7 +8900,7 @@ logBootConstantsOnce();
         return true;
       };
 
-      // King can imply two thoughts, but we still must choose at placement per design
+      // Heart can imply two thoughts, but we still must choose at placement per design
       if (legal.length === 1) {
         return commitMove(legal[0]);
       }
@@ -8918,12 +8918,12 @@ logBootConstantsOnce();
       }
       const types = [];
       if (legal.includes(Declaration.KING)) {
-        // Always put king thought on the right
+        // Always put Heart thought on the right
         types.push('kingThoughtRight');
-        // Pair with bishop or rook on the left depending on direction — use THOUGHT bubbles for the choice UI
+        // Pair with Spear or Sword on the left depending on direction - use THOUGHT bubbles for the choice UI
         if (dx === dy && dx > 0) types.push('bishopThoughtLeft'); else types.push('rookThoughtLeft');
       } else {
-        // Fallback: bishop/rook choice
+        // Fallback: Spear/Sword choice
         if (legal.includes(Declaration.BISHOP)) types.push('bishopSpeechLeft');
         if (legal.includes(Declaration.ROOK)) types.push('rookSpeechLeft');
       }
@@ -8973,15 +8973,15 @@ logBootConstantsOnce();
       let types = [];
       if (declaration === Declaration.KNIGHT) types = ['knightSpeechLeft'];
       else if (declaration === Declaration.ROOK) {
-        // Always show the rook declaration speech bubble once a move is final
+        // Always show the Sword declaration speech bubble once a move is final
         types = ['rookSpeechLeft'];
       }
       else if (declaration === Declaration.BISHOP) {
-        // Always show the bishop declaration speech bubble once a move is final
+        // Always show the Spear declaration speech bubble once a move is final
         types = ['bishopSpeechLeft'];
       }
       else if (declaration === Declaration.KING) {
-        // Show king speech on the left for king declaration
+        // Show Heart speech on the left for Heart declaration
         types = ['kingSpeechLeft'];
       }
       postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types };
@@ -9017,7 +9017,7 @@ logBootConstantsOnce();
         return;
       }
       // Only show final speech and send to server; piece already optimistically placed
-      // Always force the speech bubble so rook/bishop choices mirror king behavior
+      // Always force the speech bubble so Sword/Spear choices mirror Heart behavior
       showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration, { alwaysShow: true });
       try {
         console.log('[move] commit', { from, to, declaration });

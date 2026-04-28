@@ -3,7 +3,8 @@ import { setCellNotation } from '../render/notation.js';
 import { buildBoardScene } from '../board/scene.js';
 import { createBoardAnnotations } from './boardAnnotations.js';
 import { createImageCache } from '../render/imageCache.js';
-import { getBubbleAsset } from '../ui/icons.js';
+import { createBubbleVisual } from '../ui/icons.js';
+import { getPieceDisplayName } from '../render/pieceLabels.js';
 import { getThoughtBubbleTooltipText } from '../ui/tooltipContent.js';
 import { applyTooltipAttributes } from '../ui/tooltips.js';
 
@@ -27,28 +28,26 @@ function clearChildren(element) {
 }
 
 function createBubbleNode({ type, squareSize, interactive, onBubbleClick, uiR, uiC }) {
-  const src = getBubbleAsset(type);
-  if (!src) return null;
+  const node = createBubbleVisual({
+    type,
+    size: Math.floor(squareSize * 1.08),
+    alt: ''
+  });
+  if (!node) return null;
 
-  const img = document.createElement('img');
-  img.dataset.bubble = '1';
-  img.dataset.bubbleType = type;
-  img.draggable = false;
-  img.alt = '';
-  img.src = src;
-  img.className = 'cg-board-bubble';
-  img.style.position = 'absolute';
-  img.style.zIndex = '1001';
-  img.style.width = `${Math.floor(squareSize * 1.08)}px`;
-  img.style.height = 'auto';
-  img.style.pointerEvents = interactive ? 'auto' : 'none';
+  node.dataset.bubble = '1';
+  node.dataset.bubbleType = type;
+  node.className = 'cg-board-bubble';
+  node.style.position = 'absolute';
+  node.style.zIndex = '1001';
+  node.style.pointerEvents = interactive ? 'auto' : 'none';
   const tooltipText = getThoughtBubbleTooltipText(type);
   if (tooltipText) {
-    applyTooltipAttributes(img, tooltipText);
+    applyTooltipAttributes(node, tooltipText);
   }
   if (interactive) {
-    img.style.cursor = 'pointer';
-    img.addEventListener('click', (event) => {
+    node.style.cursor = 'pointer';
+    node.addEventListener('click', (event) => {
       try {
         event.preventDefault();
         event.stopPropagation();
@@ -58,7 +57,19 @@ function createBubbleNode({ type, squareSize, interactive, onBubbleClick, uiR, u
       }
     });
   }
-  return img;
+  return node;
+}
+
+function appendBoardPieceLabel(hitCell, cellModel) {
+  const piece = cellModel?.piece;
+  const label = getPieceDisplayName(piece);
+  if (!label) return;
+  const labelEl = document.createElement('span');
+  labelEl.className = 'cg-board-piece-name-label';
+  labelEl.textContent = label;
+  labelEl.setAttribute('aria-hidden', 'true');
+  labelEl.style.setProperty('--cg-piece-label-font-size', Math.max(8, Math.floor(cellModel.width * 0.1)) + 'px');
+  hitCell.appendChild(labelEl);
 }
 
 /**
@@ -204,6 +215,9 @@ export function createBoardView({
       hitCell.style.touchAction = 'none';
       if (cellModel.legalSourceHighlight) {
         hitCell.classList.add('cg-piece-source-highlight');
+      }
+      if (cellModel.piece) {
+        appendBoardPieceLabel(hitCell, cellModel);
       }
 
       if (cellModel.isBottomSetupCell && typeof attachHandlers === 'function') {

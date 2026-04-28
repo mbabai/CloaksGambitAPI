@@ -1,9 +1,9 @@
 import { WIN_REASONS } from '../constants.js';
 
 const WIN_REASON_LABELS = {
-  [WIN_REASONS.CAPTURED_KING]: 'Captured King',
+  [WIN_REASONS.CAPTURED_KING]: 'Captured Heart',
   [WIN_REASONS.THRONE]: 'Throne Victory',
-  [WIN_REASONS.TRUE_KING]: 'True King Revealed',
+  [WIN_REASONS.TRUE_KING]: 'True Heart Revealed',
   [WIN_REASONS.DAGGERS]: 'Daggers Victory',
   [WIN_REASONS.TIME_CONTROL]: 'Time Control',
   [WIN_REASONS.DISCONNECT]: 'Disconnect',

@@ -98,7 +98,7 @@ describe('bomb and pass routes require a pending move window', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.payload.message).toBe('No pending move to bomb');
+    expect(response.payload.message).toBe('No pending move to Poison');
   });
 
   test('pass rejects bombs whose underlying move is already resolved', async () => {

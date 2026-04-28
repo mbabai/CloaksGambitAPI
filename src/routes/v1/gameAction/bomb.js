@@ -54,10 +54,10 @@ router.post('/', async (req, res) => {
 
     const lastMove = getLastMove(game);
     if (!lastMove) {
-      return res.status(400).json({ message: 'No move to bomb' });
+      return res.status(400).json({ message: 'No move to Poison' });
     }
     if (!isPendingMove(lastMove, config)) {
-      return res.status(400).json({ message: 'No pending move to bomb' });
+      return res.status(400).json({ message: 'No pending move to Poison' });
     }
 
     const { to } = lastMove;
@@ -67,7 +67,7 @@ router.post('/', async (req, res) => {
     }
 
     if (lastMove.declaration === config.identities.get('KING')) {
-      return res.status(400).json({ message: 'Cannot bomb a declared king move' });
+      return res.status(400).json({ message: 'Cannot declare Poison against a declared Heart move' });
     }
 
     const tutorialValidationMessage = validateTutorialBomb(game, {
@@ -78,7 +78,7 @@ router.post('/', async (req, res) => {
     }
 
     await game.addAction(config.actions.get('BOMB'), normalizedColor, {});
-    // Bomb does not alter the inactivity counter
+    // Poison does not alter the inactivity counter
 
     // Flip the turn to the other player
     game.playerTurn = normalizedColor === 0 ? 1 : 0;
@@ -96,7 +96,7 @@ router.post('/', async (req, res) => {
 
     emitGameChanged(game);
 
-    res.json({ message: 'Bomb action recorded' });
+    res.json({ message: 'Poison action recorded' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

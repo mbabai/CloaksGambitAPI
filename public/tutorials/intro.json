@@ -4,7 +4,7 @@
     "1": {
       "squareRect": "A4-E3",
       "showNextButton": false,
-      "html": "Welcome to Cloaks' Gambit! Today you are playing with the white pieces. We start by setting up our board. In a real game you can put 'any' 5 pieces on the first row as long as one of them is the king, and one other piece on the purple square (called 'on-deck'). But today, let's put them like this: King, Rook, Knight, Bishop, Bishop, and put your Bomb on-deck."
+      "html": "Welcome to Cloaks' Gambit! Today you are playing with the white pieces. We start by setting up our board. In a real game you can put 'any' 5 pieces on the first row as long as one of them is the Heart, and one other piece on the purple square (called 'on-deck'). But today, let's put them like this: Heart, Sword, Scythe, Spear, Spear, and put your Poison on-deck."
     },
     "2": {
       "squareRect": "A5-E5",
@@ -14,12 +14,15 @@
     "3": {
       "squareRect": "A5-E5",
       "showNextButton": false,
-      "html": "Alright, it is your turn to play. Go ahead and click on your rook to get started."
+      "html": "Alright, it is your turn to play. Go ahead and click on your Sword to get started."
     },
     "4": {
       "squareRect": "A6-E5",
       "showNextButton": false,
-      "html": "Note all of the spaces you can move. Rooks can move straight (like in chess) but only up to 3 spaces. However, in Cloaks' Gambit, you can move like any other piece too! Bishops also move like in chess, but only up to 3 spaces. Knights and Kings move exactly like chess. Go ahead and move your rook (b1) forward 3 spaces (b4)."
+      "pages": [
+        "Note all off the spaces you can move to:<ul><li>Heart: Moves to any adjacent space, including diagonals.</li><li>Scythe: Moves in an L-shape: one square vertically and two horizontally or vice versa, and can jump over pieces.</li><li>Sword: Moves by sliding horizontally or vertically up to 3 spaces. It cannot jump over other pieces.</li><li>Spear: Moves diagonally up to 3 spaces. It cannot jump over other pieces.</li></ul>",
+        "However, in Cloaks' Gambit, you can move like any other piece too! Sometimes that can be risky. For now, go ahead and move your Sword (b1) forward 3 spaces (b4)."
+      ]
     },
     "5": {
       "squareRect": "C5-E4",
@@ -30,17 +33,17 @@
       "squareRect": "C5-E2",
       "showNextButton": false,
       "pages": [
-        "Yep, looks like they're also bringing some pieces forward. They claim it's their rook, but we don't know for sure.",
+        "Yep, looks like they're also bringing some pieces forward. They claim it's their Sword, but we don't know for sure.",
         "You see, in cloaks' gambit, pieces are not always what they appear to be.",
-        "Go ahead and move your king forward one space, from A1 to A2."
+        "Go ahead and move your Heart forward one space, from A1 to A2."
       ]
     },
     "7": {
       "squareRect": "C5-E2",
       "showNextButton": false,
       "pages": [
-        "You'll see that there are two thought bubbles above your piece. Unlike when you moved the rook before, this move could be either a king OR a rook. You can 'declare' whichever you want. When you move a piece in a way that could be consistent with only one piece type, the declaration will be automatic.",
-        "Every piece is what you declare it to be, until proven otherwise. For now, let's not give away our king's position, and in fact, we can throw our opponent off: click the rook bubble."
+        "You'll see that there are two thought bubbles above your piece. Unlike when you moved the Sword before, this move could be either a Heart OR a Sword. You can 'declare' whichever you want. When you move a piece in a way that could be consistent with only one piece type, the declaration will be automatic.",
+        "Every piece is what you declare it to be, until proven otherwise. For now, let's not give away our Heart's position, and in fact, we can throw our opponent off: click the Sword bubble."
       ]
     },
     "8": {
@@ -52,22 +55,22 @@
       "squareRect": "A3-D2",
       "showNextButton": true,
       "pages": [
-        "Your opponent has moved from e6 to d4, and we can see the 'knight declaration'.",
-        "You now have a new option: 'Challenge'. This is like calling a bluff, as if to say, 'that's not a knight!'",
+        "Your opponent has moved from e6 to d4, and we can see the 'Scythe declaration'.",
+        "You now have a new option: 'Challenge'. This is like calling a bluff, as if to say, 'that's not a Scythe!'",
         "If you are correct, your opponent loses that piece. If you are wrong, you get a dagger token. Get 3 daggers and you lose the game."
       ]
     },
     "10": {
       "squareRect": "A3-E3",
       "showNextButton": false,
-      "html": "While you also have the option to just ignore their move and make your own move. Let's go ahead and challenge this knight. It sure looks suspicious to me."
+      "html": "While you also have the option to just ignore their move and make your own move. Let's go ahead and challenge this Scythe. It sure looks suspicious to me."
     },
     "11": {
       "squareRect": "A4-B2",
       "showNextButton": false,
       "pages": [
         "Good call! With a successful challenge, that piece is gone. Since a challenge isn't a move, it is still your turn.",
-        "Let's bring our other pieces into the fray. Move your rightmost bishop (e1) to the center (c3)."
+        "Let's bring our other pieces into the fray. Move your rightmost Spear (e1) to the center (c3)."
       ]
     },
     "12": {
@@ -80,7 +83,7 @@
       "showNextButton": true,
       "pages": [
         "Look at that! They challenged your piece, but failed. They immediately got a dagger token.",
-        "Your bishop was replaced with the piece you had on-deck, in this case the bomb. This keeps your opponent guessing,  never knowing exactly what you have."
+        "Your Spear was replaced with the piece you had on-deck, in this case the Poison. This keeps your opponent guessing, never knowing exactly what you have."
       ]
     },
     "14": {
@@ -88,7 +91,7 @@
       "showNextButton": false,
       "pages": [
         "However, this leaves your on-deck square empty. You need to replace it with one of the other pieces not on the board, called the 'stash'.",
-        "It can be the same bishop you just took off the board, or something else. For now, put your rook on-deck."
+        "It can be the same Spear you just took off the board, or something else. For now, put your Sword on-deck."
       ]
     },
     "15": {
@@ -99,36 +102,36 @@
     "16": {
       "squareRect": "C5-E4",
       "showNextButton": true,
-      "html": "Look at that, after a failed challenge, your opponent is trying to capture your piece. Little do they know that it is a bomb!"
+      "html": "Look at that, after a failed challenge, your opponent is trying to capture your piece. Little do they know that it is Poison!"
     },
     "17": {
       "squareRect": "A5-E5",
       "showNextButton": false,
       "pages": [
-        "You have some choices here. You could challenge the enemy move if you think that's not really a rook, but that's risky.",
-        "If you're wrong, you take a dagger. Since you have a bomb here, declaring bomb has zero risk. Go ahead and click 'Bomb'."
+        "You have some choices here. You could challenge the enemy move if you think that's not really a Sword, but that's risky.",
+        "If you're wrong, you take a dagger. Since you have Poison here, declaring Poison has zero risk. Go ahead and click 'Poison'."
       ]
     },
     "18": {
       "squareRect": "D5-E3",
       "showNextButton": true,
       "pages": [
-        "Boom! When one of your pieces is being captured, you can always declare bomb. Even if your piece is not a bomb. That would be a bluff.",
-        "Your opponent is deciding whether to call that bluff. If they challenge and you really had a bomb, they lose their piece and get a dagger too.",
+        "Poison! When one of your pieces is being captured, you can always declare Poison. Even if your piece is not Poison. That would be a bluff.",
+        "Your opponent is deciding whether to call that bluff. If they challenge and you really had Poison, they lose their piece and get a dagger too.",
         "If they pass, they still lose their piece and never know for sure. All pieces are what they are declared to be until proven otherwise!"
       ]
     },
     "19": {
       "squareRect": "A5-E5",
       "showNextButton": false,
-      "html": "He took the risk and got the dagger! Good thing you didn't challenge earlier. It really was a rook. Go ahead and pick any piece to go on deck."
+      "html": "He took the risk and got the dagger! Good thing you didn't challenge earlier. It really was a Sword. Go ahead and pick any piece to go on deck."
     },
     "20": {
       "squareRect": "D5-E3",
       "showNextButton": false,
       "pages": [
-        "Since the last move was your opponent's attempted capture of your bomb, it is your turn again. This time, let's take a risk.",
-        "Bluff with your left rook (b4). Pretend it's a bishop and capture the piece on d6."
+        "Since the last move was your opponent's attempted capture of your Poison, it is your turn again. This time, let's take a risk.",
+        "Bluff with your left Sword (b4). Pretend it's a Spear and capture the piece on d6."
       ]
     },
     "21": {
@@ -144,29 +147,29 @@
     "23": {
       "squareRect": "D5-E3",
       "showNextButton": true,
-      "html": "That starts to make sense. That might actually be its king, which is why the bot had to challenge to avoid losing outright. It also could have declared bomb."
+      "html": "That starts to make sense. That might actually be its Heart, which is why the bot had to challenge to avoid losing outright. It also could have declared Poison."
     },
     "24": {
       "squareRect": "D5-E3",
       "showNextButton": true,
       "pages": [
-        "Declaring king could be a bluff, but I'd be hesitant to challenge. Challenging a true king loses the game on the spot.",
-        "Kings are special like that. They are also immune to bombs, so you cannot declare bomb if the attacking declaration was a king."
+        "Declaring Heart could be a bluff, but I'd be hesitant to challenge. Challenging a true Heart loses the game on the spot.",
+        "Hearts are special like that. They are also immune to Poison, so you cannot declare Poison if the attacking declaration was a Heart."
       ]
     },
     "25": {
       "squareRect": "A5-E4",
       "showNextButton": true,
       "pages": [
-        "We can also win by capturing the king outright, or by challenging another declaration that turns out to be the king - both of those end with the king off the board.",
-        "Another way to win is by moving a declared king to the opponent's back row. Remember every piece is what it is declared to be until proven otherwise. Declare king, and move that piece over the gold line on the opponent's side, and like a touchdown, that's victory.",
-        "Lastly, you can win on time-control, if your opponent's clock runs out of time. This tutorial game has no clock, but normally you have to make your moves within a certain time limit, like chess."
+        "We can also win by capturing the Heart outright, or by challenging another declaration that turns out to be the Heart - both of those end with the Heart off the board.",
+        "Another way to win is by moving a declared Heart to the opponent's back row. Remember every piece is what it is declared to be until proven otherwise. Declare Heart, and move that piece over the gold line on the opponent's side, and like a touchdown, that's victory.",
+        "Lastly, you can win on time-control, if your opponent's clock runs out of time. This tutorial game has no clock, but normally you have to make your moves within a certain time limit."
       ]
     },
     "26": {
       "squareRect": "D5-E4",
       "showNextButton": false,
-      "html": "Well, if that really IS the king, we can take it without a bluff! Go ahead and capture it with your rook, c3 to c6."
+      "html": "Well, if that really IS the Heart, we can take it without a bluff! Go ahead and capture it with your Sword, c3 to c6."
     },
     "27": {
       "squareRect": "D5-E4",
@@ -178,7 +181,7 @@
       "showNextButton": true,
       "pages": [
         "He challenged and got his third dagger token. That loses the game immediately.",
-        "We can also see that it WAS the real king. Good thing we attacked instead of challenging it."
+        "We can also see that it WAS the real Heart. Good thing we attacked instead of challenging it."
       ]
     },
     "29": {

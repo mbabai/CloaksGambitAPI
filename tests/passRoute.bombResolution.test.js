@@ -119,7 +119,7 @@ describe('pass route bomb resolution', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.payload.message).toBe('Game ended: King captured');
+    expect(response.payload.message).toBe('Game ended: Heart captured');
     expect(game.endGame).toHaveBeenCalledWith(1, sharedConstants.winReasons.CAPTURED_KING);
     expect(game.winner).toBe(1);
     expect(game.captured[0]).toEqual([

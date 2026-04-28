@@ -1,4 +1,12 @@
 import { IDENTITIES } from '../constants.js';
+import {
+  getIdentityRenderBox,
+  getPieceAssetSources,
+  getProceduralIdentityPlacement,
+  getSinglePieceSrc,
+  isProceduralPieceAsset,
+  resolvePieceAsset
+} from './pieceAssets.js';
 
 function resolveCssColor(scope, name, fallback) {
   try {
@@ -44,6 +52,38 @@ function ensureImageLoaded(imageCache, src) {
   try {
     imageCache.get(src);
   } catch (_) {}
+}
+
+function ensurePieceAssetLoaded(imageCache, asset) {
+  getPieceAssetSources(asset).forEach((src) => ensureImageLoaded(imageCache, src));
+}
+
+function createScratchCanvas(width, height) {
+  if (typeof OffscreenCanvas === 'function') {
+    return new OffscreenCanvas(width, height);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function drawTintedImage(ctx, image, x, y, width, height, color) {
+  const transform = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+  const scaleX = Math.max(1, Math.abs(transform?.a || 1));
+  const scaleY = Math.max(1, Math.abs(transform?.d || 1));
+  const scratchWidth = Math.max(1, Math.ceil(width * scaleX));
+  const scratchHeight = Math.max(1, Math.ceil(height * scaleY));
+  const scratch = createScratchCanvas(scratchWidth, scratchHeight);
+  const scratchCtx = scratch.getContext('2d');
+  if (!scratchCtx) return;
+
+  scratchCtx.clearRect(0, 0, scratchWidth, scratchHeight);
+  scratchCtx.drawImage(image, 0, 0, scratchWidth, scratchHeight);
+  scratchCtx.globalCompositeOperation = 'source-in';
+  scratchCtx.fillStyle = color;
+  scratchCtx.fillRect(0, 0, scratchWidth, scratchHeight);
+  ctx.drawImage(scratch, x, y, width, height);
 }
 
 function configureCanvas(canvas, width, height) {
@@ -115,8 +155,33 @@ function drawPieceFallback(ctx, piece, x, y, size) {
 }
 
 function drawPieceImage(ctx, imageCache, identityMap, piece, x, y, size) {
-  const src = identityMap?.[piece.identity]?.[piece.color];
+  const asset = resolvePieceAsset(piece, identityMap);
+  const src = getSinglePieceSrc(asset);
   if (!src) {
+    if (isProceduralPieceAsset(asset)) {
+      ensurePieceAssetLoaded(imageCache, asset);
+      const cloak = getLoadedImage(imageCache, asset.cloak);
+      const identity = getLoadedImage(imageCache, asset.identity);
+      if (cloak) {
+        ctx.drawImage(cloak, x, y, size, size);
+      }
+      if (identity) {
+        const placement = getProceduralIdentityPlacement(asset);
+        const identityBox = getIdentityRenderBox(size, placement.scale);
+        const identityX = x + (size * placement.x) - (identityBox.width / 2);
+        const identityY = y + (size * placement.y) - (identityBox.height / 2);
+        drawTintedImage(
+          ctx,
+          identity,
+          identityX,
+          identityY,
+          identityBox.width,
+          identityBox.height,
+          asset.identityColor || '#292929ff'
+        );
+      }
+      if (cloak || identity) return;
+    }
     drawPieceFallback(ctx, piece, x, y, size);
     return;
   }

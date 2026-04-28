@@ -194,7 +194,7 @@ export function renderBars({
     const pulsingIndexes = pulsingCapturedIndexSets[colorIdx] || new Set();
     pieces.forEach((piece, idx) => {
       const cap = Math.floor(0.6 * s);
-      const img = makePieceGlyph(piece, cap, identityMap);
+      const img = makePieceGlyph(piece, cap, identityMap, { showLabel: false });
       if (img) {
         const wrap = document.createElement('div');
         wrap.classList.add('cg-captured-strip__piece');

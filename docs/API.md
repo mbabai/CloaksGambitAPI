@@ -24,7 +24,7 @@ match and move data is streamed to clients via WebSocket events.
 - `POST /api/v1/gameAction/setup` - Set up a game board
 - `POST /api/v1/gameAction/move` - Submit a piece move
 - `POST /api/v1/gameAction/challenge` - Challenge an opponent's move
-- `POST /api/v1/gameAction/bomb` - Bomb the last move
+- `POST /api/v1/gameAction/bomb` - Declare Poison against the last move
 - `POST /api/v1/gameAction/onDeck` - Move a piece on deck
 - `POST /api/v1/gameAction/pass` - Pass the turn
 - `POST /api/v1/gameAction/resign` - Resign from the game

@@ -1360,6 +1360,53 @@ body.history-overlay-open {
   outline-offset: -3px;
 }
 
+.cg-piece-glyph {
+  position: relative;
+  display: inline-block;
+  overflow: visible;
+}
+
+.cg-piece-glyph > img {
+  display: block;
+}
+
+.cg-piece-name-label,
+.cg-board-piece-name-label {
+  position: absolute;
+  left: 50%;
+  bottom: 3%;
+  transform: translateX(-50%);
+  max-width: 88%;
+  box-sizing: border-box;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: rgba(12, 6, 18, 0.42);
+  color: rgba(255, 255, 255, 0.72);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: var(--cg-piece-label-font-size, 10px);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: 0;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.cg-board-piece-name-label {
+  bottom: 5%;
+}
+
+.cg-piece-glyph:hover .cg-piece-name-label,
+.cg-piece-glyph:focus-within .cg-piece-name-label,
+.cg-board-hit-cell:hover .cg-board-piece-name-label,
+.cg-board-hit-cell:focus-visible .cg-board-piece-name-label {
+  opacity: 0.72;
+}
+
 .cg-piece-source-highlight {
   overflow: visible;
 }

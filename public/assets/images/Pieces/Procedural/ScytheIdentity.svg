@@ -10,8 +10,8 @@
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    width="210mm"
-   height="210mm"
-   viewBox="0 0 210 210"
+   height="250mm"
+   viewBox="0 0 210 250"
    version="1.1"
    id="svg8"
    sodipodi:docname="ScytheIdentity.svg"
@@ -26,8 +26,8 @@
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
      inkscape:zoom="0.70963216"
-     inkscape:cx="387.39771"
-     inkscape:cy="597.24262"
+     inkscape:cx="158.40583"
+     inkscape:cy="442.93732"
      inkscape:document-units="mm"
      inkscape:current-layer="layer3"
      showgrid="false"
@@ -53,17 +53,18 @@
      inkscape:label="Layer 1"
      inkscape:groupmode="layer"
      id="layer1"
-     transform="translate(0,-87)" />
+     transform="translate(0,-47)" />
   <g
      inkscape:groupmode="layer"
      id="layer3"
      inkscape:label="Layer 2"
-     transform="translate(0,-87)">
+     transform="translate(0,-47)">
     <path
        style="fill:#292929;fill-opacity:1;stroke:none;stroke-width:0.26458332px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
-       d="m 181.84188,99.03719 c -3.395,1.21354 -6.61715,2.49558 -8.55555,6.62233 -62.1907,0 -125.95386,25.02145 -148.8059,70.49389 16.524638,-24.32554 65.732232,-65.41409 127.92294,-65.41409 -27.21138,4.46495 -16.19729,7.53371 -28.91761,12.04164 -34.424578,-1.75874 -84.55606,34.25569 -99.00533,53.37245 54.224249,-31.8769 83.98963,-14.72255 134.44657,-11.84527 -20.79169,38.86628 -58.74953,48.3497 -74.617663,119.13795 9.430498,2.90099 16.895083,1.3787 23.378933,-2.35025 14.27768,-110.68781 95.95952,-63.30331 74.15361,-182.05865 z m -9.78235,15.30294 a 5.2198404,5.2198404 0 0 1 5.21984,5.21984 5.2198404,5.2198404 0 0 1 -5.21984,5.21984 5.2198404,5.2198404 0 0 1 -4.90512,-3.44889 h -11.59309 v 32.25126 h -2.98277 v -32.25126 -2.98277 h 2.98277 11.42669 a 5.2198404,5.2198404 0 0 1 5.07152,-4.00802 z"
+       d="m 193.16576,48.486241 c -3.97186,1.578879 -7.7415,3.246879 -10.00928,8.615987 C 25.776177,53.221496 3.9897256,225.10958 3.9897256,225.10958 22.363633,194.55713 162.93038,121.67106 170.17815,161.65466 c -18.21773,55.41796 -66.94564,35.51193 -98.947007,126.75706 5.813048,7.5028 45.865017,5.14937 48.976427,-2.68494 -16.67691,-90.62221 100.65751,-17.22283 72.95819,-237.240539 z m -14.44843,29.584133 -25.56722,0.122631 0.3412,56.294335 -6.57815,0.0316 -0.34123,-56.29431 -0.0315,-6.57816 6.57816,-0.0315 25.20026,-0.120893 0.39853,6.576398 z"
        id="path1746"
-       inkscape:connector-curvature="0" />
+       inkscape:connector-curvature="0"
+       sodipodi:nodetypes="ccccccccccccccccc" />
     <g
        id="g1785"
        transform="matrix(-1,0,0,1,328.07893,-1.4913885)" />

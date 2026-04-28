@@ -67,7 +67,7 @@ describe('gameToastEvents', () => {
 
     expect(feedback.toasts).toEqual([
       {
-        text: 'Bomb!',
+        text: 'Poison!',
         tone: 'danger',
         placement: 'board-center',
         appearance: 'board-alert',

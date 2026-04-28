@@ -612,15 +612,15 @@ export function createSpectateController(options) {
       switch (reason) {
         case WIN_REASONS.KING_CAPTURE:
         case 0:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by capturing ${loserLabel}'s king.`;
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by capturing ${loserLabel}'s Heart.`;
           break;
         case WIN_REASONS.KING_ADVANCE:
         case 1:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by advancing their king to the final rank.`;
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by advancing their Heart to the final rank.`;
           break;
         case WIN_REASONS.TRUE_KING:
         case 2:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} challenged the true king.`;
+          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} challenged the true Heart.`;
           break;
         case WIN_REASONS.DAGGER_PENALTY:
         case 3:

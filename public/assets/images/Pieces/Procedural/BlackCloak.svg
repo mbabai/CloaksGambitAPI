@@ -15,7 +15,7 @@
    version="1.1"
    id="svg8"
    inkscape:version="0.92.4 (5da689c313, 2019-01-14)"
-   sodipodi:docname="BlackCloakp.svg">
+   sodipodi:docname="BlackCloak.svg">
   <defs
      id="defs2" />
   <sodipodi:namedview
@@ -26,7 +26,7 @@
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
      inkscape:zoom="0.97825459"
-     inkscape:cx="112.95628"
+     inkscape:cx="-61.333728"
      inkscape:cy="396.11365"
      inkscape:document-units="mm"
      inkscape:current-layer="layer8"
@@ -163,13 +163,7 @@
      inkscape:groupmode="layer"
      id="layer8"
      inkscape:label="Bishop"
-     style="display:inline">
-    <path
-       style="fill:#d9d9d9;fill-opacity:1;stroke:none;stroke-width:4.64701;stroke-linecap:round;stroke-opacity:1"
-       d="m 101.43761,95.871061 c 10.80209,-2.99685 4.7055,-16.70947 -4.503658,-19.242651 -9.56463,3.362631 -13.55694,15.993021 -4.47137,19.172921 C 70.882927,111.76392 54.359566,155.10508 73.869231,160.35072 l -10.76847,-0.23229 c -3.844852,0 -4.363855,16.83928 0.200766,16.83928 l 64.513103,0.0309 c 3.02008,0 2.84743,-16.00476 -0.55278,-16.00476 -5.5285,0 -7.00555,-0.0817 -11.47396,-0.0817 22.71207,-6.67777 5.79573,-38.57884 -5.18169,-59.1925 -5.42777,8.85867 -10.897298,25.41811 -10.897298,31.59592 -5.71804,-3.31149 -1.59114,-25.46566 1.728708,-37.434509 z"
-       id="path1266-8"
-       sodipodi:nodetypes="cccccccccccc" />
-  </g>
+     style="display:inline" />
   <g
      inkscape:groupmode="layer"
      id="layer10"

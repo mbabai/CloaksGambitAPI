@@ -18,6 +18,7 @@ function normalizeAssetUrl(src) {
   if (typeof src !== 'string') return null;
   const trimmed = src.trim();
   if (!trimmed || trimmed.startsWith('data:')) return null;
+  if (!/^(\/|\.\/|\.\.\/|https?:)/i.test(trimmed)) return null;
   try {
     const origin = typeof window !== 'undefined' && window.location ? window.location.origin : 'http://localhost';
     const url = new URL(trimmed, origin);
@@ -41,7 +42,7 @@ function queueImage(src, { eager = false } = {}) {
 function extractAssetPaths(value, results) {
   if (!value) return;
   if (typeof value === 'string') {
-    results.add(value);
+    if (normalizeAssetUrl(value)) results.add(value);
     return;
   }
   if (Array.isArray(value)) {

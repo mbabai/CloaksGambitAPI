@@ -84,7 +84,7 @@ router.post('/', async (req, res) => {
 
     const lastAction = getLastAction(game);
     if (lastAction && lastAction.type === config.actions.get('BOMB')) {
-      return res.status(400).json({ message: 'Cannot move after a bomb action' });
+      return res.status(400).json({ message: 'Cannot move after a Poison action' });
     }
 
     if (game.onDeckingPlayer === normalizedColor) {

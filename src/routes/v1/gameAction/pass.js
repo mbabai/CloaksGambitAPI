@@ -51,7 +51,7 @@ router.post('/', async (req, res) => {
 
     const lastAction = getLastAction(game);
     if (!lastAction || lastAction.type !== config.actions.get('BOMB')) {
-      return res.status(400).json({ message: 'Last action was not a bomb' });
+      return res.status(400).json({ message: 'Last action was not Poison' });
     }
 
     const lastMove = getLastMove(game);
@@ -90,7 +90,7 @@ router.post('/', async (req, res) => {
       // Check if game ended and return early
       if (!game.isActive) {
         emitGameChanged(game);
-        return res.json({ message: 'Game ended: King captured' });
+        return res.json({ message: 'Game ended: Heart captured' });
       }
     }
 

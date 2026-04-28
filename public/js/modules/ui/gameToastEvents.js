@@ -229,7 +229,7 @@ export function deriveGameToastFeedback({
         && action.player !== viewerColor
       ) {
         toasts.push({
-          text: 'Bomb!',
+          text: 'Poison!',
           tone: 'danger',
           placement: 'board-center',
           appearance: 'board-alert',
