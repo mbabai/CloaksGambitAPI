@@ -9,6 +9,7 @@ const labelsUrl = pathToFileURL(
 const PIECE_GLYPH_PATH = path.join(ROOT, 'public', 'js', 'modules', 'render', 'pieceGlyph.js');
 const BOARD_VIEW_PATH = path.join(ROOT, 'public', 'js', 'modules', 'components', 'boardView.js');
 const BARS_PATH = path.join(ROOT, 'public', 'js', 'modules', 'render', 'bars.js');
+const TOOLTIPS_PATH = path.join(ROOT, 'public', 'js', 'modules', 'ui', 'tooltips.js');
 const UI_CSS_PATH = path.join(ROOT, 'public', 'ui.css');
 
 describe('piece name labels', () => {
@@ -52,5 +53,15 @@ describe('piece name labels', () => {
     expect(cssSource).toContain('.cg-piece-glyph:hover .cg-piece-name-label');
     expect(cssSource).toContain('.cg-board-hit-cell:hover .cg-board-piece-name-label');
     expect(cssSource).toContain('.cg-board-hit-cell:focus-visible .cg-board-piece-name-label');
+  });
+
+  test('tooltip preference disables piece name hover labels', () => {
+    const cssSource = fs.readFileSync(UI_CSS_PATH, 'utf8');
+    const tooltipSource = fs.readFileSync(TOOLTIPS_PATH, 'utf8');
+
+    expect(tooltipSource).toContain('cg-tooltips-disabled');
+    expect(tooltipSource).toContain('syncTooltipDocumentState');
+    expect(cssSource).toContain('.cg-tooltips-disabled .cg-piece-glyph:hover .cg-piece-name-label');
+    expect(cssSource).toContain('.cg-tooltips-disabled .cg-board-hit-cell:hover .cg-board-piece-name-label');
   });
 });

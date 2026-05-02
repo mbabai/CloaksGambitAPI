@@ -1,6 +1,7 @@
 const TOOLTIP_ATTRIBUTE = 'data-cg-tooltip';
 const TOOLTIP_PLACEMENT_ATTRIBUTE = 'data-cg-tooltip-placement';
 const TOOLTIP_ID = 'cgGlobalTooltip';
+const TOOLTIPS_DISABLED_CLASS = 'cg-tooltips-disabled';
 const VIEWPORT_MARGIN_PX = 12;
 const TOOLTIP_OFFSET_PX = 12;
 
@@ -56,6 +57,17 @@ function readTooltipText(trigger) {
     return '';
   }
   return trigger.getAttribute(TOOLTIP_ATTRIBUTE) || '';
+}
+
+function syncTooltipDocumentState() {
+  const doc = getDocumentRef();
+  const disabled = !tooltipState.enabled;
+  if (doc.documentElement) {
+    doc.documentElement.classList.toggle(TOOLTIPS_DISABLED_CLASS, disabled);
+  }
+  if (doc.body) {
+    doc.body.classList.toggle(TOOLTIPS_DISABLED_CLASS, disabled);
+  }
 }
 
 function hideTooltip() {
@@ -177,6 +189,7 @@ function handleViewportChange() {
 
 export function initTooltipSystem({ enabled = true } = {}) {
   tooltipState.enabled = Boolean(enabled);
+  syncTooltipDocumentState();
   if (tooltipState.initialized) {
     if (!tooltipState.enabled) {
       hideTooltip();
@@ -212,6 +225,7 @@ export function initTooltipSystem({ enabled = true } = {}) {
 
 export function setTooltipsEnabled(enabled) {
   tooltipState.enabled = Boolean(enabled);
+  syncTooltipDocumentState();
   if (!tooltipState.enabled) {
     hideTooltip();
   }

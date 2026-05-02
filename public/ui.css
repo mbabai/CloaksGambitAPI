@@ -1407,6 +1407,13 @@ body.history-overlay-open {
   opacity: 0.72;
 }
 
+.cg-tooltips-disabled .cg-piece-glyph:hover .cg-piece-name-label,
+.cg-tooltips-disabled .cg-piece-glyph:focus-within .cg-piece-name-label,
+.cg-tooltips-disabled .cg-board-hit-cell:hover .cg-board-piece-name-label,
+.cg-tooltips-disabled .cg-board-hit-cell:focus-visible .cg-board-piece-name-label {
+  opacity: 0;
+}
+
 .cg-piece-source-highlight {
   overflow: visible;
 }
