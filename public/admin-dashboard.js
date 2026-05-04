@@ -136,6 +136,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
 
   const connectedUsersEl = document.getElementById('connectedUsers');
+  const connectedUsersListEl = document.getElementById('connectedUsersList');
   const quickplayQueueEl = document.getElementById('quickplayQueue');
   const rankedQueueEl = document.getElementById('rankedQueue');
   const quickplayQueueListEl = document.getElementById('quickplayQueueList');
@@ -219,10 +220,21 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     return /^anonymous\d+$/i.test(username.trim());
   }
 
-  function renderList(targetEl, ids) {
+  function appendEmptyRow(targetEl, text) {
+    if (!targetEl) return;
+    const row = document.createElement('div');
+    row.className = 'row row--empty';
+    row.textContent = text || 'None';
+    targetEl.appendChild(row);
+  }
+
+  function renderList(targetEl, ids, options = {}) {
     if (!targetEl) return;
     targetEl.innerHTML = '';
-    if (!Array.isArray(ids) || ids.length === 0) return;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      if (options.emptyText) appendEmptyRow(targetEl, options.emptyText);
+      return;
+    }
     const frag = document.createDocumentFragment();
     ids.forEach(id => {
       const row = document.createElement('div');
@@ -251,6 +263,76 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       frag.appendChild(row);
     });
     targetEl.appendChild(frag);
+  }
+
+  function renderConnectedUsersList(details, fallbackIds) {
+    if (!connectedUsersListEl) return;
+    connectedUsersListEl.innerHTML = '';
+    const rows = Array.isArray(details) && details.length > 0
+      ? details.map((entry) => ({
+        id: normalizeId(entry?.id || entry?.userId),
+        username: typeof entry?.username === 'string' && entry.username.trim() ? entry.username.trim() : null,
+        socketCount: Math.max(1, Number(entry?.socketCount) || 1),
+        isGuest: Boolean(entry?.isGuest),
+      }))
+      : (Array.isArray(fallbackIds) ? fallbackIds.map((id) => ({
+        id: normalizeId(id),
+        username: null,
+        socketCount: 1,
+        isGuest: false,
+      })) : []);
+    const visibleRows = rows.filter((entry) => entry.id);
+    if (visibleRows.length === 0) {
+      appendEmptyRow(connectedUsersListEl, 'No live connections');
+      return;
+    }
+    visibleRows.sort((a, b) => {
+      const nameA = a.username || getUsername(a.id);
+      const nameB = b.username || getUsername(b.id);
+      return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+    });
+    const frag = document.createDocumentFragment();
+    visibleRows.forEach((entry) => {
+      if (entry.username) {
+        usernameMap[entry.id] = entry.username;
+      }
+      const row = document.createElement('div');
+      row.className = 'row';
+      const nameEl = document.createElement(adminUserId && entry.id === adminUserId ? 'strong' : 'span');
+      const displayName = entry.username || getUsername(entry.id);
+      nameEl.textContent = displayName;
+      nameEl.title = entry.id;
+      if (!isKnownBotId(entry.id)) {
+        nameEl.classList.add('userTable__name--interactive');
+        nameEl.setAttribute('role', 'button');
+        nameEl.setAttribute('tabindex', '0');
+        const payload = { userId: entry.id, username: displayName };
+        nameEl.addEventListener('click', (event) => {
+          event.stopPropagation();
+          viewPlayerStats(payload);
+        });
+        nameEl.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            viewPlayerStats(payload);
+          }
+        });
+      }
+      row.appendChild(nameEl);
+      const metaEl = document.createElement('span');
+      metaEl.className = 'connectionMeta';
+      const parts = [];
+      if (entry.socketCount > 1) {
+        parts.push(`${entry.socketCount} tabs`);
+      }
+      if (entry.isGuest) {
+        parts.push('guest');
+      }
+      metaEl.textContent = parts.join(' / ');
+      row.appendChild(metaEl);
+      frag.appendChild(row);
+    });
+    connectedUsersListEl.appendChild(frag);
   }
 
   function mapHistoryFilterToMatchType(filter) {
@@ -710,6 +792,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         latestMetrics ? latestMetrics.matches : [],
       );
       if (latestMetrics) {
+        renderConnectedUsersList(latestMetrics.connectedUserDetails, latestMetrics.connectedUserIds);
         renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
         renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
       }
@@ -1295,6 +1378,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     if (connectedUsersEl) connectedUsersEl.textContent = payload.connectedUsers ?? 0;
     if (quickplayQueueEl) quickplayQueueEl.textContent = payload.quickplayQueue ?? 0;
     if (rankedQueueEl) rankedQueueEl.textContent = payload.rankedQueue ?? 0;
+    renderConnectedUsersList(payload.connectedUserDetails, payload.connectedUserIds);
     renderList(quickplayQueueListEl, payload.quickplayQueueUserIds);
     renderList(rankedQueueListEl, payload.rankedQueueUserIds);
     activeMatchesStore.replaceAll(payload.matches);
@@ -1347,6 +1431,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       fetchAllUsers();
       renderActiveMatchesFromState();
       if (latestMetrics) {
+        renderConnectedUsersList(latestMetrics.connectedUserDetails, latestMetrics.connectedUserIds);
         renderList(quickplayQueueListEl, latestMetrics.quickplayQueueUserIds);
         renderList(rankedQueueListEl, latestMetrics.rankedQueueUserIds);
       }

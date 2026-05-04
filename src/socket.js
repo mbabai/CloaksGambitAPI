@@ -338,6 +338,12 @@ function initSocket(httpServer) {
     return [entry];
   }
 
+  function getSocketListFromClientEntry(entry) {
+    if (!entry) return [];
+    if (entry instanceof Set) return Array.from(entry).filter(Boolean);
+    return [entry].filter(Boolean);
+  }
+
   function hasConnectedUser(userId) {
     return getUserSockets(userId).length > 0;
   }
@@ -1712,13 +1718,26 @@ function initSocket(httpServer) {
       }
       const connectedEntries = Array.from(clients.entries());
       const connectedIds = [];
+      const connectedUserDetails = [];
       let connectedUserCount = 0;
-      connectedEntries.forEach(([id, socket]) => {
-        if (socket?.data?.isBot) {
+      connectedEntries.forEach(([id, entry]) => {
+        const sockets = getSocketListFromClientEntry(entry);
+        if (sockets.length === 0) {
           return;
         }
+        const isBotOnly = sockets.every(socket => Boolean(socket?.data?.isBot));
+        if (isBotOnly) return;
+        const firstSocket = sockets.find(socket => !socket?.data?.isBot) || sockets[0];
+        const session = firstSocket?.data?.session || {};
         connectedUserCount += 1;
         connectedIds.push(id);
+        connectedUserDetails.push({
+          id,
+          username: userIdToUsername.get(id) || firstSocket?.data?.username || session?.username || null,
+          socketCount: sockets.filter(socket => !socket?.data?.isBot).length || sockets.length,
+          isGuest: sockets.some(socket => Boolean(socket?.data?.isGuest || socket?.data?.session?.isGuest)),
+          authenticated: sockets.some(socket => Boolean(socket?.data?.session?.authenticated && !socket?.data?.session?.isGuest)),
+        });
       });
       const allConnectedIds = connectedEntries.map(([id]) => id);
       // Build in-game user list from active games
@@ -1756,6 +1775,11 @@ function initSocket(httpServer) {
       users.forEach(u => {
         usernames[u._id.toString()] = u.username;
       });
+      connectedUserDetails.forEach((entry) => {
+        if (!entry.username && usernames[entry.id]) {
+          entry.username = usernames[entry.id];
+        }
+      });
 
       adminNamespace.emit('admin:metrics', {
         connectedUsers: connectedUserCount,
@@ -1764,6 +1788,7 @@ function initSocket(httpServer) {
         rankedQueue: lobbyState.rankedQueue.length,
         inGameUsers: inGameIds.length,
         connectedUserIds: connectedIds,
+        connectedUserDetails,
         quickplayQueueUserIds: lobbyState.quickplayQueue,
         botQueueUserIds: lobbyState.botQueue,
         rankedQueueUserIds: lobbyState.rankedQueue,

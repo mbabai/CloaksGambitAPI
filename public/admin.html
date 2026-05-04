@@ -42,6 +42,8 @@
       .tableList { flex: 1 1 auto; max-height: 240px; overflow: auto; border: 1px solid rgba(184,134,11,0.55); border-radius: 8px; background: rgba(24,9,38,0.55); }
       .tableList .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid rgba(184,134,11,0.35); font-size: 14px; }
       .tableList .row:last-child { border-bottom: none; }
+      .tableList .row--empty { justify-content: center; color: rgba(255,215,0,0.68); font-style: italic; }
+      .tableList .connectionMeta { margin-left: auto; font-size: 12px; color: rgba(255,215,0,0.68); white-space: nowrap; }
       .userTable { width: 100%; border-collapse: collapse; min-width: 0; }
       .userTable thead { position: sticky; top: 0; background: var(--deep-purple); z-index: 1; }
       .userTable th, .userTable td { padding: 6px 10px; border-bottom: 1px solid rgba(184,134,11,0.35); color: var(--light-gold); font-size: 13px; line-height: 1.3; }
@@ -295,6 +297,10 @@
         </div>
 
         <div class="grid grid--lists">
+          <div class="listCard">
+            <div class="title">Live Connections</div>
+            <div id="connectedUsersList" class="tableList" role="table"></div>
+          </div>
           <div class="listCard">
             <div class="title">Quickplay Queue</div>
             <div id="quickplayQueueList" class="tableList" role="table"></div>
