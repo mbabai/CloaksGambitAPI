@@ -22,6 +22,9 @@ describe('procedural declaration bubbles', () => {
     expect(source).toContain('PROCEDURAL_BUBBLE_ICON_PLACEMENTS');
     expect(source).toContain('PROCEDURAL_BUBBLE_ICON_ADJUSTMENTS');
     expect(source).toContain('PROCEDURAL_BUBBLE_ICON_BOUNDS');
+    expect(source).toContain('POISON_SPEECH_FILL');
+    expect(source).toContain('drawSpeechLeftPathBackground');
+    expect(source).toContain('backgroundFill: declarationKey === \'bomb\' && placementKey === \'speechLeft\'');
     expect(source).toContain('applyBubbleIconFit');
     expect(source).toContain('drawProceduralBubbleCanvas');
     expect(source).toContain('document.createElement(\'canvas\')');
@@ -32,6 +35,8 @@ describe('procedural declaration bubbles', () => {
     const source = fs.readFileSync(BOARD_VIEW_PATH, 'utf8');
 
     expect(source).toContain('createBubbleVisual');
+    expect(source).toContain('getCapturedBubbleAnchor');
+    expect(source).toContain('overlay.attachToCaptured');
     expect(source).not.toContain('img.src = src');
   });
 });

@@ -187,6 +187,7 @@ export function deriveSpectateView(game) {
         to: { ...to },
         isPending: isPendingMove,
         actionType: lastMoveAction.type,
+        attachToCaptured: lastMoveAction.type === ACTIONS.BOMB,
       };
     }
   }

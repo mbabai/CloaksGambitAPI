@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cloaks Gambit Animation</title>
+    <link rel="icon" type="image/jpeg" href="/favicon.ico?v=20260310h" />
+    <link rel="shortcut icon" type="image/jpeg" href="/favicon.ico?v=20260310h" />
+    <link rel="apple-touch-icon" href="/favicon.ico?v=20260310h" />
+    <link rel="stylesheet" href="/colors.css?v=__ASSET_VERSION__" />
+    <link rel="stylesheet" href="/ui.css?v=__ASSET_VERSION__" />
+    <link rel="stylesheet" href="/animation.css?v=__ASSET_VERSION__" />
+  </head>
+  <body>
+    <main class="animation-scene" aria-label="Cloaks Gambit animation sequence">
+      <canvas id="animationBoard" class="animation-board" aria-hidden="true"></canvas>
+      <svg id="animationArrows" class="animation-arrows" aria-hidden="true"></svg>
+      <div id="animationActors" class="animation-actors" aria-hidden="true"></div>
+      <svg id="animationTopArrows" class="animation-top-arrows" aria-hidden="true"></svg>
+      <div id="animationPieces" class="animation-pieces" aria-hidden="true"></div>
+    </main>
+    <div class="animation-hud">
+      <div id="animationChapters" class="animation-chapters" aria-label="Animation chapters">
+        <button class="animation-chapter-button" type="button" data-chapter="identities">Identities</button>
+        <button class="animation-chapter-button" type="button" data-chapter="cloakMovement">Cloak Movement</button>
+        <button class="animation-chapter-button" type="button" data-chapter="capturesPoison">Captures &amp; Poison</button>
+        <button class="animation-chapter-button" type="button" data-chapter="setup">Set Up</button>
+        <button class="animation-chapter-button" type="button" data-chapter="winning">Winning</button>
+      </div>
+      <button id="animationPlayPause" class="animation-play-pause" type="button" aria-label="Pause animation">
+        <span class="animation-pause-icon" aria-hidden="true"></span>
+      </button>
+      <div class="animation-controls">
+        <label id="animationZoomGroup" class="animation-control-group" for="animationZoom">
+          <span class="animation-control-label">Zoom</span>
+          <input
+            id="animationZoom"
+            class="animation-slider animation-zoom"
+            type="range"
+            min="0.55"
+            max="1.2"
+            step="0.05"
+            value="0.8"
+            aria-label="Animation zoom"
+          />
+          <output id="animationZoomValue" class="animation-slider-value" for="animationZoom">0.8x</output>
+        </label>
+        <label id="animationSpeedGroup" class="animation-control-group" for="animationSpeed">
+          <span class="animation-control-label">Speed</span>
+        <input
+          id="animationSpeed"
+          class="animation-slider animation-speed"
+          type="range"
+          min="0.25"
+          max="3"
+          step="0.05"
+          value="1"
+          aria-label="Animation speed"
+        />
+          <output id="animationSpeedValue" class="animation-slider-value animation-speed-value" for="animationSpeed">1x</output>
+        </label>
+      </div>
+    </div>
+    <script type="module" src="/js/animation.js?v=__ASSET_VERSION__"></script>
+  </body>
+</html>

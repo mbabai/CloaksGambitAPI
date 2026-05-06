@@ -109,6 +109,7 @@ const PROD_FAVICON_PATH = path.join(PUBLIC_DIR, 'assets', 'images', 'cloakHood.j
 const DEV_FAVICON_PATH = path.join(PUBLIC_DIR, 'assets', 'images', 'cloakHoodInverted.jpg');
 const INDEX_HTML_PATH = path.join(PUBLIC_DIR, 'index.html');
 const ADMIN_HTML_PATH = path.join(PUBLIC_DIR, 'admin.html');
+const ANIMATION_HTML_PATH = path.join(PUBLIC_DIR, 'animation.html');
 const htmlTemplateCache = new Map();
 const staticOptions = {
   etag: true,
@@ -227,6 +228,9 @@ app.get(['/admin', '/admin.html'], async (req, res) => {
     return;
   }
   sendVersionedHtml(res, ADMIN_HTML_PATH);
+});
+app.get(['/animation', '/animation.html'], (req, res) => {
+  sendVersionedHtml(res, ANIMATION_HTML_PATH);
 });
 app.use(express.static(PUBLIC_DIR, staticOptions));
 // Serve UI image assets from fallback locations if not present in public/

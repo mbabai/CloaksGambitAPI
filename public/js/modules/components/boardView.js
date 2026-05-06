@@ -27,6 +27,13 @@ function clearChildren(element) {
   }
 }
 
+function getCapturedBubbleAnchor(cell) {
+  return {
+    x: cell.centerX,
+    y: cell.centerY,
+  };
+}
+
 function createBubbleNode({ type, squareSize, interactive, onBubbleClick, uiR, uiC }) {
   const node = createBubbleVisual({
     type,
@@ -273,10 +280,23 @@ export function createBoardView({
         const width = Math.floor(lastScene.squareSize * 1.08);
         const offsetX = Math.floor(lastScene.squareSize * 0.6);
         const offsetY = Math.floor(lastScene.squareSize * 0.5);
-        node.style.left = type.endsWith('Right')
-          ? `${cell.x + cell.width - width + offsetX}px`
-          : `${cell.x - offsetX}px`;
-        node.style.top = `${cell.y - offsetY}px`;
+        const attachToCaptured = Boolean(
+          overlay.attachToCaptured
+          && type === 'bombSpeechLeft'
+          && cell.capturedPiece
+        );
+        if (attachToCaptured) {
+          const anchor = getCapturedBubbleAnchor(cell);
+          const anchorLeft = anchor.x - (cell.width / 2);
+          const anchorTop = anchor.y - (cell.height / 2);
+          node.style.left = `${anchorLeft - offsetX}px`;
+          node.style.top = `${anchorTop - offsetY}px`;
+        } else {
+          node.style.left = type.endsWith('Right')
+            ? `${cell.x + cell.width - width + offsetX}px`
+            : `${cell.x - offsetX}px`;
+          node.style.top = `${cell.y - offsetY}px`;
+        }
         bubbleLayer.appendChild(node);
         refs.activeBubbles.push(node);
       });

@@ -14,6 +14,8 @@ const PROCEDURAL_BUBBLE_BACKGROUNDS = Object.freeze({
   thoughtLeft: `${PROCEDURAL_UI_BASE}/BubbleThoughtLeft.svg`,
   thoughtRight: `${PROCEDURAL_UI_BASE}/BubbleThoughtRight.svg`
 });
+const POISON_SPEECH_FILL = '#ac1f1b';
+const SPEECH_LEFT_PATH = 'M 163.38224,136.2068 134.27807,93.344301 C 135.64448,80.722731 138.38158,8.8880489 72.630151,7.354716 -7.970939,6.167106 -2.8563787,142.93128 66.544731,145.73179 c 11.37496,0.9296 38.701519,0.4045 60.854169,-22.75416 z';
 const DECLARATION_BUBBLE_ICONS = Object.freeze({
   king: `${PROCEDURAL_IDENTITY_BASE}/HeartIdentity.svg`,
   rook: `${PROCEDURAL_IDENTITY_BASE}/SwordIdentity.svg`,
@@ -157,6 +159,9 @@ export function getProceduralBubbleAsset(type) {
   return {
     kind: 'proceduralBubble',
     background,
+    backgroundFill: declarationKey === 'bomb' && placementKey === 'speechLeft'
+      ? POISON_SPEECH_FILL
+      : null,
     icon,
     declarationKey,
     placementKey
@@ -244,6 +249,24 @@ function applyBubbleCanvasSize(canvas, size) {
   return { cssSize, dpr };
 }
 
+function drawSpeechLeftPathBackground(ctx, cssSize, fill) {
+  if (!ctx || !Number.isFinite(cssSize) || cssSize <= 0 || !fill) return;
+  const scale = cssSize / 190;
+  const path = new Path2D(SPEECH_LEFT_PATH);
+
+  ctx.save();
+  ctx.scale(scale, scale);
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 1;
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
+  ctx.miterLimit = 4;
+  ctx.fill(path);
+  ctx.stroke(path);
+  ctx.restore();
+}
+
 function drawProceduralBubbleCanvas(canvas, procedural, size, placement, bounds, adjustment) {
   if (!canvas || !procedural) return;
   const { cssSize, dpr } = applyBubbleCanvasSize(canvas, size);
@@ -261,7 +284,9 @@ function drawProceduralBubbleCanvas(canvas, procedural, size, placement, bounds,
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
-  if (background?.complete && background.naturalWidth > 0) {
+  if (procedural.backgroundFill && procedural.placementKey === 'speechLeft') {
+    drawSpeechLeftPathBackground(ctx, cssSize, procedural.backgroundFill);
+  } else if (background?.complete && background.naturalWidth > 0) {
     ctx.drawImage(background, 0, 0, cssSize, cssSize);
   }
   if (icon?.complete && icon.naturalWidth > 0) {

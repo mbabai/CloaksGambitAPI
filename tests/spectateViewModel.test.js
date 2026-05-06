@@ -192,6 +192,7 @@ describe('deriveSpectateView', () => {
     expect(view.overlay).toMatchObject({
       types: ['bombSpeechLeft'],
       isPending: true,
+      attachToCaptured: true,
     });
     expect(view.pendingCapture).toMatchObject({ row: 0, col: 1 });
   });
