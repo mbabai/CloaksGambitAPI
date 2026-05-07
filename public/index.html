@@ -432,6 +432,53 @@
         cursor: wait;
       }
 
+      .account-setting-row--segmented {
+        cursor: default;
+      }
+
+      .account-setting-row__segments {
+        flex: 0 0 auto;
+        display: inline-grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        min-width: 156px;
+        border: 2px solid rgba(220, 220, 220, 0.78);
+        background: rgba(14, 7, 22, 0.32);
+        box-sizing: border-box;
+      }
+
+      .account-setting-row__segment {
+        min-width: 0;
+        height: 32px;
+        padding: 0 8px;
+        border: 0;
+        border-right: 1px solid rgba(220, 220, 220, 0.42);
+        background: transparent;
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .account-setting-row__segment:last-child {
+        border-right: 0;
+      }
+
+      .account-setting-row__segment--selected {
+        background: rgba(20, 201, 151, 0.98);
+        color: var(--CG-black);
+      }
+
+      .account-setting-row__segment:focus-visible {
+        outline: 2px solid rgba(255, 230, 156, 0.95);
+        outline-offset: 2px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .account-setting-row__segment:disabled {
+        opacity: 0.75;
+        cursor: wait;
+      }
+
       .history-modal {
         background: rgba(24, 9, 38, 0.95);
         border: 4px solid var(--CG-deep-gold);

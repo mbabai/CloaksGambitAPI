@@ -55,6 +55,13 @@ import {
 import { shouldPreserveClockSnapshot } from '/js/modules/utils/clockSyncPolicy.js';
 import { renderActiveMatchesList, createActiveMatchesStore, fetchActiveMatchesList } from '/js/modules/spectate/activeMatches.js';
 import { createSpectateController } from '/js/modules/spectate/controller.js';
+import {
+  DEFAULT_ANIMATION_SPEED,
+  ANIMATION_SPEEDS,
+  deriveOpponentMoveAnimationPlan,
+  getMoveAnimationDurations,
+  normalizeAnimationSpeed,
+} from '/js/modules/animations/moveAnimation.js';
 import { getLatestMoveContext } from '/js/shared/latestMoveContext.js';
 import { getResponseWindowState } from '/js/shared/responseWindow.js';
 import { logBootConstantsOnce, logGameSnapshot } from '/js/shared/debugLog.js';
@@ -234,6 +241,7 @@ logBootConstantsOnce();
   const GOOGLE_ICON_SRC = getIconAsset('google') || '/assets/images/google-icon.png';
   const TOOLTIP_COOKIE_NAME = 'cgTooltipsEnabled';
   const TOAST_NOTIFICATIONS_COOKIE_NAME = 'cgToastNotificationsEnabled';
+  const ANIMATION_SPEED_COOKIE_NAME = 'cgAnimationSpeed';
   const TOOLTIP_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 
   function normalizeTooltipPreference(value, fallback = true) {
@@ -269,6 +277,18 @@ logBootConstantsOnce();
 
   function persistToastNotificationsPreferenceCookie(enabled) {
     setCookie(TOAST_NOTIFICATIONS_COOKIE_NAME, enabled ? 'true' : 'false', TOOLTIP_COOKIE_MAX_AGE_SECONDS);
+  }
+
+  function readAnimationSpeedPreferenceCookie() {
+    return normalizeAnimationSpeed(getCookie(ANIMATION_SPEED_COOKIE_NAME), DEFAULT_ANIMATION_SPEED);
+  }
+
+  function persistAnimationSpeedPreferenceCookie(speed) {
+    setCookie(
+      ANIMATION_SPEED_COOKIE_NAME,
+      normalizeAnimationSpeed(speed, DEFAULT_ANIMATION_SPEED),
+      TOOLTIP_COOKIE_MAX_AGE_SECONDS
+    );
   }
 
   initTooltipSystem({ enabled: readTooltipPreferenceCookie() });
@@ -1278,6 +1298,17 @@ logBootConstantsOnce();
     });
   }
 
+  async function saveAnimationSpeedPreference(speed) {
+    const previousSpeed = normalizeAnimationSpeed(sessionInfo.animationSpeed, DEFAULT_ANIMATION_SPEED);
+    return saveUserBackedPreference({
+      field: 'animationSpeed',
+      value: speed,
+      previousValue: previousSpeed,
+      normalize: (value, fallback = DEFAULT_ANIMATION_SPEED) => normalizeAnimationSpeed(value, fallback),
+      errorMessage: 'Failed to update animation setting.',
+    });
+  }
+
   function createAccountToggleRow({
     id,
     label,
@@ -1364,6 +1395,103 @@ logBootConstantsOnce();
     return { row, control };
   }
 
+  function createAccountSegmentedRow({
+    id,
+    label,
+    description = '',
+    value,
+    options = [],
+    onChange,
+  }) {
+    const row = document.createElement('div');
+    row.className = 'menu-button menu-button--split account-setting-row account-setting-row--segmented';
+    row.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+
+    const textWrap = document.createElement('div');
+    textWrap.className = 'account-setting-row__text';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'account-setting-row__label';
+    labelEl.textContent = label;
+    textWrap.appendChild(labelEl);
+
+    if (description) {
+      const descriptionEl = document.createElement('span');
+      descriptionEl.className = 'account-setting-row__description';
+      descriptionEl.textContent = description;
+      textWrap.appendChild(descriptionEl);
+    }
+
+    const control = document.createElement('div');
+    control.id = id;
+    control.className = 'account-setting-row__segments';
+    control.setAttribute('role', 'group');
+    control.setAttribute('aria-label', label);
+
+    row.appendChild(textWrap);
+    row.appendChild(control);
+
+    const buttons = [];
+    let lastCommittedValue = normalizeAnimationSpeed(value, DEFAULT_ANIMATION_SPEED);
+
+    function applySegmentState(nextValue) {
+      const normalizedValue = normalizeAnimationSpeed(nextValue, DEFAULT_ANIMATION_SPEED);
+      buttons.forEach((button) => {
+        const selected = button.dataset.value === normalizedValue;
+        button.classList.toggle('account-setting-row__segment--selected', selected);
+        button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      });
+    }
+
+    async function commitSegment(nextValue) {
+      const normalizedNext = normalizeAnimationSpeed(nextValue, lastCommittedValue);
+      if (normalizedNext === lastCommittedValue) {
+        applySegmentState(lastCommittedValue);
+        return;
+      }
+      buttons.forEach((button) => { button.disabled = true; });
+      row.classList.add('account-setting-row--pending');
+      applySegmentState(normalizedNext);
+      try {
+        const committedValue = typeof onChange === 'function'
+          ? await onChange(normalizedNext)
+          : normalizedNext;
+        lastCommittedValue = normalizeAnimationSpeed(committedValue, normalizedNext);
+        applySegmentState(lastCommittedValue);
+      } catch (error) {
+        console.error('Failed to update animation setting', error);
+        applySegmentState(lastCommittedValue);
+        alert(error?.message || 'Failed to update animation setting. Please try again.');
+      } finally {
+        buttons.forEach((button) => { button.disabled = false; });
+        row.classList.remove('account-setting-row--pending');
+      }
+    }
+
+    options.forEach((option) => {
+      if (!option) return;
+      const normalizedValue = normalizeAnimationSpeed(option.value, null);
+      if (!normalizedValue) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'account-setting-row__segment';
+      button.dataset.value = normalizedValue;
+      button.textContent = option.label || normalizedValue;
+      button.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await commitSegment(normalizedValue);
+      });
+      control.appendChild(button);
+      buttons.push(button);
+    });
+
+    applySegmentState(lastCommittedValue);
+    return { row, control, buttons };
+  }
+
   function updateSessionInfo(partial = {}, { syncCookies = false } = {}) {
     if (partial.userId !== undefined) {
       sessionInfo.userId = partial.userId ? String(partial.userId) : null;
@@ -1379,6 +1507,10 @@ logBootConstantsOnce();
     if (partial.toastNotificationsEnabled !== undefined) {
       sessionInfo.toastNotificationsEnabled = normalizeTooltipPreference(partial.toastNotificationsEnabled, true);
       persistToastNotificationsPreferenceCookie(sessionInfo.toastNotificationsEnabled);
+    }
+    if (partial.animationSpeed !== undefined) {
+      sessionInfo.animationSpeed = normalizeAnimationSpeed(partial.animationSpeed, DEFAULT_ANIMATION_SPEED);
+      persistAnimationSpeedPreferenceCookie(sessionInfo.animationSpeed);
     }
 
     let recomputeAuth = false;
@@ -1519,9 +1651,21 @@ logBootConstantsOnce();
       checked: normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true),
       onChange: saveToastNotificationsPreference,
     });
+    const animationSegmented = createAccountSegmentedRow({
+      id: 'settingsAnimationSpeed',
+      label: 'Animation',
+      value: normalizeAnimationSpeed(sessionInfo.animationSpeed, DEFAULT_ANIMATION_SPEED),
+      options: [
+        { value: ANIMATION_SPEEDS.off, label: 'Off' },
+        { value: ANIMATION_SPEEDS.fast, label: 'Fast' },
+        { value: ANIMATION_SPEEDS.slow, label: 'Slow' },
+      ],
+      onChange: saveAnimationSpeedPreference,
+    });
 
     accountPanelContent.appendChild(tooltipToggle.row);
     accountPanelContent.appendChild(toastNotificationsToggle.row);
+    accountPanelContent.appendChild(animationSegmented.row);
   }
 
   function renderLearnPanel() {
@@ -1600,6 +1744,10 @@ logBootConstantsOnce();
         userDetails?.toastNotificationsEnabled,
         sessionInfo.toastNotificationsEnabled
       );
+      const animationSpeed = normalizeAnimationSpeed(
+        userDetails?.animationSpeed,
+        sessionInfo.animationSpeed
+      );
 
       if (activeMenuPanel && activeMenuPanel !== 'account') {
         updateAccountPanel();
@@ -1614,6 +1762,9 @@ logBootConstantsOnce();
       }
       if (toastNotificationsEnabled !== sessionInfo.toastNotificationsEnabled) {
         updateSessionInfo({ toastNotificationsEnabled });
+      }
+      if (animationSpeed !== sessionInfo.animationSpeed) {
+        updateSessionInfo({ animationSpeed });
       }
 
       if (statsOverlayController) {
@@ -1882,6 +2033,11 @@ logBootConstantsOnce();
         } else if (sessionData.isGuest || sessionData.authenticated === false) {
           updates.toastNotificationsEnabled = readToastNotificationsPreferenceCookie();
         }
+        if (sessionData.animationSpeed !== undefined) {
+          updates.animationSpeed = sessionData.animationSpeed;
+        } else if (sessionData.isGuest || sessionData.authenticated === false) {
+          updates.animationSpeed = readAnimationSpeedPreferenceCookie();
+        }
         updateSessionInfo(updates, { syncCookies: Boolean(sessionData.isGuest) });
       }
     } catch (err) {
@@ -1908,6 +2064,7 @@ logBootConstantsOnce();
         isGuest: true,
         tooltipsEnabled: readTooltipPreferenceCookie(),
         toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
+        animationSpeed: readAnimationSpeedPreferenceCookie(),
       });
     }
 
@@ -2051,6 +2208,7 @@ logBootConstantsOnce();
     authenticated: false,
     tooltipsEnabled: readTooltipPreferenceCookie(),
     toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
+    animationSpeed: readAnimationSpeedPreferenceCookie(),
   };
 
   let playerNames = ['Anonymous0', 'Anonymous1'];
@@ -2095,6 +2253,9 @@ logBootConstantsOnce();
   let drawCooldownTimeout = null;
   let gameToastSystem = null;
   let lastGameToastSnapshot = null;
+  let lastOpponentMoveAnimationKey = null;
+  let activeOpponentMoveAnimationLayer = null;
+  let opponentMoveAnimationGeneration = 0;
   let tutorialConfig = null;
   let tutorialConfigPromise = null;
   let tutorialState = null;
@@ -3686,6 +3847,10 @@ logBootConstantsOnce();
           hideQueuer();
           loadPlayerNames(payload.players);
           currentIsWhite = (color === 0);
+          if (lastGameId && String(lastGameId) !== String(gameId)) {
+            lastOpponentMoveAnimationKey = null;
+            clearOpponentMoveAnimationLayer({ clearTransient: true });
+          }
           lastGameId = gameId;
 
           if (awaitingTournamentAccept) {
@@ -3760,6 +3925,33 @@ logBootConstantsOnce();
           if (Array.isArray(payload.board)) {
             currentRows = payload.board.length || 6;
             currentCols = payload.board[0]?.length || 5;
+            const animationPlan = deriveOpponentMoveAnimationPlan({
+              game: {
+                ...payload,
+                animationSpeed: getAnimationSpeedPreference(),
+              },
+              currentBoard,
+              viewerColor: color,
+              rows: currentRows,
+              cols: currentCols,
+              currentIsWhite,
+              lastAnimatedMoveKey: lastOpponentMoveAnimationKey,
+            });
+            let playedOpponentMoveAnimation = false;
+            if (animationPlan) {
+              try {
+                playedOpponentMoveAnimation = await playOpponentMoveAnimationPlan(animationPlan);
+                if (playedOpponentMoveAnimation) {
+                  lastOpponentMoveAnimationKey = animationPlan.moveKey;
+                }
+              } catch (animationErr) {
+                console.error('Opponent move animation failed', animationErr);
+                clearOpponentMoveAnimationLayer({ clearTransient: true });
+              }
+              if (!playedOpponentMoveAnimation) {
+                clearOpponentMoveAnimationLayer({ clearTransient: true });
+              }
+            }
             setStateFromServer(payload, 'game:update');
             // Keep setup mode consistent after refresh or reconnect
             myColor = currentIsWhite ? 0 : 1;
@@ -3775,8 +3967,14 @@ logBootConstantsOnce();
               isInSetup = false;
             }
             ensurePlayAreaRoot();
+            if (playedOpponentMoveAnimation && gameView) {
+              try { gameView.clearBoardTransientState(['currentBoard']); } catch (_) {}
+            }
             layoutPlayArea();
             renderBoardAndBars();
+            if (playedOpponentMoveAnimation) {
+              clearOpponentMoveAnimationLayer();
+            }
             syncGameToastSnapshot(payload);
           }
         } catch (e) {
@@ -3796,6 +3994,7 @@ logBootConstantsOnce();
           winReason: payload?.winReason,
         });
         gameFinished = payload?.winReason !== undefined && payload?.winReason !== null;
+        clearOpponentMoveAnimationLayer({ clearTransient: true });
         if (tournamentParticipantMode && tournamentUiController) {
           tournamentUiController.setTournamentGameActive(false);
         }
@@ -6950,6 +7149,7 @@ logBootConstantsOnce();
 
   function hidePlayArea() {
     if (!isPlayAreaVisible) return;
+    clearOpponentMoveAnimationLayer({ clearTransient: true });
     if (playAreaRoot) playAreaRoot.style.display = 'none';
     isPlayAreaVisible = false;
     hideTutorialOverlay();
@@ -8034,9 +8234,9 @@ logBootConstantsOnce();
     }
   }
 
-  function pieceGlyph(piece, target) {
+  function pieceGlyph(piece, target, options = {}) {
     try {
-      return modulePieceGlyph(piece, target, PIECE_IMAGES);
+      return modulePieceGlyph(piece, target, PIECE_IMAGES, options);
     } catch (_) {
       // Fallback to inline image if module import failed
       if (!piece) return null;
@@ -8072,6 +8272,211 @@ logBootConstantsOnce();
       bubble.style.top = (-offsetY) + 'px';
       return bubble;
     } catch (_) { return null; }
+  }
+
+  function getAnimationSpeedPreference() {
+    return normalizeAnimationSpeed(sessionInfo.animationSpeed, DEFAULT_ANIMATION_SPEED);
+  }
+
+  function clearOpponentMoveAnimationLayer({ clearTransient = false } = {}) {
+    opponentMoveAnimationGeneration += 1;
+    if (activeOpponentMoveAnimationLayer) {
+      safeRemoveNode(activeOpponentMoveAnimationLayer);
+      activeOpponentMoveAnimationLayer = null;
+    }
+    if (clearTransient && gameView) {
+      try { gameView.clearBoardTransientState(['currentBoard']); } catch (_) {}
+    }
+  }
+
+  function ensureOpponentMoveAnimationLayer() {
+    const boardEl = gameView?.elements?.board || null;
+    if (!boardEl) return null;
+    if (activeOpponentMoveAnimationLayer) {
+      safeRemoveNode(activeOpponentMoveAnimationLayer);
+      activeOpponentMoveAnimationLayer = null;
+    }
+    const layer = document.createElement('div');
+    layer.className = 'cg-live-move-animation-layer';
+    boardEl.appendChild(layer);
+    activeOpponentMoveAnimationLayer = layer;
+    return layer;
+  }
+
+  function easeInOutCubic(t) {
+    const clamped = Math.min(1, Math.max(0, Number(t) || 0));
+    return clamped < 0.5
+      ? 4 * clamped * clamped * clamped
+      : 1 - Math.pow(-2 * clamped + 2, 3) / 2;
+  }
+
+  function routePointForCell(cell, squareSize) {
+    return {
+      x: cell.uiC * squareSize,
+      y: cell.uiR * squareSize,
+    };
+  }
+
+  function interpolateRoutePoint(points, progress) {
+    if (!Array.isArray(points) || points.length === 0) return { x: 0, y: 0 };
+    if (points.length === 1) return { ...points[0] };
+    const lengths = [];
+    let total = 0;
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const from = points[i];
+      const to = points[i + 1];
+      const length = Math.hypot(to.x - from.x, to.y - from.y);
+      lengths.push(length);
+      total += length;
+    }
+    if (!total) return { ...points[points.length - 1] };
+    let remaining = total * Math.min(1, Math.max(0, progress));
+    for (let i = 0; i < lengths.length; i += 1) {
+      const length = lengths[i];
+      if (remaining <= length || i === lengths.length - 1) {
+        const from = points[i];
+        const to = points[i + 1];
+        const local = length ? remaining / length : 1;
+        return {
+          x: from.x + ((to.x - from.x) * local),
+          y: from.y + ((to.y - from.y) * local),
+        };
+      }
+      remaining -= length;
+    }
+    return { ...points[points.length - 1] };
+  }
+
+  function setMoveActorPosition(actor, point) {
+    if (!actor || !point) return;
+    actor.style.transform = `translate(${point.x}px, ${point.y}px)`;
+  }
+
+  function setCaptureActorPose(actor, fromUI, squareSize, progress) {
+    if (!actor || !fromUI) return;
+    const eased = easeInOutCubic(progress);
+    const anchorX = (fromUI.uiC + 0.5) * squareSize;
+    const anchorY = (fromUI.uiR + 0.5) * squareSize;
+    const x = anchorX + (squareSize * 0.22 * eased);
+    const y = anchorY - (squareSize * 0.08 * eased);
+    const deg = 30 * eased;
+    actor.style.left = `${x}px`;
+    actor.style.top = `${y}px`;
+    actor.style.transform = `translate(-50%, -50%) rotate(${deg}deg) scale(1)`;
+  }
+
+  function animateDuration(durationMs, onFrame) {
+    const duration = Math.max(0, Number(durationMs) || 0);
+    if (duration <= 0) {
+      if (typeof onFrame === 'function') onFrame(1);
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const raf = window.requestAnimationFrame || ((cb) => setTimeout(() => cb(Date.now()), 16));
+      const start = performance.now();
+      function step(now) {
+        const raw = Math.min(1, Math.max(0, (now - start) / duration));
+        if (typeof onFrame === 'function') onFrame(raw);
+        if (raw >= 1) {
+          resolve();
+        } else {
+          raf(step);
+        }
+      }
+      raf(step);
+    });
+  }
+
+  function appendActorPiece(actor, className, piece, squareSize) {
+    const pieceWrap = document.createElement('div');
+    pieceWrap.className = className;
+    const glyph = pieceGlyph(piece, squareSize, { showLabel: false });
+    if (glyph) {
+      pieceWrap.appendChild(glyph);
+    }
+    actor.appendChild(pieceWrap);
+  }
+
+  function createMoveActor(plan, squareSize) {
+    const actor = document.createElement('div');
+    actor.className = 'cg-live-move-actor';
+    actor.style.width = squareSize + 'px';
+    actor.style.height = squareSize + 'px';
+    appendActorPiece(actor, 'cg-live-move-actor__piece', plan.movingPiece, squareSize);
+
+    const bubbleTypes = bubbleTypesForMove(plan.fromUI, plan.toUI, plan.move.declaration);
+    const bubbleType = Array.isArray(bubbleTypes) && bubbleTypes.length ? bubbleTypes[0] : null;
+    if (bubbleType) {
+      const bubbleWrap = document.createElement('div');
+      bubbleWrap.className = 'cg-live-move-actor__bubble';
+      const bubble = createBubbleVisual({
+        type: bubbleType,
+        size: Math.floor(squareSize * 1.08),
+        alt: '',
+      });
+      if (bubble) {
+        bubbleWrap.appendChild(bubble);
+        actor.appendChild(bubbleWrap);
+      }
+    }
+    return actor;
+  }
+
+  function createCaptureActor(piece, squareSize) {
+    const actor = document.createElement('div');
+    actor.className = 'cg-live-capture-actor';
+    actor.style.width = squareSize + 'px';
+    actor.style.height = squareSize + 'px';
+    appendActorPiece(actor, 'cg-live-capture-actor__piece', piece, squareSize);
+    return actor;
+  }
+
+  async function playOpponentMoveAnimationPlan(plan) {
+    const speed = getAnimationSpeedPreference();
+    const durations = getMoveAnimationDurations(speed);
+    if (!durations || !plan || !gameView || !Array.isArray(plan.startBoard) || !Array.isArray(plan.arrivedBoard)) {
+      return false;
+    }
+    const layer = ensureOpponentMoveAnimationLayer();
+    if (!layer) return false;
+
+    const generation = opponentMoveAnimationGeneration + 1;
+    opponentMoveAnimationGeneration = generation;
+    const scene = gameView?.boardView?.getScene?.() || null;
+    const squareSize = Math.max(1, Math.round(scene?.squareSize || currentSquareSize || 40));
+    const routePoints = plan.route.map((cell) => routePointForCell(cell, squareSize));
+    const moveActor = createMoveActor(plan, squareSize);
+    layer.appendChild(moveActor);
+    gameView.setBoardTransientState({ currentBoard: plan.startBoard });
+    setMoveActorPosition(moveActor, routePoints[0]);
+
+    await animateDuration(durations.moveMs, (progress) => {
+      if (generation !== opponentMoveAnimationGeneration) return;
+      const point = interpolateRoutePoint(routePoints, easeInOutCubic(progress));
+      setMoveActorPosition(moveActor, point);
+    });
+
+    if (generation !== opponentMoveAnimationGeneration) return false;
+    setMoveActorPosition(moveActor, routePoints[routePoints.length - 1]);
+    gameView.setBoardTransientState({ currentBoard: plan.arrivedBoard });
+    const movingPieceLayer = moveActor.querySelector('.cg-live-move-actor__piece');
+    if (movingPieceLayer) {
+      movingPieceLayer.style.opacity = '0';
+    }
+
+    if (plan.targetPiece) {
+      const captureActor = createCaptureActor(plan.targetPiece, squareSize);
+      layer.appendChild(captureActor);
+      setCaptureActorPose(captureActor, plan.toUI, squareSize, 0);
+      await animateDuration(durations.captureMs, (progress) => {
+        if (generation !== opponentMoveAnimationGeneration) return;
+        setCaptureActorPose(captureActor, plan.toUI, squareSize, progress);
+      });
+      if (generation !== opponentMoveAnimationGeneration) return false;
+      setCaptureActorPose(captureActor, plan.toUI, squareSize, 1);
+    }
+
+    return true;
   }
 
   

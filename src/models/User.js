@@ -46,6 +46,11 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  animationSpeed: {
+    type: String,
+    enum: ['off', 'fast', 'slow'],
+    default: 'slow',
+  },
   createdAt: {
     type: Date,
     default: Date.now

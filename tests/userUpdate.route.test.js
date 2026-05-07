@@ -76,6 +76,7 @@ describe('users/update route preferences', () => {
       isGuest: false,
       tooltipsEnabled: false,
       toastNotificationsEnabled: true,
+      animationSpeed: 'slow',
       email: 'c@example.com',
     });
 
@@ -91,6 +92,7 @@ describe('users/update route preferences', () => {
       username: 'Chateau',
       tooltipsEnabled: false,
       toastNotificationsEnabled: true,
+      animationSpeed: 'slow',
     });
     expect(eventBus.emit).not.toHaveBeenCalled();
     expect(applyAuthenticatedCookies).not.toHaveBeenCalled();
@@ -113,6 +115,7 @@ describe('users/update route preferences', () => {
       isGuest: false,
       tooltipsEnabled: true,
       toastNotificationsEnabled: false,
+      animationSpeed: 'slow',
       email: 'c@example.com',
     });
 
@@ -129,5 +132,41 @@ describe('users/update route preferences', () => {
     expect(response.payload).toMatchObject({
       toastNotificationsEnabled: false,
     });
+  });
+
+  test('updates animation speed preference', async () => {
+    User.findByIdAndUpdate.mockResolvedValue({
+      _id: '507f191e810c19729de860ea',
+      username: 'Chateau',
+      elo: 880,
+      isBot: false,
+      isGuest: false,
+      tooltipsEnabled: true,
+      toastNotificationsEnabled: true,
+      animationSpeed: 'fast',
+      email: 'c@example.com',
+    });
+
+    const response = await callPatch(handler, {
+      animationSpeed: 'Fast',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(User.findByIdAndUpdate).toHaveBeenCalledWith(
+      '507f191e810c19729de860ea',
+      { animationSpeed: 'fast' },
+      { new: true }
+    );
+    expect(response.payload).toMatchObject({
+      animationSpeed: 'fast',
+    });
+  });
+
+  test('rejects invalid animation speed preference input', async () => {
+    const response = await callPatch(handler, { animationSpeed: 'medium' });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.payload).toEqual({ message: 'animationSpeed must be one of off, fast, slow' });
+    expect(User.findByIdAndUpdate).not.toHaveBeenCalled();
   });
 });

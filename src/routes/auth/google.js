@@ -15,6 +15,7 @@ const {
   resolveSessionFromRequest,
 } = require('../../utils/requestSession');
 const {
+  resolveAnimationSpeed,
   resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
 } = require('../../utils/userPreferences');
@@ -278,6 +279,7 @@ router.get('/session', async (req, res) => {
         authenticated: true,
         tooltipsEnabled: resolveTooltipsEnabled(session.user || session),
         toastNotificationsEnabled: resolveToastNotificationsEnabled(session.user || session),
+        animationSpeed: resolveAnimationSpeed(session.user || session),
       });
     }
 
@@ -290,6 +292,7 @@ router.get('/session', async (req, res) => {
       authenticated: false,
       tooltipsEnabled: undefined,
       toastNotificationsEnabled: undefined,
+      animationSpeed: undefined,
     });
   } catch (err) {
     console.error('Failed to resolve session', err);

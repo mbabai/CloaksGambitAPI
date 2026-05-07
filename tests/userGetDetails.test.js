@@ -109,6 +109,7 @@ describe('users/getDetails route', () => {
       isGuest: false,
       tooltipsEnabled: true,
       toastNotificationsEnabled: true,
+      animationSpeed: 'slow',
     });
   });
 
@@ -123,6 +124,7 @@ describe('users/getDetails route', () => {
         isGuest: false,
         tooltipsEnabled: false,
         toastNotificationsEnabled: false,
+        animationSpeed: 'off',
         photoUrl: '',
       }),
     });
@@ -135,6 +137,7 @@ describe('users/getDetails route', () => {
       username: 'Chateau',
       tooltipsEnabled: false,
       toastNotificationsEnabled: false,
+      animationSpeed: 'off',
     });
   });
 });

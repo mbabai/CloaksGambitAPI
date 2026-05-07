@@ -1345,6 +1345,53 @@ body.history-overlay-open {
   overflow: visible;
 }
 
+.cg-live-move-animation-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.cg-live-move-actor,
+.cg-live-capture-actor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.cg-live-move-actor {
+  z-index: 2;
+}
+
+.cg-live-capture-actor {
+  z-index: 3;
+  transform-origin: 50% 55%;
+}
+
+.cg-live-move-actor__piece,
+.cg-live-capture-actor__piece {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 90%;
+  height: 90%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cg-live-move-actor__bubble {
+  position: absolute;
+  left: -60%;
+  top: -50%;
+  width: 108%;
+  height: 108%;
+}
+
 .cg-board-hit-cell {
   appearance: none;
   -webkit-appearance: none;

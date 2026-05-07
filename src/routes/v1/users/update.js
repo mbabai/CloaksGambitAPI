@@ -8,8 +8,10 @@ const {
   resolveSessionFromRequest,
 } = require('../../../utils/requestSession');
 const {
+  normalizeAnimationSpeedInput,
   normalizeToastNotificationsEnabledInput,
   normalizeTooltipsEnabledInput,
+  resolveAnimationSpeed,
   resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
 } = require('../../../utils/userPreferences');
@@ -23,6 +25,7 @@ router.patch('/', async (req, res) => {
       email,
       tooltipsEnabled,
       toastNotificationsEnabled,
+      animationSpeed,
     } = req.body;
     const session = await resolveSessionFromRequest(req, { createGuest: false });
     if (!session?.userId) {
@@ -74,6 +77,14 @@ router.patch('/', async (req, res) => {
       update.toastNotificationsEnabled = normalizedToastNotificationsEnabled;
     }
 
+    if (animationSpeed !== undefined) {
+      const normalizedAnimationSpeed = normalizeAnimationSpeedInput(animationSpeed);
+      if (normalizedAnimationSpeed === null) {
+        return res.status(400).json({ message: 'animationSpeed must be one of off, fast, slow' });
+      }
+      update.animationSpeed = normalizedAnimationSpeed;
+    }
+
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ message: 'No fields to update' });
     }
@@ -104,6 +115,7 @@ router.patch('/', async (req, res) => {
       isGuest: Boolean(user.isGuest),
       tooltipsEnabled: resolveTooltipsEnabled(user),
       toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
+      animationSpeed: resolveAnimationSpeed(user),
       email: adminSession || String(user._id) === String(session.userId) ? user.email || '' : undefined,
     });
   } catch (err) {

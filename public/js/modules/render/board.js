@@ -1,4 +1,3 @@
-import { IDENTITIES } from '../constants.js';
 import {
   getIdentityRenderBox,
   getPieceAssetSources,
@@ -213,16 +212,15 @@ function drawMainPiece(ctx, imageCache, identityMap, cell, palette) {
 function drawCapturedPiece(ctx, imageCache, identityMap, cell) {
   if (!cell.capturedPiece) return;
   const size = Math.floor(cell.width * 0.9);
-  const rightOffset = cell.width * 0.15;
-  const preserveVisibleIdentity = Number(cell.capturedPiece.identity) !== IDENTITIES.UNKNOWN;
-  const clipBottom = preserveVisibleIdentity ? size * 0.52 : size * 0.32;
+  const rightOffset = cell.width * 0.22;
+  const upOffset = cell.height * 0.08;
+  const originOffsetY = cell.height * 0.05;
 
   ctx.save();
-  ctx.translate(cell.centerX + rightOffset, cell.centerY - (cell.height * 0.04));
+  ctx.translate(cell.centerX + rightOffset, cell.centerY - upOffset);
+  ctx.translate(0, originOffsetY);
   ctx.rotate(Math.PI / 6);
-  ctx.beginPath();
-  ctx.rect(-size * 0.42, -size * 0.52, size * 0.84, clipBottom + (size * 0.52));
-  ctx.clip();
+  ctx.translate(0, -originOffsetY);
   drawPieceImage(ctx, imageCache, identityMap, cell.capturedPiece, -size / 2, -size / 2, size);
   ctx.restore();
 }

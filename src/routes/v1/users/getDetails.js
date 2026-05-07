@@ -5,6 +5,7 @@ const User = require('../../../models/User');
 const { isAdminSession } = require('../../../utils/adminAccess');
 const { resolveSessionFromRequest } = require('../../../utils/requestSession');
 const {
+  resolveAnimationSpeed,
   resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
 } = require('../../../utils/userPreferences');
@@ -55,6 +56,7 @@ router.post('/', async (req, res) => {
       isGuest: Boolean(user.isGuest),
       tooltipsEnabled: resolveTooltipsEnabled(user),
       toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
+      animationSpeed: resolveAnimationSpeed(user),
       photoUrl: user.photoUrl || '',
       email: adminSession || isSelf ? (user.email || '') : undefined,
     });
