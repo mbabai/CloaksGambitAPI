@@ -3348,7 +3348,7 @@ function renderCapturesPoisonDemo(time) {
   blackActor.style.top = `${blackState.position.y}px`;
   blackActor.style.opacity = `${clamp(0, blackState.opacity, 1)}`;
   blackActor.style.zIndex = `${blackState.zIndex}`;
-  blackActor.style.transform = `translate(-50%, -50%) rotate(${blackState.rotation}deg) scale(1) scaleX(${blackState.scaleX})`;
+  blackActor.style.transform = `translate(-50%, -50%) rotate(${blackState.rotation}deg) scale(${blackState.scale}) scaleX(${blackState.scaleX})`;
   blackActor.style.filter = 'drop-shadow(0 14px 14px rgba(0, 0, 0, 0.42))';
 
   const bubblePosition = bubbleTypes.includes('bombSpeechLeft')
@@ -4027,11 +4027,16 @@ function applyWinningActiveMove(renderStates, sequenceState) {
   const movingPosition = localTime < timing.moveEnd
     ? interpolatePoint(startPoint, targetPoint, moveProgress)
     : targetPoint;
+  let movingScale = 1;
   let movingScaleX = 1;
 
   if (move.challenge && localTime >= timing.challengeStart && localTime < timing.challengeRevealEnd) {
     const revealProgress = clamp(0, (localTime - timing.challengeStart) / TIMELINE.winningChallengeRevealDuration, 1);
-    movingScaleX = Math.max(0.08, Math.abs(1 - (revealProgress * 2)));
+    if (move.challenge.failed) {
+      movingScale = 1 + (Math.sin(revealProgress * Math.PI) * 0.08);
+    } else {
+      movingScaleX = Math.max(0.08, Math.abs(1 - (revealProgress * 2)));
+    }
   }
 
   if (move.challenge && localTime >= timing.challengeRevealEnd) {
@@ -4096,7 +4101,7 @@ function applyWinningActiveMove(renderStates, sequenceState) {
     position: movingPosition,
     visualIdentity: getWinningPieceVisualIdentity(piece, move.challenge?.failed),
     opacity: 1,
-    scale: 1,
+    scale: movingScale,
     scaleX: movingScaleX,
     rotation: 0,
     zIndex: 5,
@@ -4209,11 +4214,14 @@ function renderWinningMoveBubble(sequenceState, renderStates) {
   const timing = getWinningStepTiming(move);
   const bubbleType = getWinningBubbleType(move.declaration);
   const pieceState = renderStates.get(move.pieceId);
-  if (!bubbleType || !pieceState || sequenceState.localTime > timing.holdEnd) {
+  const visibleEnd = move.challenge?.failed ? timing.challengeRevealEnd : timing.holdEnd;
+  if (!bubbleType || !pieceState || sequenceState.localTime > visibleEnd) {
     renderMoveBubbles(null);
     return;
   }
-  const fadeOut = 1 - easeInOutCubic((sequenceState.localTime - timing.moveEnd) / TIMELINE.winningMoveHoldDuration);
+  const fadeOut = move.challenge?.failed
+    ? 1
+    : 1 - easeInOutCubic((sequenceState.localTime - timing.moveEnd) / TIMELINE.winningMoveHoldDuration);
   const opacity = sequenceState.localTime < timing.moveEnd ? 1 : fadeOut;
   renderMoveBubbles({ bubbleType }, pieceState.position, opacity);
 }
@@ -4910,6 +4918,7 @@ function getCapturesBlackState(time, milestones, offscreen, target) {
   let rotation = 0;
   let zIndex = 1;
   let identity = UNKNOWN_IDENTITY;
+  let scale = 1;
   let scaleX = 1;
 
   if (time >= milestones.blackSlideStart && time < milestones.blackSlideEnd) {
@@ -4933,21 +4942,14 @@ function getCapturesBlackState(time, milestones, offscreen, target) {
 
   if (time >= milestones.firstChallengeCursorClickEnd && time < milestones.firstChallengeResolveEnd) {
     const progress = clamp(0, (time - milestones.firstChallengeCursorClickEnd) / TIMELINE.captureChallengeResolveDuration, 1);
-    const half = 0.5;
-    if (progress < half) {
-      scaleX = Math.max(0.02, 1 - easeInCubic(progress / half));
-    } else {
-      identity = IDENTITIES.BOMB;
-      scaleX = Math.max(0.02, easeOutCubic((progress - half) / half));
-    }
+    identity = progress >= 0.5 ? IDENTITIES.BOMB : UNKNOWN_IDENTITY;
+    scale = 1 + (Math.sin(progress * Math.PI) * 0.08);
   } else if (time >= milestones.firstChallengeResolveEnd && time < milestones.daggerRewindStart) {
     identity = IDENTITIES.BOMB;
   } else if (time >= milestones.daggerRewindStart && time < milestones.daggerRewindEnd) {
     const progress = clamp(0, (time - milestones.daggerRewindStart) / TIMELINE.captureDaggerRewindDuration, 1);
     identity = progress < 0.5 ? IDENTITIES.BOMB : UNKNOWN_IDENTITY;
-    scaleX = progress < 0.5
-      ? Math.max(0.02, 1 - easeInCubic(progress / 0.5))
-      : Math.max(0.02, easeOutCubic((progress - 0.5) / 0.5));
+    scale = 1 + (Math.sin(progress * Math.PI) * 0.08);
   }
 
   if (time >= milestones.secondChallengeCursorClickEnd) {
@@ -5008,6 +5010,7 @@ function getCapturesBlackState(time, milestones, offscreen, target) {
     position,
     opacity,
     rotation,
+    scale,
     scaleX,
     zIndex,
   };
