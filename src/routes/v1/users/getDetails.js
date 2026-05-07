@@ -4,7 +4,10 @@ const mongoose = require('mongoose');
 const User = require('../../../models/User');
 const { isAdminSession } = require('../../../utils/adminAccess');
 const { resolveSessionFromRequest } = require('../../../utils/requestSession');
-const { resolveTooltipsEnabled } = require('../../../utils/userPreferences');
+const {
+  resolveToastNotificationsEnabled,
+  resolveTooltipsEnabled,
+} = require('../../../utils/userPreferences');
 
 const DEFAULT_ELO = 800;
 
@@ -51,6 +54,7 @@ router.post('/', async (req, res) => {
       isBot: Boolean(user.isBot),
       isGuest: Boolean(user.isGuest),
       tooltipsEnabled: resolveTooltipsEnabled(user),
+      toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
       photoUrl: user.photoUrl || '',
       email: adminSession || isSelf ? (user.email || '') : undefined,
     });

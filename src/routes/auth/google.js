@@ -14,7 +14,10 @@ const {
   clearCookie,
   resolveSessionFromRequest,
 } = require('../../utils/requestSession');
-const { resolveTooltipsEnabled } = require('../../utils/userPreferences');
+const {
+  resolveToastNotificationsEnabled,
+  resolveTooltipsEnabled,
+} = require('../../utils/userPreferences');
 
 const router = express.Router();
 
@@ -274,6 +277,7 @@ router.get('/session', async (req, res) => {
         isGuest: false,
         authenticated: true,
         tooltipsEnabled: resolveTooltipsEnabled(session.user || session),
+        toastNotificationsEnabled: resolveToastNotificationsEnabled(session.user || session),
       });
     }
 
@@ -285,6 +289,7 @@ router.get('/session', async (req, res) => {
       isGuest: true,
       authenticated: false,
       tooltipsEnabled: undefined,
+      toastNotificationsEnabled: undefined,
     });
   } catch (err) {
     console.error('Failed to resolve session', err);

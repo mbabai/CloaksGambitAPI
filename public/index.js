@@ -74,7 +74,7 @@ logBootConstantsOnce();
   const SAVED_GAME_TYPE_COOKIE = 'cgGameType';
   const SAVED_BOT_TYPE_COOKIE = 'cgBotType';
   const SELECTION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
-  const VALID_GAME_TYPES = new Set(['quickplay', 'ranked', 'custom', 'bots', 'spectate']);
+  const VALID_GAME_TYPES = new Set(['quickplay', 'ranked', 'custom', 'bots', 'spectate', 'tournament']);
 
   function saveSelectionCookie(name, value) {
     if (!name || !value) return;
@@ -198,15 +198,11 @@ logBootConstantsOnce();
     variant: 'neutral',
     position: 'relative'
   });
-  const tutorialBtn = upgradeButton(document.getElementById('tutorialBtn'), {
+  const settingsBtn = upgradeButton(document.getElementById('settingsBtn'), {
     variant: 'neutral',
     position: 'relative'
   });
-  const rankedLeaderboardBtn = upgradeButton(document.getElementById('rankedLeaderboardBtn'), {
-    variant: 'neutral',
-    position: 'relative'
-  });
-  const tournamentBtn = upgradeButton(document.getElementById('tournamentBtn'), {
+  const learnBtn = upgradeButton(document.getElementById('learnBtn'), {
     variant: 'neutral',
     position: 'relative'
   });
@@ -216,6 +212,7 @@ logBootConstantsOnce();
   const usernameDisplay = document.getElementById('usernameDisplay');
   const accountPanelContent = document.getElementById('accountPanelContent');
   const accountBtnImg = accountBtn.querySelector('img');
+  const menuCategoryButtons = [accountBtn, settingsBtn, learnBtn].filter(Boolean);
 
   const spectateOverlay = document.getElementById('spectateOverlay');
   const spectatePlayArea = document.getElementById('spectatePlayArea');
@@ -299,6 +296,7 @@ logBootConstantsOnce();
   });
 
   let menuOpen = false;
+  let activeMenuPanel = null;
   const PANEL_WIDTH = 180;
   const PANEL_MARGIN = 16; // keep gap from Find Game button
 
@@ -410,14 +408,24 @@ logBootConstantsOnce();
 
   function closeAccountPanel() {
     accountPanel.style.display = 'none';
-    accountBtn.classList.remove('active');
+    activeMenuPanel = null;
+    menuCategoryButtons.forEach((button) => button.classList.remove('active'));
     adjustMenuBounds();
   }
 
-  function openAccountPanel() {
+  function openAccountPanel(panel = 'account') {
+    activeMenuPanel = panel;
     accountPanel.style.display = 'block';
-    accountBtn.classList.add('active');
+    menuCategoryButtons.forEach((button) => {
+      const isActive = (
+        (panel === 'account' && button === accountBtn)
+        || (panel === 'settings' && button === settingsBtn)
+        || (panel === 'learn' && button === learnBtn)
+      );
+      button.classList.toggle('active', isActive);
+    });
     adjustMenuBounds();
+    updateAccountPanel();
   }
 
   function openMenu() {
@@ -1047,76 +1055,80 @@ logBootConstantsOnce();
 
   accountBtn.addEventListener('click', ev => {
     ev.stopPropagation();
-    if (accountPanel.style.display === 'block') {
+    if (accountPanel.style.display === 'block' && activeMenuPanel === 'account') {
       closeAccountPanel();
     } else {
-      openAccountPanel();
+      openAccountPanel('account');
     }
   });
 
-  if (rankedLeaderboardBtn) {
-    rankedLeaderboardBtn.addEventListener('click', ev => {
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', ev => {
       ev.stopPropagation();
-      openRankedLeaderboard();
+      if (accountPanel.style.display === 'block' && activeMenuPanel === 'settings') {
+        closeAccountPanel();
+      } else {
+        openAccountPanel('settings');
+      }
     });
   }
 
-  if (tutorialBtn) {
-    tutorialBtn.addEventListener('click', ev => {
+  if (learnBtn) {
+    learnBtn.addEventListener('click', ev => {
       ev.stopPropagation();
-      closeMenu();
-      showTutorialStartPrompt();
+      if (accountPanel.style.display === 'block' && activeMenuPanel === 'learn') {
+        closeAccountPanel();
+      } else {
+        openAccountPanel('learn');
+      }
     });
   }
 
-  if (tournamentBtn) {
-    tournamentUiController = initTournamentUi({
-      triggerButton: tournamentBtn,
-      getSessionInfo: () => sessionInfo,
-      onSessionRefresh: refreshSession,
-      onSpectateMatch: (matchId) => {
-        if (!matchId || !spectateController) return;
-        spectateController.open(matchId);
-      },
-      registerSpectateUsername: setSpectateUsername,
-      onParticipantStateChange: (isParticipant) => {
-        tournamentParticipantMode = Boolean(isParticipant);
-        updateFindButton();
-      },
-      onTournamentAcceptStateChange: ({ requiresAccept = false, currentUserGame = null } = {}) => {
-        const gameId = currentUserGame?.gameId ? String(currentUserGame.gameId) : null;
-        const color = Number.isInteger(currentUserGame?.color) ? currentUserGame.color : null;
-        if (gameId && locallyAcceptedTournamentGames.has(gameId)) {
-          return;
-        }
-        if (requiresAccept && gameId && color !== null) {
-          stopClockInterval();
-          gameFinished = false;
-          isInSetup = false;
-          selected = null;
-          dragging = null;
-          purgeDanglingDragArtifacts();
-          currentDrawOffer = null;
-          clearDrawCooldownTimeout();
-          lastGameId = gameId;
-          currentIsWhite = color === 0;
-          tournamentAcceptScheduler.queue({
-            gameId,
-            color,
-            startSeconds: Math.max(1, Number(currentUserGame?.acceptWindowSeconds) || 30),
-          });
-          return;
-        }
-        tournamentAcceptScheduler.clearPending({ preserveDeadline: false });
-        tournamentAcceptScheduler.releaseGrace();
-        if (activeBannerKind === 'tournament-accept') {
-          clearBannerOverlay({ restoreFocus: false });
-        } else if (isBannerVisible() && !shouldPreserveTournamentFinishedView()) {
-          clearBannerOverlay({ restoreFocus: false });
-        }
-      },
-    });
-  }
+  tournamentUiController = initTournamentUi({
+    getSessionInfo: () => sessionInfo,
+    onSessionRefresh: refreshSession,
+    onSpectateMatch: (matchId) => {
+      if (!matchId || !spectateController) return;
+      spectateController.open(matchId);
+    },
+    registerSpectateUsername: setSpectateUsername,
+    onParticipantStateChange: (isParticipant) => {
+      tournamentParticipantMode = Boolean(isParticipant);
+      updateFindButton();
+    },
+    onTournamentAcceptStateChange: ({ requiresAccept = false, currentUserGame = null } = {}) => {
+      const gameId = currentUserGame?.gameId ? String(currentUserGame.gameId) : null;
+      const color = Number.isInteger(currentUserGame?.color) ? currentUserGame.color : null;
+      if (gameId && locallyAcceptedTournamentGames.has(gameId)) {
+        return;
+      }
+      if (requiresAccept && gameId && color !== null) {
+        stopClockInterval();
+        gameFinished = false;
+        isInSetup = false;
+        selected = null;
+        dragging = null;
+        purgeDanglingDragArtifacts();
+        currentDrawOffer = null;
+        clearDrawCooldownTimeout();
+        lastGameId = gameId;
+        currentIsWhite = color === 0;
+        tournamentAcceptScheduler.queue({
+          gameId,
+          color,
+          startSeconds: Math.max(1, Number(currentUserGame?.acceptWindowSeconds) || 30),
+        });
+        return;
+      }
+      tournamentAcceptScheduler.clearPending({ preserveDeadline: false });
+      tournamentAcceptScheduler.releaseGrace();
+      if (activeBannerKind === 'tournament-accept') {
+        clearBannerOverlay({ restoreFocus: false });
+      } else if (isBannerVisible() && !shouldPreserveTournamentFinishedView()) {
+        clearBannerOverlay({ restoreFocus: false });
+      }
+    },
+  });
 
   document.addEventListener('click', ev => {
     if (!menuOpen) return;
@@ -1207,13 +1219,18 @@ logBootConstantsOnce();
     return true;
   }
 
-  async function saveTooltipPreference(enabled) {
-    const previousEnabled = normalizeTooltipPreference(sessionInfo.tooltipsEnabled, true);
-    const nextEnabled = normalizeTooltipPreference(enabled, true);
-    updateSessionInfo({ tooltipsEnabled: nextEnabled });
+  async function saveUserBackedPreference({
+    field,
+    value,
+    previousValue,
+    normalize,
+    errorMessage,
+  }) {
+    const nextValue = normalize(value);
+    updateSessionInfo({ [field]: nextValue });
 
     if (!(sessionInfo.authenticated && sessionInfo.userId)) {
-      return nextEnabled;
+      return nextValue;
     }
 
     try {
@@ -1222,27 +1239,43 @@ logBootConstantsOnce();
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: sessionInfo.userId,
-          tooltipsEnabled: nextEnabled,
+          [field]: nextValue,
         })
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'Failed to update tooltip setting.');
+        throw new Error(err.message || errorMessage);
       }
       const updated = await res.json().catch(() => null);
-      const resolvedEnabled = normalizeTooltipPreference(updated?.tooltipsEnabled, nextEnabled);
-      updateSessionInfo({ tooltipsEnabled: resolvedEnabled });
-      return resolvedEnabled;
+      const resolvedValue = normalize(updated?.[field], nextValue);
+      updateSessionInfo({ [field]: resolvedValue });
+      return resolvedValue;
     } catch (error) {
-      updateSessionInfo({ tooltipsEnabled: previousEnabled });
+      updateSessionInfo({ [field]: previousValue });
       throw error;
     }
   }
 
+  async function saveTooltipPreference(enabled) {
+    const previousEnabled = normalizeTooltipPreference(sessionInfo.tooltipsEnabled, true);
+    return saveUserBackedPreference({
+      field: 'tooltipsEnabled',
+      value: enabled,
+      previousValue: previousEnabled,
+      normalize: (value, fallback = true) => normalizeTooltipPreference(value, fallback),
+      errorMessage: 'Failed to update tooltip setting.',
+    });
+  }
+
   async function saveToastNotificationsPreference(enabled) {
-    const nextEnabled = normalizeTooltipPreference(enabled, true);
-    updateSessionInfo({ toastNotificationsEnabled: nextEnabled });
-    return nextEnabled;
+    const previousEnabled = normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true);
+    return saveUserBackedPreference({
+      field: 'toastNotificationsEnabled',
+      value: enabled,
+      previousValue: previousEnabled,
+      normalize: (value, fallback = true) => normalizeTooltipPreference(value, fallback),
+      errorMessage: 'Failed to update toast notification setting.',
+    });
   }
 
   function createAccountToggleRow({
@@ -1412,7 +1445,123 @@ logBootConstantsOnce();
     }
   }
 
+  function createPanelMenuButton({
+    id,
+    label,
+    iconSrc,
+    iconAlt = '',
+    onClick,
+    variant = 'neutral',
+    href = '',
+    target = '',
+    rel = '',
+  }) {
+    const button = href
+      ? document.createElement('a')
+      : createButton({
+        id,
+        variant,
+        position: 'relative'
+      });
+    if (id && href) {
+      button.id = id;
+    }
+    if (href) {
+      button.href = href;
+      if (target) button.target = target;
+      if (rel) button.rel = rel;
+    }
+    button.classList.add('menu-button', 'menu-button--split');
+    button.innerHTML = '';
+    button.style.boxSizing = 'border-box';
+
+    const labelEl = document.createElement('span');
+    labelEl.textContent = label;
+    labelEl.style.flex = '1 1 auto';
+    labelEl.style.minWidth = '0';
+    labelEl.style.textAlign = 'left';
+    button.appendChild(labelEl);
+
+    if (iconSrc) {
+      const icon = document.createElement('img');
+      icon.src = iconSrc;
+      icon.alt = iconAlt;
+      icon.style.width = '20px';
+      icon.style.height = '20px';
+      icon.style.objectFit = 'contain';
+      icon.style.pointerEvents = 'none';
+      icon.style.flex = '0 0 20px';
+      icon.style.marginLeft = 'auto';
+      button.appendChild(icon);
+    }
+
+    if (typeof onClick === 'function') {
+      button.addEventListener('click', onClick);
+    }
+
+    return button;
+  }
+
+  function renderSettingsPanel() {
+    accountPanelContent.style.alignItems = 'stretch';
+    accountPanelContent.style.gap = '8px';
+    accountPanelContent.innerHTML = '';
+
+    const tooltipToggle = createAccountToggleRow({
+      id: 'settingsTooltipsToggle',
+      label: 'Tooltips',
+      checked: normalizeTooltipPreference(sessionInfo.tooltipsEnabled, true),
+      onChange: saveTooltipPreference,
+    });
+    const toastNotificationsToggle = createAccountToggleRow({
+      id: 'settingsToastNotificationsToggle',
+      label: 'Toast Notifications',
+      checked: normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true),
+      onChange: saveToastNotificationsPreference,
+    });
+
+    accountPanelContent.appendChild(tooltipToggle.row);
+    accountPanelContent.appendChild(toastNotificationsToggle.row);
+  }
+
+  function renderLearnPanel() {
+    accountPanelContent.style.alignItems = 'stretch';
+    accountPanelContent.style.gap = '8px';
+    accountPanelContent.innerHTML = '';
+
+    accountPanelContent.appendChild(createPanelMenuButton({
+      id: 'learnTutorialBtn',
+      label: 'Play Tutorial',
+      iconSrc: '/assets/images/GoldThrone.svg',
+      iconAlt: 'Tutorial',
+      onClick: (ev) => {
+        ev.stopPropagation();
+        closeMenu();
+        showTutorialStartPrompt();
+      },
+    }));
+
+    accountPanelContent.appendChild(createPanelMenuButton({
+      id: 'rulebookBtn',
+      label: 'Rulebook',
+      iconSrc: '/assets/images/book.png',
+      iconAlt: 'Rulebook',
+      href: 'https://drive.google.com/file/d/172IyBX2voKSh7LqQnUWb4dsBzug69ong/view?usp=drive_link',
+      target: '_blank',
+      rel: 'noopener',
+    }));
+  }
+
   async function updateAccountPanel() {
+    if (activeMenuPanel === 'settings') {
+      renderSettingsPanel();
+      return;
+    }
+    if (activeMenuPanel === 'learn') {
+      renderLearnPanel();
+      return;
+    }
+
     let storedName = '';
     try {
       storedName = localStorage.getItem('cg_username') || '';
@@ -1447,12 +1596,24 @@ logBootConstantsOnce();
         userDetails?.tooltipsEnabled,
         sessionInfo.tooltipsEnabled
       );
+      const toastNotificationsEnabled = normalizeTooltipPreference(
+        userDetails?.toastNotificationsEnabled,
+        sessionInfo.toastNotificationsEnabled
+      );
+
+      if (activeMenuPanel && activeMenuPanel !== 'account') {
+        updateAccountPanel();
+        return;
+      }
 
       if (displayName && displayName !== sessionInfo.username) {
         updateSessionInfo({ username: displayName });
       }
       if (tooltipsEnabled !== sessionInfo.tooltipsEnabled) {
         updateSessionInfo({ tooltipsEnabled });
+      }
+      if (toastNotificationsEnabled !== sessionInfo.toastNotificationsEnabled) {
+        updateSessionInfo({ toastNotificationsEnabled });
       }
 
       if (statsOverlayController) {
@@ -1517,26 +1678,16 @@ logBootConstantsOnce();
       statsBtn.appendChild(statsLabel);
       statsBtn.appendChild(statsBadge);
 
-      const tournamentsBtn = createButton({
-        id: 'tournamentsBtn',
-        variant: 'neutral',
-        position: 'relative'
+      const rankedBtn = createPanelMenuButton({
+        id: 'accountRankedBtn',
+        label: 'Ranked',
+        iconSrc: '/assets/images/rankIcon.png',
+        iconAlt: 'Ranked',
+        onClick: (ev) => {
+          ev.stopPropagation();
+          openRankedLeaderboard();
+        },
       });
-      tournamentsBtn.classList.add('menu-button', 'menu-button--split');
-      tournamentsBtn.innerHTML = '';
-      const tournamentsLabel = document.createElement('span');
-      tournamentsLabel.textContent = 'Tournaments';
-      tournamentsLabel.style.flex = '1';
-      tournamentsLabel.style.textAlign = 'left';
-      const tournamentsMeta = document.createElement('img');
-      tournamentsMeta.src = '/assets/images/Tournament.png';
-      tournamentsMeta.alt = 'Tournament';
-      tournamentsMeta.style.width = '20px';
-      tournamentsMeta.style.height = '20px';
-      tournamentsMeta.style.objectFit = 'contain';
-      tournamentsMeta.style.pointerEvents = 'none';
-      tournamentsBtn.appendChild(tournamentsLabel);
-      tournamentsBtn.appendChild(tournamentsMeta);
 
       const logoutBtn = createButton({
         id: 'logoutBtn',
@@ -1559,24 +1710,9 @@ logBootConstantsOnce();
       logoutBtn.appendChild(googleImg);
       logoutBtn.style.marginTop = 'auto';
 
-      const tooltipToggle = createAccountToggleRow({
-        id: 'accountTooltipsToggle',
-        label: 'Tooltips',
-        checked: tooltipsEnabled,
-        onChange: saveTooltipPreference,
-      });
-      const toastNotificationsToggle = createAccountToggleRow({
-        id: 'accountToastNotificationsToggle',
-        label: 'Toast Notifications',
-        checked: normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true),
-        onChange: saveToastNotificationsPreference,
-      });
-
       accountPanelContent.appendChild(usernameRow);
       accountPanelContent.appendChild(statsBtn);
-      accountPanelContent.appendChild(tournamentsBtn);
-      accountPanelContent.appendChild(tooltipToggle.row);
-      accountPanelContent.appendChild(toastNotificationsToggle.row);
+      accountPanelContent.appendChild(rankedBtn);
       accountPanelContent.appendChild(logoutBtn);
 
       accountBtnImg.src = LOGGED_IN_AVATAR_SRC;
@@ -1588,10 +1724,6 @@ logBootConstantsOnce();
       statsBtn.addEventListener('click', ev => {
         ev.stopPropagation();
         openStatsOverlay();
-      });
-      tournamentsBtn.addEventListener('click', async ev => {
-        ev.stopPropagation();
-        await openAccountTournamentHistory();
       });
       editBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
@@ -1682,7 +1814,7 @@ logBootConstantsOnce();
       loginImg.src = GOOGLE_ICON_SRC;
       loginImg.alt = 'Google';
       const loginLabel = document.createElement('span');
-      loginLabel.textContent = 'Sign in';
+      loginLabel.textContent = 'Login';
       loginBtn.appendChild(loginImg);
       loginBtn.appendChild(loginLabel);
       accountPanelContent.appendChild(loginBtn);
@@ -1699,20 +1831,16 @@ logBootConstantsOnce();
       loginMessage.textContent = 'Log in to see account history, statistics, elo, and participate in ranked matches.';
       accountPanelContent.appendChild(loginMessage);
 
-      const tooltipToggle = createAccountToggleRow({
-        id: 'guestTooltipsToggle',
-        label: 'Tooltips',
-        checked: normalizeTooltipPreference(sessionInfo.tooltipsEnabled, true),
-        onChange: saveTooltipPreference,
-      });
-      const toastNotificationsToggle = createAccountToggleRow({
-        id: 'guestToastNotificationsToggle',
-        label: 'Toast Notifications',
-        checked: normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true),
-        onChange: saveToastNotificationsPreference,
-      });
-      accountPanelContent.appendChild(tooltipToggle.row);
-      accountPanelContent.appendChild(toastNotificationsToggle.row);
+      accountPanelContent.appendChild(createPanelMenuButton({
+        id: 'guestRankedBtn',
+        label: 'Ranked',
+        iconSrc: '/assets/images/rankIcon.png',
+        iconAlt: 'Ranked',
+        onClick: (ev) => {
+          ev.stopPropagation();
+          openRankedLeaderboard();
+        },
+      }));
 
       accountBtnImg.src = ACCOUNT_ICON_SRC;
       setCookie('photo', '', 0);
@@ -1749,7 +1877,11 @@ logBootConstantsOnce();
         } else if (sessionData.isGuest || sessionData.authenticated === false) {
           updates.tooltipsEnabled = readTooltipPreferenceCookie();
         }
-        updates.toastNotificationsEnabled = readToastNotificationsPreferenceCookie();
+        if (sessionData.toastNotificationsEnabled !== undefined) {
+          updates.toastNotificationsEnabled = sessionData.toastNotificationsEnabled;
+        } else if (sessionData.isGuest || sessionData.authenticated === false) {
+          updates.toastNotificationsEnabled = readToastNotificationsPreferenceCookie();
+        }
         updateSessionInfo(updates, { syncCookies: Boolean(sessionData.isGuest) });
       }
     } catch (err) {
@@ -3946,6 +4078,13 @@ logBootConstantsOnce();
 
     if (mode === 'spectate') {
       openSpectatePicker();
+      return;
+    }
+
+    if (mode === 'tournament') {
+      if (tournamentUiController && typeof tournamentUiController.openBrowser === 'function') {
+        await tournamentUiController.openBrowser();
+      }
       return;
     }
 

@@ -108,10 +108,11 @@ describe('users/getDetails route', () => {
       isBot: false,
       isGuest: false,
       tooltipsEnabled: true,
+      toastNotificationsEnabled: true,
     });
   });
 
-  test('returns stored tooltip preference when present', async () => {
+  test('returns stored preferences when present', async () => {
     const userId = '507f191e810c19729de860ea';
     User.findById.mockReturnValue({
       lean: jest.fn().mockResolvedValue({
@@ -121,6 +122,7 @@ describe('users/getDetails route', () => {
         isBot: false,
         isGuest: false,
         tooltipsEnabled: false,
+        toastNotificationsEnabled: false,
         photoUrl: '',
       }),
     });
@@ -132,6 +134,7 @@ describe('users/getDetails route', () => {
       userId,
       username: 'Chateau',
       tooltipsEnabled: false,
+      toastNotificationsEnabled: false,
     });
   });
 });

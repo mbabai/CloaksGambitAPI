@@ -88,6 +88,7 @@ describe('google auth session route', () => {
       email: 'm@example.com',
       isGuest: false,
       tooltipsEnabled: false,
+      toastNotificationsEnabled: false,
       photoUrl: '/profile.png',
     });
     ensureUser.mockResolvedValue({
@@ -108,6 +109,7 @@ describe('google auth session route', () => {
       isGuest: false,
       authenticated: true,
       tooltipsEnabled: false,
+      toastNotificationsEnabled: false,
     });
     expect(response.cookies.some((cookie) => cookie.name === 'cgToken' && cookie.value === 'dev-token')).toBe(true);
   });
@@ -144,6 +146,7 @@ describe('google auth session route', () => {
       isGuest: false,
       authenticated: true,
       tooltipsEnabled: true,
+      toastNotificationsEnabled: true,
     });
     expect(response.cookies.some((cookie) => cookie.name === 'cgToken' && cookie.value === 'dev-token')).toBe(true);
   });

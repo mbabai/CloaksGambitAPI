@@ -5,7 +5,7 @@ function resolveTooltipsEnabled(userLike) {
   return userLike.tooltipsEnabled !== false;
 }
 
-function normalizeTooltipsEnabledInput(value) {
+function normalizeBooleanPreferenceInput(value) {
   if (value === undefined) {
     return undefined;
   }
@@ -21,7 +21,24 @@ function normalizeTooltipsEnabledInput(value) {
   return null;
 }
 
+function normalizeTooltipsEnabledInput(value) {
+  return normalizeBooleanPreferenceInput(value);
+}
+
+function resolveToastNotificationsEnabled(userLike) {
+  if (!userLike || typeof userLike !== 'object') {
+    return true;
+  }
+  return userLike.toastNotificationsEnabled !== false;
+}
+
+function normalizeToastNotificationsEnabledInput(value) {
+  return normalizeBooleanPreferenceInput(value);
+}
+
 module.exports = {
   resolveTooltipsEnabled,
   normalizeTooltipsEnabledInput,
+  resolveToastNotificationsEnabled,
+  normalizeToastNotificationsEnabledInput,
 };

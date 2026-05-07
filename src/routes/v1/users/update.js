@@ -8,14 +8,22 @@ const {
   resolveSessionFromRequest,
 } = require('../../../utils/requestSession');
 const {
+  normalizeToastNotificationsEnabledInput,
   normalizeTooltipsEnabledInput,
+  resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
 } = require('../../../utils/userPreferences');
 
 // PATCH /v1/users/update
 router.patch('/', async (req, res) => {
   try {
-    const { userId, username, email, tooltipsEnabled } = req.body;
+    const {
+      userId,
+      username,
+      email,
+      tooltipsEnabled,
+      toastNotificationsEnabled,
+    } = req.body;
     const session = await resolveSessionFromRequest(req, { createGuest: false });
     if (!session?.userId) {
       return res.status(401).json({ message: 'Authentication required' });
@@ -58,6 +66,14 @@ router.patch('/', async (req, res) => {
       update.tooltipsEnabled = normalizedTooltipsEnabled;
     }
 
+    if (toastNotificationsEnabled !== undefined) {
+      const normalizedToastNotificationsEnabled = normalizeToastNotificationsEnabledInput(toastNotificationsEnabled);
+      if (normalizedToastNotificationsEnabled === null) {
+        return res.status(400).json({ message: 'toastNotificationsEnabled must be a boolean' });
+      }
+      update.toastNotificationsEnabled = normalizedToastNotificationsEnabled;
+    }
+
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ message: 'No fields to update' });
     }
@@ -87,6 +103,7 @@ router.patch('/', async (req, res) => {
       isBot: Boolean(user.isBot),
       isGuest: Boolean(user.isGuest),
       tooltipsEnabled: resolveTooltipsEnabled(user),
+      toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
       email: adminSession || String(user._id) === String(session.userId) ? user.email || '' : undefined,
     });
   } catch (err) {

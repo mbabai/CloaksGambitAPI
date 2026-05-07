@@ -453,8 +453,6 @@ export function initTournamentUi({
   onParticipantStateChange,
   onTournamentAcceptStateChange,
 }) {
-  if (!triggerButton) return null;
-
   const browserOverlay = createOverlay(createOverlayOptions('Tournament browser', 'Close tournament browser'));
   const createOverlayModal = createOverlay({
     ...createOverlayOptions('Create tournament', 'Close create tournament dialog'),
@@ -2170,19 +2168,21 @@ export function initTournamentUi({
     }
   });
 
-  triggerButton.addEventListener('click', async (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (typeof onSessionRefresh === 'function') {
-      await onSessionRefresh().catch(() => null);
-    }
-    if (currentTournament) {
-      renderPanel();
-      return;
-    }
-    browserOverlay.show();
-    await refreshBrowser();
-  });
+  if (triggerButton) {
+    triggerButton.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof onSessionRefresh === 'function') {
+        await onSessionRefresh().catch(() => null);
+      }
+      if (currentTournament) {
+        renderPanel();
+        return;
+      }
+      browserOverlay.show();
+      await refreshBrowser();
+    });
+  }
 
   return {
     openBrowser: async () => {

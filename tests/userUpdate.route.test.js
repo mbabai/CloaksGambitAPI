@@ -55,7 +55,7 @@ function callPatch(handler, body = {}) {
   });
 }
 
-describe('users/update route tooltip preference', () => {
+describe('users/update route preferences', () => {
   const handler = extractPatchHandler(userUpdateRouter);
 
   beforeEach(() => {
@@ -75,6 +75,7 @@ describe('users/update route tooltip preference', () => {
       isBot: false,
       isGuest: false,
       tooltipsEnabled: false,
+      toastNotificationsEnabled: true,
       email: 'c@example.com',
     });
 
@@ -89,6 +90,7 @@ describe('users/update route tooltip preference', () => {
     expect(response.payload).toMatchObject({
       username: 'Chateau',
       tooltipsEnabled: false,
+      toastNotificationsEnabled: true,
     });
     expect(eventBus.emit).not.toHaveBeenCalled();
     expect(applyAuthenticatedCookies).not.toHaveBeenCalled();
@@ -100,5 +102,32 @@ describe('users/update route tooltip preference', () => {
     expect(response.statusCode).toBe(400);
     expect(response.payload).toEqual({ message: 'tooltipsEnabled must be a boolean' });
     expect(User.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  test('updates toast notification preference', async () => {
+    User.findByIdAndUpdate.mockResolvedValue({
+      _id: '507f191e810c19729de860ea',
+      username: 'Chateau',
+      elo: 880,
+      isBot: false,
+      isGuest: false,
+      tooltipsEnabled: true,
+      toastNotificationsEnabled: false,
+      email: 'c@example.com',
+    });
+
+    const response = await callPatch(handler, {
+      toastNotificationsEnabled: false,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(User.findByIdAndUpdate).toHaveBeenCalledWith(
+      '507f191e810c19729de860ea',
+      { toastNotificationsEnabled: false },
+      { new: true }
+    );
+    expect(response.payload).toMatchObject({
+      toastNotificationsEnabled: false,
+    });
   });
 });
