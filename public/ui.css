@@ -1353,8 +1353,18 @@ body.history-overlay-open {
   overflow: visible;
 }
 
+.cg-live-capture-resolution-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  pointer-events: none;
+  overflow: visible;
+}
+
 .cg-live-move-actor,
-.cg-live-capture-actor {
+.cg-live-capture-actor,
+.cg-live-capture-resolution-actor,
+.cg-live-challenge-actor {
   position: absolute;
   left: 0;
   top: 0;
@@ -1371,8 +1381,20 @@ body.history-overlay-open {
   transform-origin: 50% 55%;
 }
 
+.cg-live-capture-resolution-actor {
+  z-index: 1;
+  transform-origin: 50% 55%;
+}
+
+.cg-live-challenge-actor {
+  z-index: 5;
+  transform-origin: 50% 55%;
+}
+
 .cg-live-move-actor__piece,
-.cg-live-capture-actor__piece {
+.cg-live-capture-actor__piece,
+.cg-live-capture-resolution-actor__piece,
+.cg-live-challenge-actor__piece {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -1385,6 +1407,14 @@ body.history-overlay-open {
 }
 
 .cg-live-move-actor__bubble {
+  position: absolute;
+  left: -60%;
+  top: -50%;
+  width: 108%;
+  height: 108%;
+}
+
+.cg-live-challenge-actor__bubble {
   position: absolute;
   left: -60%;
   top: -50%;

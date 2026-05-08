@@ -43,6 +43,10 @@ function createGame() {
         },
       },
     ],
+    captured: [
+      [{ color: 1, identity: identities.ROOK }],
+      [{ color: 0, identity: identities.BISHOP }],
+    ],
     isActive: true,
     winner: null,
     winReason: null,
@@ -81,5 +85,15 @@ describe('maskGameForColor action details', () => {
     expect(masked.actions[0].details.pieces.every(piece => piece.identity === identities.UNKNOWN)).toBe(true);
     expect(masked.actions[0].details.onDeck.identity).toBe(identities.UNKNOWN);
     expect(masked.actions[1].details.identity).toBe(identities.UNKNOWN);
+  });
+
+  test('preserves captured piece identities for players and spectators', () => {
+    const playerView = maskGameForColor(createGame(), 0);
+    const spectatorView = maskGameForColor(createGame(), 'spectator');
+
+    expect(playerView.captured[0][0].identity).toBe(identities.ROOK);
+    expect(playerView.captured[1][0].identity).toBe(identities.BISHOP);
+    expect(spectatorView.captured[0][0].identity).toBe(identities.ROOK);
+    expect(spectatorView.captured[1][0].identity).toBe(identities.BISHOP);
   });
 });

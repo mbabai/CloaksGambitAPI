@@ -24,6 +24,7 @@ import {
   getLegalBoardSourceCells,
   getSetupBoardDestinationIndexes,
   resolveActiveTurnColor,
+  shouldShowLegalBoardSources,
 } from '/js/modules/interactions/legalSourceHighlights.js';
 import { wireSocket as bindSocket } from '/js/modules/socket.js';
 import { computeHistorySummary, describeMatch, buildMatchDetailGrid, normalizeId, getMatchResult } from '/js/modules/history/dashboard.js';
@@ -59,8 +60,10 @@ import {
   DEFAULT_ANIMATION_SPEED,
   ANIMATION_SPEEDS,
   deriveOpponentMoveAnimationPlan,
+  derivePendingCaptureResolutionPlan,
   getMoveAnimationDurations,
   normalizeAnimationSpeed,
+  serverToAnimationUiCoords,
 } from '/js/modules/animations/moveAnimation.js';
 import { getLatestMoveContext } from '/js/shared/latestMoveContext.js';
 import { getResponseWindowState } from '/js/shared/responseWindow.js';
@@ -171,6 +174,7 @@ logBootConstantsOnce();
       tickingBlack: Boolean(snapshot.tickingBlack),
       label: snapshot.label || null,
       receivedAt: Number.isFinite(Number(snapshot.receivedAt)) ? Number(snapshot.receivedAt) : null,
+      referenceTimestamp: Number.isFinite(Number(snapshot.referenceTimestamp)) ? Number(snapshot.referenceTimestamp) : null,
     };
   }
 
@@ -191,6 +195,41 @@ logBootConstantsOnce();
         ...payload,
       });
     } catch (_) {}
+  }
+
+  function normalizeColorIndex(value) {
+    if (value === 0 || value === 1) return value;
+    if (typeof value === 'string') {
+      const parsed = parseInt(value, 10);
+      if (parsed === 0 || parsed === 1) return parsed;
+    }
+    return null;
+  }
+
+  function normalizeTransientChallengeAction(action) {
+    if (!action || action.type !== ACTIONS.CHALLENGE) return null;
+    return {
+      ...action,
+      player: normalizeColorIndex(action.player),
+    };
+  }
+
+  function cloneCapturedGroupsForDisplay(captured) {
+    return groupCapturedPiecesByColor(captured).map((bucket) => (
+      Array.isArray(bucket)
+        ? bucket.map((piece) => (piece && typeof piece === 'object' ? { ...piece } : piece))
+        : []
+    ));
+  }
+
+  function holdCapturedDisplayForAnimation() {
+    if (!capturedDisplayHold) {
+      capturedDisplayHold = cloneCapturedGroupsForDisplay(currentCaptured);
+    }
+  }
+
+  function releaseCapturedDisplayHold() {
+    capturedDisplayHold = null;
   }
 
   const allowGuestRankedQueue = isLocalDevelopmentHost;
@@ -1405,6 +1444,9 @@ logBootConstantsOnce();
   }) {
     const row = document.createElement('div');
     row.className = 'menu-button menu-button--split account-setting-row account-setting-row--segmented';
+    if (id === 'settingsAnimationSpeed') {
+      row.classList.add('account-setting-row--stacked');
+    }
     row.addEventListener('click', (event) => {
       event.stopPropagation();
     });
@@ -2240,6 +2282,7 @@ logBootConstantsOnce();
   let lastMoveAction = null; // most recent MOVE or BOMB action from server
   let lastMove = null;   // last move from server
   let latestMoveContext = null; // canonical move context from actions/moves
+  let transientChallengeAction = null; // incoming challenge shown while its animation plays
   let moveHistory = [];  // cached normalized moves from server
   let pendingMoveFrom = null; // server coords of last move origin when pending
   let challengeRemoved = null; // server coords of last piece removed by successful challenge
@@ -2253,9 +2296,16 @@ logBootConstantsOnce();
   let drawCooldownTimeout = null;
   let gameToastSystem = null;
   let lastGameToastSnapshot = null;
+  let gameUpdateSequence = 0;
+  let activeChallengeAnimationSequence = null;
+  let capturedDisplayHold = null;
   let lastOpponentMoveAnimationKey = null;
   let activeOpponentMoveAnimationLayer = null;
   let opponentMoveAnimationGeneration = 0;
+  let activeCaptureResolutionAnimationLayer = null;
+  let captureResolutionAnimationGeneration = 0;
+  let activeCaptureResolutionAnimationPromise = null;
+  let hiddenCaptureAnimationDeckContent = null;
   let tutorialConfig = null;
   let tutorialConfigPromise = null;
   let tutorialState = null;
@@ -3792,6 +3842,7 @@ logBootConstantsOnce();
       updateFindButton();
       },
       async onGameUpdate(payload) {
+        const updateSequence = ++gameUpdateSequence;
         const snapshot = payload && payload.game ? payload.game : payload;
         logGameSnapshot('game:update', snapshot);
         try {
@@ -3850,6 +3901,7 @@ logBootConstantsOnce();
           if (lastGameId && String(lastGameId) !== String(gameId)) {
             lastOpponentMoveAnimationKey = null;
             clearOpponentMoveAnimationLayer({ clearTransient: true });
+            clearCaptureResolutionAnimationLayer({ clearTransient: true });
           }
           lastGameId = gameId;
 
@@ -3923,8 +3975,70 @@ logBootConstantsOnce();
 
           // If the server provided a board/state, adopt and render
           if (Array.isArray(payload.board)) {
+            const payloadGameId = payload?.gameId || payload?._id || lastGameId || null;
+            if (payload?.clocks && typeof payload.clocks === 'object') {
+              recomputeClocksFromServer(payload.clocks, { gameId: payloadGameId });
+            }
             currentRows = payload.board.length || 6;
             currentCols = payload.board[0]?.length || 5;
+            const latestIncomingAction = Array.isArray(payload.actions) && payload.actions.length
+              ? payload.actions[payload.actions.length - 1]
+              : null;
+            const incomingActionPlayer = normalizeColorIndex(latestIncomingAction?.player);
+            const nextCaptured = Array.isArray(payload.captured)
+              ? groupCapturedPiecesByColor(payload.captured)
+              : null;
+            if (latestIncomingAction?.type === ACTIONS.CHALLENGE) {
+              transientChallengeAction = normalizeTransientChallengeAction(latestIncomingAction);
+              renderBoardAndBars();
+            }
+            const stateTransitionAnimation = (() => {
+              if (latestIncomingAction?.type === ACTIONS.BOMB && lastAction?.type === ACTIONS.MOVE) {
+                const plan = buildPoisonDeclarationAnimationPlan();
+                return plan ? { kind: 'poison', plan } : null;
+              }
+              if (latestIncomingAction?.type === ACTIONS.PASS && lastAction?.type === ACTIONS.BOMB && pendingCapture?.piece) {
+                const plan = buildPendingCaptureResolutionPlan({
+                  nextCaptured,
+                  shouldFlip: pendingCapture.piece.color !== color,
+                });
+                return plan ? { kind: 'pass-capture', plan } : null;
+              }
+              if (latestIncomingAction?.type === ACTIONS.CHALLENGE) {
+                const plan = buildChallengeResolutionAnimationPlan({
+                  incomingAction: latestIncomingAction,
+                  nextCaptured,
+                });
+                return plan ? { kind: 'challenge', plan } : null;
+              }
+              return null;
+            })();
+            const localCaptureResolutionPromise = activeCaptureResolutionAnimationPromise;
+            const captureResolutionPlan = (
+              !stateTransitionAnimation
+              && !localCaptureResolutionPromise
+              && pendingCapture?.piece
+              && pendingCapture.piece.color !== color
+              && latestIncomingAction?.type === ACTIONS.MOVE
+              && incomingActionPlayer !== color
+            )
+              ? buildPendingCaptureResolutionPlan({ nextCaptured, shouldFlip: true })
+              : null;
+            const shouldHoldCapturedDisplayForThisUpdate = Boolean(
+              stateTransitionAnimation?.kind === 'pass-capture'
+              || (
+                stateTransitionAnimation?.kind === 'challenge'
+                && (
+                  stateTransitionAnimation.plan?.outcome === 'SUCCESS'
+                  || stateTransitionAnimation.plan?.captureAfterFailure
+                )
+              )
+              || localCaptureResolutionPromise
+              || captureResolutionPlan
+            );
+            if (shouldHoldCapturedDisplayForThisUpdate) {
+              holdCapturedDisplayForAnimation();
+            }
             const animationPlan = deriveOpponentMoveAnimationPlan({
               game: {
                 ...payload,
@@ -3937,6 +4051,76 @@ logBootConstantsOnce();
               currentIsWhite,
               lastAnimatedMoveKey: lastOpponentMoveAnimationKey,
             });
+            let playedStateTransitionAnimation = false;
+            if (stateTransitionAnimation) {
+              try {
+                if (stateTransitionAnimation.kind === 'poison') {
+                  playedStateTransitionAnimation = await playPoisonDeclarationAnimationPlan(stateTransitionAnimation.plan);
+                } else if (stateTransitionAnimation.kind === 'pass-capture') {
+                  playedStateTransitionAnimation = await playPendingCaptureResolutionAnimationPlan(stateTransitionAnimation.plan);
+                } else if (stateTransitionAnimation.kind === 'challenge') {
+                  activeChallengeAnimationSequence = updateSequence;
+                  try {
+                    playedStateTransitionAnimation = await playChallengeResolutionAnimationPlan(stateTransitionAnimation.plan);
+                  } finally {
+                    if (activeChallengeAnimationSequence === updateSequence) {
+                      activeChallengeAnimationSequence = null;
+                    }
+                  }
+                }
+              } catch (animationErr) {
+                console.error('State transition animation failed', animationErr);
+                clearCaptureResolutionAnimationLayer({ clearTransient: true });
+              }
+              if (!playedStateTransitionAnimation) {
+                clearCaptureResolutionAnimationLayer({ clearTransient: true });
+              }
+            }
+            if (updateSequence !== gameUpdateSequence) {
+              transientChallengeAction = null;
+              if (playedStateTransitionAnimation) {
+                clearCaptureResolutionAnimationLayer({ clearTransient: true });
+              }
+              if (shouldHoldCapturedDisplayForThisUpdate) {
+                releaseCapturedDisplayHold();
+              }
+              layoutPlayArea();
+              renderBoardAndBars();
+              return;
+            }
+            let playedCaptureResolutionAnimation = false;
+            if (localCaptureResolutionPromise) {
+              try {
+                playedCaptureResolutionAnimation = await localCaptureResolutionPromise;
+              } catch (animationErr) {
+                console.error('Pending capture resolution animation failed', animationErr);
+                clearCaptureResolutionAnimationLayer({ clearTransient: true });
+              } finally {
+                activeCaptureResolutionAnimationPromise = null;
+              }
+            } else if (captureResolutionPlan) {
+              try {
+                playedCaptureResolutionAnimation = await playPendingCaptureResolutionAnimationPlan(captureResolutionPlan);
+              } catch (animationErr) {
+                console.error('Pending capture resolution animation failed', animationErr);
+                clearCaptureResolutionAnimationLayer({ clearTransient: true });
+              }
+              if (!playedCaptureResolutionAnimation) {
+                clearCaptureResolutionAnimationLayer({ clearTransient: true });
+              }
+            }
+            if (updateSequence !== gameUpdateSequence) {
+              transientChallengeAction = null;
+              if (playedStateTransitionAnimation || playedCaptureResolutionAnimation) {
+                clearCaptureResolutionAnimationLayer({ clearTransient: true });
+              }
+              if (shouldHoldCapturedDisplayForThisUpdate) {
+                releaseCapturedDisplayHold();
+              }
+              layoutPlayArea();
+              renderBoardAndBars();
+              return;
+            }
             let playedOpponentMoveAnimation = false;
             if (animationPlan) {
               try {
@@ -3952,7 +4136,30 @@ logBootConstantsOnce();
                 clearOpponentMoveAnimationLayer({ clearTransient: true });
               }
             }
+            if (updateSequence !== gameUpdateSequence) {
+              transientChallengeAction = null;
+              if (playedStateTransitionAnimation || playedCaptureResolutionAnimation) {
+                clearCaptureResolutionAnimationLayer({ clearTransient: true });
+              }
+              if (playedOpponentMoveAnimation) {
+                clearOpponentMoveAnimationLayer();
+              }
+              if (shouldHoldCapturedDisplayForThisUpdate) {
+                releaseCapturedDisplayHold();
+              }
+              layoutPlayArea();
+              renderBoardAndBars();
+              return;
+            }
             setStateFromServer(payload, 'game:update');
+            const keepChallengeBubbleDuringAnimation = Boolean(
+              transientChallengeAction
+              && activeChallengeAnimationSequence !== null
+              && latestIncomingAction?.type !== ACTIONS.CHALLENGE
+            );
+            if (!keepChallengeBubbleDuringAnimation) {
+              transientChallengeAction = null;
+            }
             // Keep setup mode consistent after refresh or reconnect
             myColor = currentIsWhite ? 0 : 1;
             const setupArr = Array.isArray(payload?.setupComplete) ? payload.setupComplete : setupComplete;
@@ -3970,8 +4177,14 @@ logBootConstantsOnce();
             if (playedOpponentMoveAnimation && gameView) {
               try { gameView.clearBoardTransientState(['currentBoard']); } catch (_) {}
             }
+            if (shouldHoldCapturedDisplayForThisUpdate) {
+              releaseCapturedDisplayHold();
+            }
             layoutPlayArea();
             renderBoardAndBars();
+            if (playedStateTransitionAnimation || playedCaptureResolutionAnimation) {
+              clearCaptureResolutionAnimationLayer({ clearTransient: true });
+            }
             if (playedOpponentMoveAnimation) {
               clearOpponentMoveAnimationLayer();
             }
@@ -3995,6 +4208,7 @@ logBootConstantsOnce();
         });
         gameFinished = payload?.winReason !== undefined && payload?.winReason !== null;
         clearOpponentMoveAnimationLayer({ clearTransient: true });
+        clearCaptureResolutionAnimationLayer({ clearTransient: true });
         if (tournamentParticipantMode && tournamentUiController) {
           tournamentUiController.setTournamentGameActive(false);
         }
@@ -7150,6 +7364,7 @@ logBootConstantsOnce();
   function hidePlayArea() {
     if (!isPlayAreaVisible) return;
     clearOpponentMoveAnimationLayer({ clearTransient: true });
+    clearCaptureResolutionAnimationLayer({ clearTransient: true });
     if (playAreaRoot) playAreaRoot.style.display = 'none';
     isPlayAreaVisible = false;
     hideTutorialOverlay();
@@ -7249,28 +7464,14 @@ logBootConstantsOnce();
     const bottomColor = currentIsWhite ? 0 : 1;
     let showChallengeTop = false;
     let showChallengeBottom = false;
-    if (lastAction && lastAction.type === ACTIONS.CHALLENGE) {
-      if (lastAction.player === topColor) showChallengeTop = true;
-      if (lastAction.player === bottomColor) showChallengeBottom = true;
+    const challengeBubbleAction = transientChallengeAction || lastAction;
+    if (challengeBubbleAction && challengeBubbleAction.type === ACTIONS.CHALLENGE) {
+      const challengePlayer = normalizeColorIndex(challengeBubbleAction.player);
+      if (challengePlayer === topColor) showChallengeTop = true;
+      if (challengePlayer === bottomColor) showChallengeBottom = true;
     }
 
     const viewerColor = currentIsWhite ? 0 : 1;
-    const responseContext = latestMoveContext || getLatestMoveContext({
-      actions: actionHistory,
-      moves: moveHistory,
-    });
-    const {
-      responseWindowOpen,
-    } = getResponseWindowState({
-      isMyTurn: currentPlayerTurn === viewerColor && !isInSetup,
-      isInSetup,
-      currentOnDeckingPlayer,
-      myColor: viewerColor,
-      lastMove,
-      lastAction,
-      lastMoveAction,
-      latestMoveContext: responseContext,
-    });
     const activeTurnColor = resolveActiveTurnColor({
       currentPlayerTurn,
       currentOnDeckingPlayer,
@@ -7287,17 +7488,14 @@ logBootConstantsOnce();
       && currentPlayerTurn === viewerColor
     );
     let highlightedBoardSources = [];
-    if (
-      tutorialSourceHighlightAllowed
-      || (
-        !gameFinished
-        && !isInSetup
-        && currentOnDeckingPlayer === null
-        && !responseWindowOpen
-        && !isBombActive()
-        && currentPlayerTurn === viewerColor
-      )
-    ) {
+    if (tutorialSourceHighlightAllowed || shouldShowLegalBoardSources({
+      currentPlayerTurn,
+      currentOnDeckingPlayer,
+      viewerColor,
+      isInSetup,
+      gameFinished,
+      bombActive: isBombActive(),
+    })) {
       highlightedBoardSources = getLegalBoardSourceCells({
         currentBoard,
         currentIsWhite,
@@ -7377,6 +7575,7 @@ logBootConstantsOnce();
     const showEloTop = Boolean(topPlayerId) && !isKnownBotId(topPlayerId) && !isKnownGuestId(topPlayerId);
     const showEloBottom = Boolean(bottomPlayerId) && !isKnownBotId(bottomPlayerId) && !isKnownGuestId(bottomPlayerId);
     const toastPulseState = getGameToastPulseRenderState();
+    const capturedForRender = capturedDisplayHold || currentCaptured;
     const bars = gameView.render({
       sizes: {
         rows: currentRows,
@@ -7399,7 +7598,7 @@ logBootConstantsOnce();
       },
       barsState: {
         currentIsWhite,
-        currentCaptured,
+        currentCaptured: capturedForRender,
         currentDaggers,
         activeColor: activeTurnColor,
         showChallengeTop,
@@ -8303,6 +8502,48 @@ logBootConstantsOnce();
     return layer;
   }
 
+  function clearCaptureResolutionAnimationLayer({ clearTransient = false } = {}) {
+    captureResolutionAnimationGeneration += 1;
+    activeCaptureResolutionAnimationPromise = null;
+    if (hiddenCaptureAnimationDeckContent) {
+      hiddenCaptureAnimationDeckContent.forEach((node) => {
+        try { node.style.visibility = ''; } catch (_) {}
+      });
+      hiddenCaptureAnimationDeckContent = null;
+    }
+    if (activeCaptureResolutionAnimationLayer) {
+      safeRemoveNode(activeCaptureResolutionAnimationLayer);
+      activeCaptureResolutionAnimationLayer = null;
+    }
+    if (clearTransient && gameView) {
+      try { gameView.clearBoardTransientState(['pendingCapture', 'currentBoard']); } catch (_) {}
+    }
+  }
+
+  function ensureCaptureResolutionAnimationLayer() {
+    const root = ensurePlayAreaRoot();
+    if (!root) return null;
+    if (activeCaptureResolutionAnimationLayer) {
+      safeRemoveNode(activeCaptureResolutionAnimationLayer);
+      activeCaptureResolutionAnimationLayer = null;
+    }
+    const layer = document.createElement('div');
+    layer.className = 'cg-live-capture-resolution-layer';
+    root.appendChild(layer);
+    activeCaptureResolutionAnimationLayer = layer;
+    return layer;
+  }
+
+  function easeInCubic(t) {
+    const clamped = Math.min(1, Math.max(0, Number(t) || 0));
+    return clamped * clamped * clamped;
+  }
+
+  function easeOutCubic(t) {
+    const clamped = Math.min(1, Math.max(0, Number(t) || 0));
+    return 1 - Math.pow(1 - clamped, 3);
+  }
+
   function easeInOutCubic(t) {
     const clamped = Math.min(1, Math.max(0, Number(t) || 0));
     return clamped < 0.5
@@ -8429,6 +8670,714 @@ logBootConstantsOnce();
     actor.style.height = squareSize + 'px';
     appendActorPiece(actor, 'cg-live-capture-actor__piece', piece, squareSize);
     return actor;
+  }
+
+  function getPlayAreaLocalPoint(clientPoint) {
+    const root = ensurePlayAreaRoot();
+    if (!root || !clientPoint) return null;
+    const rootRect = root.getBoundingClientRect();
+    return {
+      x: clientPoint.x - rootRect.left,
+      y: clientPoint.y - rootRect.top,
+    };
+  }
+
+  function getPendingCaptureSourcePoint(plan, squareSize) {
+    if (!plan?.sourceUI || !gameView) return null;
+    const rect = gameView.getCellClientRect(plan.sourceUI.uiR, plan.sourceUI.uiC);
+    if (!rect) return null;
+    return getPlayAreaLocalPoint({
+      x: rect.left + (rect.width / 2) + (squareSize * 0.22),
+      y: rect.top + (rect.height / 2) - (squareSize * 0.08),
+    });
+  }
+
+  function getCapturedDestinationPoint(plan) {
+    const root = ensurePlayAreaRoot();
+    if (!root || !gameView || !plan) return null;
+    const strip = root.querySelector(`.cg-captured-strip[data-captured-color="${plan.capturedColor}"]`);
+    if (!strip) return null;
+    const stripRect = strip.getBoundingClientRect();
+    const rowRect = (strip.parentElement || strip).getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    const pieceSize = Math.max(1, parseFloat(strip.dataset.capturedPieceSize || '') || Math.floor(currentSquareSize * 0.6) || 24);
+    const overlap = Math.max(0, parseFloat(strip.dataset.capturedOverlap || '') || Math.floor(pieceSize * 0.1));
+    const isBottomStrip = Boolean(gameView.elements?.bottomBar?.contains(strip));
+    const newestOnLeft = strip.dataset.newestOnLeft === '1';
+    const targetX = isBottomStrip
+      ? stripRect.right - (pieceSize / 2) - (newestOnLeft ? plan.capturedIndex * (pieceSize - overlap) : 0)
+      : stripRect.left + (plan.capturedIndex * (pieceSize - overlap)) + (pieceSize / 2);
+    const targetY = rowRect.top + (rowRect.height / 2);
+    return {
+      x: targetX - rootRect.left,
+      y: targetY - rootRect.top,
+      size: pieceSize,
+    };
+  }
+
+  function setCaptureResolutionActorPiece(actor, piece, squareSize) {
+    if (!actor) return;
+    Array.from(actor.children || []).forEach((child) => {
+      const className = String(child.className || '');
+      if (className.includes('__piece')) {
+        actor.removeChild(child);
+      }
+    });
+    appendActorPiece(actor, 'cg-live-capture-resolution-actor__piece', piece, squareSize);
+  }
+
+  function createCaptureResolutionActor(piece, squareSize) {
+    const actor = document.createElement('div');
+    actor.className = 'cg-live-capture-resolution-actor';
+    actor.style.width = squareSize + 'px';
+    actor.style.height = squareSize + 'px';
+    actor.style.left = '0px';
+    actor.style.top = '0px';
+    setCaptureResolutionActorPiece(actor, piece, squareSize);
+    return actor;
+  }
+
+  function setCaptureResolutionActorPose(actor, point, { rotation = 0, scale = 1, scaleX = 1 } = {}) {
+    if (!actor || !point) return;
+    actor.style.left = `${point.x}px`;
+    actor.style.top = `${point.y}px`;
+    actor.style.transform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale}) scaleX(${scaleX})`;
+  }
+
+  function getAnimationSquareSize() {
+    const scene = gameView?.boardView?.getScene?.() || null;
+    return Math.max(1, Math.round(scene?.squareSize || currentSquareSize || 40));
+  }
+
+  function getCellCenterPointFromUI(ui) {
+    if (!ui || !gameView) return null;
+    const rect = gameView.getCellClientRect(ui.uiR, ui.uiC);
+    if (!rect) return null;
+    return getPlayAreaLocalPoint({
+      x: rect.left + (rect.width / 2),
+      y: rect.top + (rect.height / 2),
+    });
+  }
+
+  function getCellCenterPointFromServer(square) {
+    const ui = serverToAnimationUiCoords(square, currentRows, currentCols, currentIsWhite);
+    return ui ? getCellCenterPointFromUI(ui) : null;
+  }
+
+  function getTiltedPoint(center, squareSize, progress = 1) {
+    const amount = Math.min(1, Math.max(0, Number(progress) || 0));
+    return center
+      ? {
+          x: center.x + (squareSize * 0.22 * amount),
+          y: center.y - (squareSize * 0.08 * amount),
+        }
+      : null;
+  }
+
+  function createBoardAnimationActor(piece, squareSize, { className = 'cg-live-challenge-actor', bubbleType = null } = {}) {
+    const actor = document.createElement('div');
+    actor.className = className;
+    actor.style.width = squareSize + 'px';
+    actor.style.height = squareSize + 'px';
+    appendActorPiece(actor, `${className}__piece`, piece, squareSize);
+    if (bubbleType) {
+      const bubbleWrap = document.createElement('div');
+      bubbleWrap.className = `${className}__bubble`;
+      const bubble = createBubbleVisual({
+        type: bubbleType,
+        size: Math.floor(squareSize * 1.08),
+        alt: '',
+      });
+      if (bubble) {
+        bubbleWrap.appendChild(bubble);
+        actor.appendChild(bubbleWrap);
+      }
+    }
+    return actor;
+  }
+
+  function setBoardAnimationActorPose(actor, point, { rotation = 0, scale = 1, scaleX = 1, opacity = 1 } = {}) {
+    if (!actor || !point) return;
+    actor.style.left = `${point.x}px`;
+    actor.style.top = `${point.y}px`;
+    actor.style.opacity = `${Math.min(1, Math.max(0, Number(opacity)))}`;
+    actor.style.transform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale}) scaleX(${scaleX})`;
+  }
+
+  function cloneCurrentBoardWithoutSquares(squares = []) {
+    if (!Array.isArray(currentBoard)) return null;
+    const next = currentBoard.map((row) => (Array.isArray(row) ? row.slice() : []));
+    squares.forEach((square) => {
+      if (
+        square
+        && Number.isFinite(square.row)
+        && Number.isFinite(square.col)
+        && Array.isArray(next[square.row])
+      ) {
+        next[square.row][square.col] = null;
+      }
+    });
+    return next;
+  }
+
+  function bubbleTypeForDeclaration(declaration) {
+    const types = bubbleTypesForMove(null, null, declaration);
+    return Array.isArray(types) && types.length ? types[0] : null;
+  }
+
+  function getDeckCenterPointForColor(colorIdx, targetPoint = null) {
+    const viewerColor = currentIsWhite ? 0 : 1;
+    if (colorIdx === viewerColor && refs.deckEl) {
+      const rect = refs.deckEl.getBoundingClientRect();
+      return getPlayAreaLocalPoint({
+        x: rect.left + (rect.width / 2),
+        y: rect.top + (rect.height / 2),
+      });
+    }
+    const boardRect = gameView?.getBoardClientRect?.();
+    if (!boardRect) return null;
+    const squareSize = getAnimationSquareSize();
+    const isViewerColor = colorIdx === viewerColor;
+    const rootRect = ensurePlayAreaRoot()?.getBoundingClientRect?.() || null;
+    return getPlayAreaLocalPoint({
+      x: targetPoint
+        ? ((rootRect?.left || 0) + targetPoint.x)
+        : boardRect.left + (boardRect.width / 2),
+      y: isViewerColor
+        ? boardRect.bottom + (squareSize * 1.45)
+        : boardRect.top - (squareSize * 1.1),
+    });
+  }
+
+  function getStashSlidePointForColor(colorIdx) {
+    const deckPoint = getDeckCenterPointForColor(colorIdx);
+    if (!deckPoint) return null;
+    const squareSize = getAnimationSquareSize();
+    return {
+      x: deckPoint.x + (squareSize * 0.95),
+      y: deckPoint.y,
+    };
+  }
+
+  function findCapturedPieceFromNext(plan, nextCaptured) {
+    const capturedAfter = groupCapturedPiecesByColor(nextCaptured);
+    return capturedAfter?.[plan.capturedColor]?.[plan.capturedIndex] || plan.piece;
+  }
+
+  function buildManualCapturePlan({ piece, source, nextCaptured = null, shouldFlip = false }) {
+    if (!piece || !source) return null;
+    const sourceUI = serverToAnimationUiCoords(source, currentRows, currentCols, currentIsWhite);
+    if (!sourceUI) return null;
+    const capturedColor = piece.color === 1 ? 1 : piece.color === 0 ? 0 : null;
+    if (capturedColor === null) return null;
+    const capturedIndex = Array.isArray(currentCaptured?.[capturedColor])
+      ? currentCaptured[capturedColor].length
+      : 0;
+    const plan = {
+      speed: getAnimationSpeedPreference(),
+      piece,
+      finalPiece: piece,
+      source,
+      sourceUI,
+      capturedColor,
+      capturedIndex,
+      shouldFlip: Boolean(shouldFlip),
+    };
+    if (nextCaptured) {
+      plan.finalPiece = findCapturedPieceFromNext(plan, nextCaptured);
+      plan.shouldFlip = Boolean(
+        plan.shouldFlip
+        && Number.isFinite(Number(plan.finalPiece?.identity))
+        && Number(plan.finalPiece.identity) !== Number(piece.identity)
+      );
+    }
+    return plan;
+  }
+
+  async function playPendingCaptureResolutionAnimationPlan(plan, { preserveLayer = false } = {}) {
+    const speed = getAnimationSpeedPreference();
+    const durations = getMoveAnimationDurations(speed);
+    if (!durations || !plan || !gameView) return false;
+    const layer = preserveLayer && activeCaptureResolutionAnimationLayer
+      ? activeCaptureResolutionAnimationLayer
+      : ensureCaptureResolutionAnimationLayer();
+    if (!layer) return false;
+
+    const generation = captureResolutionAnimationGeneration + 1;
+    captureResolutionAnimationGeneration = generation;
+    const scene = gameView?.boardView?.getScene?.() || null;
+    const squareSize = Math.max(1, Math.round(scene?.squareSize || currentSquareSize || 40));
+    const start = getPendingCaptureSourcePoint(plan, squareSize);
+    const destination = getCapturedDestinationPoint(plan);
+    if (!start || !destination) {
+      clearCaptureResolutionAnimationLayer({ clearTransient: true });
+      return false;
+    }
+
+    const endScale = clamp(destination.size / squareSize, 0.1, 1);
+    const actor = createCaptureResolutionActor(plan.piece, squareSize);
+    layer.appendChild(actor);
+    try { gameView.setBoardTransientState({ pendingCapture: null }); } catch (_) {}
+    setCaptureResolutionActorPose(actor, start, { rotation: 30, scale: 1, scaleX: 1 });
+
+    await animateDuration(durations.captureResolveMs, (progress) => {
+      if (generation !== captureResolutionAnimationGeneration) return;
+      const eased = easeInOutCubic(progress);
+      const point = {
+        x: start.x + ((destination.x - start.x) * eased),
+        y: start.y + ((destination.y - start.y) * eased),
+      };
+      setCaptureResolutionActorPose(actor, point, {
+        rotation: 30 * (1 - eased),
+        scale: 1 + ((endScale - 1) * eased),
+        scaleX: 1,
+      });
+    });
+
+    if (generation !== captureResolutionAnimationGeneration) return false;
+    setCaptureResolutionActorPose(actor, destination, { rotation: 0, scale: endScale, scaleX: 1 });
+
+    if (plan.shouldFlip) {
+      const halfFlip = Math.max(1, durations.flipMs / 2);
+      await animateDuration(halfFlip, (progress) => {
+        if (generation !== captureResolutionAnimationGeneration) return;
+        const scaleX = Math.max(0.02, 1 - easeInCubic(progress));
+        setCaptureResolutionActorPose(actor, destination, { rotation: 0, scale: endScale, scaleX });
+      });
+      if (generation !== captureResolutionAnimationGeneration) return false;
+      setCaptureResolutionActorPiece(actor, plan.finalPiece || plan.piece, squareSize);
+      await animateDuration(halfFlip, (progress) => {
+        if (generation !== captureResolutionAnimationGeneration) return;
+        const scaleX = Math.max(0.02, easeOutCubic(progress));
+        setCaptureResolutionActorPose(actor, destination, { rotation: 0, scale: endScale, scaleX });
+      });
+      if (generation !== captureResolutionAnimationGeneration) return false;
+      setCaptureResolutionActorPose(actor, destination, { rotation: 0, scale: endScale, scaleX: 1 });
+    }
+
+    return true;
+  }
+
+  function buildPendingCaptureResolutionPlan({ nextCaptured = null, shouldFlip = false } = {}) {
+    const viewerColor = currentIsWhite ? 0 : 1;
+    return derivePendingCaptureResolutionPlan({
+      pendingCapture,
+      currentCaptured,
+      nextCaptured,
+      viewerColor,
+      rows: currentRows,
+      cols: currentCols,
+      currentIsWhite,
+      animationSpeed: getAnimationSpeedPreference(),
+      shouldFlip,
+    });
+  }
+
+  function startActivePendingCaptureResolutionAnimation() {
+    const viewerColor = currentIsWhite ? 0 : 1;
+    if (!pendingCapture?.piece || pendingCapture.piece.color !== viewerColor) return null;
+    if (activeCaptureResolutionAnimationPromise) return activeCaptureResolutionAnimationPromise;
+    const plan = buildPendingCaptureResolutionPlan({ shouldFlip: false });
+    if (!plan) return null;
+    const promise = playPendingCaptureResolutionAnimationPlan(plan)
+      .catch((err) => {
+        console.error('Pending capture resolution animation failed', err);
+        clearCaptureResolutionAnimationLayer({ clearTransient: true });
+        return false;
+      });
+    activeCaptureResolutionAnimationPromise = promise;
+    return promise;
+  }
+
+  async function playPoisonDeclarationAnimationPlan(plan) {
+    const durations = getMoveAnimationDurations(getAnimationSpeedPreference());
+    if (!durations || !plan?.target || !plan.attackingPiece || !gameView) return false;
+    const layer = ensureCaptureResolutionAnimationLayer();
+    if (!layer) return false;
+
+    const generation = captureResolutionAnimationGeneration + 1;
+    captureResolutionAnimationGeneration = generation;
+    const squareSize = getAnimationSquareSize();
+    const center = getCellCenterPointFromServer(plan.target);
+    if (!center) return false;
+
+    const boardPatch = cloneCurrentBoardWithoutSquares([plan.target]);
+    if (boardPatch) {
+      try { gameView.setBoardTransientState({ currentBoard: boardPatch, pendingCapture: null }); } catch (_) {}
+    }
+    try { gameView.clearBubbleOverlays(); } catch (_) {}
+
+    const attacker = createBoardAnimationActor(plan.attackingPiece, squareSize);
+    layer.appendChild(attacker);
+    setBoardAnimationActorPose(attacker, center, { rotation: 0, scale: 1, scaleX: 1, opacity: 1 });
+
+    let targetActor = null;
+    if (plan.pendingPiece) {
+      targetActor = createBoardAnimationActor(plan.pendingPiece, squareSize, {
+        bubbleType: bubbleTypeForDeclaration(Declaration.BOMB),
+      });
+      layer.appendChild(targetActor);
+      setBoardAnimationActorPose(targetActor, getTiltedPoint(center, squareSize, 1), {
+        rotation: 30,
+        scale: 1,
+        scaleX: 1,
+        opacity: 1,
+      });
+    }
+
+    await animateDuration(durations.captureMs || 320, (progress) => {
+      if (generation !== captureResolutionAnimationGeneration) return;
+      const eased = easeInOutCubic(progress);
+      setBoardAnimationActorPose(attacker, getTiltedPoint(center, squareSize, eased), {
+        rotation: 30 * eased,
+        scale: 1,
+        scaleX: 1,
+        opacity: 1,
+      });
+      if (targetActor) {
+        setBoardAnimationActorPose(targetActor, getTiltedPoint(center, squareSize, 1 - eased), {
+          rotation: 30 * (1 - eased),
+          scale: 1,
+          scaleX: 1,
+          opacity: 1,
+        });
+      }
+    });
+
+    return generation === captureResolutionAnimationGeneration;
+  }
+
+  function buildPoisonDeclarationAnimationPlan() {
+    if (!lastMove || !pendingCapture?.piece) return null;
+    const target = lastMove.to;
+    if (!target || !Number.isFinite(target.row) || !Number.isFinite(target.col)) return null;
+    const attackingPiece = currentBoard?.[target.row]?.[target.col] || null;
+    if (!attackingPiece) return null;
+    return {
+      target,
+      attackingPiece,
+      pendingPiece: pendingCapture.piece,
+    };
+  }
+
+  async function animateCapturePlanAfterChallenge(plan, nextCaptured, { shouldFlip = false } = {}) {
+    if (!plan?.piece || !plan.source) return false;
+    const capturePlan = buildManualCapturePlan({
+      piece: plan.piece,
+      source: plan.source,
+      nextCaptured,
+      shouldFlip,
+    });
+    if (!capturePlan) return false;
+    return playPendingCaptureResolutionAnimationPlan(capturePlan);
+  }
+
+  async function animateExistingActorToCapturedDestination({
+    actor,
+    capturePlan,
+    generation,
+    squareSize,
+    durations,
+    startPoint,
+  }) {
+    if (!actor || !capturePlan || !startPoint) return false;
+    const destination = getCapturedDestinationPoint(capturePlan);
+    if (!destination) return false;
+    const endScale = clamp(destination.size / squareSize, 0.1, 1);
+    await animateDuration(durations.captureResolveMs || 760, (progress) => {
+      if (generation !== captureResolutionAnimationGeneration) return;
+      const eased = easeInOutCubic(progress);
+      const point = {
+        x: startPoint.x + ((destination.x - startPoint.x) * eased),
+        y: startPoint.y + ((destination.y - startPoint.y) * eased),
+      };
+      setBoardAnimationActorPose(actor, point, {
+        rotation: 30 * (1 - eased),
+        scale: 1 + ((endScale - 1) * eased),
+        scaleX: 1,
+        opacity: 1,
+      });
+    });
+    if (generation !== captureResolutionAnimationGeneration) return false;
+    setBoardAnimationActorPose(actor, destination, {
+      rotation: 0,
+      scale: endScale,
+      scaleX: 1,
+      opacity: 1,
+    });
+    return true;
+  }
+
+  async function animateOnDeckReplacementToBoard({
+    layer,
+    generation,
+    color,
+    destination,
+    squareSize,
+    durations,
+  }) {
+    if (!layer || !destination) return false;
+    const deckPoint = getDeckCenterPointForColor(color, destination);
+    if (!deckPoint) return false;
+    const viewerColor = currentIsWhite ? 0 : 1;
+    if (color === viewerColor && refs.deckEl) {
+      hiddenCaptureAnimationDeckContent = Array.from(refs.deckEl.children || []);
+      hiddenCaptureAnimationDeckContent.forEach((node) => {
+        try { node.style.visibility = 'hidden'; } catch (_) {}
+      });
+    }
+    const replacementPiece = currentOnDecks?.[color] || {
+      color,
+      identity: IDENTITIES.UNKNOWN,
+    };
+    const replacement = createBoardAnimationActor(replacementPiece, squareSize);
+    replacement.style.zIndex = '6';
+    layer.appendChild(replacement);
+    setBoardAnimationActorPose(replacement, deckPoint, {
+      rotation: 0,
+      scale: 1,
+      scaleX: 1,
+      opacity: 1,
+    });
+    await animateDuration(durations.moveMs || 760, (progress) => {
+      if (generation !== captureResolutionAnimationGeneration) return;
+      const eased = easeInOutCubic(progress);
+      const point = {
+        x: deckPoint.x + ((destination.x - deckPoint.x) * eased),
+        y: deckPoint.y + ((destination.y - deckPoint.y) * eased),
+      };
+      setBoardAnimationActorPose(replacement, point, {
+        rotation: 0,
+        scale: 1,
+        scaleX: 1,
+        opacity: 1,
+      });
+    });
+    return generation === captureResolutionAnimationGeneration;
+  }
+
+  async function playChallengeResolutionAnimationPlan(plan) {
+    const durations = getMoveAnimationDurations(getAnimationSpeedPreference());
+    if (!durations || !plan?.challengedPiece || !plan.source || !gameView) return false;
+    const layer = ensureCaptureResolutionAnimationLayer();
+    if (!layer) return false;
+
+    const generation = captureResolutionAnimationGeneration + 1;
+    captureResolutionAnimationGeneration = generation;
+    const squareSize = getAnimationSquareSize();
+    const center = getCellCenterPointFromServer(plan.source);
+    if (!center) return false;
+
+    const boardPatch = cloneCurrentBoardWithoutSquares([plan.source]);
+    if (boardPatch) {
+      try { gameView.setBoardTransientState({ currentBoard: boardPatch, pendingCapture: null }); } catch (_) {}
+    }
+
+    const actor = createBoardAnimationActor(plan.challengedPiece, squareSize);
+    actor.style.zIndex = '5';
+    layer.appendChild(actor);
+    setBoardAnimationActorPose(actor, center, { rotation: 0, scale: 1, scaleX: 1, opacity: 1 });
+
+    let otherActor = null;
+    if (plan.otherPendingPiece) {
+      otherActor = createBoardAnimationActor(plan.otherPendingPiece, squareSize);
+      otherActor.style.zIndex = '4';
+      layer.appendChild(otherActor);
+      setBoardAnimationActorPose(otherActor, getTiltedPoint(center, squareSize, 1), {
+        rotation: 30,
+        scale: 1,
+        scaleX: 1,
+        opacity: 1,
+      });
+    }
+
+    if (plan.shouldRevealFirst) {
+      const halfFlip = Math.max(1, (durations.flipMs || 520) / 2);
+      await animateDuration(halfFlip, (progress) => {
+        if (generation !== captureResolutionAnimationGeneration) return;
+        setBoardAnimationActorPose(actor, center, {
+          rotation: 0,
+          scale: 1,
+          scaleX: Math.max(0.02, 1 - easeInCubic(progress)),
+          opacity: 1,
+        });
+      });
+      if (generation !== captureResolutionAnimationGeneration) return false;
+      setCaptureResolutionActorPiece(actor, plan.revealedPiece || plan.challengedPiece, squareSize);
+      await animateDuration(halfFlip, (progress) => {
+        if (generation !== captureResolutionAnimationGeneration) return;
+        setBoardAnimationActorPose(actor, center, {
+          rotation: 0,
+          scale: 1,
+          scaleX: Math.max(0.02, easeOutCubic(progress)),
+          opacity: 1,
+        });
+      });
+      if (generation !== captureResolutionAnimationGeneration) return false;
+    }
+
+    if (plan.outcome === 'SUCCESS') {
+      let challengedTiltedPoint = getTiltedPoint(center, squareSize, 1);
+      await animateDuration(durations.captureMs || 320, (progress) => {
+        if (generation !== captureResolutionAnimationGeneration) return;
+        const eased = easeInOutCubic(progress);
+        challengedTiltedPoint = getTiltedPoint(center, squareSize, eased);
+        setBoardAnimationActorPose(actor, challengedTiltedPoint, {
+          rotation: 30 * eased,
+          scale: 1,
+          scaleX: 1,
+          opacity: 1,
+        });
+        if (otherActor) {
+          setBoardAnimationActorPose(otherActor, getTiltedPoint(center, squareSize, 1 - eased), {
+            rotation: 30 * (1 - eased),
+            scale: 1,
+            scaleX: 1,
+            opacity: 1,
+          });
+        }
+      });
+      if (generation !== captureResolutionAnimationGeneration) return false;
+      if (otherActor) {
+        const capturePlan = buildManualCapturePlan({
+          piece: plan.revealedPiece || plan.challengedPiece,
+          source: plan.source,
+          nextCaptured: plan.nextCaptured,
+          shouldFlip: false,
+        });
+        return animateExistingActorToCapturedDestination({
+          actor,
+          capturePlan,
+          generation,
+          squareSize,
+          durations,
+          startPoint: challengedTiltedPoint,
+        });
+      }
+      return animateCapturePlanAfterChallenge({
+        piece: plan.revealedPiece || plan.challengedPiece,
+        source: plan.source,
+      }, plan.nextCaptured, { shouldFlip: false });
+    }
+
+    await animateDuration(durations.captureMs || 320, (progress) => {
+      if (generation !== captureResolutionAnimationGeneration) return;
+      const scale = 1 + (Math.sin(Math.min(1, Math.max(0, progress)) * Math.PI) * 0.08);
+      setBoardAnimationActorPose(actor, center, { rotation: 0, scale, scaleX: 1, opacity: 1 });
+    });
+    if (generation !== captureResolutionAnimationGeneration) return false;
+
+    if (plan.challengedByViewer) {
+      const offscreen = { x: center.x, y: -squareSize };
+      await animateDuration(durations.captureResolveMs || 760, (progress) => {
+        if (generation !== captureResolutionAnimationGeneration) return;
+        const eased = easeInOutCubic(progress);
+        const point = {
+          x: center.x + ((offscreen.x - center.x) * eased),
+          y: center.y + ((offscreen.y - center.y) * eased),
+        };
+        setBoardAnimationActorPose(actor, point, {
+          rotation: 0,
+          scale: 1,
+          scaleX: 1,
+          opacity: 1 - eased,
+        });
+      });
+      if (generation !== captureResolutionAnimationGeneration) return false;
+      await animateOnDeckReplacementToBoard({
+        layer,
+        generation,
+        color: plan.challengedPiece.color,
+        destination: center,
+        squareSize,
+        durations,
+      });
+    } else {
+      const stashPoint = getStashSlidePointForColor(plan.challengedPiece.color) || {
+        x: center.x + squareSize,
+        y: center.y,
+      };
+      await animateDuration(durations.captureResolveMs || 760, (progress) => {
+        if (generation !== captureResolutionAnimationGeneration) return;
+        const eased = easeInOutCubic(progress);
+        const point = {
+          x: center.x + ((stashPoint.x - center.x) * eased),
+          y: center.y + ((stashPoint.y - center.y) * eased),
+        };
+        setBoardAnimationActorPose(actor, point, { rotation: 0, scale: 1, scaleX: 1, opacity: 1 });
+      });
+      if (generation !== captureResolutionAnimationGeneration) return false;
+      await animateOnDeckReplacementToBoard({
+        layer,
+        generation,
+        color: plan.challengedPiece.color,
+        destination: center,
+        squareSize,
+        durations,
+      });
+    }
+    try { gameView.clearBubbleOverlays(); } catch (_) {}
+
+    if (plan.captureAfterFailure) {
+      if (otherActor && plan.captureAfterFailure.piece === plan.otherPendingPiece) {
+        otherActor.style.zIndex = '6';
+        return animateExistingActorToCapturedDestination({
+          actor: otherActor,
+          capturePlan: plan.captureAfterFailure,
+          generation,
+          squareSize,
+          durations,
+          startPoint: getTiltedPoint(center, squareSize, 1),
+        });
+      }
+      return playPendingCaptureResolutionAnimationPlan(plan.captureAfterFailure, { preserveLayer: true });
+    }
+    return generation === captureResolutionAnimationGeneration;
+  }
+
+  function buildChallengeResolutionAnimationPlan({ incomingAction, nextCaptured }) {
+    if (!incomingAction || incomingAction.type !== ACTIONS.CHALLENGE) return null;
+    if (!lastMove || !lastAction || (lastAction.type !== ACTIONS.MOVE && lastAction.type !== ACTIONS.BOMB)) return null;
+    const source = lastMove.to;
+    if (!source || !Number.isFinite(source.row) || !Number.isFinite(source.col)) return null;
+    const challengedPiece = currentBoard?.[source.row]?.[source.col] || null;
+    if (!challengedPiece) return null;
+    const viewerColor = currentIsWhite ? 0 : 1;
+    const outcome = incomingAction.details?.outcome === 'SUCCESS' ? 'SUCCESS' : 'FAIL';
+    const declaration = lastAction.type === ACTIONS.BOMB ? Declaration.BOMB : lastMove.declaration;
+    const challengedByViewer = incomingAction.player === viewerColor;
+    let revealedPiece = findCapturedPieceFromNext({
+      capturedColor: challengedPiece.color,
+      capturedIndex: Array.isArray(currentCaptured?.[challengedPiece.color])
+        ? currentCaptured[challengedPiece.color].length
+        : 0,
+      piece: challengedPiece,
+    }, nextCaptured || currentCaptured);
+    if (outcome === 'FAIL' && challengedByViewer && Number.isFinite(Number(declaration))) {
+      revealedPiece = { ...challengedPiece, identity: declaration };
+    }
+    const otherPendingPiece = pendingCapture?.piece && pendingCapture.piece !== challengedPiece
+      ? pendingCapture.piece
+      : null;
+    let captureAfterFailure = null;
+    if (outcome === 'FAIL' && pendingCapture?.piece) {
+      captureAfterFailure = buildPendingCaptureResolutionPlan({
+        nextCaptured,
+        shouldFlip: pendingCapture.piece.color !== viewerColor,
+      });
+    }
+    return {
+      outcome,
+      source,
+      declaration,
+      challengedPiece,
+      revealedPiece,
+      challengedByViewer,
+      shouldRevealFirst: challengedByViewer,
+      otherPendingPiece,
+      nextCaptured,
+      captureAfterFailure,
+    };
   }
 
   async function playOpponentMoveAnimationPlan(plan) {
@@ -8665,6 +9614,15 @@ logBootConstantsOnce();
     return null;
   }
 
+  function isResolvedPoisonChallenge(action, previousAction) {
+    return Boolean(
+      action &&
+      action.type === ACTIONS.CHALLENGE &&
+      previousAction &&
+      previousAction.type === ACTIONS.BOMB
+    );
+  }
+
   function buildPostMoveOverlayForMove(move, action) {
     if (!move || !move.to) return null;
     try {
@@ -8721,10 +9679,10 @@ logBootConstantsOnce();
         }
       }
       if (Object.prototype.hasOwnProperty.call(u, 'playerTurn')) {
-        currentPlayerTurn = (u.playerTurn === 0 || u.playerTurn === 1) ? u.playerTurn : null;
+        currentPlayerTurn = normalizeColorIndex(u.playerTurn);
       }
       if (u.onDeckingPlayer !== undefined) {
-        currentOnDeckingPlayer = u.onDeckingPlayer;
+        currentOnDeckingPlayer = normalizeColorIndex(u.onDeckingPlayer);
         if (currentOnDeckingPlayer !== null) selected = null;
       }
       if (Object.prototype.hasOwnProperty.call(u, 'drawOffer')) {
@@ -8827,6 +9785,10 @@ logBootConstantsOnce();
       }
 
       const last = lastMove;
+      const previousAction = Array.isArray(actionHistory) && actionHistory.length > 1
+        ? actionHistory[actionHistory.length - 2]
+        : null;
+      const resolvedPoisonChallenge = isResolvedPoisonChallenge(lastAction, previousAction);
       const overlayAction = lastMoveAction || lastAction;
       if (
         last &&
@@ -8839,7 +9801,12 @@ logBootConstantsOnce();
         last.declaration = overlayAction.details.declaration;
       }
       const lastMoveKey = makeMoveKey(last);
-      if (last && last.state === MOVE_STATES.PENDING) {
+      if (resolvedPoisonChallenge) {
+        pendingCapture = null;
+        pendingMoveFrom = null;
+        postMoveOverlay = null;
+        lastPostMoveKey = null;
+      } else if (last && last.state === MOVE_STATES.PENDING) {
         const from = last.from || {};
         const to = last.to || {};
         const hasFromCoords = Number.isFinite(from.row) && Number.isFinite(from.col);
@@ -8886,14 +9853,13 @@ logBootConstantsOnce();
 
       // Determine red tint square for successful challenges
       challengeRemoved = null;
-      const prevAction = Array.isArray(actionHistory) ? actionHistory[actionHistory.length - 2] : null;
       if (
         lastAction &&
         lastAction.type === ACTIONS.CHALLENGE &&
         lastAction.details &&
         lastAction.details.outcome === 'SUCCESS' &&
-        prevAction &&
-        (prevAction.type === ACTIONS.MOVE || prevAction.type === ACTIONS.BOMB)
+        previousAction &&
+        (previousAction.type === ACTIONS.MOVE || previousAction.type === ACTIONS.BOMB)
       ) {
         const to = lastMove && lastMove.to;
         if (to) {
@@ -9426,6 +10392,7 @@ logBootConstantsOnce();
         selected = null;
         // Show final left speech bubble only for the declared type
         showFinalSpeechOnly(origin, dest, decl, opts);
+        startActivePendingCaptureResolutionAnimation();
         // Send to server
         try {
           console.log('[move] commit', { from, to, declaration: decl });
@@ -9439,7 +10406,10 @@ logBootConstantsOnce();
           });
           applyLocalMoveClock();
           await apiMove({ gameId: lastGameId, color, from, to, declaration: decl });
-        } catch (e) { console.error('apiMove failed', e); }
+        } catch (e) {
+          console.error('apiMove failed', e);
+          clearCaptureResolutionAnimationLayer({ clearTransient: true });
+        }
         renderBoardAndBars();
         return true;
       };
@@ -9563,6 +10533,7 @@ logBootConstantsOnce();
       // Only show final speech and send to server; piece already optimistically placed
       // Always force the speech bubble so Sword/Spear choices mirror Heart behavior
       showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration, { alwaysShow: true });
+      startActivePendingCaptureResolutionAnimation();
       try {
         console.log('[move] commit', { from, to, declaration });
         emitLocalClockDebug('client-action-submit', {
@@ -9574,7 +10545,10 @@ logBootConstantsOnce();
         });
         applyLocalMoveClock();
         await apiMove({ gameId: lastGameId, color: myColorIdx, from, to, declaration });
-      } catch (e) { console.error('apiMove failed', e); }
+      } catch (e) {
+        console.error('apiMove failed', e);
+        clearCaptureResolutionAnimationLayer({ clearTransient: true });
+      }
       renderBoardAndBars();
     } catch (_) {}
   }

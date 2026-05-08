@@ -9,12 +9,24 @@ async function loadMoveAnimationModule() {
 
 describe('moveAnimation helpers', () => {
   test('normalizes animation speed values with slow as the default', async () => {
-    const { normalizeAnimationSpeed } = await loadMoveAnimationModule();
+    const { getMoveAnimationDurations, normalizeAnimationSpeed } = await loadMoveAnimationModule();
 
     expect(normalizeAnimationSpeed(undefined)).toBe('slow');
     expect(normalizeAnimationSpeed('FAST')).toBe('fast');
     expect(normalizeAnimationSpeed('off')).toBe('off');
     expect(normalizeAnimationSpeed('medium')).toBe('slow');
+    expect(getMoveAnimationDurations('fast')).toMatchObject({
+      moveMs: 420,
+      captureMs: 270,
+      captureResolveMs: 420,
+      flipMs: 360,
+    });
+    expect(getMoveAnimationDurations('slow')).toMatchObject({
+      moveMs: 1140,
+      captureMs: 480,
+      captureResolveMs: 1140,
+      flipMs: 780,
+    });
   });
 
   test('routes scythe declarations as a two-square then one-square L', async () => {
@@ -103,6 +115,60 @@ describe('moveAnimation helpers', () => {
       rows: 6,
       cols: 5,
       currentIsWhite: false,
+    })).toBeNull();
+  });
+
+  test('derives pending capture resolution plans with captured-strip indexes', async () => {
+    const { derivePendingCaptureResolutionPlan } = await loadMoveAnimationModule();
+    const pendingCapture = {
+      row: 3,
+      col: 3,
+      piece: { color: 1, identity: 0 },
+    };
+    const currentCaptured = [
+      [{ color: 0, identity: 4 }],
+      [{ color: 1, identity: 3 }],
+    ];
+    const nextCaptured = [
+      [{ color: 0, identity: 4 }],
+      [
+        { color: 1, identity: 3 },
+        { color: 1, identity: 5 },
+      ],
+    ];
+
+    const plan = derivePendingCaptureResolutionPlan({
+      pendingCapture,
+      currentCaptured,
+      nextCaptured,
+      viewerColor: 0,
+      rows: 6,
+      cols: 5,
+      currentIsWhite: true,
+      animationSpeed: 'slow',
+      shouldFlip: true,
+    });
+
+    expect(plan).toMatchObject({
+      speed: 'slow',
+      piece: { color: 1, identity: 0 },
+      finalPiece: { color: 1, identity: 5 },
+      source: { row: 3, col: 3 },
+      sourceUI: { uiR: 2, uiC: 3 },
+      capturedColor: 1,
+      capturedIndex: 1,
+      shouldFlip: true,
+    });
+
+    expect(derivePendingCaptureResolutionPlan({
+      pendingCapture,
+      currentCaptured,
+      viewerColor: 0,
+      rows: 6,
+      cols: 5,
+      currentIsWhite: true,
+      animationSpeed: 'off',
+      shouldFlip: true,
     })).toBeNull();
   });
 });

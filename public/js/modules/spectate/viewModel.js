@@ -170,7 +170,14 @@ export function deriveSpectateView(game) {
     }
   }
 
-  if (to && rows && cols && lastMoveAction) {
+  const resolvedPoisonChallenge = Boolean(
+    lastAction &&
+    lastAction.type === ACTIONS.CHALLENGE &&
+    previousAction &&
+    previousAction.type === ACTIONS.BOMB
+  );
+
+  if (!resolvedPoisonChallenge && to && rows && cols && lastMoveAction) {
     const { uiR, uiC } = serverToUICoords(to.row, to.col, rows, cols);
     let types = [];
     if (lastMoveAction.type === ACTIONS.BOMB) {

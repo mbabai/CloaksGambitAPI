@@ -3,10 +3,11 @@ const { pathToFileURL } = require('url');
 
 describe('clock display policy', () => {
   let advanceClockSnapshot;
+  let normalizeClockSnapshot;
   let resolveDisplayedClockMs;
 
   beforeAll(async () => {
-    ({ advanceClockSnapshot, resolveDisplayedClockMs } = await import(
+    ({ advanceClockSnapshot, normalizeClockSnapshot, resolveDisplayedClockMs } = await import(
       pathToFileURL(path.resolve(__dirname, '../public/js/modules/utils/clockState.js')).href
     ));
   });
@@ -51,5 +52,23 @@ describe('clock display policy', () => {
     expect(advanceClockSnapshot(base, receivedAt + 2000, { startsAt }).blackMs).toBe(300000);
     expect(advanceClockSnapshot(base, receivedAt + 4000, { startsAt }).whiteMs).toBe(299000);
     expect(advanceClockSnapshot(base, receivedAt + 4000, { startsAt }).blackMs).toBe(299000);
+  });
+
+  test('anchors server snapshots to their reference timestamp', () => {
+    const referenceTimestamp = new Date('2024-01-01T00:00:00Z').getTime();
+    const base = normalizeClockSnapshot({
+      whiteMs: 300000,
+      blackMs: 300000,
+      activeColor: 0,
+      setupComplete: [true, true],
+      tickingWhite: true,
+      tickingBlack: false,
+      referenceTimestamp,
+    }, {
+      receivedAt: referenceTimestamp + 2500,
+    });
+
+    expect(base.receivedAt).toBe(referenceTimestamp);
+    expect(advanceClockSnapshot(base, referenceTimestamp + 2500).whiteMs).toBe(297500);
   });
 });

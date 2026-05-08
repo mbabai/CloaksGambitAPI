@@ -199,6 +199,11 @@ export function normalizeClockSnapshot(snapshot, {
 
   const whiteMs = Number(snapshot.whiteMs);
   const blackMs = Number(snapshot.blackMs);
+  const snapshotReceivedAt = Number(snapshot.receivedAt);
+  const referenceTimestamp = Number(snapshot.referenceTimestamp);
+  const anchorReceivedAt = Number.isFinite(snapshotReceivedAt)
+    ? snapshotReceivedAt
+    : (Number.isFinite(referenceTimestamp) ? referenceTimestamp : receivedAt);
   return {
     whiteMs: Number.isFinite(whiteMs) ? whiteMs : 0,
     blackMs: Number.isFinite(blackMs) ? blackMs : 0,
@@ -207,7 +212,7 @@ export function normalizeClockSnapshot(snapshot, {
     tickingWhite: Boolean(snapshot.tickingWhite),
     tickingBlack: Boolean(snapshot.tickingBlack),
     label: snapshot.label || fallbackLabel || null,
-    receivedAt,
+    receivedAt: anchorReceivedAt,
   };
 }
 

@@ -219,6 +219,24 @@ export function resolveActiveTurnColor({
   return isPlayerColor(currentPlayerTurn) ? currentPlayerTurn : null;
 }
 
+export function shouldShowLegalBoardSources({
+  currentPlayerTurn = null,
+  currentOnDeckingPlayer = null,
+  viewerColor = null,
+  isInSetup = false,
+  gameFinished = false,
+  bombActive = false,
+} = {}) {
+  return Boolean(
+    !gameFinished
+    && !isInSetup
+    && currentOnDeckingPlayer === null
+    && !bombActive
+    && isPlayerColor(viewerColor)
+    && currentPlayerTurn === viewerColor
+  );
+}
+
 export function getSetupLegalSources({
   workingRank = [],
   workingStash = [],

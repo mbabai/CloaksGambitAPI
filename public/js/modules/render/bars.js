@@ -183,29 +183,41 @@ export function renderBars({
     return counter;
   }
 
-  function makeCapturedForColor(colorIdx) {
+  function makeCapturedForColor(colorIdx, options = {}) {
+    const newestOnLeft = Boolean(options.newestOnLeft);
     const strip = document.createElement('div');
     strip.classList.add('cg-captured-strip');
+    strip.dataset.capturedColor = String(colorIdx);
+    if (newestOnLeft) {
+      strip.dataset.newestOnLeft = '1';
+    }
     strip.style.display = 'flex';
     strip.style.alignItems = 'center';
     strip.style.gap = '0px';
     applyTooltipAttributes(strip, TOOLTIP_TEXT.capturedPieces);
     const pieces = (capturedByColor?.[colorIdx] || []);
     const pulsingIndexes = pulsingCapturedIndexSets[colorIdx] || new Set();
-    pieces.forEach((piece, idx) => {
-      const cap = Math.floor(0.6 * s);
+    const cap = Math.floor(0.6 * s);
+    const overlap = Math.floor(0.1 * cap);
+    strip.dataset.capturedPieceSize = String(cap);
+    strip.dataset.capturedOverlap = String(overlap);
+    const displayPieces = newestOnLeft
+      ? pieces.map((piece, idx) => ({ piece, idx })).reverse()
+      : pieces.map((piece, idx) => ({ piece, idx }));
+    displayPieces.forEach(({ piece, idx }, displayIdx) => {
       const img = makePieceGlyph(piece, cap, identityMap, { showLabel: false });
       if (img) {
         const wrap = document.createElement('div');
         wrap.classList.add('cg-captured-strip__piece');
-        const overlap = Math.floor(0.1 * cap);
+        wrap.dataset.capturedColor = String(colorIdx);
+        wrap.dataset.capturedIndex = String(idx);
         wrap.style.width = cap + 'px';
         wrap.style.height = cap + 'px';
         wrap.style.display = 'flex';
         wrap.style.alignItems = 'center';
         wrap.style.justifyContent = 'center';
         applyTooltipAttributes(wrap, TOOLTIP_TEXT.capturedPieces);
-        if (idx > 0) {
+        if (displayIdx > 0) {
           wrap.style.marginLeft = (-overlap) + 'px';
         }
         if (pulsingIndexes.has(idx)) {
@@ -273,7 +285,7 @@ export function renderBars({
       left.appendChild(clock);
       left.appendChild(buildDaggers(currentDaggers?.[bottomColor] || 0, bottomColor));
       row.appendChild(left);
-      row.appendChild(makeCapturedForColor(bottomColor));
+      row.appendChild(makeCapturedForColor(bottomColor, { newestOnLeft: true }));
       const spacer = Math.max(4, Math.floor(0.012 * H));
       row.style.marginTop = spacer + 'px';
       nameRow.style.marginTop = (-spacer) + 'px';

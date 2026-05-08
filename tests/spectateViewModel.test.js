@@ -196,4 +196,50 @@ describe('deriveSpectateView', () => {
     });
     expect(view.pendingCapture).toMatchObject({ row: 0, col: 1 });
   });
+
+  test('clears bomb speech bubble after a poison challenge resolves', () => {
+    const game = {
+      board: [
+        [null, makePiece(IDENTITIES.UNKNOWN, 0)],
+        [null, null],
+      ],
+      moves: [
+        {
+          player: 0,
+          from: { row: 0, col: 0 },
+          to: { row: 0, col: 1 },
+          declaration: IDENTITIES.KNIGHT,
+          state: MOVE_STATES.RESOLVED,
+        },
+      ],
+      actions: [
+        {
+          type: ACTIONS.MOVE,
+          player: 0,
+          timestamp: now,
+          details: {
+            from: { row: 0, col: 0 },
+            to: { row: 0, col: 1 },
+            declaration: IDENTITIES.KNIGHT,
+          },
+        },
+        {
+          type: ACTIONS.BOMB,
+          player: 0,
+          timestamp: now,
+          details: {},
+        },
+        {
+          type: ACTIONS.CHALLENGE,
+          player: 1,
+          timestamp: now,
+          details: { outcome: 'SUCCESS' },
+        },
+      ],
+    };
+
+    const view = deriveViaWorker(game);
+    expect(view.overlay).toBeNull();
+    expect(view.challengeRemoved).toEqual({ row: 0, col: 1 });
+  });
 });

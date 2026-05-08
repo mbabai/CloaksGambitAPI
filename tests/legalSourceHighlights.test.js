@@ -162,6 +162,34 @@ describe('legal piece source highlights', () => {
     expect(result.blockedBoard).toEqual([]);
   });
 
+  test('regular play source underlines stay available while response buttons are visible', () => {
+    const result = runExpression(`
+      ({ helpers }) => ({
+        allowed: helpers.shouldShowLegalBoardSources({
+          currentPlayerTurn: 0,
+          currentOnDeckingPlayer: null,
+          viewerColor: 0,
+          isInSetup: false,
+          gameFinished: false,
+          bombActive: false,
+          responseWindowOpen: true,
+        }),
+        blockedDuringPoison: helpers.shouldShowLegalBoardSources({
+          currentPlayerTurn: 0,
+          currentOnDeckingPlayer: null,
+          viewerColor: 0,
+          isInSetup: false,
+          gameFinished: false,
+          bombActive: true,
+          responseWindowOpen: true,
+        }),
+      })
+    `);
+
+    expect(result.allowed).toBe(true);
+    expect(result.blockedDuringPoison).toBe(false);
+  });
+
   test('live destination highlights mark captures and true-identity squares separately from bluff-only squares', () => {
     const result = runExpression(`
       ({ helpers }) => {

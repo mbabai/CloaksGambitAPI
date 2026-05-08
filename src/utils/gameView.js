@@ -20,6 +20,10 @@ function maskGameForColor(game, color) {
     }
     return piece;
   };
+  const clonePiece = (piece) => {
+    if (!piece || typeof piece !== 'object') return piece;
+    return { ...piece };
+  };
 
   const shouldMaskOwnedAction = (ownerColor) => {
     if (isAdmin) return false;
@@ -82,6 +86,11 @@ function maskGameForColor(game, color) {
   }
   if (Array.isArray(maskedGame.onDecks)) {
     maskedGame.onDecks = maskedGame.onDecks.map(maskPiece);
+  }
+  if (Array.isArray(maskedGame.captured)) {
+    maskedGame.captured = maskedGame.captured.map((bucket) => (
+      Array.isArray(bucket) ? bucket.map(clonePiece) : bucket
+    ));
   }
   if (Array.isArray(maskedGame.actions)) {
     maskedGame.actions = maskedGame.actions.map(maskAction);

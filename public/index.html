@@ -436,6 +436,16 @@
         cursor: default;
       }
 
+      .account-setting-row--stacked {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .account-setting-row--stacked .account-setting-row__text {
+        flex: 0 0 auto;
+      }
+
       .account-setting-row__segments {
         flex: 0 0 auto;
         display: inline-grid;
@@ -444,6 +454,11 @@
         border: 2px solid rgba(220, 220, 220, 0.78);
         background: rgba(14, 7, 22, 0.32);
         box-sizing: border-box;
+      }
+
+      .account-setting-row--stacked .account-setting-row__segments {
+        width: 100%;
+        min-width: 0;
       }
 
       .account-setting-row__segment {

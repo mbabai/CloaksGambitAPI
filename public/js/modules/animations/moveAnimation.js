@@ -12,12 +12,16 @@ export const DEFAULT_ANIMATION_SPEED = ANIMATION_SPEEDS.slow;
 
 export const MOVE_ANIMATION_DURATIONS = Object.freeze({
   fast: Object.freeze({
-    moveMs: 280,
-    captureMs: 180,
+    moveMs: 420,
+    captureMs: 270,
+    captureResolveMs: 420,
+    flipMs: 360,
   }),
   slow: Object.freeze({
-    moveMs: 760,
-    captureMs: 320,
+    moveMs: 1140,
+    captureMs: 480,
+    captureResolveMs: 1140,
+    flipMs: 780,
   }),
 });
 
@@ -44,6 +48,20 @@ function normalizeSquare(square) {
 
 function coordsEqual(left, right) {
   return Boolean(left && right && left.row === right.row && left.col === right.col);
+}
+
+function normalizeCapturedByColor(rawCaptured) {
+  const grouped = [[], []];
+  if (!Array.isArray(rawCaptured)) return grouped;
+  rawCaptured.forEach((bucket) => {
+    if (!Array.isArray(bucket)) return;
+    bucket.forEach((piece) => {
+      if (!piece || typeof piece !== 'object') return;
+      const color = normalizePlayer(piece.color);
+      if (color === 0 || color === 1) grouped[color].push(piece);
+    });
+  });
+  return grouped;
 }
 
 export function normalizeAnimationSpeed(value, fallback = DEFAULT_ANIMATION_SPEED) {
@@ -212,5 +230,56 @@ export function deriveOpponentMoveAnimationPlan({
     route,
     startBoard: cloneBoardWithHiddenSource(currentBoard, from),
     arrivedBoard: cloneBoardWithArrivedMove(currentBoard, from, to, movingPiece),
+  };
+}
+
+export function derivePendingCaptureResolutionPlan({
+  pendingCapture,
+  currentCaptured,
+  nextCaptured = null,
+  viewerColor,
+  rows,
+  cols,
+  currentIsWhite,
+  animationSpeed = DEFAULT_ANIMATION_SPEED,
+  shouldFlip = false,
+} = {}) {
+  const speed = normalizeAnimationSpeed(animationSpeed);
+  if (speed === ANIMATION_SPEEDS.off) return null;
+  if (!pendingCapture || typeof pendingCapture !== 'object') return null;
+
+  const piece = pendingCapture.piece && typeof pendingCapture.piece === 'object'
+    ? pendingCapture.piece
+    : null;
+  const pieceColor = normalizePlayer(piece?.color);
+  if (!piece || !(pieceColor === 0 || pieceColor === 1)) return null;
+
+  const source = normalizeSquare(pendingCapture);
+  const sourceUI = serverToAnimationUiCoords(source, rows, cols, currentIsWhite);
+  if (!source || !sourceUI) return null;
+
+  const capturedBefore = normalizeCapturedByColor(currentCaptured);
+  const capturedAfter = normalizeCapturedByColor(nextCaptured);
+  const capturedIndex = capturedBefore[pieceColor].length;
+  const finalPiece = capturedAfter[pieceColor]?.[capturedIndex] || piece;
+  const normalizedViewerColor = normalizePlayer(viewerColor);
+  const finalIdentity = Number(finalPiece?.identity);
+  const sourceIdentity = Number(piece.identity);
+
+  return {
+    speed,
+    piece,
+    finalPiece,
+    source,
+    sourceUI,
+    capturedColor: pieceColor,
+    capturedIndex,
+    shouldFlip: Boolean(
+      shouldFlip
+      && normalizedViewerColor !== null
+      && pieceColor !== normalizedViewerColor
+      && Number.isFinite(finalIdentity)
+      && finalIdentity !== sourceIdentity
+    ),
   };
 }
