@@ -1380,7 +1380,7 @@ function ensureDaggerSlots() {
   }
   const size = getDaggerSlotSize();
   slots.style.setProperty('--dagger-slot-size', `${size}px`);
-  slots.style.setProperty('--dagger-slot-gap', `${Math.max(5, Math.floor(size * 0.16))}px`);
+  slots.style.setProperty('--dagger-slot-gap', `${getDaggerSlotGap()}px`);
   return slots;
 }
 
@@ -1397,7 +1397,7 @@ function ensureWinningDaggerSlots(id) {
   }
   const size = getDaggerSlotSize();
   slots.style.setProperty('--dagger-slot-size', `${size}px`);
-  slots.style.setProperty('--dagger-slot-gap', `${Math.max(5, Math.floor(size * 0.16))}px`);
+  slots.style.setProperty('--dagger-slot-gap', `${getDaggerSlotGap()}px`);
   return slots;
 }
 
@@ -2214,17 +2214,30 @@ function getDaggerSlotGap() {
   return Math.max(5, Math.floor(getDaggerSlotSize() * 0.16));
 }
 
+function getBoardSideDaggerSlotsCenter() {
+  const geometry = getSetupBoardGeometry();
+  const spacing = getDaggerSlotSize() + getDaggerSlotGap();
+  return {
+    x: geometry.right + (getDaggerSlotSize() / 2) + (geometry.square * 0.14),
+    y: geometry.top + (getDaggerSlotSize() / 2) + spacing,
+  };
+}
+
+function getBoardSideDaggerSlotPoint(index) {
+  const geometry = getSetupBoardGeometry();
+  const spacing = getDaggerSlotSize() + getDaggerSlotGap();
+  return {
+    x: getBoardSideDaggerSlotsCenter().x,
+    y: geometry.top + (getDaggerSlotSize() / 2) + (index * spacing),
+  };
+}
+
 function getDaggerSlotsCenter(points) {
-  return getChallengeButtonPoint(points);
+  return getBoardSideDaggerSlotsCenter();
 }
 
 function getDaggerSlotPoint(points, index) {
-  const center = getDaggerSlotsCenter(points);
-  const spacing = getDaggerSlotSize() + getDaggerSlotGap();
-  return {
-    x: center.x + ((index - 1) * spacing),
-    y: center.y,
-  };
+  return getBoardSideDaggerSlotPoint(index);
 }
 
 function getBoardPoints() {
@@ -3635,19 +3648,27 @@ function getWinningFadeMultiplier(time) {
 }
 
 function getWinningDaggerSlotCenters() {
-  const geometry = getSetupBoardGeometry();
+  const topCenter = getWinningDaggerSlotsCenter(0);
+  const bottomCenter = getWinningDaggerSlotsCenter(1);
   return [
     {
       id: 'animationWinningDaggerSlotsTop',
-      x: geometry.right + (geometry.square * 0.92),
-      y: geometry.top + (geometry.square * 0.7),
+      ...topCenter,
     },
     {
       id: 'animationWinningDaggerSlotsBottom',
-      x: geometry.right + (geometry.square * 0.92),
-      y: geometry.bottom - (geometry.square * 0.7),
+      ...bottomCenter,
     },
   ];
+}
+
+function getWinningDaggerSlotsCenter(groupIndex = 0) {
+  const firstSlot = getWinningDaggerSlotPoint(groupIndex, 0);
+  const thirdSlot = getWinningDaggerSlotPoint(groupIndex, 2);
+  return {
+    x: firstSlot.x,
+    y: (firstSlot.y + thirdSlot.y) / 2,
+  };
 }
 
 function renderWinningDaggerSlots(time) {
@@ -3660,7 +3681,7 @@ function renderWinningDaggerSlots(time) {
     if (!slots) return;
     slots.style.left = `${center.x}px`;
     slots.style.top = `${center.y}px`;
-    slots.style.opacity = `${clamp(0, opacity, 1)}`;
+    slots.style.opacity = center.hidden ? '0' : `${clamp(0, opacity, 1)}`;
   });
 }
 
@@ -3675,11 +3696,18 @@ function hideSharedDaggerOverlay() {
 }
 
 function getWinningDaggerSlotPoint(groupIndex, slotIndex) {
-  const center = getWinningDaggerSlotCenters()[groupIndex];
+  const geometry = getSetupBoardGeometry();
   const spacing = getDaggerSlotSize() + getDaggerSlotGap();
+  const x = getBoardSideDaggerSlotsCenter().x;
+  if (groupIndex === 1) {
+    return {
+      x,
+      y: geometry.bottom - (getDaggerSlotSize() / 2) - (slotIndex * spacing),
+    };
+  }
   return {
-    x: center.x + ((slotIndex - 1) * spacing),
-    y: center.y,
+    x,
+    y: geometry.top + (getDaggerSlotSize() / 2) + (slotIndex * spacing),
   };
 }
 
@@ -3709,14 +3737,13 @@ function getWinningStashIntakePoint() {
 
 function getWinningCapturedPoint(color, index) {
   const geometry = getSetupBoardGeometry();
-  const groupIndex = color === BLACK ? 1 : 0;
-  const center = getWinningDaggerSlotCenters()[groupIndex];
-  const spacing = geometry.square * 0.5;
+  const capturedSize = layout.pieceSize * 0.5;
+  const spacing = geometry.square * 0.58;
   return {
-    x: center.x + ((index - 0.5) * spacing),
+    x: geometry.left - (capturedSize / 2) - (geometry.square * 0.14),
     y: color === BLACK
-      ? center.y - (geometry.square * 0.72)
-      : center.y + (geometry.square * 0.72),
+      ? geometry.bottom - (capturedSize / 2) - (index * spacing)
+      : geometry.top + (capturedSize / 2) + (index * spacing),
   };
 }
 
@@ -3939,9 +3966,43 @@ function ensureWinningDaggerToken(index) {
 }
 
 function hideWinningMoveActors() {
-  document.querySelectorAll('.animation-winning-piece, .animation-winning-dagger-token, .animation-winning-throne, .animation-winning-draw').forEach((element) => {
+  document.querySelectorAll('.animation-winning-piece, .animation-winning-dagger-token, .animation-winning-throne, .animation-winning-throne-banner, .animation-winning-draw').forEach((element) => {
     element.style.opacity = '0';
   });
+}
+
+function ensureWinningThroneBanner() {
+  if (!layout || !actorStage) return null;
+  let banner = document.getElementById('animationWinningThroneBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'animationWinningThroneBanner';
+    banner.className = 'animation-winning-throne-banner';
+    actorStage.appendChild(banner);
+  }
+  return banner;
+}
+
+function getWinningOutcomeOverlayGeometry() {
+  const geometry = getSetupBoardGeometry();
+  const centerY = geometry.top + (geometry.square * 4.5);
+  return {
+    center: {
+      x: layout.width / 2,
+      y: centerY,
+    },
+    bannerTop: centerY - (geometry.square * 1.25),
+    bannerHeight: geometry.square * 2.5,
+  };
+}
+
+function renderWinningOutcomeBanner(opacity) {
+  const banner = ensureWinningThroneBanner();
+  if (!banner) return;
+  const overlay = getWinningOutcomeOverlayGeometry();
+  banner.style.top = `${overlay.bannerTop}px`;
+  banner.style.height = `${overlay.bannerHeight}px`;
+  banner.style.opacity = `${clamp(0, opacity, 1)}`;
 }
 
 function ensureWinningThrone() {
@@ -3949,7 +4010,7 @@ function ensureWinningThrone() {
   let throne = document.getElementById('animationWinningThrone');
   if (!throne) {
     throne = createThroneIcon({
-      size: Math.round(layout.squareSize * 0.72),
+      size: Math.round(layout.squareSize * 2.3),
       alt: 'White wins',
       title: 'White wins',
     });
@@ -4329,23 +4390,26 @@ function renderWinningDrawIcon(time, milestones) {
   const draw = ensureWinningDrawIcon();
   if (!draw) return;
   const progress = easeOutCubic((time - milestones.drawIconStart) / TIMELINE.winningFinaleDrawIconDuration);
-  const topCaptured = getWinningCapturedPoint(WHITE, 0);
-  const bottomCaptured = getWinningCapturedPoint(BLACK, 0);
-  const size = Math.round(layout.squareSize * 1.12);
+  const opacity = clamp(0, progress, 1);
+  const overlay = getWinningOutcomeOverlayGeometry();
+  const size = Math.round(layout.squareSize * 2.3);
+  renderWinningOutcomeBanner(opacity);
   draw.style.width = `${size}px`;
   draw.style.height = `${size}px`;
-  draw.style.left = `${getWinningDaggerSlotPoint(0, 1).x}px`;
-  draw.style.top = `${(topCaptured.y + bottomCaptured.y) / 2}px`;
-  draw.style.opacity = `${clamp(0, progress, 1)}`;
-  draw.style.transform = `translate(-50%, -50%) scale(${0.72 + (0.28 * clamp(0, progress, 1))})`;
-  draw.style.zIndex = '7';
+  draw.style.left = `${overlay.center.x}px`;
+  draw.style.top = `${overlay.center.y}px`;
+  draw.style.opacity = `${opacity}`;
+  draw.style.transform = `translate(-50%, -50%) scale(${0.7 + (0.3 * opacity)})`;
+  draw.style.zIndex = '9';
 }
 
 function renderWinningFinale(time) {
   const milestones = getWinningChapterMilestones();
   const throne = document.getElementById('animationWinningThrone');
+  const throneBanner = document.getElementById('animationWinningThroneBanner');
   if (time < milestones.start) {
     if (throne) throne.style.opacity = '0';
+    if (throneBanner) throneBanner.style.opacity = '0';
     const draw = document.getElementById('animationWinningDrawIcon');
     if (draw) draw.style.opacity = '0';
     return;
@@ -4356,6 +4420,8 @@ function renderWinningFinale(time) {
   if (time < milestones.drawIconStart) {
     const draw = document.getElementById('animationWinningDrawIcon');
     if (draw) draw.style.opacity = '0';
+    const winningThroneBanner = document.getElementById('animationWinningThroneBanner');
+    if (winningThroneBanner) winningThroneBanner.style.opacity = '0';
   }
 
   const state = getWinningFinaleBaseState();
@@ -4465,6 +4531,8 @@ function renderWinningFinale(time) {
     } else {
       const draw = document.getElementById('animationWinningDrawIcon');
       if (draw) draw.style.opacity = '0';
+      const winningThroneBanner = document.getElementById('animationWinningThroneBanner');
+      if (winningThroneBanner) winningThroneBanner.style.opacity = '0';
     }
     return;
   }
@@ -4629,15 +4697,13 @@ function renderWinningFinale(time) {
   const thirdThroneProgress = Math.min(thirdThroneAppearProgress, 1 - thirdThroneRewindProgress);
   const finalThroneProgress = Math.min(crownThroneProgress, 1 - drawRewindProgress);
   const throneProgress = Math.max(firstThroneProgress, secondThroneProgress, thirdThroneProgress, finalThroneProgress);
-  const throneSize = Math.round(layout.squareSize * 0.72);
-  const thronePoint = {
-    x: getWinningDaggerSlotPoint(1, 2).x + (layout.squareSize * 0.68),
-    y: getWinningDaggerSlotPoint(1, 2).y,
-  };
+  const overlay = getWinningOutcomeOverlayGeometry();
+  const throneSize = Math.round(layout.squareSize * 2.3);
+  renderWinningOutcomeBanner(throneProgress);
   winningThrone.style.width = `${throneSize}px`;
   winningThrone.style.height = `${throneSize}px`;
-  winningThrone.style.left = `${thronePoint.x}px`;
-  winningThrone.style.top = `${thronePoint.y}px`;
+  winningThrone.style.left = `${overlay.center.x}px`;
+  winningThrone.style.top = `${overlay.center.y}px`;
   winningThrone.style.opacity = `${clamp(0, throneProgress, 1)}`;
   winningThrone.style.transform = `translate(-50%, -50%) scale(${0.7 + (0.3 * throneProgress)})`;
 
@@ -5341,21 +5407,11 @@ function renderCapturesRewindIndicator(time, milestones) {
 }
 
 function getCapturesDaggerSlotsCenter(points) {
-  const challenge = getCapturesChallengeButtonPoint(points);
-  const { height } = getCapturesButtonMetrics();
-  return {
-    x: challenge.x,
-    y: challenge.y - (height * 0.9),
-  };
+  return getBoardSideDaggerSlotsCenter();
 }
 
 function getCapturesDaggerSlotPoint(points, index) {
-  const center = getCapturesDaggerSlotsCenter(points);
-  const spacing = getDaggerSlotSize() + getDaggerSlotGap();
-  return {
-    x: center.x + ((index - 1) * spacing),
-    y: center.y,
-  };
+  return getBoardSideDaggerSlotPoint(index);
 }
 
 function renderCapturesDagger(time, milestones, points) {

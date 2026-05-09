@@ -71,36 +71,36 @@ body {
 .animation-hud {
   position: fixed;
   left: 16px;
-  bottom: 16px;
+  top: 50%;
   z-index: 5000;
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  width: min(560px, calc(100vw - 32px));
-  min-height: 42px;
-  padding: 0 10px;
+  width: 164px;
+  max-height: calc(100vh - 32px);
+  padding: 10px;
   box-sizing: border-box;
   border: 1px solid rgba(245, 230, 167, 0.44);
   background: rgba(7, 4, 12, 0.72);
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.26);
   backdrop-filter: blur(5px);
   pointer-events: auto;
+  transform: translateY(-50%);
 }
 
 .animation-chapters {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   order: -1;
-  flex: 1 0 100%;
   min-width: 0;
 }
 
 .animation-chapter-button {
-  flex: 1 1 0;
   min-width: 0;
-  height: 28px;
+  min-height: 30px;
   padding: 0 7px;
   border: 1px solid rgba(245, 230, 167, 0.34);
   background: rgba(255, 255, 255, 0.06);
@@ -118,20 +118,23 @@ body {
 
 .animation-controls {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
-  flex: 1 1 auto;
   min-width: 0;
 }
 
 .animation-control-group {
-  flex: 1 1 0;
-  min-width: 145px;
   display: grid;
-  grid-template-columns: auto minmax(72px, 1fr) 38px;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 7px;
   color: var(--CG-white);
+}
+
+.animation-control-group .animation-slider {
+  grid-column: 1 / -1;
+  grid-row: 2;
 }
 
 .animation-control-label {
@@ -141,10 +144,10 @@ body {
 }
 
 .animation-play-pause {
-  flex: 0 0 30px;
   width: 30px;
   height: 30px;
   display: inline-flex;
+  align-self: center;
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -385,6 +388,7 @@ body {
   position: absolute;
   z-index: 3;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: var(--dagger-slot-gap, 7px);
   opacity: 0;
@@ -412,16 +416,26 @@ body {
 
 .animation-winning-throne {
   position: absolute;
-  z-index: 6;
+  z-index: 8;
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, -50%) scale(0.7);
   filter: drop-shadow(0 0 12px rgba(255, 215, 0, 0.68)) drop-shadow(0 12px 14px rgba(0, 0, 0, 0.42));
 }
 
+.animation-winning-throne-banner {
+  position: absolute;
+  left: 0;
+  width: 100vw;
+  z-index: 7;
+  opacity: 0;
+  pointer-events: none;
+  background: rgba(245, 245, 245, 0.46);
+}
+
 .animation-winning-draw {
   position: absolute;
-  z-index: 7;
+  z-index: 9;
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, -50%) scale(0.72);
@@ -452,7 +466,24 @@ body {
 @media (max-width: 480px) {
   .animation-hud {
     left: 10px;
-    bottom: 10px;
-    width: calc(100vw - 20px);
+    top: 10px;
+    width: 142px;
+    max-height: calc(100vh - 20px);
+    padding: 8px;
+    transform: none;
+  }
+
+  .animation-chapter-button {
+    min-height: 28px;
+    font-size: 10px;
+  }
+
+  .animation-control-label {
+    font-size: 11px;
+  }
+
+  .animation-slider-value,
+  .animation-speed-value {
+    font-size: 12px;
   }
 }
