@@ -27,6 +27,11 @@ const {
   getTournamentDetails,
 } = require('./services/tournaments/liveTournaments');
 const { buildTutorialPayload } = require('./services/tutorials/runtime');
+const {
+  notifyLobbyJoined,
+  notifyLobbyLeft,
+  notifyQueueTransitions,
+} = require('./services/discordLobbyWebhook');
 const DEFAULT_TOURNAMENT_MATCH_TYPES = Match.TOURNAMENT_MATCH_TYPES || {
   ROUND_ROBIN: 'TOURNAMENT_ROUND_ROBIN',
   ELIMINATION: 'TOURNAMENT_ELIMINATION',
@@ -1003,6 +1008,16 @@ function initSocket(httpServer) {
       });
     });
 
+    notifyQueueTransitions(lobbyState, {
+      quickplayQueue: newQuick,
+      rankedQueue: newRanked,
+      botQueue: newBots,
+    }, {
+      affectedUsers: Array.from(affected),
+    }).catch((err) => {
+      console.error('Error sending Discord queue notification:', err);
+    });
+
     lobbyState.quickplayQueue = newQuick;
     lobbyState.rankedQueue = newRanked;
     lobbyState.botQueue = newBots;
@@ -1393,6 +1408,7 @@ function initSocket(httpServer) {
       isBot: isBotUser,
       isGuest: isGuestUser,
     });
+    const wasConnected = hasConnectedUser(userId);
     addUserSocket(userId, socket);
     setConnectedUsername(userId, session.username);
     markPlayerConnectedToAllMatches(userId);
@@ -1402,6 +1418,11 @@ function initSocket(httpServer) {
     socket.data.isGuest = isGuestUser;
     socket.data.username = usernameForLog;
     console.log('Client connected', socket.id);
+    if (!wasConnected && !isBotUser) {
+      notifyLobbyJoined({ userId, username: usernameForLog }).catch((err) => {
+        console.error('Error sending Discord lobby join notification:', err);
+      });
+    }
 
     if (isGuestUser && !isBotUser) {
       try {
@@ -1640,8 +1661,14 @@ function initSocket(httpServer) {
         socket.data.spectating.clear();
       }
       if (userId) {
+        const wasBotSocket = Boolean(socket.data?.isBot);
         removeUserSocket(userId, socket);
         if (!hasConnectedUser(userId)) {
+          if (!wasBotSocket) {
+            notifyLobbyLeft({ userId, username: socket.data?.username }).catch((err) => {
+              console.error('Error sending Discord lobby leave notification:', err);
+            });
+          }
           // Grace period: remove mapping now, but defer queue cleanup
           clearPendingInvitesForUser(userId, 'disconnect');
           markPlayerDisconnectedFromAllMatches(userId);
