@@ -38,6 +38,7 @@ function normalizeToastNotificationsEnabledInput(value) {
 
 const ANIMATION_SPEEDS = new Set(['off', 'fast', 'slow']);
 const DEFAULT_ANIMATION_SPEED = 'slow';
+const DEFAULT_AUDIO_VOLUME = 0.5;
 
 function normalizeAnimationSpeed(value, fallback = DEFAULT_ANIMATION_SPEED) {
   if (typeof value !== 'string') {
@@ -65,7 +66,37 @@ function normalizeAnimationSpeedInput(value) {
   return normalized || null;
 }
 
+function normalizeAudioVolume(value, fallback = DEFAULT_AUDIO_VOLUME) {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return fallback;
+  }
+  return Math.min(1, Math.max(0, normalized));
+}
+
+function resolveAudioVolume(userLike) {
+  if (!userLike || typeof userLike !== 'object') {
+    return DEFAULT_AUDIO_VOLUME;
+  }
+  return normalizeAudioVolume(userLike.audioVolume, DEFAULT_AUDIO_VOLUME);
+}
+
+function normalizeAudioVolumeInput(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized) || normalized < 0 || normalized > 1) {
+    return null;
+  }
+  return normalized;
+}
+
 module.exports = {
+  DEFAULT_AUDIO_VOLUME,
   DEFAULT_ANIMATION_SPEED,
   resolveTooltipsEnabled,
   normalizeTooltipsEnabledInput,
@@ -73,4 +104,7 @@ module.exports = {
   normalizeToastNotificationsEnabledInput,
   resolveAnimationSpeed,
   normalizeAnimationSpeedInput,
+  resolveAudioVolume,
+  normalizeAudioVolume,
+  normalizeAudioVolumeInput,
 };

@@ -110,6 +110,7 @@ describe('users/getDetails route', () => {
       tooltipsEnabled: true,
       toastNotificationsEnabled: true,
       animationSpeed: 'slow',
+      audioVolume: 0.5,
     });
   });
 
@@ -125,6 +126,7 @@ describe('users/getDetails route', () => {
         tooltipsEnabled: false,
         toastNotificationsEnabled: false,
         animationSpeed: 'off',
+        audioVolume: 0.4,
         photoUrl: '',
       }),
     });
@@ -138,6 +140,7 @@ describe('users/getDetails route', () => {
       tooltipsEnabled: false,
       toastNotificationsEnabled: false,
       animationSpeed: 'off',
+      audioVolume: 0.4,
     });
   });
 });

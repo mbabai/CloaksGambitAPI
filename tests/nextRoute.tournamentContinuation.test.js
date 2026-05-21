@@ -148,7 +148,7 @@ describe('next route tournament continuation', () => {
       tournamentId: 'tournament-1',
       tournamentPhase: 'elimination',
       requiresAccept: true,
-      acceptWindowSeconds: 30,
+      acceptWindowSeconds: 120,
     }));
   });
 

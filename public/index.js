@@ -46,6 +46,7 @@ import { createGameToastSnapshot, deriveGameToastFeedback } from '/js/modules/ui
 import { applyTooltipAttributes, initTooltipSystem, setTooltipsEnabled } from '/js/modules/ui/tooltips.js';
 import { initTournamentUi } from '/js/modules/tournaments/ui.js';
 import { createTournamentAcceptScheduler } from '/js/modules/tournaments/acceptScheduler.js';
+import { createAudioManager, normalizeAudioVolume as normalizeAudioVolumePreference } from '/js/modules/audio/audioManager.js';
 import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
 import {
   computeGameClockState,
@@ -281,7 +282,21 @@ logBootConstantsOnce();
   const TOOLTIP_COOKIE_NAME = 'cgTooltipsEnabled';
   const TOAST_NOTIFICATIONS_COOKIE_NAME = 'cgToastNotificationsEnabled';
   const ANIMATION_SPEED_COOKIE_NAME = 'cgAnimationSpeed';
+  const AUDIO_VOLUME_COOKIE_NAME = 'cgAudioVolume';
+  const AUDIO_VOLUME_TOUCHED_COOKIE_NAME = 'cgAudioVolumeTouched';
   const TOOLTIP_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+  const DEFAULT_AUDIO_VOLUME = 0.5;
+  const MATCH_FOUND_SOUND_ID = 'matchFound';
+  const MATCH_FOUND_SOUND_SRC = '/assets/sounds/MatchFound.mp3';
+  const MOVE_SOUND_ID = 'move';
+  const MOVE_SOUND_SRC = '/assets/sounds/Move.mp3';
+  const CAPTURE_SOUND_ID = 'capture';
+  const CAPTURE_SOUND_SRC = '/assets/sounds/Capture.mp3';
+  const POISON_SOUND_ID = 'poison';
+  const POISON_SOUND_SRC = '/assets/sounds/Poison.mp3';
+  const CHALLENGE_SOUND_ID = 'challenge';
+  const CHALLENGE_SOUND_SRC = '/assets/sounds/Challenge.mp3';
+  const GAME_SOUND_EVENT_LIMIT = 160;
 
   function normalizeTooltipPreference(value, fallback = true) {
     if (value === true || value === false) {
@@ -330,7 +345,74 @@ logBootConstantsOnce();
     );
   }
 
+  function readAudioVolumePreferenceCookie() {
+    const rawVolume = getCookie(AUDIO_VOLUME_COOKIE_NAME);
+    const userTouchedVolume = getCookie(AUDIO_VOLUME_TOUCHED_COOKIE_NAME) === 'true';
+    if (!userTouchedVolume && String(rawVolume || '').trim() === '0') {
+      return DEFAULT_AUDIO_VOLUME;
+    }
+    return normalizeAudioVolumePreference(rawVolume, DEFAULT_AUDIO_VOLUME);
+  }
+
+  function persistAudioVolumePreferenceCookie(volume) {
+    const normalized = normalizeAudioVolumePreference(volume, DEFAULT_AUDIO_VOLUME);
+    setCookie(AUDIO_VOLUME_COOKIE_NAME, String(normalized), TOOLTIP_COOKIE_MAX_AGE_SECONDS);
+    setCookie(AUDIO_VOLUME_TOUCHED_COOKIE_NAME, 'true', TOOLTIP_COOKIE_MAX_AGE_SECONDS);
+  }
+
   initTooltipSystem({ enabled: readTooltipPreferenceCookie() });
+  const audioManager = createAudioManager({
+    defaultVolume: readAudioVolumePreferenceCookie(),
+  });
+  audioManager.registerSound(MATCH_FOUND_SOUND_ID, {
+    src: MATCH_FOUND_SOUND_SRC,
+    loop: true,
+  });
+  audioManager.registerSound(MOVE_SOUND_ID, {
+    src: MOVE_SOUND_SRC,
+  });
+  audioManager.registerSound(CAPTURE_SOUND_ID, {
+    src: CAPTURE_SOUND_SRC,
+  });
+  audioManager.registerSound(POISON_SOUND_ID, {
+    src: POISON_SOUND_SRC,
+  });
+  audioManager.registerSound(CHALLENGE_SOUND_ID, {
+    src: CHALLENGE_SOUND_SRC,
+  });
+
+  const playedGameSoundEvents = new Set();
+
+  function playSound(soundId) {
+    audioManager.play(soundId);
+  }
+
+  function playMoveSounds({ isPendingCapture = false } = {}) {
+    playSound(MOVE_SOUND_ID);
+    if (isPendingCapture) {
+      playSound(CAPTURE_SOUND_ID);
+    }
+  }
+
+  function rememberGameSoundEvent(key) {
+    const eventKey = key ? String(key) : '';
+    if (!eventKey) return false;
+    if (playedGameSoundEvents.has(eventKey)) return false;
+    playedGameSoundEvents.add(eventKey);
+    while (playedGameSoundEvents.size > GAME_SOUND_EVENT_LIMIT) {
+      const firstKey = playedGameSoundEvents.values().next().value;
+      playedGameSoundEvents.delete(firstKey);
+    }
+    return true;
+  }
+
+  function playSoundEventOnce(key, callback) {
+    if (!rememberGameSoundEvent(key)) return false;
+    if (typeof callback === 'function') {
+      callback();
+    }
+    return true;
+  }
 
   upgradeButton(document.getElementById('googleLoginBtn'), {
     variant: 'neutral',
@@ -1284,6 +1366,7 @@ logBootConstantsOnce();
     previousValue,
     normalize,
     errorMessage,
+    allowNoFieldsFallback = false,
   }) {
     const nextValue = normalize(value);
     updateSessionInfo({ [field]: nextValue });
@@ -1303,6 +1386,13 @@ logBootConstantsOnce();
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
+        if (
+          allowNoFieldsFallback
+          && res.status === 400
+          && String(err?.message || '').toLowerCase() === 'no fields to update'
+        ) {
+          return nextValue;
+        }
         throw new Error(err.message || errorMessage);
       }
       const updated = await res.json().catch(() => null);
@@ -1345,6 +1435,18 @@ logBootConstantsOnce();
       previousValue: previousSpeed,
       normalize: (value, fallback = DEFAULT_ANIMATION_SPEED) => normalizeAnimationSpeed(value, fallback),
       errorMessage: 'Failed to update animation setting.',
+    });
+  }
+
+  async function saveAudioVolumePreference(volume) {
+    const previousVolume = normalizeAudioVolumePreference(sessionInfo.audioVolume, DEFAULT_AUDIO_VOLUME);
+    return saveUserBackedPreference({
+      field: 'audioVolume',
+      value: volume,
+      previousValue: previousVolume,
+      normalize: (value, fallback = DEFAULT_AUDIO_VOLUME) => normalizeAudioVolumePreference(value, fallback),
+      errorMessage: 'Failed to update volume setting.',
+      allowNoFieldsFallback: true,
     });
   }
 
@@ -1534,6 +1636,113 @@ logBootConstantsOnce();
     return { row, control, buttons };
   }
 
+  function formatAudioVolumePercent(value) {
+    return `${Math.round(normalizeAudioVolumePreference(value, DEFAULT_AUDIO_VOLUME) * 100)}%`;
+  }
+
+  function createAccountRangeRow({
+    id,
+    label,
+    description = '',
+    value,
+    onPreview,
+    onChange,
+  }) {
+    const row = document.createElement('div');
+    row.className = 'menu-button menu-button--split account-setting-row account-setting-row--stacked account-setting-row--range';
+    row.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+
+    const textWrap = document.createElement('div');
+    textWrap.className = 'account-setting-row__text account-setting-row__text--inline';
+
+    const labelWrap = document.createElement('div');
+    labelWrap.className = 'account-setting-row__range-label';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'account-setting-row__label';
+    labelEl.textContent = label;
+    labelWrap.appendChild(labelEl);
+
+    const valueEl = document.createElement('output');
+    valueEl.className = 'account-setting-row__range-value';
+    valueEl.setAttribute('for', id);
+    labelWrap.appendChild(valueEl);
+    textWrap.appendChild(labelWrap);
+
+    if (description) {
+      const descriptionEl = document.createElement('span');
+      descriptionEl.className = 'account-setting-row__description';
+      descriptionEl.textContent = description;
+      textWrap.appendChild(descriptionEl);
+    }
+
+    const control = document.createElement('input');
+    control.type = 'range';
+    control.id = id;
+    control.className = 'account-setting-row__range';
+    control.min = '0';
+    control.max = '100';
+    control.step = '1';
+    control.setAttribute('aria-label', label);
+
+    row.appendChild(textWrap);
+    row.appendChild(control);
+
+    let lastCommittedValue = normalizeAudioVolumePreference(value, DEFAULT_AUDIO_VOLUME);
+
+    function applyRangeState(nextValue) {
+      const normalizedValue = normalizeAudioVolumePreference(nextValue, lastCommittedValue);
+      control.value = String(Math.round(normalizedValue * 100));
+      valueEl.value = formatAudioVolumePercent(normalizedValue);
+    }
+
+    function readControlValue() {
+      return normalizeAudioVolumePreference(Number(control.value) / 100, lastCommittedValue);
+    }
+
+    async function commitRange(nextValue) {
+      const normalizedNext = normalizeAudioVolumePreference(nextValue, lastCommittedValue);
+      control.disabled = true;
+      row.classList.add('account-setting-row--pending');
+      try {
+        const committedValue = typeof onChange === 'function'
+          ? await onChange(normalizedNext)
+          : normalizedNext;
+        lastCommittedValue = normalizeAudioVolumePreference(committedValue, normalizedNext);
+        applyRangeState(lastCommittedValue);
+      } catch (error) {
+        console.error('Failed to update volume setting', error);
+        applyRangeState(lastCommittedValue);
+        if (typeof onPreview === 'function') {
+          onPreview(lastCommittedValue);
+        }
+        alert(error?.message || 'Failed to update volume setting. Please try again.');
+      } finally {
+        control.disabled = false;
+        row.classList.remove('account-setting-row--pending');
+      }
+    }
+
+    control.addEventListener('input', (event) => {
+      event.stopPropagation();
+      const nextValue = readControlValue();
+      valueEl.value = formatAudioVolumePercent(nextValue);
+      if (typeof onPreview === 'function') {
+        onPreview(nextValue);
+      }
+    });
+
+    control.addEventListener('change', async (event) => {
+      event.stopPropagation();
+      await commitRange(readControlValue());
+    });
+
+    applyRangeState(lastCommittedValue);
+    return { row, control };
+  }
+
   function updateSessionInfo(partial = {}, { syncCookies = false } = {}) {
     if (partial.userId !== undefined) {
       sessionInfo.userId = partial.userId ? String(partial.userId) : null;
@@ -1553,6 +1762,11 @@ logBootConstantsOnce();
     if (partial.animationSpeed !== undefined) {
       sessionInfo.animationSpeed = normalizeAnimationSpeed(partial.animationSpeed, DEFAULT_ANIMATION_SPEED);
       persistAnimationSpeedPreferenceCookie(sessionInfo.animationSpeed);
+    }
+    if (partial.audioVolume !== undefined) {
+      sessionInfo.audioVolume = normalizeAudioVolumePreference(partial.audioVolume, DEFAULT_AUDIO_VOLUME);
+      persistAudioVolumePreferenceCookie(sessionInfo.audioVolume);
+      audioManager.setVolume(sessionInfo.audioVolume);
     }
 
     let recomputeAuth = false;
@@ -1704,10 +1918,18 @@ logBootConstantsOnce();
       ],
       onChange: saveAnimationSpeedPreference,
     });
+    const volumeSlider = createAccountRangeRow({
+      id: 'settingsAudioVolume',
+      label: 'Volume',
+      value: normalizeAudioVolumePreference(sessionInfo.audioVolume, DEFAULT_AUDIO_VOLUME),
+      onPreview: (nextValue) => audioManager.setVolume(nextValue),
+      onChange: saveAudioVolumePreference,
+    });
 
     accountPanelContent.appendChild(tooltipToggle.row);
     accountPanelContent.appendChild(toastNotificationsToggle.row);
     accountPanelContent.appendChild(animationSegmented.row);
+    accountPanelContent.appendChild(volumeSlider.row);
   }
 
   function renderLearnPanel() {
@@ -1790,6 +2012,10 @@ logBootConstantsOnce();
         userDetails?.animationSpeed,
         sessionInfo.animationSpeed
       );
+      const audioVolume = normalizeAudioVolumePreference(
+        userDetails?.audioVolume,
+        sessionInfo.audioVolume
+      );
 
       if (activeMenuPanel && activeMenuPanel !== 'account') {
         updateAccountPanel();
@@ -1807,6 +2033,9 @@ logBootConstantsOnce();
       }
       if (animationSpeed !== sessionInfo.animationSpeed) {
         updateSessionInfo({ animationSpeed });
+      }
+      if (audioVolume !== sessionInfo.audioVolume) {
+        updateSessionInfo({ audioVolume });
       }
 
       if (statsOverlayController) {
@@ -2080,6 +2309,11 @@ logBootConstantsOnce();
         } else if (sessionData.isGuest || sessionData.authenticated === false) {
           updates.animationSpeed = readAnimationSpeedPreferenceCookie();
         }
+        if (sessionData.audioVolume !== undefined) {
+          updates.audioVolume = sessionData.audioVolume;
+        } else if (sessionData.isGuest || sessionData.authenticated === false) {
+          updates.audioVolume = readAudioVolumePreferenceCookie();
+        }
         updateSessionInfo(updates, { syncCookies: Boolean(sessionData.isGuest) });
       }
     } catch (err) {
@@ -2107,6 +2341,7 @@ logBootConstantsOnce();
         tooltipsEnabled: readTooltipPreferenceCookie(),
         toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
         animationSpeed: readAnimationSpeedPreferenceCookie(),
+        audioVolume: readAudioVolumePreferenceCookie(),
       });
     }
 
@@ -2211,6 +2446,7 @@ logBootConstantsOnce();
   let bannerKeyListener = null;
   let activeBannerKind = null;
   let activeBannerGameId = null;
+  let activeTournamentAcceptSoundKey = null;
   const locallyAcceptedTournamentGames = new Set();
   // Tournament accept timing is client-owned but server-authoritative:
   // the scheduler only decides when to surface the banner, while the server
@@ -2251,6 +2487,7 @@ logBootConstantsOnce();
     tooltipsEnabled: readTooltipPreferenceCookie(),
     toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
     animationSpeed: readAnimationSpeedPreferenceCookie(),
+    audioVolume: readAudioVolumePreferenceCookie(),
   };
 
   let playerNames = ['Anonymous0', 'Anonymous1'];
@@ -2290,6 +2527,7 @@ logBootConstantsOnce();
   const PIECE_PRELOAD = {}; // identity -> { color -> HTMLImageElement }
   let dragPreviewImgs = []; // active floating preview images
   let lastChoiceOrigin = null; // remember origin for two-option choice
+  let lastChoicePendingCapture = false; // destination was occupied before optimistic choice move
   let gameFinished = false; // true when the current game has concluded
   let currentDrawOffer = null; // { player, createdAt }
   let drawOfferCooldowns = [null, null]; // ms timestamps when players may re-offer
@@ -3985,12 +4223,37 @@ logBootConstantsOnce();
               ? payload.actions[payload.actions.length - 1]
               : null;
             const incomingActionPlayer = normalizeColorIndex(latestIncomingAction?.player);
+            const latestIncomingMoveContext = latestIncomingAction?.type === ACTIONS.MOVE
+              ? getLatestMoveContext(payload)
+              : null;
+            const latestIncomingMove = latestIncomingMoveContext
+              ? buildCanonicalMoveFromContext(latestIncomingMoveContext)
+              : null;
+            const latestIncomingMoveKey = makeMoveKey(latestIncomingMove);
+            const latestIncomingMoveIsPendingCapture = Boolean(
+              latestIncomingMove
+              && latestIncomingMove.state === MOVE_STATES.PENDING
+              && isPendingCaptureMoveFromBoard(latestIncomingMove, currentBoard)
+            );
             const nextCaptured = Array.isArray(payload.captured)
               ? groupCapturedPiecesByColor(payload.captured)
               : null;
+            if (
+              latestIncomingAction?.type === ACTIONS.BOMB
+              && incomingActionPlayer !== color
+            ) {
+              playSoundEventOnce(
+                makeGameSoundEventKey('poison', latestIncomingAction),
+                () => playSound(POISON_SOUND_ID)
+              );
+            }
             if (latestIncomingAction?.type === ACTIONS.CHALLENGE) {
               transientChallengeAction = normalizeTransientChallengeAction(latestIncomingAction);
               renderBoardAndBars();
+              playSoundEventOnce(
+                makeGameSoundEventKey('challenge', latestIncomingAction),
+                () => playSound(CHALLENGE_SOUND_ID)
+              );
             }
             const stateTransitionAnimation = (() => {
               if (latestIncomingAction?.type === ACTIONS.BOMB && lastAction?.type === ACTIONS.MOVE) {
@@ -4051,6 +4314,16 @@ logBootConstantsOnce();
               currentIsWhite,
               lastAnimatedMoveKey: lastOpponentMoveAnimationKey,
             });
+            if (
+              !animationPlan
+              && latestIncomingAction?.type === ACTIONS.MOVE
+              && incomingActionPlayer !== color
+            ) {
+              playSoundEventOnce(
+                makeGameSoundEventKey('move', latestIncomingAction, latestIncomingMoveKey),
+                () => playMoveSounds({ isPendingCapture: latestIncomingMoveIsPendingCapture })
+              );
+            }
             let playedStateTransitionAnimation = false;
             if (stateTransitionAnimation) {
               try {
@@ -4150,6 +4423,16 @@ logBootConstantsOnce();
               layoutPlayArea();
               renderBoardAndBars();
               return;
+            }
+            if (
+              animationPlan
+              && latestIncomingAction?.type === ACTIONS.MOVE
+              && incomingActionPlayer !== color
+            ) {
+              playSoundEventOnce(
+                makeGameSoundEventKey('move', latestIncomingAction, latestIncomingMoveKey),
+                () => playMoveSounds({ isPendingCapture: latestIncomingMoveIsPendingCapture })
+              );
             }
             setStateFromServer(payload, 'game:update');
             const keepChallengeBubbleDuringAnimation = Boolean(
@@ -4816,12 +5099,40 @@ logBootConstantsOnce();
     activeBannerGameId = gameId !== null && gameId !== undefined ? String(gameId) : null;
   }
 
+  function getTournamentAcceptSoundKey(gameId = activeBannerGameId) {
+    const normalizedGameId = gameId !== null && gameId !== undefined ? String(gameId) : 'unknown';
+    return `tournamentAccept:${normalizedGameId || 'unknown'}`;
+  }
+
+  function startTournamentAcceptSound(gameId = activeBannerGameId) {
+    const key = getTournamentAcceptSoundKey(gameId);
+    if (activeTournamentAcceptSoundKey && activeTournamentAcceptSoundKey !== key) {
+      audioManager.stopLoop(activeTournamentAcceptSoundKey);
+    }
+    activeTournamentAcceptSoundKey = key;
+    audioManager.startLoop(MATCH_FOUND_SOUND_ID, { key });
+  }
+
+  function stopTournamentAcceptSound(gameId = null) {
+    const key = gameId !== null && gameId !== undefined
+      ? getTournamentAcceptSoundKey(gameId)
+      : activeTournamentAcceptSoundKey;
+    if (!key) return;
+    audioManager.stopLoop(key);
+    if (activeTournamentAcceptSoundKey === key) {
+      activeTournamentAcceptSoundKey = null;
+    }
+  }
+
   function clearBannerOverlay({ restoreFocus = false } = {}) {
     if (bannerInterval) {
       clearInterval(bannerInterval);
       bannerInterval = null;
     }
     setBannerKeyListener(null);
+    if (activeBannerKind === 'tournament-accept') {
+      stopTournamentAcceptSound(activeBannerGameId);
+    }
     setActiveBanner(null, null);
     if (bannerOverlay) {
       try {
@@ -6620,6 +6931,7 @@ logBootConstantsOnce();
 
     function closeBanner() {
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
+      stopTournamentAcceptSound(normalizedGameId);
       content.innerHTML = '';
       setActiveBanner(null, null);
       overlay.hide();
@@ -6628,9 +6940,11 @@ logBootConstantsOnce();
     let remaining = Math.max(1, Number(startSeconds) || 30);
     timerEl.textContent = String(remaining);
     overlay.show({ initialFocus: acceptBtn });
+    startTournamentAcceptSound(normalizedGameId);
 
     acceptBtn.addEventListener('click', async () => {
       acceptBtn.disabled = true;
+      stopTournamentAcceptSound(normalizedGameId);
       acceptBtn.textContent = 'Accepting…';
       if (normalizedGameId) {
         locallyAcceptedTournamentGames.add(normalizedGameId);
@@ -6647,6 +6961,7 @@ logBootConstantsOnce();
         console.error('Failed to accept tournament match', err);
         acceptBtn.disabled = false;
         acceptBtn.textContent = 'Accept';
+        startTournamentAcceptSound(normalizedGameId);
       }
     });
 
@@ -7863,6 +8178,7 @@ logBootConstantsOnce();
             color: myColor,
           });
           applyLocalMoveClock();
+          playSound(POISON_SOUND_ID);
           apiBomb(lastGameId, myColor).catch(err => console.error('Poison failed', err));
         },
         width: btnW,
@@ -9569,6 +9885,45 @@ logBootConstantsOnce();
     return parts.join(':');
   }
 
+  function makeActionKey(action) {
+    if (!action || typeof action !== 'object') return null;
+    const details = action.details && typeof action.details === 'object'
+      ? action.details
+      : {};
+    let serializedDetails = '';
+    try {
+      serializedDetails = JSON.stringify(details);
+    } catch (_) {
+      serializedDetails = '';
+    }
+    return [
+      action.type || 'x',
+      normalizeColorIndex(action.player) ?? 'x',
+      action.timestamp || action.createdAt || action._id || '',
+      serializedDetails,
+    ].join(':');
+  }
+
+  function makeGameSoundEventKey(kind, action, fallbackKey = '') {
+    const actionKey = makeActionKey(action);
+    return [
+      lastGameId || 'game',
+      kind || 'sound',
+      actionKey || fallbackKey || 'event',
+    ].join('|');
+  }
+
+  function isPendingCaptureMoveFromBoard(move, boardSnapshot) {
+    if (!move || !boardSnapshot) return false;
+    const to = move.to || {};
+    if (!Number.isFinite(to.row) || !Number.isFinite(to.col)) return false;
+    const player = normalizeColorIndex(move.player);
+    const target = boardSnapshot?.[to.row]?.[to.col] || null;
+    if (!target) return false;
+    const targetColor = normalizeColorIndex(target.color);
+    return player === null || targetColor === null || targetColor !== player;
+  }
+
   function buildCanonicalMoveFromContext(ctx) {
     if (!ctx) return null;
     const canonical = ctx.move ? { ...ctx.move } : {};
@@ -10392,6 +10747,8 @@ logBootConstantsOnce();
         selected = null;
         // Show final left speech bubble only for the declared type
         showFinalSpeechOnly(origin, dest, decl, opts);
+        playMoveSounds({ isPendingCapture: Boolean(target && target.color !== myColorIdx) });
+        lastChoicePendingCapture = false;
         startActivePendingCaptureResolutionAnimation();
         // Send to server
         try {
@@ -10423,6 +10780,7 @@ logBootConstantsOnce();
       clearDragPreviewImgs();
       // Optimistically place the piece at destination so it visually moves with the choice bubbles
       const movingNow = currentBoard[from.row][from.col];
+      lastChoicePendingCapture = Boolean(target && target.color !== myColorIdx);
       if (movingNow && movingNow.color === myColorIdx) {
         currentBoard = currentBoard.map(row => row.slice());
         currentBoard[to.row] = currentBoard[to.row].slice();
@@ -10532,7 +10890,10 @@ logBootConstantsOnce();
       }
       // Only show final speech and send to server; piece already optimistically placed
       // Always force the speech bubble so Sword/Spear choices mirror Heart behavior
+      const moveIsPendingCapture = Boolean(lastChoicePendingCapture);
       showFinalSpeechOnly(ctx.originUI, ctx.destUI, declaration, { alwaysShow: true });
+      playMoveSounds({ isPendingCapture: moveIsPendingCapture });
+      lastChoicePendingCapture = false;
       startActivePendingCaptureResolutionAnimation();
       try {
         console.log('[move] commit', { from, to, declaration });

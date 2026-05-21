@@ -15,31 +15,20 @@ const {
   getAllowedTimeControls,
   getIncrementMs,
 } = require('../utils/gameModeClock');
+const {
+  getTournamentAcceptWindowSeconds,
+  shouldRequireTournamentMatchAccept,
+} = require('../utils/tournamentAccept');
 
 const defaultConfig = new ServerConfig();
-const TOURNAMENT_MATCH_TYPES = Object.freeze({
-  ROUND_ROBIN: 'TOURNAMENT_ROUND_ROBIN',
-  ELIMINATION: 'TOURNAMENT_ELIMINATION',
-});
-const TOURNAMENT_ACCEPT_WINDOW_SECONDS = 30;
 const MATCH_FOUND_COUNTDOWN_MS = 3000;
 
 function shouldRequireGameAccept(match) {
-  const matchType = String(match?.type || '').toUpperCase();
-  if (matchType === TOURNAMENT_MATCH_TYPES.ROUND_ROBIN) {
-    return true;
-  }
-  if (matchType !== TOURNAMENT_MATCH_TYPES.ELIMINATION) {
-    return false;
-  }
-  const player1Score = Number(match?.player1Score || 0);
-  const player2Score = Number(match?.player2Score || 0);
-  const drawCount = Number(match?.drawCount || 0);
-  return (player1Score + player2Score + drawCount) === 0;
+  return shouldRequireTournamentMatchAccept(match);
 }
 
 function getGameAcceptWindowSeconds(match, requiresAccept = shouldRequireGameAccept(match)) {
-  return requiresAccept ? TOURNAMENT_ACCEPT_WINDOW_SECONDS : 0;
+  return getTournamentAcceptWindowSeconds(match, requiresAccept);
 }
 
 async function getRuntimeConfig() {

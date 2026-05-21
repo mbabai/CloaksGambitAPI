@@ -635,6 +635,7 @@ describe('live tournaments service', () => {
     expect(currentState.tournament.currentUserGame).toMatchObject({
       phase: 'round_robin',
       requiresAccept: true,
+      acceptWindowSeconds: 30,
     });
     expect(Number.isInteger(currentState.tournament.currentUserGame.color)).toBe(true);
     expect(currentState.tournament.currentUserGame.gameId).toBeTruthy();
@@ -660,6 +661,7 @@ describe('live tournaments service', () => {
     await startElimination({ tournamentId: created.id, session: host });
     const eliminationGames = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'elimination');
     expect(eliminationGames[0].requiresAccept).toBe(true);
+    expect(eliminationGames[0].acceptWindowSeconds).toBe(120);
 
     const eliminationGame = await Game.findById(eliminationGames[0].gameId);
     eliminationGame.playersReady = [true, true];

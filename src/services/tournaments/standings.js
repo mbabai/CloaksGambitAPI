@@ -36,10 +36,40 @@ function computeArenaPoints(entry) {
   return toFiniteNumber(entry?.wins) + (toFiniteNumber(entry?.draws) * 0.5);
 }
 
-function compareNumberDesc(left, right) {
-  const delta = toFiniteNumber(right) - toFiniteNumber(left);
-  if (delta < 0) return -1;
-  if (delta > 0) return 1;
+function compareFiniteNumberAsc(left, right, fallback = 0) {
+  const leftValue = toFiniteNumber(left, fallback);
+  const rightValue = toFiniteNumber(right, fallback);
+  if (leftValue < rightValue) return -1;
+  if (leftValue > rightValue) return 1;
+  return 0;
+}
+
+function compareFiniteNumberDesc(left, right, fallback = 0) {
+  return compareFiniteNumberAsc(right, left, fallback);
+}
+
+function toTimestamp(value) {
+  const timestamp = Date.parse(value || 0);
+  return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
+}
+
+function compareStandingsEntries(left, right) {
+  const byPoints = compareFiniteNumberDesc(left?.points, right?.points);
+  if (byPoints !== 0) return byPoints;
+
+  const byGamesPlayed = compareFiniteNumberAsc(left?.totalGames, right?.totalGames);
+  if (byGamesPlayed !== 0) return byGamesPlayed;
+
+  const byElo = compareFiniteNumberDesc(left?.preTournamentElo, right?.preTournamentElo, 800);
+  if (byElo !== 0) return byElo;
+
+  const byJoinTime = compareFiniteNumberAsc(toTimestamp(left?.joinedAt), toTimestamp(right?.joinedAt));
+  if (byJoinTime !== 0) return byJoinTime;
+
+  const leftRandom = toOptionalFiniteNumber(left?.seedTieBreaker);
+  const rightRandom = toOptionalFiniteNumber(right?.seedTieBreaker);
+  if (leftRandom < rightRandom) return -1;
+  if (leftRandom > rightRandom) return 1;
   return 0;
 }
 
@@ -58,6 +88,8 @@ function buildRoundRobinStandings(players = [], games = []) {
       difficulty: player?.difficulty || null,
       preTournamentElo: toFiniteNumber(player?.preTournamentElo, 800),
       storedSeed: toOptionalFiniteNumber(player?.seed),
+      joinedAt: player?.joinedAt || null,
+      seedTieBreaker: toOptionalFiniteNumber(player?.seedTieBreaker) ?? Math.random(),
       wins: 0,
       losses: 0,
       draws: 0,
@@ -103,7 +135,7 @@ function buildRoundRobinStandings(players = [], games = []) {
     entry.points = computeArenaPoints(entry);
   });
 
-  const ranked = entries.slice().sort((left, right) => compareNumberDesc(left?.points, right?.points));
+  const ranked = entries.slice().sort(compareStandingsEntries);
 
   ranked.forEach((entry, index) => {
     entry.computedSeed = index + 1;
@@ -119,6 +151,7 @@ function buildRoundRobinStandings(players = [], games = []) {
 module.exports = {
   toIdString,
   computeArenaPoints,
+  compareStandingsEntries,
   buildRoundRobinStandings,
   toOptionalFiniteNumber,
 };

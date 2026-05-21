@@ -9,6 +9,10 @@ const getServerConfig = require('../../utils/getServerConfig');
 const { getClockSettingsForMatchType } = require('../../utils/gameModeClock');
 const ensureUser = require('../../utils/ensureUser');
 const { appendNamedLocalDebugLog } = require('../../utils/localDebugLogger');
+const {
+  getTournamentAcceptWindowSeconds,
+  shouldRequireTournamentMatchAccept,
+} = require('../../utils/tournamentAccept');
 const { buildRoundRobinStandings, toIdString, toOptionalFiniteNumber } = require('./standings');
 const { buildSingleEliminationBracket, buildDoubleEliminationBracket, getRoundLabel } = require('./bracket');
 const {
@@ -382,6 +386,10 @@ function nowIso() {
   return new Date(Date.now()).toISOString();
 }
 
+function createSeedTieBreaker() {
+  return crypto.randomInt(0, 1000000000);
+}
+
 function makeId(prefix) {
   if (prefix === 'trn') {
     return new mongoose.Types.ObjectId().toString();
@@ -403,17 +411,7 @@ function normalizeTournamentPhaseLabel(phase) {
 }
 
 function shouldRequireTournamentAccept(match) {
-  const matchType = String(match?.type || '').toUpperCase();
-  if (matchType === TOURNAMENT_MATCH_TYPES.ROUND_ROBIN) {
-    return true;
-  }
-  if (matchType !== TOURNAMENT_MATCH_TYPES.ELIMINATION) {
-    return false;
-  }
-  const player1Score = Number(match?.player1Score || 0);
-  const player2Score = Number(match?.player2Score || 0);
-  const drawCount = Number(match?.drawCount || 0);
-  return (player1Score + player2Score + drawCount) === 0;
+  return shouldRequireTournamentMatchAccept(match);
 }
 
 function findMemberIndex(entries, userId) {
@@ -884,6 +882,7 @@ async function joinTournamentAsPlayer({ tournamentId, session }) {
     isGuest: Boolean(session.isGuest),
     preTournamentElo,
     seed: null,
+    seedTieBreaker: createSeedTieBreaker(),
     joinedAt: nowIso(),
   };
   tournament.players.push(playerEntry);
@@ -1087,6 +1086,7 @@ async function addBotToTournament({ tournamentId, session, botName, difficulty }
     difficulty: definition.id,
     preTournamentElo,
     seed: null,
+    seedTieBreaker: createSeedTieBreaker(),
     joinedAt: nowIso(),
   };
   tournament.players.push(botPlayerEntry);
@@ -1319,7 +1319,7 @@ async function createTournamentMatch({ tournament, playerA, playerB, phase, game
     ? [playerA.userId, playerB.userId]
     : [playerB.userId, playerA.userId];
   const requiresAccept = shouldRequireTournamentAccept(match);
-  const acceptWindowSeconds = requiresAccept ? 30 : 0;
+  const acceptWindowSeconds = getTournamentAcceptWindowSeconds(match, requiresAccept);
   const game = await Game.create({
     players,
     match: match._id,
@@ -2206,7 +2206,7 @@ async function listTournamentGames(tournamentId, { skipLifecycleAdvance = false 
       requiresAccept,
       acceptWindowSeconds: Number.isFinite(Number(game.acceptWindowSeconds))
         ? Math.max(0, Number(game.acceptWindowSeconds))
-        : (requiresAccept ? 30 : 0),
+        : getTournamentAcceptWindowSeconds(match, requiresAccept),
       startedAt: game.startTime ? new Date(game.startTime).toISOString() : null,
       endedAt: game.endTime ? new Date(game.endTime).toISOString() : null,
       winner: typeof game.winner === 'number' ? game.winner : null,

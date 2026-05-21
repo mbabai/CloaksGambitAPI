@@ -51,6 +51,12 @@ const userSchema = new mongoose.Schema({
     enum: ['off', 'fast', 'slow'],
     default: 'slow',
   },
+  audioVolume: {
+    type: Number,
+    default: 0.5,
+    min: 0,
+    max: 1,
+  },
   createdAt: {
     type: Date,
     default: Date.now

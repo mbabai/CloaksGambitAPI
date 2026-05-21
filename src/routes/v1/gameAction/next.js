@@ -5,24 +5,23 @@ const Match = require('../../../models/Match');
 const eventBus = require('../../../eventBus');
 const { requireGamePlayerContext } = require('../../../utils/gameAccess');
 const { isTutorialGame } = require('../../../services/tutorials/runtime');
+const {
+  getTournamentAcceptWindowSeconds,
+  shouldRequireTournamentMatchAccept,
+} = require('../../../utils/tournamentAccept');
 
 function resolveAcceptState(match, game) {
   if (typeof game?.requiresAccept === 'boolean') {
     const requiresAccept = Boolean(game.requiresAccept);
     const acceptWindowSeconds = Number.isFinite(Number(game?.acceptWindowSeconds))
       ? Math.max(0, Number(game.acceptWindowSeconds))
-      : (requiresAccept ? 30 : 0);
+      : getTournamentAcceptWindowSeconds(match, requiresAccept);
     return { requiresAccept, acceptWindowSeconds };
   }
-  const matchType = String(match?.type || '').toUpperCase();
-  const player1Score = Number(match?.player1Score || 0);
-  const player2Score = Number(match?.player2Score || 0);
-  const drawCount = Number(match?.drawCount || 0);
-  const requiresAccept = matchType === 'TOURNAMENT_ROUND_ROBIN'
-    || (matchType === 'TOURNAMENT_ELIMINATION' && (player1Score + player2Score + drawCount) === 0);
+  const requiresAccept = shouldRequireTournamentMatchAccept(match);
   return {
     requiresAccept,
-    acceptWindowSeconds: requiresAccept ? 30 : 0,
+    acceptWindowSeconds: getTournamentAcceptWindowSeconds(match, requiresAccept),
   };
 }
 

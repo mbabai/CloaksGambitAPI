@@ -162,6 +162,43 @@ describe('users/update route preferences', () => {
     });
   });
 
+  test('updates audio volume preference', async () => {
+    User.findByIdAndUpdate.mockResolvedValue({
+      _id: '507f191e810c19729de860ea',
+      username: 'Chateau',
+      elo: 880,
+      isBot: false,
+      isGuest: false,
+      tooltipsEnabled: true,
+      toastNotificationsEnabled: true,
+      animationSpeed: 'slow',
+      audioVolume: 0.35,
+      email: 'c@example.com',
+    });
+
+    const response = await callPatch(handler, {
+      audioVolume: '0.35',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(User.findByIdAndUpdate).toHaveBeenCalledWith(
+      '507f191e810c19729de860ea',
+      { audioVolume: 0.35 },
+      { new: true }
+    );
+    expect(response.payload).toMatchObject({
+      audioVolume: 0.35,
+    });
+  });
+
+  test('rejects invalid audio volume preference input', async () => {
+    const response = await callPatch(handler, { audioVolume: 1.5 });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.payload).toEqual({ message: 'audioVolume must be a number between 0 and 1' });
+    expect(User.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
   test('rejects invalid animation speed preference input', async () => {
     const response = await callPatch(handler, { animationSpeed: 'medium' });
 

@@ -8,9 +8,11 @@ const {
   resolveSessionFromRequest,
 } = require('../../../utils/requestSession');
 const {
+  normalizeAudioVolumeInput,
   normalizeAnimationSpeedInput,
   normalizeToastNotificationsEnabledInput,
   normalizeTooltipsEnabledInput,
+  resolveAudioVolume,
   resolveAnimationSpeed,
   resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
@@ -26,6 +28,7 @@ router.patch('/', async (req, res) => {
       tooltipsEnabled,
       toastNotificationsEnabled,
       animationSpeed,
+      audioVolume,
     } = req.body;
     const session = await resolveSessionFromRequest(req, { createGuest: false });
     if (!session?.userId) {
@@ -85,6 +88,14 @@ router.patch('/', async (req, res) => {
       update.animationSpeed = normalizedAnimationSpeed;
     }
 
+    if (audioVolume !== undefined) {
+      const normalizedAudioVolume = normalizeAudioVolumeInput(audioVolume);
+      if (normalizedAudioVolume === null) {
+        return res.status(400).json({ message: 'audioVolume must be a number between 0 and 1' });
+      }
+      update.audioVolume = normalizedAudioVolume;
+    }
+
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ message: 'No fields to update' });
     }
@@ -116,6 +127,7 @@ router.patch('/', async (req, res) => {
       tooltipsEnabled: resolveTooltipsEnabled(user),
       toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
       animationSpeed: resolveAnimationSpeed(user),
+      audioVolume: resolveAudioVolume(user),
       email: adminSession || String(user._id) === String(session.userId) ? user.email || '' : undefined,
     });
   } catch (err) {

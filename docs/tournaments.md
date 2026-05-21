@@ -129,7 +129,13 @@ Round-robin standings use arena-style scoring:
 - draw: `0.5`
 - loss: `0`
 
-Round-robin seed order is based on points only. Equal-point players are not split by secondary tie-break metrics such as opponent score, win count, games played, ELO, join time, entry id, roster index, or user id.
+Round-robin seed order is based on:
+
+1. points, highest first
+2. games played, lowest first
+3. pre-tournament ELO, highest first
+4. join time, earliest first
+5. a random seed tie breaker assigned when the player enters the tournament
 
 The roster currently shows:
 
@@ -218,6 +224,7 @@ Every new round-robin game requires acceptance.
 Acceptance is match-scoped, not game-scoped.
 
 - game 1 of an elimination match requires acceptance
+- accept window: `120` seconds
 - later games in the same elimination match do not
 - if one player accepts and the other does not, the accepting player wins the match
 - if neither player accepts, the higher seed advances
@@ -272,7 +279,15 @@ Current behavior:
 - the queue waits up to `5` seconds while the player is on the game-finished and match-summary flow
 - if the player reaches `Back to Lobby` early, the banner is flushed immediately
 - if the player does nothing, the queued accept banner replaces the finished-match flow when the `5` seconds expire
-- the countdown uses the real server-backed remaining accept time, not a restarted local `30`
+- the countdown uses the real server-backed remaining accept time, not a restarted local default
+
+### Accept Audio
+
+While a tournament accept banner is visible for a player who has not accepted, the browser loops `public/assets/sounds/MatchFound.mp3`.
+
+- the loop stops as soon as the player clicks `Accept`
+- if the accept request fails and the banner remains actionable, the loop resumes
+- the Settings `Volume` slider controls this sound and any future browser-managed sounds through one master volume
 
 ### Refresh / Reconnect Behavior
 

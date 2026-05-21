@@ -494,6 +494,46 @@
         cursor: wait;
       }
 
+      .account-setting-row--range {
+        cursor: default;
+      }
+
+      .account-setting-row__text--inline {
+        width: 100%;
+      }
+
+      .account-setting-row__range-label {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+      }
+
+      .account-setting-row__range-value {
+        flex: 0 0 auto;
+        min-width: 44px;
+        color: rgba(255, 255, 255, 0.86);
+        font-size: 13px;
+        text-align: right;
+      }
+
+      .account-setting-row__range {
+        width: 100%;
+        accent-color: rgba(20, 201, 151, 0.98);
+        cursor: pointer;
+      }
+
+      .account-setting-row__range:focus-visible {
+        outline: 2px solid rgba(255, 230, 156, 0.95);
+        outline-offset: 4px;
+      }
+
+      .account-setting-row__range:disabled {
+        opacity: 0.75;
+        cursor: wait;
+      }
+
       .history-modal {
         background: rgba(24, 9, 38, 0.95);
         border: 4px solid var(--CG-deep-gold);

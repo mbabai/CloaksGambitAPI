@@ -5,6 +5,7 @@ const User = require('../../../models/User');
 const { isAdminSession } = require('../../../utils/adminAccess');
 const { resolveSessionFromRequest } = require('../../../utils/requestSession');
 const {
+  resolveAudioVolume,
   resolveAnimationSpeed,
   resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
@@ -57,6 +58,7 @@ router.post('/', async (req, res) => {
       tooltipsEnabled: resolveTooltipsEnabled(user),
       toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
       animationSpeed: resolveAnimationSpeed(user),
+      audioVolume: resolveAudioVolume(user),
       photoUrl: user.photoUrl || '',
       email: adminSession || isSelf ? (user.email || '') : undefined,
     });
