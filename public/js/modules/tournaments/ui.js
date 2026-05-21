@@ -1387,7 +1387,7 @@ export function initTournamentUi({
     const winnersSide = buildSide(
       normalizedBracket.winnersRounds,
       'winners',
-      normalizedBracket.losersRounds.length || normalizedBracket.finalsRounds.length ? 'Winners Bracket' : '',
+      normalizedBracket.losersRounds.length || normalizedBracket.finalsRounds.length ? 'Main Bracket' : '',
       'winnersRounds',
     );
     const finalsSide = buildSide(
@@ -1399,7 +1399,7 @@ export function initTournamentUi({
     const losersSide = buildSide(
       normalizedBracket.losersRounds,
       'losers',
-      'Losers Bracket',
+      'Redemption Bracket',
       'losersRounds',
     );
 

@@ -129,13 +129,7 @@ Round-robin standings use arena-style scoring:
 - draw: `0.5`
 - loss: `0`
 
-Tie-break order:
-
-1. Buchholz
-2. Sonneborn-Berger
-3. Number of wins
-4. Head-to-head
-5. Performance rating
+Round-robin seed order is based on points only. Equal-point players are not split by secondary tie-break metrics such as opponent score, win count, games played, ELO, join time, entry id, roster index, or user id.
 
 The roster currently shows:
 
@@ -187,7 +181,7 @@ Supported elimination formats:
 - single elimination
 - double elimination
 
-Double elimination renders winners bracket above losers bracket, with dotted loser-drop connectors and finals/grand-final structure generated from the persisted bracket object.
+Double elimination renders the Main Bracket above the Redemption Bracket, with dotted loser-drop connectors and finals/grand-final structure generated from the persisted bracket object.
 
 Additional rules:
 
@@ -339,7 +333,7 @@ Current bracket behavior:
 - winning connectors thicker than loser-drop connectors
 - loser-drop connectors dotted
 - connector color reflects upstream match completion
-- winners bracket above losers bracket in double elimination
+- Main Bracket above Redemption Bracket in double elimination
 - small vertical status tabs on each match card
 - win-progress throne icons on slots
 - `BYE` for actual byes

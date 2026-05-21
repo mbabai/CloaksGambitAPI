@@ -1,10 +1,10 @@
 const { buildRoundRobinStandings, computeArenaPoints } = require('../src/services/tournaments/standings');
 
 describe('tournament standings helpers', () => {
-  test('seed ordering uses arena points first and Buchholz as the first tie-break', () => {
+  test('seed ordering uses arena points only and leaves tied players in roster order', () => {
     const players = [
-      { entryId: 'ply_a', userId: 'p1', username: 'One', preTournamentElo: 900, joinedAt: '2026-03-28T00:00:00.000Z' },
       { entryId: 'ply_b', userId: 'p2', username: 'Two', preTournamentElo: 1000, joinedAt: '2026-03-28T00:00:01.000Z' },
+      { entryId: 'ply_a', userId: 'p1', username: 'One', preTournamentElo: 900, joinedAt: '2026-03-28T00:00:00.000Z' },
       { entryId: 'ply_c', userId: 'p3', username: 'Three', preTournamentElo: 850, joinedAt: '2026-03-28T00:00:02.000Z' },
       { entryId: 'ply_d', userId: 'p4', username: 'Four', preTournamentElo: 800, joinedAt: '2026-03-28T00:00:03.000Z' },
     ];
@@ -37,11 +37,10 @@ describe('tournament standings helpers', () => {
     ];
 
     const standings = buildRoundRobinStandings(players, games);
-    expect(standings.ranked.map((entry) => entry.userId)).toEqual(['p1', 'p2', 'p3', 'p4']);
+    expect(standings.ranked.map((entry) => entry.userId)).toEqual(['p2', 'p1', 'p3', 'p4']);
     expect(standings.ranked.map((entry) => entry.computedSeed)).toEqual([1, 2, 3, 4]);
     expect(standings.byUserId.get('p1').points).toBe(1.5);
     expect(standings.byUserId.get('p2').points).toBe(1.5);
-    expect(standings.byUserId.get('p1').buchholz).toBeGreaterThan(standings.byUserId.get('p2').buchholz);
   });
 
   test('arena points score wins as 1, draws as 0.5, and losses as 0', () => {
@@ -81,11 +80,11 @@ describe('tournament standings helpers', () => {
     }));
   });
 
-  test('fully tied players seed by fewer games, then higher pre-tournament elo, then earlier joinedAt', () => {
+  test('fully tied players are not split by games played, elo, or join time', () => {
     const standings = buildRoundRobinStandings(
       [
-        { entryId: 'ply_c', userId: 'p1', username: 'One', preTournamentElo: 900, joinedAt: '2026-03-28T00:00:02.000Z' },
         { entryId: 'ply_b', userId: 'p2', username: 'Two', preTournamentElo: 1000, joinedAt: '2026-03-28T00:00:01.000Z' },
+        { entryId: 'ply_c', userId: 'p1', username: 'One', preTournamentElo: 900, joinedAt: '2026-03-28T00:00:02.000Z' },
         { entryId: 'ply_d', userId: 'p3', username: 'Three', preTournamentElo: 850, joinedAt: '2026-03-28T00:00:03.000Z' },
         { entryId: 'ply_e', userId: 'p4', username: 'Four', preTournamentElo: 950, joinedAt: '2026-03-28T00:00:04.000Z' },
         { entryId: 'ply_f', userId: 'p5', username: 'Five', preTournamentElo: 800, joinedAt: '2026-03-28T00:00:05.000Z' },
@@ -132,28 +131,24 @@ describe('tournament standings helpers', () => {
 
     expect(standings.byUserId.get('p1').points).toBe(1);
     expect(standings.byUserId.get('p2').points).toBe(1);
-    expect(standings.byUserId.get('p1').buchholz).toBe(3);
-    expect(standings.byUserId.get('p2').buchholz).toBe(3);
-    expect(standings.byUserId.get('p1').sonnebornBerger).toBe(1);
-    expect(standings.byUserId.get('p2').sonnebornBerger).toBe(1);
     expect(standings.byUserId.get('p1').wins).toBe(1);
     expect(standings.byUserId.get('p2').wins).toBe(1);
     expect(standings.byUserId.get('p1').totalGames).toBe(2);
     expect(standings.byUserId.get('p2').totalGames).toBe(3);
     const rankedUserIds = standings.ranked.map((entry) => entry.userId);
-    expect(rankedUserIds.indexOf('p1')).toBeLessThan(rankedUserIds.indexOf('p2'));
+    expect(rankedUserIds.indexOf('p2')).toBeLessThan(rankedUserIds.indexOf('p1'));
   });
 
-  test('entryId provides a stable random final tie-break when all other configured metrics tie', () => {
+  test('entryId does not break tied point totals', () => {
     const standings = buildRoundRobinStandings(
       [
-        { entryId: 'ply_a', userId: 'p1', username: 'One', preTournamentElo: 1000, joinedAt: '2026-03-28T00:00:00.000Z' },
         { entryId: 'ply_b', userId: 'p2', username: 'Two', preTournamentElo: 1000, joinedAt: '2026-03-28T00:00:00.000Z' },
+        { entryId: 'ply_a', userId: 'p1', username: 'One', preTournamentElo: 1000, joinedAt: '2026-03-28T00:00:00.000Z' },
       ],
       [],
     );
 
-    expect(standings.ranked.map((entry) => entry.userId)).toEqual(['p1', 'p2']);
+    expect(standings.ranked.map((entry) => entry.userId)).toEqual(['p2', 'p1']);
   });
 
   test('unset stored seeds do not override computed standings seeds', () => {

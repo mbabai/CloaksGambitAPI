@@ -1597,10 +1597,6 @@ function buildParticipantView(tournament, games = []) {
       draws: 0,
       totalGames: 0,
       points: 0,
-      buchholz: 0,
-      sonnebornBerger: 0,
-      headToHeadPoints: 0,
-      performanceRating: Number.isFinite(Number(player?.preTournamentElo)) ? Number(player.preTournamentElo) : 800,
       computedSeed: null,
       preTournamentElo: Number.isFinite(Number(player?.preTournamentElo)) ? Number(player.preTournamentElo) : 800,
     };
@@ -1616,10 +1612,6 @@ function buildParticipantView(tournament, games = []) {
       draws: Number(standing.draws || 0),
       totalGames: Number(standing.totalGames || 0),
       points: Number.isFinite(Number(standing.points)) ? Number(standing.points) : 0,
-      buchholz: Number.isFinite(Number(standing.buchholz)) ? Number(standing.buchholz) : 0,
-      sonnebornBerger: Number.isFinite(Number(standing.sonnebornBerger)) ? Number(standing.sonnebornBerger) : 0,
-      headToHeadPoints: Number.isFinite(Number(standing.headToHeadPoints)) ? Number(standing.headToHeadPoints) : 0,
-      performanceRating: Number.isFinite(Number(standing.performanceRating)) ? Number(standing.performanceRating) : 800,
       preTournamentElo: Number.isFinite(Number(standing.preTournamentElo)) ? Number(standing.preTournamentElo) : 800,
       activeGame: activeGameByUserId.get(userId) || null,
     };

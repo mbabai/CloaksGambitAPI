@@ -43,7 +43,7 @@ After this change, a user can open the main menu, create or join a tournament, p
 - Observation: the requested "round robin" is actually a timed rolling-pairing phase, not a classical fixed schedule.
   Evidence: the requested behavior pairs free players randomly, avoids repeats until exhausted, and stops only new pairings when the timer ends.
 
-- Observation: proper double elimination needs more than a winners bracket and a loose losers list; it needs lower-bracket major/minor rounds and often a reset grand final.
+- Observation: proper double elimination needs more than a Main Bracket and an ad hoc Redemption Bracket; it needs lower-bracket major/minor rounds and often a reset grand final.
   Evidence: [Brackets Documentation: Glossary](https://drarig29.github.io/brackets-docs/user-guide/glossary/) and [Brackets Documentation: Structure](https://drarig29.github.io/brackets-docs/user-guide/structure/).
 
 - Observation: the round-robin seed comparator cannot use simple numeric subtraction when two players are undefeated because `Infinity - Infinity` becomes `NaN` and destabilizes sort order.
