@@ -187,7 +187,7 @@ Supported elimination formats:
 - single elimination
 - double elimination
 
-Double elimination renders the Main Bracket above the Redemption Bracket, with dotted loser-drop connectors and finals/grand-final structure generated from the persisted bracket object.
+Double elimination renders the Main Bracket above the Redemption Bracket, with dotted redemption-drop connectors and finals/grand-final structure generated from the persisted bracket object.
 
 Additional rules:
 
@@ -203,9 +203,9 @@ Additional rules:
 - completed placings are ordered by:
   - champion
   - runner-up
-  - then deepest finals round, deepest losers round, deepest winners round, and round-robin points
+  - then deepest finals round, deepest redemption round, deepest main round, and round-robin points
 - if those values are still tied, the placement remains tied instead of using an alphabetical fallback
-- the final results table shows placement, name, deepest losers round, deepest winners round, and points
+- the final results table shows placement, name, deepest redemption round, deepest main round, and points
 
 ## Match Acceptance and Continuation
 
@@ -345,8 +345,8 @@ Current bracket behavior:
 
 - pannable overlay
 - curved connectors between rounds
-- winning connectors thicker than loser-drop connectors
-- loser-drop connectors dotted
+- main-advance connectors thicker than redemption-drop connectors
+- redemption-drop connectors dotted
 - connector color reflects upstream match completion
 - Main Bracket above Redemption Bracket in double elimination
 - small vertical status tabs on each match card

@@ -34,12 +34,12 @@ function getRoundLabel(roundIndex, roundCount, { section = 'winners', doubleElim
     return index === 0 ? 'Grand Finals' : 'Grand Finals Reset';
   }
   if (section === 'losers') {
-    if (roundsFromEnd === 1) return 'Losers Finals';
-    if (roundsFromEnd === 2) return 'Losers Semifinals';
-    if (roundsFromEnd === 3) return 'Losers Quarterfinals';
-    return `Losers Round ${index + 1}`;
+    if (roundsFromEnd === 1) return 'Redemption Finals';
+    if (roundsFromEnd === 2) return 'Redemption Semifinals';
+    if (roundsFromEnd === 3) return 'Redemption Quarterfinals';
+    return `Redemption Round ${index + 1}`;
   }
-  if (doubleElimination && roundsFromEnd === 1) return 'Winner Finals';
+  if (doubleElimination && roundsFromEnd === 1) return 'Main Finals';
   if (!doubleElimination && totalRounds === 1) return 'Final';
   if (!doubleElimination && roundsFromEnd === 1) return 'Final';
   if (roundsFromEnd === 2) return 'Semifinals';

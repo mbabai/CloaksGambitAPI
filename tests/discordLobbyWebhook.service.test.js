@@ -4,6 +4,7 @@ const {
   notifyLobbyJoined,
   notifyLobbyLeft,
   notifyQueueTransitions,
+  LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS,
   sendDiscordMessage,
 } = require('../src/services/discordLobbyWebhook');
 
@@ -70,12 +71,41 @@ describe('discord lobby webhook service', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  test('formats lobby join and leave notifications', async () => {
+  test('formats lobby join notifications and disables lobby leave notifications', async () => {
     const sendMessageFn = jest.fn(async () => ({ sent: true }));
 
     await notifyLobbyJoined({ userId: 'u1', username: 'Ada' }, { sendMessageFn });
-    await notifyLobbyLeft({ userId: 'u1', username: 'Ada' }, { sendMessageFn });
+    const leaveResult = await notifyLobbyLeft({ userId: 'u1', username: 'Ada' }, { sendMessageFn });
 
+    expect(sendMessageFn).toHaveBeenCalledTimes(1);
+    expect(sendMessageFn).toHaveBeenCalledWith(
+      'Ada has joined the lobby',
+      expect.objectContaining({ sendMessageFn }),
+    );
+    expect(leaveResult).toEqual({ sent: false, reason: 'lobby-leave-disabled' });
+  });
+
+  test('suppresses duplicate lobby join notifications for the same account for 30 minutes', async () => {
+    const sendMessageFn = jest.fn(async () => ({ sent: true }));
+    const notificationTimes = new Map();
+
+    const first = await notifyLobbyJoined(
+      { userId: 'u1', username: 'Ada' },
+      { sendMessageFn, notificationTimes, nowFn: () => 1_000 },
+    );
+    const second = await notifyLobbyJoined(
+      { userId: 'u1', username: 'Ada' },
+      { sendMessageFn, notificationTimes, nowFn: () => 1_000 + LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS - 1 },
+    );
+    const third = await notifyLobbyJoined(
+      { userId: 'u1', username: 'Ada' },
+      { sendMessageFn, notificationTimes, nowFn: () => 1_000 + LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS },
+    );
+
+    expect(first).toEqual({ sent: true });
+    expect(second).toEqual({ sent: false, reason: 'join-cooldown' });
+    expect(third).toEqual({ sent: true });
+    expect(sendMessageFn).toHaveBeenCalledTimes(2);
     expect(sendMessageFn).toHaveBeenNthCalledWith(
       1,
       'Ada has joined the lobby',
@@ -83,7 +113,43 @@ describe('discord lobby webhook service', () => {
     );
     expect(sendMessageFn).toHaveBeenNthCalledWith(
       2,
-      'Ada has left the lobby',
+      'Ada has joined the lobby',
+      expect.objectContaining({ sendMessageFn }),
+    );
+  });
+
+  test('does not start lobby join cooldown until a notification is sent', async () => {
+    const sendMessageFn = jest.fn()
+      .mockResolvedValueOnce({ sent: false, reason: 'missing-webhook-url' })
+      .mockResolvedValueOnce({ sent: true })
+      .mockResolvedValueOnce({ sent: false, reason: 'join-cooldown' });
+    const notificationTimes = new Map();
+
+    const first = await notifyLobbyJoined(
+      { userId: 'guest-1', username: 'Anonymous1' },
+      { sendMessageFn, notificationTimes, nowFn: () => 1_000 },
+    );
+    const second = await notifyLobbyJoined(
+      { userId: 'guest-1', username: 'Anonymous1' },
+      { sendMessageFn, notificationTimes, nowFn: () => 2_000 },
+    );
+    const third = await notifyLobbyJoined(
+      { userId: 'guest-1', username: 'Anonymous1' },
+      { sendMessageFn, notificationTimes, nowFn: () => 3_000 },
+    );
+
+    expect(first).toEqual({ sent: false, reason: 'missing-webhook-url' });
+    expect(second).toEqual({ sent: true });
+    expect(third).toEqual({ sent: false, reason: 'join-cooldown' });
+    expect(sendMessageFn).toHaveBeenCalledTimes(2);
+    expect(sendMessageFn).toHaveBeenNthCalledWith(
+      1,
+      'Anonymous1 has joined the lobby',
+      expect.objectContaining({ sendMessageFn }),
+    );
+    expect(sendMessageFn).toHaveBeenNthCalledWith(
+      2,
+      'Anonymous1 has joined the lobby',
       expect.objectContaining({ sendMessageFn }),
     );
   });

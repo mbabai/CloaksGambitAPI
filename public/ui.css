@@ -869,6 +869,9 @@ body.history-overlay-open {
   font-weight: var(--cg-button-font-weight);
   cursor: pointer;
   overflow: visible;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .cg-button:disabled {
@@ -2115,6 +2118,9 @@ body.history-overlay-open {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
   font-weight: 700;
   color: var(--CG-white);
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .tournament-modal__button:disabled {
@@ -3136,6 +3142,9 @@ body.history-overlay-open {
     letter-spacing: 0.06em;
     text-transform: uppercase;
     padding: 8px 12px;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .tournament-panel__tab--active {

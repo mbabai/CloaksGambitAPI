@@ -46,6 +46,7 @@ import { createGameToastSnapshot, deriveGameToastFeedback } from '/js/modules/ui
 import { applyTooltipAttributes, initTooltipSystem, setTooltipsEnabled } from '/js/modules/ui/tooltips.js';
 import { initTournamentUi } from '/js/modules/tournaments/ui.js';
 import { createTournamentAcceptScheduler } from '/js/modules/tournaments/acceptScheduler.js';
+import { isTournamentAcceptSoundAllowed } from '/js/modules/tournaments/acceptSound.js';
 import { createAudioManager, normalizeAudioVolume as normalizeAudioVolumePreference } from '/js/modules/audio/audioManager.js';
 import { coerceMilliseconds, describeTimeControl, formatClock } from '/js/modules/utils/timeControl.js';
 import {
@@ -1277,7 +1278,11 @@ logBootConstantsOnce();
         clearBannerOverlay({ restoreFocus: false });
       }
     },
-    onPlayAreaBoundsChange: () => {
+    onPlayAreaBoundsChange: ({ activeSection = null, isInTournamentGame = false } = {}) => {
+      if (!isPlayAreaVisible && isInTournamentGame && activeSection === 'game' && lastGameId && currentRows && currentCols) {
+        showPlayArea();
+        return;
+      }
       if (isPlayAreaVisible) {
         layoutPlayArea();
       }
@@ -5122,8 +5127,19 @@ logBootConstantsOnce();
   }
 
   function setActiveBanner(kind = null, gameId = null) {
+    const previousBannerKind = activeBannerKind;
+    const previousBannerGameId = activeBannerGameId;
     activeBannerKind = kind || null;
     activeBannerGameId = gameId !== null && gameId !== undefined ? String(gameId) : null;
+    if (
+      previousBannerKind === 'tournament-accept'
+      && (
+        activeBannerKind !== 'tournament-accept'
+        || previousBannerGameId !== activeBannerGameId
+      )
+    ) {
+      stopTournamentAcceptSound(previousBannerGameId);
+    }
   }
 
   function getTournamentAcceptSoundKey(gameId = activeBannerGameId) {
@@ -5132,6 +5148,15 @@ logBootConstantsOnce();
   }
 
   function startTournamentAcceptSound(gameId = activeBannerGameId) {
+    if (!isTournamentAcceptSoundAllowed({
+      activeBannerKind,
+      activeBannerGameId,
+      gameId,
+      isBannerVisible,
+    })) {
+      stopTournamentAcceptSound(gameId);
+      return;
+    }
     const key = getTournamentAcceptSoundKey(gameId);
     if (activeTournamentAcceptSoundKey && activeTournamentAcceptSoundKey !== key) {
       audioManager.stopLoop(activeTournamentAcceptSoundKey);
@@ -5157,9 +5182,8 @@ logBootConstantsOnce();
       bannerInterval = null;
     }
     setBannerKeyListener(null);
-    if (activeBannerKind === 'tournament-accept') {
-      stopTournamentAcceptSound(activeBannerGameId);
-    }
+    stopTournamentAcceptSound(activeBannerGameId);
+    stopTournamentAcceptSound();
     setActiveBanner(null, null);
     if (bannerOverlay) {
       try {
@@ -7624,7 +7648,12 @@ logBootConstantsOnce();
       // Do NOT suppress clicks on non-preview bubble overlays (choice or post-move)
       const t = ev.target;
       const isBubbleOverlay = t && t.closest && t.closest('[data-bubble]:not([data-preview])');
-      if (suppress && !isBubbleOverlay) { try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {} }
+      const allowSuppressedClick = t && t.closest && t.closest('[data-allow-suppressed-click="true"]');
+      const interactiveControl = t && t.closest && t.closest('button, a[href], input, select, textarea, [role="button"]');
+      const isExternalInteractiveControl = interactiveControl && (!playAreaRoot || !playAreaRoot.contains(interactiveControl));
+      if (suppress && !isBubbleOverlay && !allowSuppressedClick && !isExternalInteractiveControl) {
+        try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {}
+      }
     }, true);
 
     // Removed global diagnostic click logger now that bubble click handling works

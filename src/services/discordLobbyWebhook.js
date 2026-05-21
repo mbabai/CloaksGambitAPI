@@ -5,6 +5,8 @@ const QUEUE_DISPLAY_NAMES = {
   rankedQueue: 'ranked queue',
   botQueue: 'bot queue',
 };
+const LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS = 30 * 60 * 1000;
+const lobbyJoinNotificationTimes = new Map();
 
 function toId(value) {
   if (!value) return null;
@@ -87,19 +89,34 @@ async function resolveUsername(userId, {
 }
 
 async function notifyLobbyJoined(payload = {}, deps = {}) {
+  const userId = toId(payload.userId);
+  const now = typeof deps.nowFn === 'function' ? deps.nowFn() : Date.now();
+  const cooldownMs = Number.isFinite(Number(deps.cooldownMs))
+    ? Math.max(0, Number(deps.cooldownMs))
+    : LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS;
+  const notificationTimes = deps.notificationTimes || lobbyJoinNotificationTimes;
+  const usesCooldown = userId && cooldownMs > 0 && notificationTimes instanceof Map;
+
+  if (usesCooldown) {
+    const previousNotificationAt = notificationTimes.get(userId);
+    if (Number.isFinite(previousNotificationAt) && now - previousNotificationAt < cooldownMs) {
+      return { sent: false, reason: 'join-cooldown' };
+    }
+  }
+
   const username = await resolveUsername(payload.userId, {
     username: payload.username,
     UserModel: deps.UserModel || User,
   });
-  return (deps.sendMessageFn || sendDiscordMessage)(`${username} has joined the lobby`, deps);
+  const result = await (deps.sendMessageFn || sendDiscordMessage)(`${username} has joined the lobby`, deps);
+  if (usesCooldown && result?.sent) {
+    notificationTimes.set(userId, now);
+  }
+  return result;
 }
 
 async function notifyLobbyLeft(payload = {}, deps = {}) {
-  const username = await resolveUsername(payload.userId, {
-    username: payload.username,
-    UserModel: deps.UserModel || User,
-  });
-  return (deps.sendMessageFn || sendDiscordMessage)(`${username} has left the lobby`, deps);
+  return { sent: false, reason: 'lobby-leave-disabled' };
 }
 
 async function notifyQueueTransition({ userId, queueName, action }, deps = {}) {
@@ -180,4 +197,5 @@ module.exports = {
   notifyQueueTransitions,
   getQueueTransitions,
   QUEUE_DISPLAY_NAMES,
+  LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS,
 };

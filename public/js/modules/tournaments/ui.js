@@ -121,18 +121,29 @@ function formatPlacementDepth(value, { section = 'winners', bracket = null } = {
   }
 
   if (normalizedSection === 'losers') {
-    if (roundsFromEnd === 1) return 'Losers Finals';
-    if (roundsFromEnd === 2) return 'Losers Semifinals';
-    if (roundsFromEnd === 3) return 'Losers Quarterfinals';
+    if (roundsFromEnd === 1) return 'Redemption Finals';
+    if (roundsFromEnd === 2) return 'Redemption Semifinals';
+    if (roundsFromEnd === 3) return 'Redemption Quarterfinals';
     return String(roundIndex + 1);
   }
 
-  if (hasLosersBracket && roundsFromEnd === 1) return 'Winner Finals';
+  if (hasLosersBracket && roundsFromEnd === 1) return 'Main Finals';
   if (!hasLosersBracket && totalRounds === 1) return 'Final';
   if (!hasLosersBracket && roundsFromEnd === 1) return 'Final';
   if (roundsFromEnd === 2) return 'Semifinals';
   if (roundsFromEnd === 3) return 'Quarterfinals';
   return String(roundIndex + 1);
+}
+
+function formatBracketRoundLabel(label) {
+  const text = asText(label, 'Round');
+  if (text === 'Winner Finals') return 'Main Finals';
+  if (text === 'Losers Finals') return 'Redemption Finals';
+  if (text === 'Losers Semifinals') return 'Redemption Semifinals';
+  if (text === 'Losers Quarterfinals') return 'Redemption Quarterfinals';
+  const losersRoundMatch = text.match(/^Losers Round (\d+)$/);
+  if (losersRoundMatch) return `Redemption Round ${losersRoundMatch[1]}`;
+  return text;
 }
 
 function getTournamentStatusHint(tournament, {
@@ -744,15 +755,19 @@ export function initTournamentUi({
   let panelScrollFrame = null;
   function schedulePlayAreaBoundsChange() {
     if (typeof onPlayAreaBoundsChange !== 'function') return;
+    const payload = () => ({
+      activeSection: activePanelSection,
+      isInTournamentGame,
+    });
     if (playAreaBoundsFrame) {
       window.cancelAnimationFrame(playAreaBoundsFrame);
       playAreaBoundsFrame = null;
     }
     playAreaBoundsFrame = window.requestAnimationFrame(() => {
       playAreaBoundsFrame = null;
-      try { onPlayAreaBoundsChange(); } catch (err) { console.error('Failed to sync tournament game layout', err); }
+      try { onPlayAreaBoundsChange(payload()); } catch (err) { console.error('Failed to sync tournament game layout', err); }
       window.requestAnimationFrame(() => {
-        try { onPlayAreaBoundsChange(); } catch (err) { console.error('Failed to sync tournament game layout', err); }
+        try { onPlayAreaBoundsChange(payload()); } catch (err) { console.error('Failed to sync tournament game layout', err); }
       });
     });
   }
@@ -1384,7 +1399,7 @@ export function initTournamentUi({
         const matches = Array.isArray(round?.matches) ? round.matches : [];
         const hasWideMatch = matches.some((match) => Boolean(match?.resetMatch));
         const roundColumn = el('div', { className: `tournament-bracket__round${hasWideMatch ? ' tournament-bracket__round--wide' : ''}` });
-        roundColumn.appendChild(el('div', { className: 'tournament-bracket__round-label' }, round.label || 'Round'));
+        roundColumn.appendChild(el('div', { className: 'tournament-bracket__round-label' }, formatBracketRoundLabel(round.label)));
         const roundBody = el('div', { className: `tournament-bracket__round-body${hasWideMatch ? ' tournament-bracket__round-body--wide' : ''}` });
         roundBody.style.height = `${sectionHeight}px`;
         matches.forEach((match, matchIndex) => {
@@ -1561,8 +1576,8 @@ export function initTournamentUi({
       const resultsHeader = el('div', { className: 'tournament-panel__results-header' });
       resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--place' }, 'Placement'));
       resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--name' }, 'Name'));
-      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--losers' }, 'Deepest Losers'));
-      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--winners' }, 'Deepest Winners'));
+      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--losers' }, 'Deepest Redemption'));
+      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--winners' }, 'Deepest Main'));
       resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--points' }, 'Points'));
       resultsCard.appendChild(resultsHeader);
       const resultsList = el('div', { className: 'tournament-panel__results-list' });
