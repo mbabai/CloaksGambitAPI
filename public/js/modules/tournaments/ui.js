@@ -452,6 +452,8 @@ export function initTournamentUi({
   registerSpectateUsername,
   onParticipantStateChange,
   onTournamentAcceptStateChange,
+  onTournamentGameAccept,
+  onPlayAreaBoundsChange,
 }) {
   const browserOverlay = createOverlay(createOverlayOptions('Tournament browser', 'Close tournament browser'));
   const createOverlayModal = createOverlay({
@@ -495,6 +497,7 @@ export function initTournamentUi({
   let roundRobinTimerEl = null;
   let tournamentServerClockOffsetMs = 0;
   let lastAcceptStateKey = null;
+  let playAreaBoundsFrame = null;
 
   const panelRoot = el('div', { className: 'tournament-panel', hidden: 'hidden' });
   const panelLayout = el('div', { className: 'tournament-panel__layout' });
@@ -693,6 +696,7 @@ export function initTournamentUi({
     if (scroll && target) {
       target.column.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
     }
+    schedulePlayAreaBoundsChange();
   }
 
   function syncActivePanelSectionFromScroll() {
@@ -738,11 +742,27 @@ export function initTournamentUi({
   }
 
   let panelScrollFrame = null;
+  function schedulePlayAreaBoundsChange() {
+    if (typeof onPlayAreaBoundsChange !== 'function') return;
+    if (playAreaBoundsFrame) {
+      window.cancelAnimationFrame(playAreaBoundsFrame);
+      playAreaBoundsFrame = null;
+    }
+    playAreaBoundsFrame = window.requestAnimationFrame(() => {
+      playAreaBoundsFrame = null;
+      try { onPlayAreaBoundsChange(); } catch (err) { console.error('Failed to sync tournament game layout', err); }
+      window.requestAnimationFrame(() => {
+        try { onPlayAreaBoundsChange(); } catch (err) { console.error('Failed to sync tournament game layout', err); }
+      });
+    });
+  }
+
   panelLayout.addEventListener('scroll', () => {
     if (panelScrollFrame) return;
     panelScrollFrame = window.requestAnimationFrame(() => {
       panelScrollFrame = null;
       syncActivePanelSectionFromScroll();
+      schedulePlayAreaBoundsChange();
     });
   }, { passive: true });
 
@@ -1920,6 +1940,9 @@ export function initTournamentUi({
         row.appendChild(pointsCell);
 
         const actionCell = el('td', { className: 'tournament-panel__participant-action-cell' });
+        const participantActiveGame = participant.activeGame || null;
+        const isCurrentSessionParticipant = String(participant.userId || '') === String(getSessionInfo?.()?.userId || '');
+        const participantRequiresAccept = Boolean(participantActiveGame?.requiresAccept && participantActiveGame?.gameId && Number.isInteger(Number(participantActiveGame?.color)));
         if (!isReadOnlyView && roleFlags.isHost && currentTournament.state === 'starting' && String(participant.userId || '') !== String(currentTournament.host?.userId || '')) {
           const kickBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, participant.type === 'bot' ? 'Remove Bot' : 'Remove'), {
             variant: 'neutral',
@@ -1939,33 +1962,51 @@ export function initTournamentUi({
             }
           });
           actionCell.appendChild(kickBtn);
-        } else if (participant.activeGame?.matchId) {
-          const watchBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Watch'), {
-            variant: 'neutral',
-            position: 'relative',
-          });
-          watchBtn.addEventListener('click', () => {
-            if (typeof onSpectateMatch === 'function') {
-              onSpectateMatch(participant.activeGame.matchId);
-            }
-          });
-          actionCell.appendChild(watchBtn);
-        } else if (!isReadOnlyView && String(participant.userId || '') === String(getSessionInfo?.()?.userId || '') && participant.activeGame?.requiresAccept) {
-          const acceptBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, 'Accept'), {
+        } else if (!isReadOnlyView && isCurrentSessionParticipant && participantRequiresAccept) {
+          const acceptBtn = upgradeButton(el('button', {
+            type: 'button',
+            className: 'tournament-modal__button tournament-modal__button--danger',
+            'aria-label': `Accept tournament match against ${participantActiveGame.opponentUsername || 'opponent'}`,
+            'data-allow-suppressed-click': 'true',
+          }, 'Accept'), {
             variant: 'danger',
             position: 'relative',
           });
-          acceptBtn.addEventListener('click', async () => {
+          let acceptInFlight = false;
+          acceptBtn.addEventListener('click', async (event) => {
+            event.preventDefault();
+            if (acceptInFlight) return;
+            acceptInFlight = true;
+            acceptBtn.disabled = true;
+            acceptBtn.textContent = 'Accepting...';
             try {
-              await apiReady(participant.activeGame.gameId, participant.activeGame.color);
+              if (typeof onTournamentGameAccept === 'function') {
+                await onTournamentGameAccept(participantActiveGame);
+              } else {
+                await apiReady(participantActiveGame.gameId, Number(participantActiveGame.color));
+              }
               await refreshCurrentTournament({ tournamentId: currentTournament.id, silent: true });
             } catch (err) {
+              acceptInFlight = false;
+              acceptBtn.disabled = false;
+              acceptBtn.textContent = 'Accept';
               try {
                 window.alert(err.message || 'Unable to accept tournament match.');
               } catch (_) {}
             }
           });
           actionCell.appendChild(acceptBtn);
+        } else if (participantActiveGame?.matchId) {
+          const watchBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Watch'), {
+            variant: 'neutral',
+            position: 'relative',
+          });
+          watchBtn.addEventListener('click', () => {
+            if (typeof onSpectateMatch === 'function') {
+              onSpectateMatch(participantActiveGame.matchId);
+            }
+          });
+          actionCell.appendChild(watchBtn);
         }
         row.appendChild(actionCell);
         const seedCell = el('td', { className: 'tournament-panel__participant-seed-cell' });
@@ -2239,8 +2280,12 @@ export function initTournamentUi({
     setTournamentGameActive: (inGame) => {
       const wasInTournamentGame = isInTournamentGame;
       isInTournamentGame = Boolean(inGame);
+      if (!wasInTournamentGame && isInTournamentGame) {
+        activePanelSection = 'game';
+      }
       syncPanelVisibility();
       renderPanel();
+      schedulePlayAreaBoundsChange();
       if (wasInTournamentGame && !isInTournamentGame) {
         lastAcceptStateKey = null;
         notifyAcceptState();

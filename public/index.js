@@ -297,6 +297,7 @@ logBootConstantsOnce();
   const CHALLENGE_SOUND_ID = 'challenge';
   const CHALLENGE_SOUND_SRC = '/assets/sounds/Challenge.mp3';
   const GAME_SOUND_EVENT_LIMIT = 160;
+  const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 
   function normalizeTooltipPreference(value, fallback = true) {
     if (value === true || value === false) {
@@ -1269,6 +1270,18 @@ logBootConstantsOnce();
         clearBannerOverlay({ restoreFocus: false });
       }
     },
+    onTournamentGameAccept: async ({ gameId, color } = {}) => {
+      const normalizedGameId = gameId ? String(gameId) : null;
+      await acceptTournamentGame({ gameId: normalizedGameId, color });
+      if (activeBannerKind === 'tournament-accept' && activeBannerGameId === normalizedGameId) {
+        clearBannerOverlay({ restoreFocus: false });
+      }
+    },
+    onPlayAreaBoundsChange: () => {
+      if (isPlayAreaVisible) {
+        layoutPlayArea();
+      }
+    },
   });
 
   document.addEventListener('click', ev => {
@@ -1374,6 +1387,12 @@ logBootConstantsOnce();
     if (!(sessionInfo.authenticated && sessionInfo.userId)) {
       return nextValue;
     }
+    if (Object.is(nextValue, previousValue)) {
+      return nextValue;
+    }
+    if (field === 'audioVolume' && !serverSupportsAudioVolumePreference) {
+      return nextValue;
+    }
 
     try {
       const res = await authFetch('/api/v1/users/update', {
@@ -1396,6 +1415,9 @@ logBootConstantsOnce();
         throw new Error(err.message || errorMessage);
       }
       const updated = await res.json().catch(() => null);
+      if (hasOwn(updated, 'audioVolume')) {
+        serverSupportsAudioVolumePreference = true;
+      }
       const resolvedValue = normalize(updated?.[field], nextValue);
       updateSessionInfo({ [field]: resolvedValue });
       return resolvedValue;
@@ -2016,6 +2038,9 @@ logBootConstantsOnce();
         userDetails?.audioVolume,
         sessionInfo.audioVolume
       );
+      if (hasOwn(userDetails, 'audioVolume')) {
+        serverSupportsAudioVolumePreference = true;
+      }
 
       if (activeMenuPanel && activeMenuPanel !== 'account') {
         updateAccountPanel();
@@ -2311,6 +2336,7 @@ logBootConstantsOnce();
         }
         if (sessionData.audioVolume !== undefined) {
           updates.audioVolume = sessionData.audioVolume;
+          serverSupportsAudioVolumePreference = true;
         } else if (sessionData.isGuest || sessionData.authenticated === false) {
           updates.audioVolume = readAudioVolumePreferenceCookie();
         }
@@ -2489,6 +2515,7 @@ logBootConstantsOnce();
     animationSpeed: readAnimationSpeedPreferenceCookie(),
     audioVolume: readAudioVolumePreferenceCookie(),
   };
+  let serverSupportsAudioVolumePreference = false;
 
   let playerNames = ['Anonymous0', 'Anonymous1'];
   let playerElos = [null, null];
@@ -6856,6 +6883,26 @@ logBootConstantsOnce();
     }, 100);
   }
 
+  async function acceptTournamentGame({ gameId, color } = {}) {
+    const normalizedGameId = gameId ? String(gameId) : null;
+    const normalizedColor = Number(color);
+    if (!normalizedGameId || !Number.isInteger(normalizedColor)) {
+      throw new Error('Unable to accept tournament match.');
+    }
+    stopTournamentAcceptSound(normalizedGameId);
+    locallyAcceptedTournamentGames.add(normalizedGameId);
+    try {
+      await apiReady(normalizedGameId, normalizedColor);
+      tournamentAcceptScheduler.clearPending({ preserveDeadline: false });
+      tournamentAcceptScheduler.releaseGrace();
+      scheduleTournamentGameHydration(normalizedGameId, normalizedColor);
+    } catch (err) {
+      locallyAcceptedTournamentGames.delete(normalizedGameId);
+      clearTournamentGameHydration();
+      throw err;
+    }
+  }
+
   function showTournamentAcceptBanner({ gameId, color, startSeconds = 30 } = {}) {
     const normalizedGameId = gameId ? String(gameId) : null;
     if (normalizedGameId && locallyAcceptedTournamentGames.has(normalizedGameId)) {
@@ -6922,6 +6969,8 @@ logBootConstantsOnce();
     acceptBtn.style.setProperty('--cg-button-font-weight', '700');
     acceptBtn.style.boxShadow = '0 12px 30px rgba(0, 0, 0, 0.28)';
     acceptBtn.style.margin = '0 auto';
+    acceptBtn.style.touchAction = 'manipulation';
+    acceptBtn.dataset.allowSuppressedClick = 'true';
 
     stack.appendChild(title);
     stack.appendChild(message);
@@ -6945,19 +6994,11 @@ logBootConstantsOnce();
     acceptBtn.addEventListener('click', async () => {
       acceptBtn.disabled = true;
       stopTournamentAcceptSound(normalizedGameId);
-      acceptBtn.textContent = 'Accepting…';
-      if (normalizedGameId) {
-        locallyAcceptedTournamentGames.add(normalizedGameId);
-      }
+      acceptBtn.textContent = 'Accepting...';
       try {
-        await apiReady(normalizedGameId, color);
+        await acceptTournamentGame({ gameId: normalizedGameId, color });
         closeBanner();
-        scheduleTournamentGameHydration(normalizedGameId, color);
       } catch (err) {
-        if (normalizedGameId) {
-          locallyAcceptedTournamentGames.delete(normalizedGameId);
-        }
-        clearTournamentGameHydration();
         console.error('Failed to accept tournament match', err);
         acceptBtn.disabled = false;
         acceptBtn.textContent = 'Accept';
