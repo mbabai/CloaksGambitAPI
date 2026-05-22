@@ -33,6 +33,20 @@ describe('elo badge renderer source guards', () => {
     expect(source).toContain('showEloBadge: isTopBar ? showEloTop : showEloBottom,');
   });
 
+  test('live player elo cache is refreshed from populated match player details', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'public', 'index.js'), 'utf8');
+
+    expect(source).toContain('const profileElos = matchPlayers.map((player) => coerceFiniteNumber(player?.elo));');
+    expect(source).toContain('playerProfileCache.set(idStr, {');
+    expect(source).not.toContain("if (matchType !== 'RANKED') return false;");
+  });
+
+  test('player sockets prefer websocket before polling in production browsers', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'public', 'index.js'), 'utf8');
+
+    expect(source).toContain("transports: ['websocket', 'polling'],");
+  });
+
   test('shared elo badge value shifts downward by thirty percent of the configured font size', () => {
     const source = fs.readFileSync(UI_CSS_PATH, 'utf8');
 

@@ -16,7 +16,7 @@ router.post('/', async (req, res) => {
     const game = await Game.findById(gameId);
 
     if (!game) {
-      return res.status(404).json({ message: 'Game not found' });
+      return res.json({ gameOver: false, missing: true });
     }
 
     // If game already ended just report true

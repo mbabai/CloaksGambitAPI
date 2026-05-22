@@ -14,6 +14,7 @@ describe('match countdown banner title', () => {
     expect(getMatchCountdownBannerTitle(1)).toBe('Match Found');
     expect(getMatchCountdownBannerTitle(2)).toBe('Game Starting');
     expect(getMatchCountdownBannerTitle(5)).toBe('Game Starting');
+    expect(getMatchCountdownBannerTitle(5, { suddenDeath: true })).toBe('Sudden Death Game Starting');
   });
 
   test('match found banner stays up for the same game until both players are ready', async () => {
@@ -45,12 +46,13 @@ describe('match countdown banner title', () => {
     const source = fs.readFileSync(INDEX_PATH, 'utf8');
 
     expect(source).toContain("import { getMatchCountdownBannerTitle, shouldPreserveMatchCountdownBanner } from '/js/modules/ui/matchCountdown.js';");
-    expect(source).toContain('title.textContent = getMatchCountdownBannerTitle(currentGameNumber);');
+    expect(source).toContain('title.textContent = getMatchCountdownBannerTitle(currentGameNumber, { suddenDeath });');
     expect(source).toContain('const shouldPreserveCountdownBanner = shouldPreserveMatchCountdownBanner({');
     expect(source).toContain('if (!shouldPreserveCountdownBanner) {');
     expect(source).toContain('const currentGameNumber = Number.isFinite(Number(payload?.currentGameNumber))');
     expect(source).toContain('gameId: nextGameId,');
     expect(source).toContain('currentGameNumber,');
     expect(source).toContain('countdownEndsAt: payload?.startTime || null,');
+    expect(source).toContain('suddenDeath: Boolean(payload?.suddenDeath),');
   });
 });

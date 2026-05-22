@@ -194,6 +194,10 @@ Additional rules:
 - elimination ELO is awarded once per match, not per individual game
 - elimination ELO only applies when both participants are human
 - elimination matches involving bots never affect ELO
+- the `victoryPoints` setting is also the draw cap for an elimination match
+- when the draw cap is reached, the player with more game wins advances
+- if game wins are tied at the draw cap, the match enters sudden death; the next player to win a game advances, while additional draws keep the match going
+- sudden-death continuation games use the normal within-match `Next` flow, but the countdown banner reads `Sudden Death Game Starting`
 
 ### `completed`
 

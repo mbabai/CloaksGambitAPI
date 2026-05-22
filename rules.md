@@ -9,6 +9,7 @@ The text below is the current gold-standard rules wording for the project.
 The gold-standard wording below is preserved as the design reference. The current online implementation additionally uses these rule-layer clarifications:
 
 - Ranked competitive matches are first to 3 points, not first to 5 or 10.
+- Tournament elimination matches use the configured victory target as a draw cap. If that many draws occur, the player with more game wins advances; if game wins are tied, the match enters sudden death and continues until either player wins one game.
 - Live clocks begin during the digital setup/pre-play flow rather than only after setup has fully finished.
 - The player-facing move flow still treats an unanswered move as resolved immediately. Any delayed server-side finalization is considered an implementation detail, not a different player rule.
 

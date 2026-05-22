@@ -214,6 +214,73 @@ describe('next route tournament continuation', () => {
       currentGameNumber: 2,
       requiresAccept: false,
       acceptWindowSeconds: 0,
+      suddenDeath: false,
+    }));
+  });
+
+  test('tied elimination draw cap emits sudden death for the next countdown game', async () => {
+    requireGamePlayerContext.mockResolvedValue({
+      game: {
+        _id: 'finished-sudden-death-draw',
+        match: 'match-sudden-death',
+        playersNext: [false, false],
+      },
+      color: 0,
+    });
+
+    Game.findByIdAndUpdate.mockReturnValueOnce({
+      lean: jest.fn(async () => ({
+        _id: 'finished-sudden-death-draw',
+        match: 'match-sudden-death',
+        players: ['user-a', 'user-b'],
+        playersNext: [true, true],
+      })),
+    });
+
+    const nextGame = {
+      _id: 'next-sudden-death-game',
+      isActive: true,
+      players: ['user-b', 'user-a'],
+      toObject() {
+        return {
+          _id: 'next-sudden-death-game',
+          isActive: true,
+          players: ['user-b', 'user-a'],
+        };
+      },
+    };
+
+    Match.findById.mockReturnValue({
+      populate: jest.fn(async () => ({
+        _id: 'match-sudden-death',
+        type: 'TOURNAMENT_ELIMINATION',
+        tournamentId: 'tournament-sudden-death',
+        tournamentPhase: 'elimination',
+        player1Score: 0,
+        player2Score: 0,
+        drawCount: 3,
+        winScoreTarget: 3,
+        games: [
+          { _id: 'finished-sudden-death-draw', isActive: false, players: ['user-a', 'user-b'] },
+          nextGame,
+        ],
+      })),
+    });
+
+    const response = await callPost(handler, {
+      gameId: 'finished-sudden-death-draw',
+      color: 0,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(eventBus.emit).toHaveBeenCalledWith('players:bothNext', expect.objectContaining({
+      game: expect.objectContaining({
+        _id: 'next-sudden-death-game',
+      }),
+      currentGameNumber: 2,
+      requiresAccept: false,
+      acceptWindowSeconds: 0,
+      suddenDeath: true,
     }));
   });
 

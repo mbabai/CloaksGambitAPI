@@ -9,6 +9,9 @@ const {
   getTournamentAcceptWindowSeconds,
   shouldRequireTournamentMatchAccept,
 } = require('../../../utils/tournamentAccept');
+const {
+  isTournamentEliminationSuddenDeath,
+} = require('../../../utils/tournamentMatchRules');
 
 function resolveAcceptState(match, game) {
   if (typeof game?.requiresAccept === 'boolean') {
@@ -60,6 +63,7 @@ function getTournamentNextPayload(match, nextGame) {
       tournamentPhase: match?.tournamentPhase || null,
       requiresAccept: false,
       acceptWindowSeconds: 0,
+      suddenDeath: false,
     };
   }
   const gameForEvent = typeof nextGame.toObject === 'function'
@@ -69,6 +73,7 @@ function getTournamentNextPayload(match, nextGame) {
     ? nextGame.players.map((player) => player.toString())
     : [];
   const { requiresAccept, acceptWindowSeconds } = resolveAcceptState(match, nextGame);
+  const suddenDeath = isTournamentEliminationSuddenDeath(match);
   return {
     hasNextGame: true,
     game: gameForEvent,
@@ -78,6 +83,7 @@ function getTournamentNextPayload(match, nextGame) {
     tournamentPhase: match?.tournamentPhase || null,
     requiresAccept,
     acceptWindowSeconds,
+    suddenDeath,
   };
 }
 

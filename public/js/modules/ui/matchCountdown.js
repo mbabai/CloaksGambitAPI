@@ -1,4 +1,7 @@
-export function getMatchCountdownBannerTitle(gameNumber) {
+export function getMatchCountdownBannerTitle(gameNumber, { suddenDeath = false } = {}) {
+  if (suddenDeath) {
+    return 'Sudden Death Game Starting';
+  }
   return Number.isFinite(Number(gameNumber)) && Number(gameNumber) > 1
     ? 'Game Starting'
     : 'Match Found';

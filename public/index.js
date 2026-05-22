@@ -3471,10 +3471,14 @@ logBootConstantsOnce();
     }
   }
 
+  function coerceFiniteNumber(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
   function syncPlayerElosFromMatch(match) {
     if (!match || typeof match !== 'object') return false;
     const matchType = typeof match.type === 'string' ? match.type.toUpperCase() : '';
-    if (matchType !== 'RANKED') return false;
 
     const toIdString = (value) => {
       if (!value) return '';
@@ -3496,16 +3500,41 @@ logBootConstantsOnce();
       return '';
     };
 
-    const matchIds = [match.player1, match.player2].map(toIdString);
-    const endElos = [match.player1EndElo, match.player2EndElo];
+    const matchPlayers = [match.player1, match.player2];
+    const matchIds = matchPlayers.map(toIdString);
+    const profileElos = matchPlayers.map((player) => coerceFiniteNumber(player?.elo));
+    const endElos = [match.player1EndElo, match.player2EndElo].map(coerceFiniteNumber);
     let updated = false;
 
     matchIds.forEach((idStr, idx) => {
       if (!idStr) return;
-      const newElo = endElos[idx];
+      const player = matchPlayers[idx];
+      const newElo = matchType === 'RANKED' && Number.isFinite(endElos[idx])
+        ? endElos[idx]
+        : profileElos[idx];
       if (!Number.isFinite(newElo)) return;
+      const cached = playerProfileCache.get(idStr) || {};
+      playerProfileCache.set(idStr, {
+        ...cached,
+        username: typeof player?.username === 'string' && player.username.trim()
+          ? player.username.trim()
+          : cached.username,
+        elo: newElo,
+        isBot: Boolean(player?.isBot ?? cached.isBot),
+        isGuest: Boolean(player?.isGuest ?? cached.isGuest),
+      });
       const targetIdx = currentPlayerIds.findIndex(playerId => toIdString(playerId) === idStr);
-      if (targetIdx === -1) return;
+      if (targetIdx === -1) {
+        updated = true;
+        return;
+      }
+      if (typeof player?.username === 'string' && player.username.trim()) {
+        const resolvedName = resolveDisplayedPlayerName(idStr, player.username, targetIdx);
+        if (playerNames[targetIdx] !== resolvedName) {
+          playerNames[targetIdx] = resolvedName;
+          updated = true;
+        }
+      }
       if (!Number.isFinite(playerElos[targetIdx]) || playerElos[targetIdx] !== newElo) {
         playerElos[targetIdx] = newElo;
         updated = true;
@@ -4141,6 +4170,7 @@ logBootConstantsOnce();
                 activeMatchId = String(currentMatch._id);
               }
               applyExpectedTimeSettingsForMatch(currentMatch);
+              syncPlayerElosFromMatch(currentMatch);
             } catch (e) {
               console.error('Failed to fetch match details', e);
               applyExpectedTimeSettingsForMatch(null);
@@ -4669,6 +4699,7 @@ logBootConstantsOnce();
             gameId: nextGameId,
             currentGameNumber,
             countdownEndsAt: payload?.startTime || null,
+            suddenDeath: Boolean(payload?.suddenDeath),
           });
         } catch (e) { console.error('players:bothNext handler failed', e); }
       },
@@ -4914,7 +4945,12 @@ logBootConstantsOnce();
       }
       preloadPieceImages();
       preloadBubbleImages();
-      socket = io('/', { withCredentials: true, autoConnect: false });
+      socket = io('/', {
+        withCredentials: true,
+        autoConnect: false,
+        transports: ['websocket', 'polling'],
+        upgrade: true,
+      });
       spectateController = createSpectateController({
         overlayEl: spectateOverlay,
         playAreaEl: spectatePlayArea,
@@ -6827,6 +6863,7 @@ logBootConstantsOnce();
       gameId = null,
       currentGameNumber = 1,
       countdownEndsAt = null,
+      suddenDeath = false,
     } = {},
   ) {
     const overlay = ensureBannerOverlay();
@@ -6854,7 +6891,7 @@ logBootConstantsOnce();
     card.style.textAlign = 'center';
 
     const title = document.createElement('div');
-    title.textContent = getMatchCountdownBannerTitle(currentGameNumber);
+    title.textContent = getMatchCountdownBannerTitle(currentGameNumber, { suddenDeath });
     title.style.fontSize = '32px';
     title.style.fontWeight = '800';
     title.style.marginBottom = '10px';

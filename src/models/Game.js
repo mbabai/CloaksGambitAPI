@@ -19,6 +19,10 @@ const {
   getTournamentAcceptWindowSeconds,
   shouldRequireTournamentMatchAccept,
 } = require('../utils/tournamentAccept');
+const {
+  getTournamentEliminationDrawCapWinner,
+  isTournamentEliminationMatch,
+} = require('../utils/tournamentMatchRules');
 
 const defaultConfig = new ServerConfig();
 const MATCH_FOUND_COUNTDOWN_MS = 3000;
@@ -474,11 +478,17 @@ async function updateMatchAfterGame(game, createNextGame) {
         || quickplayDefaults;
       winScore = typeSettings?.WIN_SCORE;
     }
-    const isTournamentElimination = String(match.type || '').toUpperCase() === 'TOURNAMENT_ELIMINATION';
+    const isTournamentElimination = isTournamentEliminationMatch(match);
     const drawWins = !isTournamentElimination && Number.isFinite(winScore) && (match.drawCount || 0) >= winScore;
 
     if (drawWins) {
       await match.endMatch(null);
+      return;
+    }
+
+    const drawCapWinnerId = getTournamentEliminationDrawCapWinner(match, winScore);
+    if (drawCapWinnerId) {
+      await match.endMatch(drawCapWinnerId);
       return;
     }
 

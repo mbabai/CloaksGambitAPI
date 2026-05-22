@@ -11,7 +11,11 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   preloadAssets();
 
   const origin = window.location.origin.replace(/\/$/, '');
-  const socket = io(origin + '/admin', { withCredentials: true });
+  const socket = io(origin + '/admin', {
+    withCredentials: true,
+    transports: ['websocket', 'polling'],
+    upgrade: true,
+  });
   const params = new URLSearchParams(window.location.search);
   const adminIdParam = params.get('adminId');
   const adminUserId = adminIdParam || localStorage.getItem('cg_userId') || null;

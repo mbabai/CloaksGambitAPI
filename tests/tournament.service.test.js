@@ -77,6 +77,51 @@ describe('live tournaments service', () => {
     await new Promise((resolve) => setImmediate(resolve));
   }
 
+  async function startTwoPlayerElimination(created, started, hostSession) {
+    const roundRobinGames = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    for (const entry of roundRobinGames) {
+      const roundRobinGame = await Game.findById(entry.gameId);
+      await roundRobinGame.endGame(0, WIN_REASONS.RESIGN);
+    }
+
+    const deadlineSpy = jest.spyOn(Date, 'now').mockReturnValue(
+      Date.parse(started.startedAt) + (16 * 60 * 1000),
+    );
+    await maybeAdvanceTournamentRoundRobin(created.id);
+    deadlineSpy.mockRestore();
+
+    await startElimination({ tournamentId: created.id, session: hostSession });
+    const eliminationGames = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'elimination');
+    const match = await Match.findById(eliminationGames[0].matchId);
+    match.eloEligible = false;
+    await match.save();
+    return eliminationGames[0].matchId;
+  }
+
+  async function getActiveGameForMatch(matchId) {
+    const match = await Match.findById(matchId);
+    for (const gameId of (Array.isArray(match?.games) ? match.games : [])) {
+      const game = await Game.findById(gameId);
+      if (game?.isActive) {
+        return { match, game };
+      }
+    }
+    return { match, game: null };
+  }
+
+  async function endActiveGameForMatch(matchId, winner, reason) {
+    const { game } = await getActiveGameForMatch(matchId);
+    expect(game).toBeTruthy();
+    const players = Array.isArray(game.players) ? game.players.map((id) => String(id)) : [];
+    await game.endGame(winner, reason);
+    await flushAsyncEvents();
+    return {
+      game,
+      match: await Match.findById(matchId),
+      players,
+    };
+  }
+
   beforeEach(() => {
     resetForTests();
   });
@@ -677,6 +722,72 @@ describe('live tournaments service', () => {
       phase: 'elimination',
       requiresAccept: false,
     });
+  });
+
+  test('elimination draw cap advances the player with more game wins', async () => {
+    const host = { userId: '000000000000000000000535', username: 'HostDrawLeader', isGuest: false };
+    const opponent = { userId: '000000000000000000000536', username: 'OpponentDrawLeader', isGuest: false };
+    const created = await createTournament({
+      hostSession: host,
+      label: 'Draw Leader Cup',
+      config: { victoryPoints: 3 },
+    });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    const started = await startTournament({ tournamentId: created.id, session: host });
+    const matchId = await startTwoPlayerElimination(created, started, host);
+
+    const openingWin = await endActiveGameForMatch(matchId, 0, WIN_REASONS.RESIGN);
+    const leaderUserId = openingWin.players[0];
+
+    await endActiveGameForMatch(matchId, null, WIN_REASONS.DRAW);
+    await endActiveGameForMatch(matchId, null, WIN_REASONS.DRAW);
+    await endActiveGameForMatch(matchId, null, WIN_REASONS.DRAW);
+
+    const completedMatch = await Match.findById(matchId);
+    expect(completedMatch.isActive).toBe(false);
+    expect(String(completedMatch.winner)).toBe(leaderUserId);
+    expect(completedMatch.drawCount).toBe(3);
+
+    const finalState = await getTournamentClientState(created.id, { session: host });
+    const finalMatch = finalState.tournament.bracket.rounds[0].matches[0];
+    expect(finalState.tournament.phase).toBe('completed');
+    expect(finalMatch.winner.userId).toBe(leaderUserId);
+  });
+
+  test('tied elimination draw cap keeps playing until the next game win', async () => {
+    const host = { userId: '000000000000000000000537', username: 'HostSuddenDeath', isGuest: false };
+    const opponent = { userId: '000000000000000000000538', username: 'OpponentSuddenDeath', isGuest: false };
+    const created = await createTournament({
+      hostSession: host,
+      label: 'Sudden Death Cup',
+      config: { victoryPoints: 3 },
+    });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    const started = await startTournament({ tournamentId: created.id, session: host });
+    const matchId = await startTwoPlayerElimination(created, started, host);
+
+    await endActiveGameForMatch(matchId, null, WIN_REASONS.DRAW);
+    await endActiveGameForMatch(matchId, null, WIN_REASONS.DRAW);
+    await endActiveGameForMatch(matchId, null, WIN_REASONS.DRAW);
+
+    const tiedCapMatch = await Match.findById(matchId);
+    const suddenDeathGame = await getActiveGameForMatch(matchId);
+    expect(tiedCapMatch.isActive).toBe(true);
+    expect(tiedCapMatch.winner).toBeNull();
+    expect(tiedCapMatch.drawCount).toBe(3);
+    expect(suddenDeathGame.game).toBeTruthy();
+
+    const suddenDeathWin = await endActiveGameForMatch(matchId, 0, WIN_REASONS.RESIGN);
+    const winnerUserId = suddenDeathWin.players[0];
+    const completedMatch = await Match.findById(matchId);
+
+    expect(completedMatch.isActive).toBe(false);
+    expect(String(completedMatch.winner)).toBe(winnerUserId);
+    expect((completedMatch.player1Score || 0) + (completedMatch.player2Score || 0)).toBe(1);
   });
 
   test('tournament games use ranked time controls in round robin and elimination', async () => {
