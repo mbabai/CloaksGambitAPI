@@ -217,6 +217,11 @@
         color: var(--CG-white);
         pointer-events: none;
       }
+      @media (max-width: 720px) {
+        body.cg-game-header-context:not(.cg-menu-open) .username-display {
+          display: none;
+        }
+      }
 
       .menu-container {
         position: fixed;

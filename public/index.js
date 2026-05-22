@@ -515,6 +515,11 @@ logBootConstantsOnce();
     persistQueueMode(null);
   }
 
+  function updateHeaderMenuStateClasses() {
+    document.body.classList.toggle('cg-menu-open', menuOpen);
+    document.body.classList.toggle('cg-game-header-context', Boolean(isPlayAreaVisible || tournamentParticipantMode));
+  }
+
   function adjustMenuBounds() {
     // Default panel width if queue button isn't visible (e.g., during a game)
     let mainWidth = PANEL_WIDTH;
@@ -574,12 +579,14 @@ logBootConstantsOnce();
   function openMenu() {
     menuContainer.classList.add('open');
     menuOpen = true;
+    updateHeaderMenuStateClasses();
     adjustMenuBounds();
   }
 
   function closeMenu() {
     menuOpen = false;
     menuContainer.classList.remove('open');
+    updateHeaderMenuStateClasses();
     closeAccountPanel();
   }
 
@@ -1237,6 +1244,7 @@ logBootConstantsOnce();
     registerSpectateUsername: setSpectateUsername,
     onParticipantStateChange: (isParticipant) => {
       tournamentParticipantMode = Boolean(isParticipant);
+      updateHeaderMenuStateClasses();
       updateFindButton();
     },
     onTournamentAcceptStateChange: ({ requiresAccept = false, currentUserGame = null } = {}) => {
@@ -7724,6 +7732,7 @@ logBootConstantsOnce();
     layoutPlayArea();
     if (isPlayAreaVisible) return;
     isPlayAreaVisible = true;
+    updateHeaderMenuStateClasses();
     playAreaRoot.style.display = 'block';
     renderTutorialOverlay();
   }
@@ -7752,6 +7761,7 @@ logBootConstantsOnce();
     clearCaptureResolutionAnimationLayer({ clearTransient: true });
     if (playAreaRoot) playAreaRoot.style.display = 'none';
     isPlayAreaVisible = false;
+    updateHeaderMenuStateClasses();
     hideTutorialOverlay();
     clearGameToastFeedback();
   }
