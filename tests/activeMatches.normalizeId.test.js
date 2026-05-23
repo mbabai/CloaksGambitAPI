@@ -1,4 +1,7 @@
-const { normalizeId } = require('../src/services/matches/activeMatches');
+const {
+  normalizeId,
+  resolvePlayerDisplayName,
+} = require('../src/services/matches/activeMatches');
 const mongoose = require('mongoose');
 
 describe('activeMatches normalizeId', () => {
@@ -21,5 +24,40 @@ describe('activeMatches normalizeId', () => {
     circular._id = circular;
 
     expect(normalizeId(circular)).toBeNull();
+  });
+
+  test('resolves safe fallback names for missing history players', () => {
+    expect(resolvePlayerDisplayName({
+      user: { username: 'MediumBot', isBot: true },
+      match: { type: 'AI' },
+      playerIndex: 1,
+    })).toBe('MediumBot');
+
+    expect(resolvePlayerDisplayName({
+      user: null,
+      match: { type: 'AI' },
+      playerIndex: 1,
+    })).toBe('Cloak Bot');
+
+    expect(resolvePlayerDisplayName({
+      user: null,
+      match: { type: 'QUICKPLAY' },
+      playerIndex: 0,
+    })).toBe('Anonymous');
+  });
+
+  test('prefers tournament participant bot names over bot instance usernames', () => {
+    expect(resolvePlayerDisplayName({
+      user: { username: 'mediumbot_a698cd7e', isBot: true },
+      match: { type: 'TOURNAMENT_ROUND_ROBIN' },
+      playerIndex: 1,
+      participant: { type: 'bot', username: 'TESTER', difficulty: 'medium' },
+    })).toBe('TESTER (MediumBot)');
+
+    expect(resolvePlayerDisplayName({
+      user: { username: 'mediumbot_a698cd7e', isBot: true },
+      match: { type: 'TOURNAMENT_ROUND_ROBIN' },
+      playerIndex: 1,
+    })).toBe('MediumBot');
   });
 });

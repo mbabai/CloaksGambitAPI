@@ -2,11 +2,18 @@ const express = require('express');
 const router = express.Router();
 const User = require('../../../models/User');
 
+const ANONYMOUS_USERNAME_REGEX = /^anonymous\d+$/i;
+
 router.post('/', async (req, res) => {
   try {
     const { username, email } = req.body;
 
-    const query = {};
+    const query = {
+      isGuest: { $ne: true },
+      $and: [
+        { username: { $not: ANONYMOUS_USERNAME_REGEX } },
+      ],
+    };
     if (username) {
       query.username = username;
     }

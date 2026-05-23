@@ -37,6 +37,92 @@ function normalizeId(value) {
   return null;
 }
 
+const OBJECT_ID_STRING_REGEX = /^[a-f\d]{24}$/i;
+
+function isObjectIdLikeString(value) {
+  return typeof value === 'string' && OBJECT_ID_STRING_REGEX.test(value.trim());
+}
+
+function normalizeDisplayName(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function normalizeBotTypeLabel(value) {
+  const normalized = normalizeDisplayName(value);
+  if (!normalized) return null;
+  const difficultyMatch = normalized.match(/^(easy|medium|hard)$/i);
+  if (difficultyMatch) {
+    const difficulty = difficultyMatch[1].toLowerCase();
+    return `${difficulty.charAt(0).toUpperCase()}${difficulty.slice(1)}Bot`;
+  }
+  const botNameMatch = normalized.match(/^(easy|medium|hard)bot(?:_[a-f\d]+)?$/i);
+  if (botNameMatch) {
+    const difficulty = botNameMatch[1].toLowerCase();
+    return `${difficulty.charAt(0).toUpperCase()}${difficulty.slice(1)}Bot`;
+  }
+  return null;
+}
+
+function compactNameForCompare(value) {
+  return normalizeDisplayName(value)?.replace(/[^a-z\d]/gi, '').toLowerCase() || '';
+}
+
+function appendBotTypeLabel(displayName, botTypeLabel) {
+  const name = normalizeDisplayName(displayName);
+  const label = normalizeDisplayName(botTypeLabel);
+  if (!name) return label || 'Cloak Bot';
+  if (!label || compactNameForCompare(name) === compactNameForCompare(label)) {
+    return name;
+  }
+  return `${name} (${label})`;
+}
+
+function getPlayerDetailsForIndex(match, playerIndex) {
+  const details = match?.playerDetails || {};
+  return playerIndex === 0 ? details.player1 : details.player2;
+}
+
+function isBotMatchSlot(match, playerIndex) {
+  const type = typeof match?.type === 'string' ? match.type.toUpperCase() : '';
+  return type === 'AI' && playerIndex === 1;
+}
+
+function resolveHistoryPlayerName(match, playerIndex, {
+  id = null,
+  usernameLookup = value => value,
+  fallback = null
+} = {}) {
+  const detail = getPlayerDetailsForIndex(match, playerIndex);
+  const detailName = normalizeDisplayName(detail?.username);
+  const isBot = Boolean(detail?.isBot) || isBotMatchSlot(match, playerIndex);
+
+  if (isBot) {
+    const botTypeLabel = normalizeBotTypeLabel(detail?.botDifficulty)
+      || normalizeBotTypeLabel(detailName)
+      || 'Cloak Bot';
+    return detailName && !isObjectIdLikeString(detailName)
+      ? appendBotTypeLabel(detailName, botTypeLabel)
+      : botTypeLabel;
+  }
+
+  if (detailName && !isObjectIdLikeString(detailName)) {
+    return detailName;
+  }
+
+  const lookedUp = normalizeDisplayName(id ? usernameLookup(id) : null);
+  if (lookedUp && lookedUp !== id && !isObjectIdLikeString(lookedUp)) {
+    return lookedUp;
+  }
+
+  if (detail?.isGuest || !detail) {
+    return 'Anonymous';
+  }
+
+  return fallback || 'Anonymous';
+}
+
 function formatWinReasonLabel(reason) {
   if (reason === null || reason === undefined) return '';
   return WIN_REASON_LABELS[reason] || 'Unknown';
@@ -335,9 +421,13 @@ function describeMatch(match, { usernameLookup = id => id, userId } = {}) {
     }
   ];
 
-  playerEntries.forEach(entry => {
+  playerEntries.forEach((entry, index) => {
     if (!entry.id) return;
-    const name = usernameLookup(entry.id) || entry.id;
+    const name = resolveHistoryPlayerName(match, index, {
+      id: entry.id,
+      usernameLookup,
+      fallback: `Player ${index + 1}`
+    });
     const isUser = normalizedUserId && entry.id === normalizedUserId;
     const start = entry.startElo;
     const end = entry.endElo !== null ? entry.endElo : entry.startElo;
@@ -374,11 +464,13 @@ function buildMatchDetailGrid(match, {
   currentUserId = null,
   shouldAllowPlayerClick = null
 } = {}) {
-  const lookupName = (id, fallback) => {
+  const lookupName = (id, fallback, playerIndex) => {
     if (!id) return fallback;
-    const name = usernameLookup(id);
-    if (name && typeof name === 'string') return name;
-    return fallback || id;
+    return resolveHistoryPlayerName(match, playerIndex, {
+      id,
+      usernameLookup,
+      fallback
+    });
   };
 
   const normalizedSquareSize = Number.isFinite(squareSize) ? Math.max(20, squareSize) : 34;
@@ -397,7 +489,7 @@ function buildMatchDetailGrid(match, {
   const players = [
     {
       id: result.player1Id,
-      name: lookupName(result.player1Id, 'Player 1'),
+      name: lookupName(result.player1Id, 'Player 1', 0),
       score: Number.isFinite(match?.player1Score) ? match.player1Score : 0,
       result: result.player1Result,
       startElo: Number.isFinite(match?.player1StartElo) ? match.player1StartElo : null,
@@ -405,7 +497,7 @@ function buildMatchDetailGrid(match, {
     },
     {
       id: result.player2Id,
-      name: lookupName(result.player2Id, 'Player 2'),
+      name: lookupName(result.player2Id, 'Player 2', 1),
       score: Number.isFinite(match?.player2Score) ? match.player2Score : 0,
       result: result.player2Result,
       startElo: Number.isFinite(match?.player2StartElo) ? match.player2StartElo : null,
@@ -625,5 +717,6 @@ export {
   createStatusIcon,
   describeMatch,
   buildMatchDetailGrid,
-  getMatchResult
+  getMatchResult,
+  resolveHistoryPlayerName
 };

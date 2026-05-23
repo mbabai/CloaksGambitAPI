@@ -1,9 +1,13 @@
 const mongoose = require('mongoose');
 const Match = require('../../models/Match');
+const Tournament = require('../../models/Tournament');
 const User = require('../../models/User');
 const { toIdString } = require('../../models/inMemoryUtils');
 
 const DEFAULT_ELO = 800;
+const BOT_FALLBACK_NAME = 'Cloak Bot';
+const ANONYMOUS_FALLBACK_NAME = 'Anonymous';
+const OBJECT_ID_STRING_REGEX = /^[a-f\d]{24}$/i;
 
 function normalizeId(value, seen = null) {
   if (value === undefined || value === null) return null;
@@ -124,6 +128,88 @@ function resolveMatchType(source = {}) {
   return null;
 }
 
+function normalizeDisplayName(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function isObjectIdLikeString(value) {
+  return typeof value === 'string' && OBJECT_ID_STRING_REGEX.test(value.trim());
+}
+
+function normalizeBotInstanceName(username) {
+  const normalized = normalizeDisplayName(username);
+  if (!normalized || isObjectIdLikeString(normalized)) return null;
+  const match = normalized.match(/^(easy|medium|hard)bot_[a-f\d]+$/i);
+  if (!match) return normalized;
+  const difficulty = match[1].toLowerCase();
+  return `${difficulty.charAt(0).toUpperCase()}${difficulty.slice(1)}Bot`;
+}
+
+function normalizeBotTypeLabel(value) {
+  const normalized = normalizeDisplayName(value);
+  if (!normalized) return null;
+  const difficultyMatch = normalized.match(/^(easy|medium|hard)$/i);
+  if (difficultyMatch) {
+    const difficulty = difficultyMatch[1].toLowerCase();
+    return `${difficulty.charAt(0).toUpperCase()}${difficulty.slice(1)}Bot`;
+  }
+  const botNameMatch = normalized.match(/^(easy|medium|hard)bot(?:_[a-f\d]+)?$/i);
+  if (botNameMatch) {
+    const difficulty = botNameMatch[1].toLowerCase();
+    return `${difficulty.charAt(0).toUpperCase()}${difficulty.slice(1)}Bot`;
+  }
+  return null;
+}
+
+function compactNameForCompare(value) {
+  return normalizeDisplayName(value)?.replace(/[^a-z\d]/gi, '').toLowerCase() || '';
+}
+
+function appendBotTypeLabel(displayName, botTypeLabel) {
+  const name = normalizeDisplayName(displayName);
+  const label = normalizeDisplayName(botTypeLabel);
+  if (!name) return label || BOT_FALLBACK_NAME;
+  if (!label || compactNameForCompare(name) === compactNameForCompare(label)) {
+    return name;
+  }
+  return `${name} (${label})`;
+}
+
+function isBotMatchSlot(match, playerIndex) {
+  const type = resolveMatchType(match);
+  return type === 'AI' && playerIndex === 1;
+}
+
+function resolvePlayerDisplayName({ user = null, match = null, playerIndex = null, participant = null } = {}) {
+  const participantName = normalizeDisplayName(participant?.username);
+  const username = normalizeDisplayName(user?.username);
+  const isBot = Boolean(user?.isBot) || participant?.type === 'bot' || isBotMatchSlot(match, playerIndex);
+
+  if (isBot) {
+    const botTypeLabel = normalizeBotTypeLabel(participant?.difficulty)
+      || normalizeBotTypeLabel(user?.botDifficulty)
+      || normalizeBotTypeLabel(username)
+      || normalizeBotInstanceName(username)
+      || BOT_FALLBACK_NAME;
+    const displayName = participantName && !isObjectIdLikeString(participantName)
+      ? participantName
+      : botTypeLabel;
+    return appendBotTypeLabel(displayName, botTypeLabel);
+  }
+
+  if (username && !isObjectIdLikeString(username)) {
+    return username;
+  }
+
+  if (!user || user?.isGuest) {
+    return ANONYMOUS_FALLBACK_NAME;
+  }
+
+  return null;
+}
+
 function extractPlayerIds(source = {}) {
   const ids = [];
   if (Array.isArray(source.players)) {
@@ -231,6 +317,8 @@ function normalizeActiveMatch(source = {}) {
   normalized.player1EndElo = player1End !== null ? player1End : null;
   normalized.player2EndElo = player2End !== null ? player2End : null;
   normalized.isTutorial = Boolean(source.isTutorial);
+  normalized.tournamentId = normalizeId(source.tournamentId) || null;
+  normalized.tournamentPhase = typeof source.tournamentPhase === 'string' ? source.tournamentPhase : null;
 
   if (Array.isArray(source.games)) {
     normalized.games = source.games.slice();
@@ -253,7 +341,40 @@ function collectMatchUserIds(matches = []) {
   return Array.from(ids);
 }
 
-function attachPlayerDetails(matches, userMap) {
+function collectTournamentIds(matches = []) {
+  const ids = new Set();
+  matches.forEach((match) => {
+    const id = normalizeId(match?.tournamentId);
+    if (id) ids.add(id);
+  });
+  return Array.from(ids);
+}
+
+function buildTournamentPlayerMap(tournaments = []) {
+  const map = new Map();
+  tournaments.forEach((tournament) => {
+    const tournamentId = normalizeId(tournament?._id || tournament?.id);
+    if (!tournamentId) return;
+    const players = Array.isArray(tournament?.historicalPlayers) && tournament.historicalPlayers.length > 0
+      ? tournament.historicalPlayers
+      : (Array.isArray(tournament?.players) ? tournament.players : []);
+    const playerMap = new Map();
+    players.forEach((entry) => {
+      const userId = normalizeId(entry?.userId);
+      if (userId) playerMap.set(userId, entry);
+    });
+    map.set(tournamentId, playerMap);
+  });
+  return map;
+}
+
+function resolveEloValue(user, participant) {
+  if (Number.isFinite(user?.elo)) return user.elo;
+  if (Number.isFinite(participant?.preTournamentElo)) return participant.preTournamentElo;
+  return DEFAULT_ELO;
+}
+
+function attachPlayerDetails(matches, userMap, tournamentPlayerMap = new Map()) {
   matches.forEach((match) => {
     if (!match) return;
     const players = Array.isArray(match.players) ? match.players : [];
@@ -262,22 +383,30 @@ function attachPlayerDetails(matches, userMap) {
 
     const player1User = player1Id ? userMap.get(player1Id) : null;
     const player2User = player2Id ? userMap.get(player2Id) : null;
+    const tournamentId = normalizeId(match.tournamentId);
+    const participantMap = tournamentId ? tournamentPlayerMap.get(tournamentId) : null;
+    const player1Participant = player1Id && participantMap ? participantMap.get(player1Id) : null;
+    const player2Participant = player2Id && participantMap ? participantMap.get(player2Id) : null;
 
     match.playerDetails = {
       player1: player1Id
         ? {
             id: player1Id,
-            username: player1User?.username || null,
-            elo: Number.isFinite(player1User?.elo) ? player1User.elo : DEFAULT_ELO,
-            isBot: Boolean(player1User?.isBot),
+            username: resolvePlayerDisplayName({ user: player1User, match, playerIndex: 0, participant: player1Participant }),
+            elo: resolveEloValue(player1User, player1Participant),
+            isBot: Boolean(player1User?.isBot) || player1Participant?.type === 'bot' || isBotMatchSlot(match, 0),
+            botDifficulty: player1Participant?.difficulty || player1User?.botDifficulty || null,
+            isGuest: Boolean(player1User?.isGuest) || !player1User,
           }
         : null,
       player2: player2Id
         ? {
             id: player2Id,
-            username: player2User?.username || null,
-            elo: Number.isFinite(player2User?.elo) ? player2User.elo : DEFAULT_ELO,
-            isBot: Boolean(player2User?.isBot),
+            username: resolvePlayerDisplayName({ user: player2User, match, playerIndex: 1, participant: player2Participant }),
+            elo: resolveEloValue(player2User, player2Participant),
+            isBot: Boolean(player2User?.isBot) || player2Participant?.type === 'bot' || isBotMatchSlot(match, 1),
+            botDifficulty: player2Participant?.difficulty || player2User?.botDifficulty || null,
+            isGuest: Boolean(player2User?.isGuest) || !player2User,
           }
         : null,
     };
@@ -445,12 +574,22 @@ async function fetchMatchList(options = {}) {
   let userMap = new Map();
   if (validObjectIds.length > 0) {
     const users = await User.find({ _id: { $in: validObjectIds } })
-      .select('_id username elo isBot')
+      .select('_id username elo isBot botDifficulty isGuest')
       .lean();
     userMap = new Map(users.map((user) => [user._id.toString(), user]));
   }
 
-  attachPlayerDetails(normalizedMatches, userMap);
+  const tournamentIds = collectTournamentIds(normalizedMatches);
+  const validTournamentIds = tournamentIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  let tournamentPlayerMap = new Map();
+  if (validTournamentIds.length > 0) {
+    const tournaments = await Tournament.find({ _id: { $in: validTournamentIds } })
+      .select('_id players historicalPlayers')
+      .lean();
+    tournamentPlayerMap = buildTournamentPlayerMap(tournaments);
+  }
+
+  attachPlayerDetails(normalizedMatches, userMap, tournamentPlayerMap);
 
   return {
     items: normalizedMatches,
@@ -468,6 +607,8 @@ module.exports = {
   resolveScoreValue,
   resolveMatchType,
   normalizeActiveMatch,
+  resolvePlayerDisplayName,
+  buildTournamentPlayerMap,
   fetchMatchList,
   buildMatchQuery,
   normalizeStatus,

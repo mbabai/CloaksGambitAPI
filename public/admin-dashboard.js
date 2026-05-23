@@ -451,6 +451,8 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     const tbody = document.createElement('tbody');
 
     users.forEach(u => {
+      if (u.isGuest) return;
+      if (isAnonymousUsername(u.username)) return;
       const row = document.createElement('tr');
       const username = u.username || 'Unknown';
       const nameEl = document.createElement(adminUserId && u.id === adminUserId ? 'strong' : 'span');
@@ -780,6 +782,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
           const id = u._id ? u._id.toString() : '';
           if (!id) return;
           const username = u.username || 'Unknown';
+          if (u.isGuest || isAnonymousUsername(username)) return;
           const isBot = Boolean(u.isBot);
           const numericElo = Number(u.elo);
           const elo = Number.isFinite(numericElo) ? numericElo : null;
@@ -897,6 +900,7 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
         status: 'completed',
         page: safePage,
         limit: 50,
+        includeUsers: true,
       };
       const typeFilter = mapHistoryFilterToMatchType(historyFilter);
       if (typeFilter) {
@@ -917,6 +921,19 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       const matchItems = Array.isArray(matchesPayload)
         ? matchesPayload
         : (Array.isArray(matchesPayload?.items) ? matchesPayload.items : []);
+      matchItems.forEach((match) => {
+        const details = match?.playerDetails || {};
+        const p1 = details.player1;
+        const p2 = details.player2;
+        if (p1?.id) {
+          if (p1.username) usernameMap[p1.id] = p1.username;
+          markBotStatus(p1.id, Boolean(p1.isBot));
+        }
+        if (p2?.id) {
+          if (p2.username) usernameMap[p2.id] = p2.username;
+          markBotStatus(p2.id, Boolean(p2.isBot));
+        }
+      });
 
       const pagination = matchesPayload && typeof matchesPayload === 'object' ? matchesPayload.pagination : null;
       if (pagination && typeof pagination === 'object') {
