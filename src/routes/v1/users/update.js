@@ -14,6 +14,7 @@ const {
   normalizeTooltipsEnabledInput,
   resolveAudioVolume,
   resolveAnimationSpeed,
+  resolveGameStartAlertVolume,
   resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
 } = require('../../../utils/userPreferences');
@@ -29,6 +30,7 @@ router.patch('/', async (req, res) => {
       toastNotificationsEnabled,
       animationSpeed,
       audioVolume,
+      gameStartAlertVolume,
     } = req.body;
     const session = await resolveSessionFromRequest(req, { createGuest: false });
     if (!session?.userId) {
@@ -96,6 +98,14 @@ router.patch('/', async (req, res) => {
       update.audioVolume = normalizedAudioVolume;
     }
 
+    if (gameStartAlertVolume !== undefined) {
+      const normalizedGameStartAlertVolume = normalizeAudioVolumeInput(gameStartAlertVolume);
+      if (normalizedGameStartAlertVolume === null) {
+        return res.status(400).json({ message: 'gameStartAlertVolume must be a number between 0 and 1' });
+      }
+      update.gameStartAlertVolume = normalizedGameStartAlertVolume;
+    }
+
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ message: 'No fields to update' });
     }
@@ -128,6 +138,7 @@ router.patch('/', async (req, res) => {
       toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
       animationSpeed: resolveAnimationSpeed(user),
       audioVolume: resolveAudioVolume(user),
+      gameStartAlertVolume: resolveGameStartAlertVolume(user),
       email: adminSession || String(user._id) === String(session.userId) ? user.email || '' : undefined,
     });
   } catch (err) {

@@ -126,6 +126,38 @@ describe('audio manager', () => {
     expect(instances[0].pause).toHaveBeenCalledTimes(1);
   });
 
+  test('plays one-shot sounds with volume independent from master volume', () => {
+    const instances = [];
+    class MockAudio {
+      constructor(src) {
+        this.src = src;
+        this.volume = 0;
+        this.loop = false;
+        this.currentTime = 0;
+        this.play = jest.fn(() => Promise.resolve());
+        this.pause = jest.fn();
+        this.addEventListener = jest.fn();
+        this.removeEventListener = jest.fn();
+        instances.push(this);
+      }
+    }
+
+    const manager = createAudioManager({
+      AudioCtor: MockAudio,
+      documentRef: null,
+      logger: null,
+      defaultVolume: 0,
+    });
+    manager.registerSound('gameStartAlert', { src: '/assets/sounds/GameStart.mp3' });
+
+    manager.play('gameStartAlert', { volume: 0.7, useMasterVolume: false });
+    manager.setVolume(0.25);
+
+    expect(instances).toHaveLength(1);
+    expect(instances[0].src).toBe('/assets/sounds/GameStart.mp3');
+    expect(instances[0].volume).toBeCloseTo(0.7);
+  });
+
   test('retries blocked loop playback on the next user gesture', async () => {
     const documentRef = createDocumentHarness();
     const playResults = [

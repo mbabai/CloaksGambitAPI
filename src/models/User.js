@@ -57,6 +57,12 @@ const userSchema = new mongoose.Schema({
     min: 0,
     max: 1,
   },
+  gameStartAlertVolume: {
+    type: Number,
+    default: 0.5,
+    min: 0,
+    max: 1,
+  },
   createdAt: {
     type: Date,
     default: Date.now

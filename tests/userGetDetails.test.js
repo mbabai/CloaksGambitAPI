@@ -111,6 +111,7 @@ describe('users/getDetails route', () => {
       toastNotificationsEnabled: true,
       animationSpeed: 'slow',
       audioVolume: 0.5,
+      gameStartAlertVolume: 0.5,
     });
   });
 
@@ -127,6 +128,7 @@ describe('users/getDetails route', () => {
         toastNotificationsEnabled: false,
         animationSpeed: 'off',
         audioVolume: 0.4,
+        gameStartAlertVolume: 0.7,
         photoUrl: '',
       }),
     });
@@ -141,6 +143,7 @@ describe('users/getDetails route', () => {
       toastNotificationsEnabled: false,
       animationSpeed: 'off',
       audioVolume: 0.4,
+      gameStartAlertVolume: 0.7,
     });
   });
 });

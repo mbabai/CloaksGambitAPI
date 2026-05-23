@@ -173,21 +173,24 @@ describe('users/update route preferences', () => {
       toastNotificationsEnabled: true,
       animationSpeed: 'slow',
       audioVolume: 0.35,
+      gameStartAlertVolume: 0.65,
       email: 'c@example.com',
     });
 
     const response = await callPatch(handler, {
       audioVolume: '0.35',
+      gameStartAlertVolume: '0.65',
     });
 
     expect(response.statusCode).toBe(200);
     expect(User.findByIdAndUpdate).toHaveBeenCalledWith(
       '507f191e810c19729de860ea',
-      { audioVolume: 0.35 },
+      { audioVolume: 0.35, gameStartAlertVolume: 0.65 },
       { new: true }
     );
     expect(response.payload).toMatchObject({
       audioVolume: 0.35,
+      gameStartAlertVolume: 0.65,
     });
   });
 
@@ -196,6 +199,14 @@ describe('users/update route preferences', () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.payload).toEqual({ message: 'audioVolume must be a number between 0 and 1' });
+    expect(User.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  test('rejects invalid game start alert volume preference input', async () => {
+    const response = await callPatch(handler, { gameStartAlertVolume: 1.5 });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.payload).toEqual({ message: 'gameStartAlertVolume must be a number between 0 and 1' });
     expect(User.findByIdAndUpdate).not.toHaveBeenCalled();
   });
 

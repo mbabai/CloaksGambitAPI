@@ -285,10 +285,14 @@ logBootConstantsOnce();
   const ANIMATION_SPEED_COOKIE_NAME = 'cgAnimationSpeed';
   const AUDIO_VOLUME_COOKIE_NAME = 'cgAudioVolume';
   const AUDIO_VOLUME_TOUCHED_COOKIE_NAME = 'cgAudioVolumeTouched';
+  const GAME_START_ALERT_VOLUME_COOKIE_NAME = 'cgGameStartAlertVolume';
+  const GAME_START_ALERT_VOLUME_TOUCHED_COOKIE_NAME = 'cgGameStartAlertVolumeTouched';
   const TOOLTIP_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
   const DEFAULT_AUDIO_VOLUME = 0.5;
   const MATCH_FOUND_SOUND_ID = 'matchFound';
   const MATCH_FOUND_SOUND_SRC = '/assets/sounds/MatchFound.mp3';
+  const GAME_START_ALERT_SOUND_ID = 'gameStartAlert';
+  const GAME_START_ALERT_SOUND_SRC = '/assets/sounds/GameStart.mp3';
   const MOVE_SOUND_ID = 'move';
   const MOVE_SOUND_SRC = '/assets/sounds/Move.mp3';
   const CAPTURE_SOUND_ID = 'capture';
@@ -362,6 +366,21 @@ logBootConstantsOnce();
     setCookie(AUDIO_VOLUME_TOUCHED_COOKIE_NAME, 'true', TOOLTIP_COOKIE_MAX_AGE_SECONDS);
   }
 
+  function readGameStartAlertVolumePreferenceCookie() {
+    const rawVolume = getCookie(GAME_START_ALERT_VOLUME_COOKIE_NAME);
+    const userTouchedVolume = getCookie(GAME_START_ALERT_VOLUME_TOUCHED_COOKIE_NAME) === 'true';
+    if (!userTouchedVolume && String(rawVolume || '').trim() === '0') {
+      return DEFAULT_AUDIO_VOLUME;
+    }
+    return normalizeAudioVolumePreference(rawVolume, DEFAULT_AUDIO_VOLUME);
+  }
+
+  function persistGameStartAlertVolumePreferenceCookie(volume) {
+    const normalized = normalizeAudioVolumePreference(volume, DEFAULT_AUDIO_VOLUME);
+    setCookie(GAME_START_ALERT_VOLUME_COOKIE_NAME, String(normalized), TOOLTIP_COOKIE_MAX_AGE_SECONDS);
+    setCookie(GAME_START_ALERT_VOLUME_TOUCHED_COOKIE_NAME, 'true', TOOLTIP_COOKIE_MAX_AGE_SECONDS);
+  }
+
   initTooltipSystem({ enabled: readTooltipPreferenceCookie() });
   const audioManager = createAudioManager({
     defaultVolume: readAudioVolumePreferenceCookie(),
@@ -369,6 +388,9 @@ logBootConstantsOnce();
   audioManager.registerSound(MATCH_FOUND_SOUND_ID, {
     src: MATCH_FOUND_SOUND_SRC,
     loop: true,
+  });
+  audioManager.registerSound(GAME_START_ALERT_SOUND_ID, {
+    src: GAME_START_ALERT_SOUND_SRC,
   });
   audioManager.registerSound(MOVE_SOUND_ID, {
     src: MOVE_SOUND_SRC,
@@ -384,9 +406,36 @@ logBootConstantsOnce();
   });
 
   const playedGameSoundEvents = new Set();
+  const playedGameStartAlertKeys = new Set();
 
   function playSound(soundId) {
     audioManager.play(soundId);
+  }
+
+  function unlockGameStartAlertSound() {
+    audioManager.unlockSound(GAME_START_ALERT_SOUND_ID);
+  }
+
+  function playGameStartAlertSound() {
+    audioManager.play(GAME_START_ALERT_SOUND_ID, {
+      volume: normalizeAudioVolumePreference(sessionInfo.gameStartAlertVolume, DEFAULT_AUDIO_VOLUME),
+      useMasterVolume: false,
+    });
+  }
+
+  function playGameStartAlertForCountdown(gameId = null) {
+    const key = gameId !== null && gameId !== undefined
+      ? String(gameId)
+      : `countdown:${Date.now()}`;
+    if (playedGameStartAlertKeys.has(key)) {
+      return;
+    }
+    playedGameStartAlertKeys.add(key);
+    while (playedGameStartAlertKeys.size > GAME_SOUND_EVENT_LIMIT) {
+      const firstKey = playedGameStartAlertKeys.values().next().value;
+      playedGameStartAlertKeys.delete(firstKey);
+    }
+    playGameStartAlertSound();
   }
 
   function playMoveSounds({ isPendingCapture = false } = {}) {
@@ -1406,6 +1455,9 @@ logBootConstantsOnce();
     if (field === 'audioVolume' && !serverSupportsAudioVolumePreference) {
       return nextValue;
     }
+    if (field === 'gameStartAlertVolume' && !serverSupportsGameStartAlertVolumePreference) {
+      return nextValue;
+    }
 
     try {
       const res = await authFetch('/api/v1/users/update', {
@@ -1430,6 +1482,9 @@ logBootConstantsOnce();
       const updated = await res.json().catch(() => null);
       if (hasOwn(updated, 'audioVolume')) {
         serverSupportsAudioVolumePreference = true;
+      }
+      if (hasOwn(updated, 'gameStartAlertVolume')) {
+        serverSupportsGameStartAlertVolumePreference = true;
       }
       const resolvedValue = normalize(updated?.[field], nextValue);
       updateSessionInfo({ [field]: resolvedValue });
@@ -1481,6 +1536,18 @@ logBootConstantsOnce();
       previousValue: previousVolume,
       normalize: (value, fallback = DEFAULT_AUDIO_VOLUME) => normalizeAudioVolumePreference(value, fallback),
       errorMessage: 'Failed to update volume setting.',
+      allowNoFieldsFallback: true,
+    });
+  }
+
+  async function saveGameStartAlertVolumePreference(volume) {
+    const previousVolume = normalizeAudioVolumePreference(sessionInfo.gameStartAlertVolume, DEFAULT_AUDIO_VOLUME);
+    return saveUserBackedPreference({
+      field: 'gameStartAlertVolume',
+      value: volume,
+      previousValue: previousVolume,
+      normalize: (value, fallback = DEFAULT_AUDIO_VOLUME) => normalizeAudioVolumePreference(value, fallback),
+      errorMessage: 'Failed to update game start alert volume setting.',
       allowNoFieldsFallback: true,
     });
   }
@@ -1803,6 +1870,10 @@ logBootConstantsOnce();
       persistAudioVolumePreferenceCookie(sessionInfo.audioVolume);
       audioManager.setVolume(sessionInfo.audioVolume);
     }
+    if (partial.gameStartAlertVolume !== undefined) {
+      sessionInfo.gameStartAlertVolume = normalizeAudioVolumePreference(partial.gameStartAlertVolume, DEFAULT_AUDIO_VOLUME);
+      persistGameStartAlertVolumePreferenceCookie(sessionInfo.gameStartAlertVolume);
+    }
 
     let recomputeAuth = false;
     if (partial.isGuest !== undefined) {
@@ -1960,11 +2031,24 @@ logBootConstantsOnce();
       onPreview: (nextValue) => audioManager.setVolume(nextValue),
       onChange: saveAudioVolumePreference,
     });
+    const gameStartAlertVolumeSlider = createAccountRangeRow({
+      id: 'settingsGameStartAlertVolume',
+      label: 'Game Start Alert',
+      value: normalizeAudioVolumePreference(sessionInfo.gameStartAlertVolume, DEFAULT_AUDIO_VOLUME),
+      onPreview: (nextValue) => {
+        audioManager.play(GAME_START_ALERT_SOUND_ID, {
+          volume: nextValue,
+          useMasterVolume: false,
+        });
+      },
+      onChange: saveGameStartAlertVolumePreference,
+    });
 
     accountPanelContent.appendChild(tooltipToggle.row);
     accountPanelContent.appendChild(toastNotificationsToggle.row);
     accountPanelContent.appendChild(animationSegmented.row);
     accountPanelContent.appendChild(volumeSlider.row);
+    accountPanelContent.appendChild(gameStartAlertVolumeSlider.row);
   }
 
   function renderLearnPanel() {
@@ -2051,8 +2135,15 @@ logBootConstantsOnce();
         userDetails?.audioVolume,
         sessionInfo.audioVolume
       );
+      const gameStartAlertVolume = normalizeAudioVolumePreference(
+        userDetails?.gameStartAlertVolume,
+        sessionInfo.gameStartAlertVolume
+      );
       if (hasOwn(userDetails, 'audioVolume')) {
         serverSupportsAudioVolumePreference = true;
+      }
+      if (hasOwn(userDetails, 'gameStartAlertVolume')) {
+        serverSupportsGameStartAlertVolumePreference = true;
       }
 
       if (activeMenuPanel && activeMenuPanel !== 'account') {
@@ -2074,6 +2165,9 @@ logBootConstantsOnce();
       }
       if (audioVolume !== sessionInfo.audioVolume) {
         updateSessionInfo({ audioVolume });
+      }
+      if (gameStartAlertVolume !== sessionInfo.gameStartAlertVolume) {
+        updateSessionInfo({ gameStartAlertVolume });
       }
 
       if (statsOverlayController) {
@@ -2353,6 +2447,12 @@ logBootConstantsOnce();
         } else if (sessionData.isGuest || sessionData.authenticated === false) {
           updates.audioVolume = readAudioVolumePreferenceCookie();
         }
+        if (sessionData.gameStartAlertVolume !== undefined) {
+          updates.gameStartAlertVolume = sessionData.gameStartAlertVolume;
+          serverSupportsGameStartAlertVolumePreference = true;
+        } else if (sessionData.isGuest || sessionData.authenticated === false) {
+          updates.gameStartAlertVolume = readGameStartAlertVolumePreferenceCookie();
+        }
         updateSessionInfo(updates, { syncCookies: Boolean(sessionData.isGuest) });
       }
     } catch (err) {
@@ -2381,6 +2481,7 @@ logBootConstantsOnce();
         toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
         animationSpeed: readAnimationSpeedPreferenceCookie(),
         audioVolume: readAudioVolumePreferenceCookie(),
+        gameStartAlertVolume: readGameStartAlertVolumePreferenceCookie(),
       });
     }
 
@@ -2527,8 +2628,10 @@ logBootConstantsOnce();
     toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
     animationSpeed: readAnimationSpeedPreferenceCookie(),
     audioVolume: readAudioVolumePreferenceCookie(),
+    gameStartAlertVolume: readGameStartAlertVolumePreferenceCookie(),
   };
   let serverSupportsAudioVolumePreference = false;
+  let serverSupportsGameStartAlertVolumePreference = false;
 
   let playerNames = ['Anonymous0', 'Anonymous1'];
   let playerElos = [null, null];
@@ -4806,6 +4909,7 @@ logBootConstantsOnce();
   async function enterQueue(mode) {
     const activeUserId = sessionInfo.userId || getStoredUserId() || userId;
     console.log('[action] enterQueue', { userId: activeUserId, mode });
+    unlockGameStartAlertSound();
     const result = mode === 'ranked' ? await apiEnterRankedQueue() : await apiEnterQueue();
     console.log('[action] enterQueue response', result);
 
@@ -5453,6 +5557,7 @@ logBootConstantsOnce();
       statusEl.style.color = 'var(--CG-light-gold)';
       prompt.pendingName = target;
       lastInviteTargetName = target;
+      unlockGameStartAlertSound();
       try {
         socket.emit('custom:invite', { username: target });
       } catch (err) {
@@ -6368,6 +6473,7 @@ logBootConstantsOnce();
       acceptBtn.disabled = true;
       declineBtn.disabled = true;
       acceptBtn.textContent = 'Accepting…';
+      unlockGameStartAlertSound();
       emitResponse(true);
       closeBanner();
     });
@@ -6932,6 +7038,7 @@ logBootConstantsOnce();
       closeBanner();
       return;
     }
+    playGameStartAlertForCountdown(gameId);
 
     if (bannerInterval) clearInterval(bannerInterval);
     bannerInterval = setInterval(() => {

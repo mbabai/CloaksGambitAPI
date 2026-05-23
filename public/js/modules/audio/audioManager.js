@@ -37,10 +37,16 @@ export function createAudioManager({
   let unlockListenersBound = false;
   let disposed = false;
 
-  function applyVolume(audio, soundVolume = 1) {
+  function applyVolume(audio, soundVolume = 1, { useMasterVolume = true, volumeOverride } = {}) {
     if (!audio) return;
-    audio.volume = normalizeAudioVolume(masterVolume, DEFAULT_AUDIO_VOLUME)
-      * normalizeAudioVolume(soundVolume, 1);
+    const baseVolume = useMasterVolume
+      ? normalizeAudioVolume(masterVolume, DEFAULT_AUDIO_VOLUME)
+      : 1;
+    const resolvedSoundVolume = volumeOverride === undefined
+      ? soundVolume
+      : volumeOverride;
+    audio.volume = baseVolume
+      * normalizeAudioVolume(resolvedSoundVolume, 1);
   }
 
   function getBlockedLoopCount() {
@@ -130,12 +136,12 @@ export function createAudioManager({
     return soundId;
   }
 
-  function createAudio(sound) {
+  function createAudio(sound, playbackOptions = {}) {
     if (!AudioCtor) return null;
     const audio = new AudioCtor(sound.src);
     audio.preload = sound.preload;
     audio.loop = Boolean(sound.loop);
-    applyVolume(audio, sound.volume);
+    applyVolume(audio, sound.volume, playbackOptions);
     return audio;
   }
 
@@ -207,7 +213,7 @@ export function createAudioManager({
     };
   }
 
-  function play(id, { restart = true } = {}) {
+  function play(id, { restart = true, volume, useMasterVolume = true } = {}) {
     const soundId = id ? String(id) : '';
     if (!soundId || disposed) {
       return null;
@@ -219,12 +225,17 @@ export function createAudioManager({
       }
       return null;
     }
-    const audio = createAudio({ ...sound, loop: false });
+    const audio = createAudio(
+      { ...sound, loop: false },
+      { useMasterVolume, volumeOverride: volume }
+    );
     if (!audio) return null;
     const entry = {
       audio,
       sound,
       stopped: false,
+      useMasterVolume,
+      volumeOverride: volume,
     };
     const cleanup = () => {
       oneShots.delete(entry);
@@ -271,13 +282,53 @@ export function createAudioManager({
     };
   }
 
+  function unlockSound(id) {
+    const soundId = id ? String(id) : '';
+    if (!soundId || disposed) {
+      return null;
+    }
+    const sound = sounds.get(soundId);
+    if (!sound) {
+      return null;
+    }
+    const audio = createAudio(
+      { ...sound, loop: false },
+      { useMasterVolume: false, volumeOverride: 0 }
+    );
+    if (!audio) return null;
+    const restore = () => {
+      safeCall(() => audio.pause());
+      safeCall(() => {
+        audio.currentTime = 0;
+      });
+      safeCall(() => {
+        audio.muted = false;
+      });
+    };
+    safeCall(() => {
+      audio.muted = true;
+    });
+    const result = safeCall(() => audio.play());
+    if (result.error) {
+      restore();
+    } else if (isPromiseLike(result.value)) {
+      result.value.then(restore).catch(restore);
+    } else {
+      restore();
+    }
+    return audio;
+  }
+
   function setVolume(value) {
     masterVolume = normalizeAudioVolume(value, masterVolume);
     loops.forEach((entry) => {
       applyVolume(entry.audio, entry.sound?.volume);
     });
     oneShots.forEach((entry) => {
-      applyVolume(entry.audio, entry.sound?.volume);
+      applyVolume(entry.audio, entry.sound?.volume, {
+        useMasterVolume: entry.useMasterVolume,
+        volumeOverride: entry.volumeOverride,
+      });
     });
     return masterVolume;
   }
@@ -316,5 +367,6 @@ export function createAudioManager({
     startLoop,
     stopAll,
     stopLoop,
+    unlockSound,
   };
 }

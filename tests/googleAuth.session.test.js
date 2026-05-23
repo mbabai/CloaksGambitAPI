@@ -91,6 +91,7 @@ describe('google auth session route', () => {
       toastNotificationsEnabled: false,
       animationSpeed: 'fast',
       audioVolume: 0.45,
+      gameStartAlertVolume: 0.8,
       photoUrl: '/profile.png',
     });
     ensureUser.mockResolvedValue({
@@ -114,6 +115,7 @@ describe('google auth session route', () => {
       toastNotificationsEnabled: false,
       animationSpeed: 'fast',
       audioVolume: 0.45,
+      gameStartAlertVolume: 0.8,
     });
     expect(response.cookies.some((cookie) => cookie.name === 'cgToken' && cookie.value === 'dev-token')).toBe(true);
   });
@@ -153,6 +155,7 @@ describe('google auth session route', () => {
       toastNotificationsEnabled: true,
       animationSpeed: 'slow',
       audioVolume: 0.5,
+      gameStartAlertVolume: 0.5,
     });
     expect(response.cookies.some((cookie) => cookie.name === 'cgToken' && cookie.value === 'dev-token')).toBe(true);
   });

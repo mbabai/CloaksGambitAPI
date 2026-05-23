@@ -7,6 +7,7 @@ const { resolveSessionFromRequest } = require('../../../utils/requestSession');
 const {
   resolveAudioVolume,
   resolveAnimationSpeed,
+  resolveGameStartAlertVolume,
   resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
 } = require('../../../utils/userPreferences');
@@ -59,6 +60,7 @@ router.post('/', async (req, res) => {
       toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
       animationSpeed: resolveAnimationSpeed(user),
       audioVolume: resolveAudioVolume(user),
+      gameStartAlertVolume: resolveGameStartAlertVolume(user),
       photoUrl: user.photoUrl || '',
       email: adminSession || isSelf ? (user.email || '') : undefined,
     });

@@ -17,6 +17,7 @@ const {
 const {
   resolveAudioVolume,
   resolveAnimationSpeed,
+  resolveGameStartAlertVolume,
   resolveToastNotificationsEnabled,
   resolveTooltipsEnabled,
 } = require('../../utils/userPreferences');
@@ -282,6 +283,7 @@ router.get('/session', async (req, res) => {
         toastNotificationsEnabled: resolveToastNotificationsEnabled(session.user || session),
         animationSpeed: resolveAnimationSpeed(session.user || session),
         audioVolume: resolveAudioVolume(session.user || session),
+        gameStartAlertVolume: resolveGameStartAlertVolume(session.user || session),
       });
     }
 
@@ -296,6 +298,7 @@ router.get('/session', async (req, res) => {
       toastNotificationsEnabled: undefined,
       animationSpeed: undefined,
       audioVolume: undefined,
+      gameStartAlertVolume: undefined,
     });
   } catch (err) {
     console.error('Failed to resolve session', err);

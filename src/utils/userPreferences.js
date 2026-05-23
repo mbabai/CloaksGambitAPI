@@ -39,6 +39,7 @@ function normalizeToastNotificationsEnabledInput(value) {
 const ANIMATION_SPEEDS = new Set(['off', 'fast', 'slow']);
 const DEFAULT_ANIMATION_SPEED = 'slow';
 const DEFAULT_AUDIO_VOLUME = 0.5;
+const DEFAULT_GAME_START_ALERT_VOLUME = 0.5;
 
 function normalizeAnimationSpeed(value, fallback = DEFAULT_ANIMATION_SPEED) {
   if (typeof value !== 'string') {
@@ -84,6 +85,13 @@ function resolveAudioVolume(userLike) {
   return normalizeAudioVolume(userLike.audioVolume, DEFAULT_AUDIO_VOLUME);
 }
 
+function resolveGameStartAlertVolume(userLike) {
+  if (!userLike || typeof userLike !== 'object') {
+    return DEFAULT_GAME_START_ALERT_VOLUME;
+  }
+  return normalizeAudioVolume(userLike.gameStartAlertVolume, DEFAULT_GAME_START_ALERT_VOLUME);
+}
+
 function normalizeAudioVolumeInput(value) {
   if (value === undefined) {
     return undefined;
@@ -97,6 +105,7 @@ function normalizeAudioVolumeInput(value) {
 
 module.exports = {
   DEFAULT_AUDIO_VOLUME,
+  DEFAULT_GAME_START_ALERT_VOLUME,
   DEFAULT_ANIMATION_SPEED,
   resolveTooltipsEnabled,
   normalizeTooltipsEnabledInput,
@@ -105,6 +114,7 @@ module.exports = {
   resolveAnimationSpeed,
   normalizeAnimationSpeedInput,
   resolveAudioVolume,
+  resolveGameStartAlertVolume,
   normalizeAudioVolume,
   normalizeAudioVolumeInput,
 };
