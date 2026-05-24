@@ -68,10 +68,14 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'No piece to capture' });
     }
 
-    game.captured[normalizedColor].push(piece);
+    const poisonDeclarer = lastAction.player === 0 || lastAction.player === 1
+      ? lastAction.player
+      : (normalizedColor === 0 ? 1 : 0);
+
+    game.captured[poisonDeclarer].push(piece);
     game.board[from.row][from.col] = null;
 
-    game.playerTurn = normalizedColor === 0 ? 1 : 0;
+    game.playerTurn = poisonDeclarer;
 
     lastMove.state = config.moveStates.get('RESOLVED');
 
@@ -86,7 +90,7 @@ router.post('/', async (req, res) => {
     game.movesSinceAction = 0;
 
     if (piece.identity === config.identities.get('KING') && game.isActive) {
-      await game.endGame(normalizedColor === 0 ? 1 : 0, config.winReasons.get('CAPTURED_KING'));
+      await game.endGame(poisonDeclarer, config.winReasons.get('CAPTURED_KING'));
       // Check if game ended and return early
       if (!game.isActive) {
         emitGameChanged(game);

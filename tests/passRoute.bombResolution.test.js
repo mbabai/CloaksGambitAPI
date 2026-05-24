@@ -61,7 +61,79 @@ describe('pass route bomb resolution', () => {
     });
   });
 
-  test('awards the win to the bomber when pass reveals the mover king', async () => {
+  test('credits the Poison declarer when pass removes a non-Heart attacker', async () => {
+    const board = Array.from({ length: 6 }, () => Array.from({ length: 5 }, () => null));
+    board[0][4] = { color: 0, identity: sharedConstants.identities.ROOK };
+    board[2][2] = { color: 1, identity: sharedConstants.identities.BOMB };
+
+    const game = {
+      _id: 'game-pass-1',
+      isActive: true,
+      playerTurn: 0,
+      actions: [
+        { type: sharedConstants.actions.MOVE, player: 0, details: {} },
+        { type: sharedConstants.actions.BOMB, player: 1, details: {} },
+      ],
+      moves: [
+        {
+          player: 0,
+          from: { row: 0, col: 4 },
+          to: { row: 2, col: 2 },
+          declaration: sharedConstants.identities.BISHOP,
+          state: sharedConstants.moveStates.PENDING,
+        },
+      ],
+      board,
+      captured: [[], []],
+      setupComplete: [true, true],
+      clockState: null,
+      movesSinceAction: 0,
+      players: [],
+      addAction: jest.fn(async function addAction(type, player, details) {
+        this.actions.push({ type, player, details });
+      }),
+      save: jest.fn(async () => {}),
+      endGame: jest.fn(async function endGame(winner, reason) {
+        this.isActive = false;
+        this.winner = winner;
+        this.winReason = reason;
+      }),
+      toObject() {
+        return this;
+      },
+    };
+
+    requireGamePlayerContext.mockResolvedValue({
+      game,
+      color: 0,
+      requesterDetails: {
+        userId: 'player-0',
+        username: 'Player0',
+        isBot: false,
+        botDifficulty: null,
+      },
+    });
+
+    const response = await callPost(handler, {
+      gameId: game._id,
+      color: 0,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.payload.message).toBe('Pass recorded');
+    expect(game.endGame).not.toHaveBeenCalled();
+    expect(game.board[0][4]).toBeNull();
+    expect(game.board[2][2]).toEqual(
+      expect.objectContaining({ color: 1, identity: sharedConstants.identities.BOMB })
+    );
+    expect(game.playerTurn).toBe(1);
+    expect(game.captured[0]).toEqual([]);
+    expect(game.captured[1]).toEqual([
+      expect.objectContaining({ color: 0, identity: sharedConstants.identities.ROOK }),
+    ]);
+  });
+
+  test('awards the win and captured Heart credit to the Poison declarer', async () => {
     const board = Array.from({ length: 6 }, () => Array.from({ length: 5 }, () => null));
     board[0][4] = { color: 0, identity: sharedConstants.identities.KING };
 
@@ -122,7 +194,8 @@ describe('pass route bomb resolution', () => {
     expect(response.payload.message).toBe('Game ended: Heart captured');
     expect(game.endGame).toHaveBeenCalledWith(1, sharedConstants.winReasons.CAPTURED_KING);
     expect(game.winner).toBe(1);
-    expect(game.captured[0]).toEqual([
+    expect(game.captured[0]).toEqual([]);
+    expect(game.captured[1]).toEqual([
       expect.objectContaining({ color: 0, identity: sharedConstants.identities.KING }),
     ]);
   });
