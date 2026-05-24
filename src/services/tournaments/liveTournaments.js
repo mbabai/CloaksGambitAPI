@@ -1482,47 +1482,92 @@ async function persistCompletedGameIfSupported(game) {
   }
 }
 
-function resolveNoShowWinnerColorForGame(tournament, game) {
+function getGameWinnerColorForUserId(game, winnerUserId) {
+  const winner = String(winnerUserId || '');
+  if (!winner) return null;
   const playerIds = Array.isArray(game?.players) ? game.players.map((id) => String(id)) : [];
-  if (playerIds.length < 2) return null;
-  const entrants = playerIds.map((id) => getTournamentPlayerById(tournament, id) || { userId: id });
-  const winner = resolveNoShowWinnerEntrant(tournament, entrants[0], entrants[1]);
-  if (!winner?.userId) return null;
-  const winnerColor = playerIds.findIndex((id) => id === String(winner.userId));
+  const winnerColor = playerIds.findIndex((id) => id === winner);
   return winnerColor === 0 || winnerColor === 1 ? winnerColor : null;
 }
 
-async function completeEliminationMatchByNoShow({ game, match, winnerColor, winReason }) {
-  if (!game?.isActive || !match?.isActive) return false;
-  if (winnerColor !== 0 && winnerColor !== 1) return false;
+function resolveWithdrawalWinnerUserIdForMatch(tournament, match, forfeitingUserId) {
+  const player1Id = toIdString(match?.player1);
+  const player2Id = toIdString(match?.player2);
+  if (!player1Id || !player2Id) return null;
 
-  const winnerUserId = game.players?.[winnerColor]?.toString?.() || game.players?.[winnerColor] || null;
-  if (!winnerUserId) return false;
+  const forfeiter = String(forfeitingUserId || '');
+  if (forfeiter === player1Id) return player2Id;
+  if (forfeiter === player2Id) return player1Id;
 
-  game.winner = winnerColor;
+  const player1 = getTournamentPlayerById(tournament, player1Id) || { userId: player1Id };
+  const player2 = getTournamentPlayerById(tournament, player2Id) || { userId: player2Id };
+  const winner = resolveNoShowWinnerEntrant(tournament, player1, player2);
+  return winner?.userId ? String(winner.userId) : null;
+}
+
+function setMatchScoreToWin(match, winnerUserId) {
+  const winner = String(winnerUserId || '');
+  if (!winner) return false;
+
+  const winScoreTarget = Number.isFinite(Number(match.winScoreTarget)) && Number(match.winScoreTarget) > 0
+    ? Number(match.winScoreTarget)
+    : 1;
+  if (String(match.player1 || '') === winner) {
+    match.player1Score = Math.max(Number(match.player1Score || 0), winScoreTarget);
+    return true;
+  }
+  if (String(match.player2 || '') === winner) {
+    match.player2Score = Math.max(Number(match.player2Score || 0), winScoreTarget);
+    return true;
+  }
+  return false;
+}
+
+async function completeGameByTournamentForfeit({ game, winnerUserId, winReason }) {
+  if (!game?.isActive) return false;
+
+  const winnerColor = getGameWinnerColorForUserId(game, winnerUserId);
+  game.winner = winnerColor === 0 || winnerColor === 1 ? winnerColor : null;
+  if (game.winner === null) {
+    game.tournamentScoreOutcome = 'double_no_show_loss';
+  }
   game.winReason = winReason;
   game.endTime = new Date();
   game.isActive = false;
   game.drawOffer = null;
   game.drawOfferCooldowns = [null, null];
+  if (typeof game.markModified === 'function') {
+    game.markModified('drawOffer');
+    game.markModified('drawOfferCooldowns');
+  }
   finalizeStoredClockState(game, {
     now: game.endTime.getTime(),
-    reason: 'tournament-no-show',
+    reason: 'tournament-forfeit',
   });
   await game.save();
   await persistCompletedGameIfSupported(game);
+  emitGameChangedForGame(game);
+  return true;
+}
 
-  const winScoreTarget = Number.isFinite(Number(match.winScoreTarget)) && Number(match.winScoreTarget) > 0
-    ? Number(match.winScoreTarget)
-    : 1;
-  if (String(match.player1 || '') === String(winnerUserId)) {
-    match.player1Score = Math.max(Number(match.player1Score || 0), winScoreTarget);
-  } else if (String(match.player2 || '') === String(winnerUserId)) {
-    match.player2Score = Math.max(Number(match.player2Score || 0), winScoreTarget);
+async function completeTournamentMatchByForfeit({ tournament, match, forfeitingUserId, winReason }) {
+  if (!match?.isActive) return false;
+
+  const winnerUserId = resolveWithdrawalWinnerUserIdForMatch(tournament, match, forfeitingUserId);
+  if (winnerUserId) {
+    setMatchScoreToWin(match, winnerUserId);
   }
 
-  await match.endMatch(winnerUserId);
-  emitGameChangedForGame(game);
+  const activeGames = await Game.find({ match: match._id, isActive: true });
+  for (const game of (Array.isArray(activeGames) ? activeGames : [])) {
+    await completeGameByTournamentForfeit({
+      game,
+      winnerUserId,
+      winReason,
+    });
+  }
+
+  await match.endMatch(winnerUserId || null);
   return true;
 }
 
@@ -1534,36 +1579,28 @@ async function resolveWithdrawnPlayerActiveGames(tournament, userId) {
   const winReason = config?.winReasons?.get
     ? config.winReasons.get('RESIGN')
     : 6;
-  const games = await listTournamentGames(tournament.id, { skipLifecycleAdvance: true });
-  const activeEntries = games.filter((entry) => (
-    entry?.status !== 'completed'
-    && Array.isArray(entry?.players)
-    && entry.players.some((player) => String(player?.userId || '') === targetUserId)
-  ));
+  const activeMatchesById = new Map();
+  const tournamentMatches = await Match.find({ tournamentId: tournament.id, isActive: true });
+  for (const match of (Array.isArray(tournamentMatches) ? tournamentMatches : [])) {
+    if (match?._id) activeMatchesById.set(String(match._id), match);
+  }
 
-  for (const entry of activeEntries) {
-    const game = await Game.findById(entry.gameId);
-    const match = await Match.findById(entry.matchId);
-    if (!game?.isActive || !match?.isActive) continue;
+  for (const matchId of (Array.isArray(tournament.matchIds) ? tournament.matchIds : [])) {
+    const normalizedMatchId = String(matchId || '');
+    if (!normalizedMatchId || activeMatchesById.has(normalizedMatchId)) continue;
+    const match = await Match.findById(matchId);
+    if (match?.isActive) activeMatchesById.set(normalizedMatchId, match);
+  }
 
-    const winnerColor = resolveNoShowWinnerColorForGame(tournament, game);
-    if (entry.phase === 'elimination') {
-      await completeEliminationMatchByNoShow({
-        game,
-        match,
-        winnerColor,
-        winReason,
-      });
-      continue;
-    }
-
-    if (winnerColor === 0 || winnerColor === 1) {
-      await game.endGame(winnerColor, winReason);
-    } else {
-      game.tournamentScoreOutcome = 'double_no_show_loss';
-      await game.endGame(null, winReason);
-    }
-    emitGameChangedForGame(game);
+  for (const match of activeMatchesById.values()) {
+    const playerIds = [toIdString(match.player1), toIdString(match.player2)].filter(Boolean);
+    if (!playerIds.includes(targetUserId)) continue;
+    await completeTournamentMatchByForfeit({
+      tournament,
+      match,
+      forfeitingUserId: targetUserId,
+      winReason,
+    });
   }
 }
 

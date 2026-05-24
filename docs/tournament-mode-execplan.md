@@ -26,8 +26,8 @@ After this change, a user can open the main menu, create or join a tournament, p
 - [x] (2026-03-29 00:20Z) Split tournament bot entrants from canonical difficulty accounts by creating dedicated bot-user instances per entrant, auto-connecting internal bot clients for those instances, and adding regressions for same-difficulty tournament bots.
 - [x] (2026-03-29 01:05Z) Replaced the incorrect fixed-round round-robin implementation with timed rolling pairings that keep free players active until the start window closes, then wait for the last in-flight game before unlocking elimination.
 - [x] (2026-03-29 03:10Z) Corrected tournament follow-through so tournament games inherit ranked clocks, spectator mode follows the current live series game instead of the just-finished one, and bot-controlled tournament series can advance into later games.
-- [ ] Implement true double-elimination bracket execution, not just the persisted `eliminationStyle` setting.
-- [ ] Deepen active-player leave/forfeit handling so future pairings and current matches are auto-resolved rather than lightly detached.
+- [x] (2026-05-24) Deepened active-player leave/forfeit handling so leaving during an active tournament game awards the active match to the opponent in both round robin and elimination.
+- [x] (2026-05-24) Confirmed double-elimination bracket execution is covered by current service tests, including reset finals.
 
 ## Surprises & Discoveries
 
@@ -112,7 +112,7 @@ After this change, a user can open the main menu, create or join a tournament, p
 
 ## Outcomes & Retrospective
 
-This slice delivered the persistent tournament shell, refresh recovery route, seeded participant list, host message editing, host transfer flow, manual elimination start, a live single-elimination bracket viewer, per-entrant tournament bot identities, and now a rolling round-robin scheduler that actually matches the product rules. The biggest remaining gaps are explicit: `eliminationStyle` still persists a future double-elimination intent while the live bracket path is single elimination only, and leaving an active tournament still needs stronger automatic forfeit cleanup.
+This slice delivered the persistent tournament shell, refresh recovery route, seeded participant list, host message editing, host transfer flow, manual elimination start, a live elimination bracket viewer, per-entrant tournament bot identities, and a rolling round-robin scheduler that matches the product rules. Active tournament leaving now marks the player withdrawn, skips them for future pairings, closes the current game as a forfeit, and awards the active match to the opponent.
 
 ## Context and Orientation
 

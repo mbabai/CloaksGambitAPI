@@ -820,6 +820,70 @@ describe('live tournaments service', () => {
     expect(finalMatch.winner.userId).toBe(host.userId);
   });
 
+  test('player leaving during an active round robin game gives the opponent the match win', async () => {
+    const host = { userId: '000000000000000000000635', username: 'HostRoundRobinForfeit', isGuest: false };
+    const opponent = { userId: '000000000000000000000636', username: 'OpponentRoundRobinForfeit', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Round Robin Forfeit Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    await startTournament({ tournamentId: created.id, session: host });
+    const [roundRobinEntry] = await listTournamentGames(created.id);
+    const activeGame = await Game.findById(roundRobinEntry.gameId);
+    const hostColor = activeGame.players.map((id) => String(id)).findIndex((id) => id === host.userId);
+    expect(hostColor).toBeGreaterThanOrEqual(0);
+
+    await leaveTournament({ tournamentId: created.id, session: opponent });
+    await flushAsyncEvents();
+
+    const completedGame = await Game.findById(roundRobinEntry.gameId);
+    const completedMatch = await Match.findById(roundRobinEntry.matchId);
+    const hostScore = String(completedMatch.player1) === host.userId
+      ? completedMatch.player1Score
+      : completedMatch.player2Score;
+
+    expect(completedGame.isActive).toBe(false);
+    expect(completedGame.winner).toBe(hostColor);
+    expect(completedMatch.isActive).toBe(false);
+    expect(String(completedMatch.winner)).toBe(host.userId);
+    expect(hostScore).toBe(1);
+  });
+
+  test('player leaving during an active elimination game gives the opponent the match win', async () => {
+    const host = { userId: '000000000000000000000637', username: 'HostElimForfeit', isGuest: false };
+    const opponent = { userId: '000000000000000000000638', username: 'OpponentElimForfeit', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Elimination Forfeit Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    const started = await startTournament({ tournamentId: created.id, session: host });
+    const matchId = await startTwoPlayerElimination(created, started, host);
+    const { game: activeGame } = await getActiveGameForMatch(matchId);
+    const hostColor = activeGame.players.map((id) => String(id)).findIndex((id) => id === host.userId);
+    expect(hostColor).toBeGreaterThanOrEqual(0);
+
+    await leaveTournament({ tournamentId: created.id, session: opponent });
+    await flushAsyncEvents();
+
+    const completedGame = await Game.findById(activeGame._id);
+    const completedMatch = await Match.findById(matchId);
+    const hostScore = String(completedMatch.player1) === host.userId
+      ? completedMatch.player1Score
+      : completedMatch.player2Score;
+    const activeGames = await Game.find({ match: matchId, isActive: true });
+    const finalState = await getTournamentClientState(created.id, { session: host });
+    const finalMatch = finalState.tournament.bracket.rounds[0].matches[0];
+
+    expect(completedGame.isActive).toBe(false);
+    expect(completedGame.winner).toBe(hostColor);
+    expect(completedMatch.isActive).toBe(false);
+    expect(String(completedMatch.winner)).toBe(host.userId);
+    expect(hostScore).toBe(completedMatch.winScoreTarget);
+    expect(activeGames).toHaveLength(0);
+    expect(finalState.tournament.phase).toBe('completed');
+    expect(finalMatch.winner.userId).toBe(host.userId);
+  });
+
   test('elimination draw cap advances the player with more game wins', async () => {
     const host = { userId: '000000000000000000000535', username: 'HostDrawLeader', isGuest: false };
     const opponent = { userId: '000000000000000000000536', username: 'OpponentDrawLeader', isGuest: false };

@@ -79,6 +79,8 @@ Players:
 - stay attached across refresh
 - use the persistent tournament panel as their default background shell
 - return to the panel between tournament matches
+- forfeit the full active tournament match if they leave after the tournament has started
+- are skipped for future pairings after leaving an active tournament
 
 ### Viewers
 
@@ -102,6 +104,8 @@ If the host leaves an active tournament with remaining members:
 The UI labels this state as `Autopilot`.
 
 If the host leaves a pre-start tournament and nobody remains, the tournament is removed instead of entering autopilot.
+
+If a player leaves during an active tournament game, the current game is closed as a forfeit and the active match is awarded to the opposing player. In elimination, this ends the whole series immediately rather than creating another game.
 
 ## Configuration
 
