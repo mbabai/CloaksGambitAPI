@@ -430,6 +430,32 @@ describe('live tournaments service', () => {
     })).rejects.toThrow(/only host can update/i);
   });
 
+  test('pre-start host leaving closes the tournament and alerts attached users', async () => {
+    const host = { userId: '000000000000000000000303', username: 'HostPreLeave', isGuest: false };
+    const player = { userId: '000000000000000000000304', username: 'PlayerPreLeave', isGuest: false };
+    const viewer = { userId: '000000000000000000000307', username: 'ViewerPreLeave', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Host Left Early Cup' });
+
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: player });
+    await joinTournamentAsViewer({ tournamentId: created.id, session: viewer });
+
+    const afterLeave = await leaveTournament({ tournamentId: created.id, session: host });
+    expect(afterLeave.state).toBe('cancelled');
+    expect(afterLeave.players).toHaveLength(0);
+    expect(afterLeave.viewers).toHaveLength(0);
+
+    const liveRows = await listLiveTournaments();
+    expect(liveRows.some((row) => row.id === created.id)).toBe(false);
+    await expect(getTournamentClientState(created.id, { session: player })).rejects.toThrow(/not found/i);
+    expect(await getCurrentTournamentForSession({ session: player })).toEqual({
+      tournament: null,
+      games: [],
+      role: null,
+    });
+    expect(consumeTournamentAlerts(player.userId).join(' ')).toMatch(/host has left/i);
+    expect(consumeTournamentAlerts(viewer.userId).join(' ')).toMatch(/host has left/i);
+  });
+
   test('viewer disconnect removes viewer membership and emits a tournament update', async () => {
     const host = { userId: '000000000000000000000305', username: 'HostViewer', isGuest: false };
     const viewer = { userId: '000000000000000000000306', username: 'ViewerGone', isGuest: false };
@@ -724,6 +750,76 @@ describe('live tournaments service', () => {
     });
   });
 
+  test('elimination accept double no-show advances the higher seed even when higher seed is black', async () => {
+    const host = { userId: '000000000000000000000631', username: 'HostSeedTimeout', isGuest: false };
+    const opponent = { userId: '000000000000000000000632', username: 'OpponentSeedTimeout', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Seed Timeout Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    const started = await startTournament({ tournamentId: created.id, session: host });
+    const matchId = await startTwoPlayerElimination(created, started, host);
+    const eliminationState = await getTournamentClientState(created.id, { session: host });
+    const higherSeed = eliminationState.tournament.participants.find((entry) => entry.seed === 1);
+    const lowerSeed = eliminationState.tournament.participants.find((entry) => entry.seed === 2);
+    expect(higherSeed).toBeTruthy();
+    expect(lowerSeed).toBeTruthy();
+
+    const [eliminationGameEntry] = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'elimination');
+    const eliminationGame = await Game.findById(eliminationGameEntry.gameId);
+    eliminationGame.players = [lowerSeed.userId, higherSeed.userId];
+    eliminationGame.playersReady = [false, false];
+    await eliminationGame.save();
+
+    const result = await enforceTournamentAcceptTimeoutForGame(eliminationGame._id);
+    await flushAsyncEvents();
+
+    expect(result).toEqual(expect.objectContaining({
+      handled: true,
+      winnerColor: 1,
+    }));
+    const finalMatch = await Match.findById(matchId);
+    expect(String(finalMatch.winner)).toBe(higherSeed.userId);
+    const finalState = await getTournamentClientState(created.id, { session: host });
+    expect(finalState.tournament.phase).toBe('completed');
+  });
+
+  test('withdrawn players remain as no-show placeholders for elimination', async () => {
+    const host = { userId: '000000000000000000000633', username: 'HostNoShow', isGuest: false };
+    const opponent = { userId: '000000000000000000000634', username: 'OpponentNoShow', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'No Show Placeholder Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    const started = await startTournament({ tournamentId: created.id, session: host });
+    const [roundRobinEntry] = await listTournamentGames(created.id);
+    const roundRobinGame = await Game.findById(roundRobinEntry.gameId);
+    const hostColor = roundRobinGame.players.map((id) => String(id)).findIndex((id) => id === host.userId);
+    expect(hostColor).toBeGreaterThanOrEqual(0);
+    await roundRobinGame.endGame(hostColor, WIN_REASONS.RESIGN);
+
+    const deadlineSpy = jest.spyOn(Date, 'now').mockReturnValue(
+      Date.parse(started.startedAt) + (16 * 60 * 1000),
+    );
+    await maybeAdvanceTournamentRoundRobin(created.id);
+    deadlineSpy.mockRestore();
+
+    await leaveTournament({ tournamentId: created.id, session: opponent });
+    expect(await getCurrentTournamentForSession({ session: opponent })).toEqual({
+      tournament: null,
+      games: [],
+      role: null,
+    });
+
+    await startElimination({ tournamentId: created.id, session: host });
+    const finalState = await getTournamentClientState(created.id, { session: host });
+    const finalMatch = finalState.tournament.bracket.rounds[0].matches[0];
+    expect(finalState.tournament.phase).toBe('completed');
+    expect(finalState.tournament.participants.some((entry) => entry.userId === opponent.userId)).toBe(true);
+    expect(finalMatch.playerA?.userId === opponent.userId || finalMatch.playerB?.userId === opponent.userId).toBe(true);
+    expect(finalMatch.winner.userId).toBe(host.userId);
+  });
+
   test('elimination draw cap advances the player with more game wins', async () => {
     const host = { userId: '000000000000000000000535', username: 'HostDrawLeader', isGuest: false };
     const opponent = { userId: '000000000000000000000536', username: 'OpponentDrawLeader', isGuest: false };
@@ -842,6 +938,39 @@ describe('live tournaments service', () => {
     expect(match.playerAScore).toBe(0);
     expect(match.playerBScore).toBe(0);
     expect(match.winScoreTarget).toBe(3);
+  });
+
+  test('double elimination labels the active opening round instead of waiting grand finals', async () => {
+    const host = { userId: '000000000000000000000555', username: 'HostDoubleLabel', isGuest: false };
+    const a = { userId: '000000000000000000000556', username: 'LabelA', isGuest: false };
+    const b = { userId: '000000000000000000000557', username: 'LabelB', isGuest: false };
+    const c = { userId: '000000000000000000000558', username: 'LabelC', isGuest: false };
+    const created = await createTournament({
+      hostSession: host,
+      label: 'Double Label Cup',
+      config: { eliminationStyle: 'double' },
+    });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: a });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: b });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: c });
+
+    const started = await startTournament({ tournamentId: created.id, session: host });
+    const roundRobinGames = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    for (const entry of roundRobinGames) {
+      const rrGame = await Game.findById(entry.gameId);
+      await rrGame.endGame(0, WIN_REASONS.RESIGN);
+    }
+    const deadlineSpy = jest.spyOn(Date, 'now').mockReturnValue(
+      Date.parse(started.startedAt) + (16 * 60 * 1000),
+    );
+    await maybeAdvanceTournamentRoundRobin(created.id);
+    deadlineSpy.mockRestore();
+
+    await startElimination({ tournamentId: created.id, session: host });
+    const eliminationState = await getTournamentClientState(created.id, { session: host });
+    expect(eliminationState.tournament.phase).toBe('elimination');
+    expect(eliminationState.tournament.currentRoundLabel).toBe('Semifinals');
   });
 
   test('tournament does not complete after only one semifinal finishes', async () => {

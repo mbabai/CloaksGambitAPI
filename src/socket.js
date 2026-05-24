@@ -109,8 +109,13 @@ async function resolveTournamentAcceptForfeitColor(game, match, readyFlags, {
   if (matchType !== tournamentMatchTypes.ELIMINATION) {
     return null;
   }
+  const gamePlayers = Array.isArray(game?.players) ? game.players.map((entry) => String(entry)) : [];
+  const fallbackUserId = String(match?.player1 || '');
+  const fallbackColor = gamePlayers.findIndex((entry) => entry === fallbackUserId);
   try {
-    const tournament = await getTournamentDetailsFn(String(match?.tournamentId || ''));
+    const tournament = await getTournamentDetailsFn(String(match?.tournamentId || ''), {
+      accessMode: 'internal',
+    });
     const participants = Array.isArray(tournament?.players) ? tournament.players : [];
     const player1Seed = Number(participants.find((entry) => String(entry?.userId || '') === String(match?.player1 || ''))?.seed || 0);
     const player2Seed = Number(participants.find((entry) => String(entry?.userId || '') === String(match?.player2 || ''))?.seed || 0);
@@ -121,12 +126,20 @@ async function resolveTournamentAcceptForfeitColor(game, match, readyFlags, {
     )
       ? (player1Seed < player2Seed ? String(match.player1) : String(match.player2))
       : String(match?.player1 || '');
-    const gamePlayers = Array.isArray(game?.players) ? game.players.map((entry) => String(entry)) : [];
     const color = gamePlayers.findIndex((entry) => entry === preferredUserId);
-    return color === 0 || color === 1 ? color : 0;
+    return color === 0 || color === 1 ? color : (fallbackColor === 0 || fallbackColor === 1 ? fallbackColor : 0);
   } catch (err) {
     console.error('Error resolving elimination accept forfeit winner:', err);
-    return 0;
+    return fallbackColor === 0 || fallbackColor === 1 ? fallbackColor : 0;
+  }
+}
+
+async function persistCompletedGameIfSupported(GameModel, game) {
+  if (typeof GameModel?._persistDocument !== 'function') return;
+  try {
+    await GameModel._persistDocument(game);
+  } catch (err) {
+    console.error('Error persisting completed tournament accept-timeout game:', err);
   }
 }
 
@@ -192,6 +205,7 @@ async function enforceTournamentAcceptTimeoutForGame(gameId, {
       reason: 'tournament-accept-timeout',
     });
     await game.save();
+    await persistCompletedGameIfSupported(GameModel, game);
     const winScoreTarget = Number.isFinite(Number(match.winScoreTarget)) && Number(match.winScoreTarget) > 0
       ? Number(match.winScoreTarget)
       : 1;

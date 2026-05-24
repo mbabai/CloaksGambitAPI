@@ -7,6 +7,7 @@ const Tournament = require('../../models/Tournament');
 const User = require('../../models/User');
 const getServerConfig = require('../../utils/getServerConfig');
 const { getClockSettingsForMatchType } = require('../../utils/gameModeClock');
+const { finalizeStoredClockState } = require('../../utils/gameClock');
 const ensureUser = require('../../utils/ensureUser');
 const { appendNamedLocalDebugLog } = require('../../utils/localDebugLogger');
 const {
@@ -68,7 +69,9 @@ function isTournamentMember(tournament, userId) {
   const normalized = String(userId || '');
   if (!normalized) return false;
   if (String(tournament?.host?.userId || '') === normalized) return true;
-  if (Array.isArray(tournament?.players) && tournament.players.some((entry) => String(entry.userId || '') === normalized)) return true;
+  if (Array.isArray(tournament?.players) && tournament.players.some((entry) => (
+    String(entry.userId || '') === normalized && !entry.withdrawnAt
+  ))) return true;
   if (Array.isArray(tournament?.viewers) && tournament.viewers.some((entry) => String(entry.userId || '') === normalized)) return true;
   return false;
 }
@@ -78,7 +81,7 @@ function getTournamentMembershipRole(tournament, userId) {
   if (!normalized) return null;
   const isHost = String(tournament?.host?.userId || '') === normalized;
   const isPlayer = Array.isArray(tournament?.players)
-    && tournament.players.some((entry) => String(entry?.userId || '') === normalized);
+    && tournament.players.some((entry) => String(entry?.userId || '') === normalized && !entry?.withdrawnAt);
   const isViewer = Array.isArray(tournament?.viewers)
     && tournament.viewers.some((entry) => String(entry?.userId || '') === normalized);
   if (isHost && isPlayer) return 'host_player';
@@ -426,6 +429,58 @@ function hasPlayerWithId(tournament, userId) {
 
 function getActiveTournamentPlayers(tournament) {
   return (Array.isArray(tournament?.players) ? tournament.players : []).filter((entry) => entry && !entry.withdrawnAt);
+}
+
+function getTournamentPlayerById(tournament, userId) {
+  const normalized = String(userId || '');
+  if (!normalized) return null;
+  return (Array.isArray(tournament?.players) ? tournament.players : [])
+    .find((entry) => String(entry?.userId || '') === normalized) || null;
+}
+
+function isTournamentPlayerWithdrawn(tournament, userId) {
+  return Boolean(getTournamentPlayerById(tournament, userId)?.withdrawnAt);
+}
+
+function pickHigherSeedEntrant(left, right) {
+  const leftSeed = toOptionalFiniteNumber(left?.seed) ?? Number.MAX_SAFE_INTEGER;
+  const rightSeed = toOptionalFiniteNumber(right?.seed) ?? Number.MAX_SAFE_INTEGER;
+  if (leftSeed !== rightSeed) {
+    return leftSeed < rightSeed ? left : right;
+  }
+  return left || right || null;
+}
+
+function resolveNoShowWinnerEntrant(tournament, playerA, playerB) {
+  const hasA = Boolean(playerA?.userId);
+  const hasB = Boolean(playerB?.userId);
+  if (!hasA || !hasB) return null;
+  const playerAWithdrawn = isTournamentPlayerWithdrawn(tournament, playerA.userId);
+  const playerBWithdrawn = isTournamentPlayerWithdrawn(tournament, playerB.userId);
+  if (playerAWithdrawn && !playerBWithdrawn) return playerB;
+  if (playerBWithdrawn && !playerAWithdrawn) return playerA;
+  if (playerAWithdrawn && playerBWithdrawn) {
+    return pickHigherSeedEntrant(playerA, playerB);
+  }
+  return null;
+}
+
+function markTournamentPlayerWithdrawn(tournament, userId, reason = 'left') {
+  const normalized = String(userId || '');
+  const player = getTournamentPlayerById(tournament, normalized);
+  if (!player) return null;
+  if (!player.withdrawnAt) {
+    player.withdrawnAt = nowIso();
+    player.withdrawalReason = reason;
+  }
+  const historical = Array.isArray(tournament?.historicalPlayers)
+    ? tournament.historicalPlayers.find((entry) => String(entry?.userId || '') === normalized)
+    : null;
+  if (historical && !historical.withdrawnAt) {
+    historical.withdrawnAt = player.withdrawnAt;
+    historical.withdrawalReason = reason;
+  }
+  return player;
 }
 
 function getHostTransferCandidates(tournament, currentHostUserId) {
@@ -945,46 +1000,58 @@ async function leaveTournament({ tournamentId, session }) {
   if (canManageTournament(tournament, session.userId)) {
     const hostUserId = String(session.userId || '');
     const hostPlayerIndex = findMemberIndex(tournament.players, hostUserId);
-    if (hostPlayerIndex >= 0) {
-      tournament.players.splice(hostPlayerIndex, 1);
-    }
     const hostViewerIndex = findMemberIndex(tournament.viewers, hostUserId);
     if (hostViewerIndex >= 0) {
       tournament.viewers.splice(hostViewerIndex, 1);
     }
     tournament.host = null;
     if (!hasStarted) {
-      removeHistoricalTournamentPlayer(tournament, hostUserId);
-      if (tournament.players.length === 0 && tournament.viewers.length === 0) {
-        TOURNAMENTS.delete(String(tournament.id));
-        await removeTournamentSnapshot(tournament.id);
-        return {
-          ...cloneTournament(tournament),
-          state: 'cancelled',
-          phase: 'completed',
-          completedAt: nowIso(),
-        };
-      }
-      await persistTournamentSnapshot(tournament);
+      const alertMessage = `Tournament "${tournament.label}" closed because the host has left.`;
+      collectTournamentMemberIds(tournament)
+        .filter((userId) => String(userId || '') !== hostUserId)
+        .forEach((userId) => queueTournamentAlert(userId, alertMessage));
       emitTournamentUpdated(tournament);
-      return cloneTournament(tournament);
+      TOURNAMENTS.delete(String(tournament.id));
+      await removeTournamentSnapshot(tournament.id);
+      return {
+        ...cloneTournament(tournament),
+        state: 'cancelled',
+        phase: 'completed',
+        host: null,
+        players: [],
+        viewers: [],
+        completedAt: nowIso(),
+      };
     }
 
     if (isCompletedTournament) {
+      if (hostPlayerIndex >= 0) {
+        tournament.players.splice(hostPlayerIndex, 1);
+      }
       clearTournamentEliminationBreakTimer(tournament.id);
       await persistTournamentSnapshot(tournament);
       emitTournamentUpdated(tournament);
       return cloneTournament(tournament);
     }
 
+    if (hostPlayerIndex >= 0) {
+      markTournamentPlayerWithdrawn(tournament, hostUserId, 'left');
+      await resolveWithdrawnPlayerActiveGames(tournament, hostUserId);
+    }
     await persistTournamentSnapshot(tournament);
     emitTournamentUpdated(tournament);
     return cloneTournament(tournament);
   }
 
   const playerIndex = findMemberIndex(tournament.players, session.userId);
+  let withdrewActivePlayer = false;
   if (playerIndex >= 0) {
-    tournament.players.splice(playerIndex, 1);
+    if (hasStarted && !isCompletedTournament) {
+      markTournamentPlayerWithdrawn(tournament, session.userId, 'left');
+      withdrewActivePlayer = true;
+    } else {
+      tournament.players.splice(playerIndex, 1);
+    }
   }
 
   const viewerIndex = findMemberIndex(tournament.viewers, session.userId);
@@ -1014,6 +1081,9 @@ async function leaveTournament({ tournamentId, session }) {
     return cloneTournament(tournament);
   }
 
+  if (withdrewActivePlayer) {
+    await resolveWithdrawnPlayerActiveGames(tournament, session.userId);
+  }
   await persistTournamentSnapshot(tournament);
   emitTournamentUpdated(tournament);
   return cloneTournament(tournament);
@@ -1392,6 +1462,111 @@ async function launchRoundRobinPairings(tournament, pairings, gameSettings) {
   return generated;
 }
 
+function emitGameChangedForGame(game) {
+  const gamePayload = typeof game?.toObject === 'function' ? game.toObject() : game;
+  const affectedUsers = Array.isArray(gamePayload?.players)
+    ? gamePayload.players.map((id) => String(id))
+    : [];
+  eventBus.emit('gameChanged', {
+    game: gamePayload,
+    affectedUsers,
+  });
+}
+
+async function persistCompletedGameIfSupported(game) {
+  if (typeof Game?._persistDocument !== 'function') return;
+  try {
+    await Game._persistDocument(game);
+  } catch (err) {
+    console.error('Failed to persist completed tournament no-show game:', err);
+  }
+}
+
+function resolveNoShowWinnerColorForGame(tournament, game) {
+  const playerIds = Array.isArray(game?.players) ? game.players.map((id) => String(id)) : [];
+  if (playerIds.length < 2) return null;
+  const entrants = playerIds.map((id) => getTournamentPlayerById(tournament, id) || { userId: id });
+  const winner = resolveNoShowWinnerEntrant(tournament, entrants[0], entrants[1]);
+  if (!winner?.userId) return null;
+  const winnerColor = playerIds.findIndex((id) => id === String(winner.userId));
+  return winnerColor === 0 || winnerColor === 1 ? winnerColor : null;
+}
+
+async function completeEliminationMatchByNoShow({ game, match, winnerColor, winReason }) {
+  if (!game?.isActive || !match?.isActive) return false;
+  if (winnerColor !== 0 && winnerColor !== 1) return false;
+
+  const winnerUserId = game.players?.[winnerColor]?.toString?.() || game.players?.[winnerColor] || null;
+  if (!winnerUserId) return false;
+
+  game.winner = winnerColor;
+  game.winReason = winReason;
+  game.endTime = new Date();
+  game.isActive = false;
+  game.drawOffer = null;
+  game.drawOfferCooldowns = [null, null];
+  finalizeStoredClockState(game, {
+    now: game.endTime.getTime(),
+    reason: 'tournament-no-show',
+  });
+  await game.save();
+  await persistCompletedGameIfSupported(game);
+
+  const winScoreTarget = Number.isFinite(Number(match.winScoreTarget)) && Number(match.winScoreTarget) > 0
+    ? Number(match.winScoreTarget)
+    : 1;
+  if (String(match.player1 || '') === String(winnerUserId)) {
+    match.player1Score = Math.max(Number(match.player1Score || 0), winScoreTarget);
+  } else if (String(match.player2 || '') === String(winnerUserId)) {
+    match.player2Score = Math.max(Number(match.player2Score || 0), winScoreTarget);
+  }
+
+  await match.endMatch(winnerUserId);
+  emitGameChangedForGame(game);
+  return true;
+}
+
+async function resolveWithdrawnPlayerActiveGames(tournament, userId) {
+  const targetUserId = String(userId || '');
+  if (!targetUserId) return;
+
+  const config = await getServerConfig();
+  const winReason = config?.winReasons?.get
+    ? config.winReasons.get('RESIGN')
+    : 6;
+  const games = await listTournamentGames(tournament.id, { skipLifecycleAdvance: true });
+  const activeEntries = games.filter((entry) => (
+    entry?.status !== 'completed'
+    && Array.isArray(entry?.players)
+    && entry.players.some((player) => String(player?.userId || '') === targetUserId)
+  ));
+
+  for (const entry of activeEntries) {
+    const game = await Game.findById(entry.gameId);
+    const match = await Match.findById(entry.matchId);
+    if (!game?.isActive || !match?.isActive) continue;
+
+    const winnerColor = resolveNoShowWinnerColorForGame(tournament, game);
+    if (entry.phase === 'elimination') {
+      await completeEliminationMatchByNoShow({
+        game,
+        match,
+        winnerColor,
+        winReason,
+      });
+      continue;
+    }
+
+    if (winnerColor === 0 || winnerColor === 1) {
+      await game.endGame(winnerColor, winReason);
+    } else {
+      game.tournamentScoreOutcome = 'double_no_show_loss';
+      await game.endGame(null, winReason);
+    }
+    emitGameChangedForGame(game);
+  }
+}
+
 async function maybeAdvanceTournamentRoundRobin(tournamentId) {
   const id = String(tournamentId || '');
   if (!id) return;
@@ -1751,6 +1926,14 @@ function syncEliminationBracket(tournament) {
     }
 
     if (hasA && hasB) {
+      const noShowWinner = resolveNoShowWinnerEntrant(tournament, match.playerA, match.playerB);
+      if (noShowWinner?.userId) {
+        match.winner = cloneBracketEntrantFromPlayer(noShowWinner);
+        match.status = 'completed';
+        match.matchId = null;
+        match.gameId = null;
+        return;
+      }
       match.status = match.matchId ? 'series' : 'pending';
       return;
     }
@@ -1824,12 +2007,16 @@ function computeTournamentRoundLabel(tournament, bracket) {
   }
   if (tournament?.phase === 'elimination') {
     const rounds = [
-      ...(Array.isArray(bracket?.finalsRounds) ? bracket.finalsRounds.filter((round) => round?.active !== false || round?.matches?.some((match) => match?.winner || match?.playerA || match?.playerB)) : []),
       ...(Array.isArray(bracket?.winnersRounds) ? bracket.winnersRounds : []),
       ...(Array.isArray(bracket?.losersRounds) ? bracket.losersRounds : []),
       ...(!Array.isArray(bracket?.winnersRounds) && Array.isArray(bracket?.rounds) ? bracket.rounds : []),
+      ...(Array.isArray(bracket?.finalsRounds) ? bracket.finalsRounds.filter((round) => round?.active !== false || round?.matches?.some((match) => match?.winner || match?.playerA || match?.playerB)) : []),
     ];
-    const activeRound = rounds.find((round) => (Array.isArray(round.matches) ? round.matches : []).some((match) => match?.status !== 'completed'));
+    const activeRound = rounds.find((round) => (Array.isArray(round.matches) ? round.matches : []).some((match) => {
+      const status = String(match?.status || '').toLowerCase();
+      if (!status || status === 'completed' || status === 'waiting' || status === 'bye') return false;
+      return Boolean(match?.matchId || (match?.playerA?.userId && match?.playerB?.userId));
+    }));
     return activeRound?.label || getRoundLabel(0, rounds.length || 1);
   }
   if (tournament?.phase === 'completed' || tournament?.state === 'completed') {
@@ -2096,7 +2283,7 @@ async function updateTournamentAfterEliminationMatchEnd(tournamentId, matchId) {
 
 async function getTournamentDetails(tournamentId, { session, accessMode = 'member' } = {}) {
   const tournament = await getTournamentOrThrow(tournamentId);
-  if (accessMode === 'admin') {
+  if (accessMode === 'admin' || accessMode === 'internal') {
     return cloneTournament(tournament);
   }
   if (session?.userId && isKickedFromTournament(tournament, session.userId)) {

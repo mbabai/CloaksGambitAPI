@@ -145,9 +145,13 @@ describe('socket tournament accept timeout handling', () => {
     const eventBusRef = {
       emit: jest.fn(),
     };
+    const GameModel = {
+      findById: jest.fn(async () => game),
+      _persistDocument: jest.fn(async () => {}),
+    };
 
     const result = await enforceTournamentAcceptTimeoutForGame('elim-timeout-1', {
-      GameModel: { findById: jest.fn(async () => game) },
+      GameModel,
       MatchModel: { findById: jest.fn(async () => match) },
       eventBusRef,
       getTournamentDetailsFn: jest.fn(async () => ({
@@ -166,5 +170,6 @@ describe('socket tournament accept timeout handling', () => {
     }));
     expect(game.winner).toBe(1);
     expect(match.endMatch).toHaveBeenCalledWith('user-a');
+    expect(GameModel._persistDocument).toHaveBeenCalledWith(game);
   });
 });
