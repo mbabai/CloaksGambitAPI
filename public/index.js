@@ -7,6 +7,7 @@ import { createEloBadge } from '/js/modules/render/eloBadge.js';
 import { PIECE_IMAGES, IDENTITIES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
+import { getVisibleMatchWinCounts } from '/js/modules/utils/matchScores.js';
 import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiEnterTutorial, apiLeaveTutorial, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiAdvanceTutorial, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog, apiGetTournamentHistory } from '/js/modules/api/game.js';
 import { createLocalGameLogger } from '/js/modules/debug/localGameLogger.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
@@ -4703,10 +4704,9 @@ logBootConstantsOnce();
             if (match?._id) {
               activeMatchId = String(match._id);
             }
-            const updatedElos = syncPlayerElosFromMatch(match);
-            if (updatedElos) {
-              renderBoardAndBars();
-            }
+            syncPlayerElosFromMatch(match);
+            currentMatch = match;
+            renderBoardAndBars();
             showGameFinishedBanner({
               gameId: payload?.gameId || finishSnapshot?._id || lastGameId || null,
               winnerName,
@@ -8067,43 +8067,16 @@ logBootConstantsOnce();
       : '';
     const isRankedMatch = matchType === 'RANKED';
     const hasSeriesWins = isRankedMatch || matchType === 'TOURNAMENT_ELIMINATION';
-    const p1Score = currentMatch?.player1Score || 0;
-    const p2Score = currentMatch?.player2Score || 0;
     let winsTop = 0;
     let winsBottom = 0;
     if (hasSeriesWins) {
-      const toIdString = (value) => {
-        if (!value) return '';
-        if (typeof value === 'string' || typeof value === 'number') {
-          return String(value);
-        }
-        if (typeof value === 'object') {
-          if (value._id !== undefined) {
-            return toIdString(value._id);
-          }
-          if (typeof value.toHexString === 'function') {
-            return value.toHexString();
-          }
-          if (typeof value.toString === 'function') {
-            const str = value.toString();
-            return str === '[object Object]' ? '' : str;
-          }
-        }
-        return '';
-      };
-
-      const matchPlayer1IdStr = toIdString(currentMatch?.player1?._id ?? currentMatch?.player1);
-      const matchPlayer2IdStr = toIdString(currentMatch?.player2?._id ?? currentMatch?.player2);
-      const resolveWins = (playerId) => {
-        const idStr = toIdString(playerId);
-        if (!idStr) return 0;
-        if (matchPlayer1IdStr && idStr === matchPlayer1IdStr) return p1Score;
-        if (matchPlayer2IdStr && idStr === matchPlayer2IdStr) return p2Score;
-        return 0;
-      };
-
-      winsTop = resolveWins(currentPlayerIds?.[topIdx]);
-      winsBottom = resolveWins(currentPlayerIds?.[bottomIdx]);
+      const visibleWins = getVisibleMatchWinCounts({
+        match: currentMatch,
+        currentPlayerIds,
+        currentIsWhite,
+      });
+      winsTop = visibleWins.winsTop;
+      winsBottom = visibleWins.winsBottom;
     }
     const topPlayerId = currentPlayerIds[topIdx];
     const bottomPlayerId = currentPlayerIds[bottomIdx];
