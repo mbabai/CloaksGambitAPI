@@ -29,9 +29,14 @@ const tournamentSchema = new mongoose.Schema({
   },
   config: {
     roundRobinMinutes: { type: Number, min: 1, max: 30, default: 15 },
+    timeControlMinutes: { type: Number, min: 1, max: 30, default: 3 },
+    incrementSeconds: { type: Number, min: 0, max: 60, default: 3 },
+    roundRobinAcceptSeconds: { type: Number, min: 5, max: 600, default: 30 },
+    eliminationAcceptSeconds: { type: Number, min: 5, max: 600, default: 120 },
     breakMinutes: { type: Number, min: 0, max: 30, default: 5 },
     eliminationStyle: { type: String, enum: ['single', 'double'], default: 'single' },
     victoryPoints: { type: Number, enum: [3, 4, 5], default: 3 },
+    lateJoinRoundRobin: { type: Boolean, default: false },
   },
   players: {
     type: [mongoose.Schema.Types.Mixed],
@@ -66,6 +71,10 @@ const tournamentSchema = new mongoose.Schema({
     default: null,
   },
   roundRobinCompletedAt: {
+    type: Date,
+    default: null,
+  },
+  roundRobinClosedAt: {
     type: Date,
     default: null,
   },

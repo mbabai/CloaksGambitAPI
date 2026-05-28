@@ -324,9 +324,11 @@ export function createOverlay({
       try { options.onShow(api); } catch (_) {}
     }
 
-    setTimeout(() => {
-      focusFirstAvailable(options.initialFocus);
-    }, 0);
+    if (options.focus !== false) {
+      setTimeout(() => {
+        focusFirstAvailable(options.initialFocus);
+      }, 0);
+    }
   }
 
   function hide({ restoreFocus = true, reason } = {}) {

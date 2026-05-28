@@ -21,6 +21,7 @@ function createAuthToken(user) {
     username: user.username || null,
     email: user.email || '',
     isGuest: Boolean(user.isGuest),
+    hasUpdatedUsername: Boolean(user.hasUpdatedUsername),
   };
   return jwt.sign(payload, getJwtSecret(), { expiresIn: '365d' });
 }
@@ -89,12 +90,14 @@ async function resolveUserFromToken(token) {
   const userId = user._id.toString();
   const username = user.username || 'Anonymous';
   const isGuest = Boolean(user.isGuest);
+  const hasUpdatedUsername = Boolean(user.hasUpdatedUsername);
 
   return {
     userId,
     username,
     email: user.email || '',
     isGuest,
+    hasUpdatedUsername,
     user,
   };
 }

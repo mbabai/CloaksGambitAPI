@@ -23,6 +23,15 @@ describe('tournament accept window helpers', () => {
     expect(getTournamentAcceptWindowSeconds(match, true)).toBe(120);
   });
 
+  test('uses a match-specific accept window when provided', () => {
+    const match = {
+      type: 'TOURNAMENT_ROUND_ROBIN',
+      acceptWindowSeconds: 45,
+    };
+
+    expect(getTournamentAcceptWindowSeconds(match, true)).toBe(45);
+  });
+
   test('does not require accept after an elimination series has started', () => {
     const match = {
       type: 'TOURNAMENT_ELIMINATION',

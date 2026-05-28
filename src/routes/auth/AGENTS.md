@@ -35,7 +35,8 @@
 - Queue and socket guest flows now reuse the same request/session helper rather than accepting body or handshake `userId` values.
 
 ## Frontend Contract
-- The browser expects `/session` to return `userId`, `username`, `isGuest`, and `authenticated`.
+- The browser expects `/session` to return `userId`, `username`, `isGuest`, `authenticated`, and `hasUpdatedUsername`.
+- First-time authenticated users are prompted client-side until `PATCH /api/v1/users/update` saves a username and refreshes the auth cookies.
 - Login/logout should keep the browser's session bootstrap working in `public/index.js`, but there is no longer any supported browser-side token mirroring contract.
 
 ## Required Test Coverage

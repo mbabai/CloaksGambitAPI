@@ -6,6 +6,48 @@ const { buildClockPayload } = require('./gameClock');
 const constants = require('../../shared/constants/game.json');
 
 const DEFAULT_ELO = 800;
+const SPECTATE_GAME_END_FREEZE_MS = 5000;
+const SPECTATE_FREEZE_MATCH_TYPES = new Set(['RANKED', 'TOURNAMENT_ELIMINATION']);
+
+function normalizeMatchType(match) {
+  return typeof match?.type === 'string' ? match.type.trim().toUpperCase() : '';
+}
+
+function isSpectateGameEndFreezeMatch(match) {
+  return SPECTATE_FREEZE_MATCH_TYPES.has(normalizeMatchType(match));
+}
+
+function toTimeMs(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function getSpectateGameEndFreezeRemainingMs(game, match, now = Date.now()) {
+  if (!game || game.isActive !== false || !isSpectateGameEndFreezeMatch(match)) {
+    return 0;
+  }
+  const endMs = toTimeMs(game.endTime);
+  if (!Number.isFinite(endMs)) {
+    return 0;
+  }
+  return Math.max(0, SPECTATE_GAME_END_FREEZE_MS - Math.max(0, Number(now) - endMs));
+}
+
+function selectSpectateGame({ match, activeGame, finishedGame, fallbackGame = null, now = Date.now() } = {}) {
+  if (
+    activeGame
+    && finishedGame
+    && getSpectateGameEndFreezeRemainingMs(finishedGame, match, now) > 0
+  ) {
+    return finishedGame;
+  }
+  return activeGame || finishedGame || fallbackGame || null;
+}
 
 async function buildSpectateSnapshot(matchId) {
   if (!matchId) return null;
@@ -22,7 +64,7 @@ async function buildSpectateSnapshot(matchId) {
       .lean(),
   ]);
 
-  let latestGame = activeGame || finishedGame || null;
+  let latestGame = selectSpectateGame({ match, activeGame, finishedGame });
 
   if (!latestGame) {
     latestGame = await Game.findOne({ match: normalizedId })
@@ -119,4 +161,8 @@ async function buildSpectateSnapshot(matchId) {
 
 module.exports = {
   buildSpectateSnapshot,
+  getSpectateGameEndFreezeRemainingMs,
+  isSpectateGameEndFreezeMatch,
+  selectSpectateGame,
+  SPECTATE_GAME_END_FREEZE_MS,
 };

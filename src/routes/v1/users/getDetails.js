@@ -56,6 +56,7 @@ router.post('/', async (req, res) => {
       elo: Number.isFinite(user.elo) ? user.elo : DEFAULT_ELO,
       isBot: Boolean(user.isBot),
       isGuest: Boolean(user.isGuest),
+      ...(adminSession || isSelf ? { hasUpdatedUsername: Boolean(user.hasUpdatedUsername) } : {}),
       tooltipsEnabled: resolveTooltipsEnabled(user),
       toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
       animationSpeed: resolveAnimationSpeed(user),

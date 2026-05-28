@@ -2,6 +2,7 @@ const express = require('express');
 const request = require('supertest');
 
 jest.mock('../src/utils/requestSession', () => ({
+  applyGuestCookies: jest.fn(),
   resolveSessionFromRequest: jest.fn(),
 }));
 jest.mock('../src/utils/adminAccess', () => ({
@@ -37,7 +38,7 @@ jest.mock('../src/services/bots/registry', () => ({
   }),
 }));
 
-const { resolveSessionFromRequest } = require('../src/utils/requestSession');
+const { applyGuestCookies, resolveSessionFromRequest } = require('../src/utils/requestSession');
 const { ensureAdminRequest } = require('../src/utils/adminAccess');
 const tournamentsRouter = require('../src/routes/v1/tournaments');
 const { resetForTests } = require('../src/services/tournaments/liveTournaments');
@@ -53,6 +54,7 @@ describe('tournaments routes', () => {
   beforeEach(() => {
     resetForTests();
     resolveSessionFromRequest.mockReset();
+    applyGuestCookies.mockReset();
     ensureAdminRequest.mockReset();
     ensureAdminRequest.mockResolvedValue({ userId: 'admin-user', authenticated: true, isGuest: false });
   });
@@ -69,7 +71,7 @@ describe('tournaments routes', () => {
     const app = createApp();
     const createRes = await request(app)
       .post('/api/v1/tournaments/create')
-      .send({ label: 'Guest Cup' });
+      .send({ label: 'Guest Cup', config: { lateJoinRoundRobin: true } });
 
     expect(createRes.status).toBe(200);
     expect(createRes.body.testModeEnabled).toBe(true);
@@ -77,6 +79,30 @@ describe('tournaments routes', () => {
       username: 'GuestOne',
       isGuest: true,
     });
+    expect(createRes.body.tournament.config.lateJoinRoundRobin).toBe(true);
+    expect(applyGuestCookies).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ userId: 'guest-1', isGuest: true }),
+    );
+  });
+
+  test('authenticated tournament participation does not rewrite guest cookies', async () => {
+    process.env.NODE_ENV = 'development';
+    resolveSessionFromRequest.mockResolvedValue({
+      userId: 'auth-1',
+      username: 'AuthOne',
+      isGuest: false,
+      authenticated: true,
+    });
+
+    const app = createApp();
+    const createRes = await request(app)
+      .post('/api/v1/tournaments/create')
+      .send({ label: 'Auth Cup' });
+
+    expect(createRes.status).toBe(200);
+    expect(applyGuestCookies).not.toHaveBeenCalled();
   });
 
   test('production blocks guest participation', async () => {
@@ -169,7 +195,7 @@ describe('tournaments routes', () => {
     expect(joinRes.status).toBe(401);
   });
 
-  test('details requires membership before loading', async () => {
+  test('details lets non-participants open a live tournament as viewer', async () => {
     process.env.NODE_ENV = 'development';
     const app = createApp();
 
@@ -193,8 +219,9 @@ describe('tournaments routes', () => {
       .post('/api/v1/tournaments/details')
       .send({ tournamentId: createRes.body.tournament.id });
 
-    expect(detailsRes.status).toBe(403);
-    expect(detailsRes.body.message).toMatch(/must join/i);
+    expect(detailsRes.status).toBe(200);
+    expect(detailsRes.body.tournament.id).toBe(createRes.body.tournament.id);
+    expect(detailsRes.body.role).toBe('viewer');
   });
 
   test('current route restores the joined tournament for refresh flows', async () => {

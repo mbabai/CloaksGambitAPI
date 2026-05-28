@@ -1,6 +1,7 @@
 export const TOOLTIP_TEXT = Object.freeze({
   daggerToken: 'This is a "strike" for bluffing a piece or challenging a Poison that was a real Poison. If you get 3 you lose!',
   bombButton: 'Declare that your piece is Poison. If they believe you, you keep your piece and they lose their attacker. If they challenge, lose your Poison and get a dagger token. 3 dagger tokens and you lose!',
+  bombButtonHeartBlocked: 'You cannot declare bomb against a heart declaration.',
   challengeButton: 'Call your opponent\'s bluff. If you\'re right, they lose that piece (and get a dagger token if it was Poison). If you\'re wrong, get a dagger token. 3 dagger tokens and you lose!',
   challengeBubble: 'The Challenge action. If the last move was a bluff, that piece is removed. If it was NOT a bluff, then gain a dagger token (3 dagger tokens and you lose).',
   passButton: 'You believe that piece really is Poison. You lose your attacking piece, and your opponent takes their turn.',

@@ -15,6 +15,11 @@ function normalizeRemainingSeconds(value, fallback = DEFAULT_ACCEPT_WINDOW_SECON
   return Math.max(1, Math.ceil(normalized));
 }
 
+function normalizeDeadlineMs(value) {
+  const parsed = Date.parse(value || '');
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /**
  * Owns the client-side delay between "match complete" and the next
  * tournament accept banner. The server still decides whether a game requires
@@ -24,6 +29,7 @@ function normalizeRemainingSeconds(value, fallback = DEFAULT_ACCEPT_WINDOW_SECON
 export function createTournamentAcceptScheduler({
   showAcceptBanner,
   isLocallyAccepted = () => false,
+  isAcceptBannerShowing = () => false,
   onDebug = null,
   now = () => Date.now(),
   setTimeoutFn = (handler, delayMs) => window.setTimeout(handler, delayMs),
@@ -38,6 +44,7 @@ export function createTournamentAcceptScheduler({
   let pendingBanner = null;
   let pendingTimeout = null;
   let graceDeadlineMs = 0;
+  let lastShownBannerKey = null;
 
   const debug = (event, payload = {}) => {
     if (typeof onDebug === 'function') {
@@ -45,13 +52,18 @@ export function createTournamentAcceptScheduler({
     }
   };
 
-  function rememberDeadline(gameId, startSeconds = DEFAULT_ACCEPT_WINDOW_SECONDS) {
+  function rememberDeadline(gameId, startSeconds = DEFAULT_ACCEPT_WINDOW_SECONDS, { deadlineAt = null, replace = false } = {}) {
     const normalizedGameId = normalizeGameId(gameId);
     if (!normalizedGameId) return null;
+    const explicitDeadline = normalizeDeadlineMs(deadlineAt);
     const durationMs = normalizeRemainingSeconds(startSeconds) * 1000;
-    const candidateDeadline = now() + durationMs;
+    const candidateDeadline = Number.isFinite(explicitDeadline)
+      ? explicitDeadline
+      : now() + durationMs;
     const existingDeadline = acceptDeadlineByGameId.get(normalizedGameId);
-    const resolvedDeadline = Number.isFinite(existingDeadline)
+    const resolvedDeadline = replace
+      ? candidateDeadline
+      : Number.isFinite(existingDeadline)
       ? Math.min(existingDeadline, candidateDeadline)
       : candidateDeadline;
     acceptDeadlineByGameId.set(normalizedGameId, resolvedDeadline);
@@ -62,6 +74,9 @@ export function createTournamentAcceptScheduler({
     const normalizedGameId = normalizeGameId(gameId);
     if (!normalizedGameId) return;
     acceptDeadlineByGameId.delete(normalizedGameId);
+    if (lastShownBannerKey && lastShownBannerKey.startsWith(`${normalizedGameId}:`)) {
+      lastShownBannerKey = null;
+    }
   }
 
   function getRemainingSeconds(gameId, fallbackSeconds = DEFAULT_ACCEPT_WINDOW_SECONDS) {
@@ -88,7 +103,40 @@ export function createTournamentAcceptScheduler({
     if (!preserveDeadline && pendingBanner?.gameId) {
       forgetDeadline(pendingBanner.gameId);
     }
+    if (!preserveDeadline) {
+      lastShownBannerKey = null;
+    }
     pendingBanner = null;
+  }
+
+  function getBannerKey(gameId, color) {
+    const deadline = acceptDeadlineByGameId.get(gameId);
+    return [
+      gameId,
+      color,
+      Number.isFinite(deadline) ? Math.round(deadline) : '',
+    ].join(':');
+  }
+
+  function isCurrentBannerShowing(gameId, color) {
+    try {
+      return Boolean(isAcceptBannerShowing({
+        gameId,
+        color,
+        deadlineMs: acceptDeadlineByGameId.get(gameId),
+      }));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function shouldSkipRepeatedShow(gameId, color) {
+    return lastShownBannerKey === getBannerKey(gameId, color)
+      && isCurrentBannerShowing(gameId, color);
+  }
+
+  function markBannerShown(gameId, color) {
+    lastShownBannerKey = getBannerKey(gameId, color);
   }
 
   function setGrace(delayMs = graceMs) {
@@ -120,6 +168,10 @@ export function createTournamentAcceptScheduler({
       forceImmediate: Boolean(forceImmediate),
       remainingSeconds,
     });
+    if (shouldSkipRepeatedShow(nextBanner.gameId, nextBanner.color)) {
+      return true;
+    }
+    markBannerShown(nextBanner.gameId, nextBanner.color);
     showAcceptBanner({
       gameId: nextBanner.gameId,
       color: nextBanner.color,
@@ -128,7 +180,13 @@ export function createTournamentAcceptScheduler({
     return true;
   }
 
-  function queue({ gameId, color, startSeconds = DEFAULT_ACCEPT_WINDOW_SECONDS } = {}) {
+  function queue({
+    gameId,
+    color,
+    startSeconds = DEFAULT_ACCEPT_WINDOW_SECONDS,
+    acceptDeadlineAt = null,
+    replaceDeadline = false,
+  } = {}) {
     const normalizedGameId = normalizeGameId(gameId);
     if (!normalizedGameId || !Number.isInteger(color)) {
       return false;
@@ -137,7 +195,10 @@ export function createTournamentAcceptScheduler({
       return false;
     }
 
-    rememberDeadline(normalizedGameId, startSeconds);
+    rememberDeadline(normalizedGameId, startSeconds, {
+      deadlineAt: acceptDeadlineAt,
+      replace: Boolean(replaceDeadline || acceptDeadlineAt),
+    });
     const remainingSeconds = getRemainingSeconds(normalizedGameId, startSeconds);
     if (remainingSeconds <= 0) {
       forgetDeadline(normalizedGameId);
@@ -147,11 +208,15 @@ export function createTournamentAcceptScheduler({
     const remainingGraceMs = Math.max(0, graceDeadlineMs - now());
     if (remainingGraceMs <= 0) {
       clearPending({ preserveDeadline: true });
+      if (shouldSkipRepeatedShow(normalizedGameId, color)) {
+        return true;
+      }
       debug('client-tournament-accept-immediate', {
         gameId: normalizedGameId,
         color,
         remainingSeconds,
       });
+      markBannerShown(normalizedGameId, color);
       showAcceptBanner({
         gameId: normalizedGameId,
         color,
@@ -185,6 +250,7 @@ export function createTournamentAcceptScheduler({
     clearPending({ preserveDeadline: false });
     releaseGrace();
     acceptDeadlineByGameId.clear();
+    lastShownBannerKey = null;
   }
 
   return {

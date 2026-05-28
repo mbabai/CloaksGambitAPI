@@ -194,6 +194,7 @@ const getServerConfig = require('./utils/getServerConfig');
 const { startInternalBots } = require('./services/bots/internalBots');
 const { startGuestCleanupTask } = require('./services/guestCleanup');
 const { ensureAdminRequest } = require('./utils/adminAccess');
+const { backfillMissingUsernameUpdatedFlags } = require('./utils/usernameFlags');
 
 // Middleware
 app.use(cors({
@@ -417,6 +418,18 @@ async function startServer() {
   const connected = await connectToDatabase();
 
   if (connected) {
+    try {
+      const result = await backfillMissingUsernameUpdatedFlags();
+      if (result.modifiedCount > 0) {
+        console.log(`Backfilled username update flags for ${result.modifiedCount} user(s)`);
+      }
+    } catch (err) {
+      console.error('Failed to backfill username update flags:', err);
+      if (isProduction) {
+        process.exit(1);
+      }
+    }
+
     try {
       await getServerConfig.initServerConfig();
       console.log('Loaded server configuration into memory');

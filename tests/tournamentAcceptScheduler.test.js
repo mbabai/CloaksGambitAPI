@@ -116,4 +116,94 @@ describe('tournament accept scheduler', () => {
     expect(scheduler.getRemainingSeconds('game-4', 30)).toBe(28);
     expect(shown).toEqual([]);
   });
+
+  test('replaces the deadline when the server sends an explicit extension', () => {
+    let nowMs = 1000;
+    const shown = [];
+    const scheduler = createTournamentAcceptScheduler({
+      showAcceptBanner: (payload) => shown.push(payload),
+      now: () => nowMs,
+    });
+
+    scheduler.queue({ gameId: 'game-5', color: 0, startSeconds: 30 });
+    nowMs = 11000;
+    scheduler.queue({
+      gameId: 'game-5',
+      color: 0,
+      startSeconds: 50,
+      acceptDeadlineAt: new Date(nowMs + 50000).toISOString(),
+    });
+
+    expect(scheduler.getRemainingSeconds('game-5', 30)).toBe(50);
+    expect(shown[shown.length - 1]).toEqual({ gameId: 'game-5', color: 0, startSeconds: 50 });
+  });
+
+  test('does not reshow an already visible banner for the same deadline', () => {
+    let nowMs = 1000;
+    let showing = false;
+    const shown = [];
+    const debugEvents = [];
+    const deadlineAt = new Date(nowMs + 30000).toISOString();
+    const scheduler = createTournamentAcceptScheduler({
+      showAcceptBanner: (payload) => {
+        showing = true;
+        shown.push(payload);
+      },
+      isAcceptBannerShowing: ({ gameId }) => showing && gameId === 'game-6',
+      onDebug: (event) => debugEvents.push(event),
+      now: () => nowMs,
+    });
+
+    scheduler.queue({
+      gameId: 'game-6',
+      color: 1,
+      startSeconds: 30,
+      acceptDeadlineAt: deadlineAt,
+    });
+    nowMs = 1500;
+    scheduler.queue({
+      gameId: 'game-6',
+      color: 1,
+      startSeconds: 30,
+      acceptDeadlineAt: deadlineAt,
+    });
+
+    expect(shown).toEqual([
+      { gameId: 'game-6', color: 1, startSeconds: 30 },
+    ]);
+    expect(debugEvents.filter((event) => event === 'client-tournament-accept-immediate')).toHaveLength(1);
+  });
+
+  test('reshows an already visible banner when the deadline changes', () => {
+    let nowMs = 1000;
+    let showing = false;
+    const shown = [];
+    const scheduler = createTournamentAcceptScheduler({
+      showAcceptBanner: (payload) => {
+        showing = true;
+        shown.push(payload);
+      },
+      isAcceptBannerShowing: ({ gameId }) => showing && gameId === 'game-7',
+      now: () => nowMs,
+    });
+
+    scheduler.queue({
+      gameId: 'game-7',
+      color: 0,
+      startSeconds: 30,
+      acceptDeadlineAt: new Date(nowMs + 30000).toISOString(),
+    });
+    nowMs = 2000;
+    scheduler.queue({
+      gameId: 'game-7',
+      color: 0,
+      startSeconds: 60,
+      acceptDeadlineAt: new Date(nowMs + 60000).toISOString(),
+    });
+
+    expect(shown).toEqual([
+      { gameId: 'game-7', color: 0, startSeconds: 30 },
+      { gameId: 'game-7', color: 0, startSeconds: 60 },
+    ]);
+  });
 });

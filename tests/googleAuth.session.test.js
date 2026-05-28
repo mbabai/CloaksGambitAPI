@@ -116,6 +116,7 @@ describe('google auth session route', () => {
       animationSpeed: 'fast',
       audioVolume: 0.45,
       gameStartAlertVolume: 0.8,
+      hasUpdatedUsername: false,
     });
     expect(response.cookies.some((cookie) => cookie.name === 'cgToken' && cookie.value === 'dev-token')).toBe(true);
   });
@@ -156,6 +157,7 @@ describe('google auth session route', () => {
       animationSpeed: 'slow',
       audioVolume: 0.5,
       gameStartAlertVolume: 0.5,
+      hasUpdatedUsername: false,
     });
     expect(response.cookies.some((cookie) => cookie.name === 'cgToken' && cookie.value === 'dev-token')).toBe(true);
   });

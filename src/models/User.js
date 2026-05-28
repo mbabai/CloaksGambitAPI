@@ -38,6 +38,10 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  hasUpdatedUsername: {
+    type: Boolean,
+    default: false,
+  },
   tooltipsEnabled: {
     type: Boolean,
     default: true,

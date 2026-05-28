@@ -17,6 +17,7 @@
   - the Mongoose schema
   - the in-memory document constructor
   - the persistence preparation path
+- Tournament accept countdown fields follow the same rule: `Game.acceptDeadlineAt` and `Match.acceptWindowSeconds` must exist in both the Mongoose schema and in-memory document wrappers.
 - `updateMatchAfterGame()` increments match scores, handles draws, and creates the next game in the match with player colors swapped.
 - `endGame()` also finalizes stored clock state before persisting.
 
@@ -24,6 +25,7 @@
 - `Match.endMatch()` updates ranked Elo with K-factor 32 and writes the result back to the user records.
 - Ending a match also emits `match:ended` and removes players from the in-game lobby set.
 - Like `Game`, the in-memory `MatchDocument` and the Mongoose schema have to stay in lockstep for new fields.
+- Tournament snapshots now persist expanded config fields (`timeControlMinutes`, `incrementSeconds`, accept windows, and `lateJoinRoundRobin`) plus `roundRobinClosedAt`; keep `Tournament.js` and service normalization aligned.
 
 ## Query Behavior
 - Active queries are usually served from the in-memory store.

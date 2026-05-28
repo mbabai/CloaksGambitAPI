@@ -50,11 +50,13 @@ const {
   kickTournamentPlayer,
   reallowTournamentPlayer,
   startTournament,
+  endTournamentRoundRobin,
   maybeAdvanceTournamentRoundRobin,
   maybeAdvanceTournamentEliminationBreak,
   startElimination,
   transferTournamentHost,
   updateTournamentMessage,
+  extendTournamentAcceptWindow,
   getCurrentTournamentForSession,
   getTournamentClientState,
   listTournamentGames,
@@ -63,8 +65,10 @@ const {
   consumeTournamentAlerts,
 } = require('../src/services/tournaments/liveTournaments');
 const eventBus = require('../src/eventBus');
+const mongoose = require('mongoose');
 const Game = require('../src/models/Game');
 const Match = require('../src/models/Match');
+const User = require('../src/models/User');
 const { enforceTournamentAcceptTimeoutForGame } = initSocket._private;
 const {
   winReasons: WIN_REASONS,
@@ -184,6 +188,10 @@ describe('live tournaments service', () => {
       session: host,
       config: {
         roundRobinMinutes: 22,
+        timeControlMinutes: 4,
+        incrementSeconds: 5,
+        roundRobinAcceptSeconds: 45,
+        eliminationAcceptSeconds: 150,
         breakMinutes: 7,
         eliminationStyle: 'double',
         victoryPoints: 5,
@@ -192,9 +200,14 @@ describe('live tournaments service', () => {
 
     expect(updated.config).toEqual({
       roundRobinMinutes: 22,
+      timeControlMinutes: 4,
+      incrementSeconds: 5,
+      roundRobinAcceptSeconds: 45,
+      eliminationAcceptSeconds: 150,
       breakMinutes: 7,
       eliminationStyle: 'double',
       victoryPoints: 5,
+      lateJoinRoundRobin: false,
     });
 
     await startTournament({ tournamentId: created.id, session: host });
@@ -204,6 +217,10 @@ describe('live tournaments service', () => {
       session: host,
       config: {
         roundRobinMinutes: 10,
+        timeControlMinutes: 8,
+        incrementSeconds: 9,
+        roundRobinAcceptSeconds: 60,
+        eliminationAcceptSeconds: 180,
         breakMinutes: 3,
         eliminationStyle: 'single',
         victoryPoints: 3,
@@ -212,10 +229,184 @@ describe('live tournaments service', () => {
 
     expect(breakOnlyUpdated.config).toEqual({
       roundRobinMinutes: 22,
+      timeControlMinutes: 4,
+      incrementSeconds: 5,
+      roundRobinAcceptSeconds: 45,
+      eliminationAcceptSeconds: 150,
       breakMinutes: 3,
       eliminationStyle: 'double',
       victoryPoints: 5,
+      lateJoinRoundRobin: false,
     });
+  });
+
+  test('players cannot late join round robin when the setting is off', async () => {
+    const host = { userId: '000000000000000000000251', username: 'NoLateHost', isGuest: false };
+    const opponent = { userId: '000000000000000000000252', username: 'NoLateOpponent', isGuest: false };
+    const latePlayer = { userId: '000000000000000000000253', username: 'NoLatePlayer', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'No Late Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    await startTournament({ tournamentId: created.id, session: host });
+
+    await expect(joinTournamentAsPlayer({
+      tournamentId: created.id,
+      session: latePlayer,
+    })).rejects.toThrow(/late joining is enabled/i);
+  });
+
+  test('late round-robin joiners enter the rolling pairing pool when enabled', async () => {
+    const host = { userId: '000000000000000000000254', username: 'LateHost', isGuest: false };
+    const first = { userId: '000000000000000000000255', username: 'LateFirst', isGuest: false };
+    const idle = { userId: '000000000000000000000256', username: 'LateIdle', isGuest: false };
+    const latePlayer = { userId: '000000000000000000000257', username: 'LateArrival', isGuest: false };
+    const created = await createTournament({
+      hostSession: host,
+      label: 'Late Join Cup',
+      config: { lateJoinRoundRobin: true },
+    });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: first });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: idle });
+
+    await startTournament({ tournamentId: created.id, session: host });
+    const firstWave = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    expect(firstWave).toHaveLength(1);
+
+    const afterLateJoin = await joinTournamentAsPlayer({
+      tournamentId: created.id,
+      session: latePlayer,
+    });
+    expect(afterLateJoin.players.some((entry) => entry.userId === latePlayer.userId)).toBe(true);
+
+    const games = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    expect(games).toHaveLength(2);
+    expect(games.some((entry) => (
+      entry.players.some((player) => player.userId === idle.userId)
+      && entry.players.some((player) => player.userId === latePlayer.userId)
+    ))).toBe(true);
+  });
+
+  test('break-time late joiners use normal seed rules with zero round-robin score', async () => {
+    const originalReadyState = mongoose.connection.readyState;
+    const host = { userId: '000000000000000000000258', username: 'BreakHost', isGuest: false };
+    const opponent = { userId: '000000000000000000000259', username: 'BreakOpponent', isGuest: false };
+    const lateOne = { userId: '000000000000000000000260', username: 'BreakLateOne', isGuest: false };
+    const lateTwo = { userId: '000000000000000000000261', username: 'BreakLateTwo', isGuest: false };
+    mongoose.connection.readyState = 1;
+    jest.spyOn(User, 'findById').mockImplementation((id) => ({
+      lean: jest.fn(async () => ({
+        _id: id,
+        elo: {
+          [host.userId]: 900,
+          [opponent.userId]: 700,
+          [lateOne.userId]: 1000,
+          [lateTwo.userId]: 600,
+        }[String(id)] || 800,
+      })),
+    }));
+    jest.spyOn(Game, '_persistDocument').mockResolvedValue(undefined);
+    jest.spyOn(Match, '_persistDocument').mockResolvedValue(undefined);
+    const created = await createTournament({
+      hostSession: host,
+      label: 'Break Late Cup',
+      config: { lateJoinRoundRobin: true },
+    });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    const started = await startTournament({ tournamentId: created.id, session: host });
+    const roundRobinGames = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    const roundRobinWinnerId = roundRobinGames[0].players[0].userId;
+    const roundRobinLoserId = roundRobinGames[0].players[1].userId;
+    const rrGame = await Game.findById(roundRobinGames[0].gameId);
+    await rrGame.endGame(0, WIN_REASONS.RESIGN);
+
+    const breakNow = Date.parse(started.startedAt) + (16 * 60 * 1000);
+    const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(breakNow);
+    await maybeAdvanceTournamentRoundRobin(created.id);
+    dateSpy.mockReturnValue(breakNow + 1000);
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: lateOne });
+    dateSpy.mockReturnValue(breakNow + 2000);
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: lateTwo });
+    mongoose.connection.readyState = originalReadyState;
+
+    const breakState = await getTournamentClientState(created.id, { session: host });
+    const seedByUserId = new Map(breakState.tournament.participants.map((entry) => [entry.userId, entry.seed]));
+    expect(breakState.tournament.phase).toBe('round_robin_complete');
+    expect(seedByUserId.get(roundRobinWinnerId)).toBe(1);
+    expect(seedByUserId.get(lateOne.userId)).toBe(2);
+    expect(seedByUserId.get(lateTwo.userId)).toBe(seedByUserId.get(lateOne.userId) + 1);
+    expect(seedByUserId.get(roundRobinLoserId)).toBeGreaterThan(seedByUserId.get(lateTwo.userId));
+
+    await startElimination({ tournamentId: created.id, session: host });
+    const eliminationState = await getTournamentClientState(created.id, { session: host });
+    const eliminationSeedByUserId = new Map(eliminationState.tournament.participants.map((entry) => [entry.userId, entry.seed]));
+    dateSpy.mockRestore();
+    mongoose.connection.readyState = originalReadyState;
+
+    expect(eliminationState.tournament.phase).toBe('elimination');
+    expect(eliminationSeedByUserId.get(roundRobinWinnerId)).toBe(1);
+    expect(eliminationSeedByUserId.get(lateOne.userId)).toBe(2);
+    expect(eliminationSeedByUserId.get(lateTwo.userId)).toBe(eliminationSeedByUserId.get(lateOne.userId) + 1);
+    expect(eliminationSeedByUserId.get(roundRobinLoserId)).toBeGreaterThan(eliminationSeedByUserId.get(lateTwo.userId));
+  });
+
+  test('late joins after the round-robin timer closes still use normal seed rules', async () => {
+    const originalReadyState = mongoose.connection.readyState;
+    const host = { userId: '000000000000000000000262', username: 'ClosedHost', isGuest: false };
+    const activeOpponent = { userId: '000000000000000000000263', username: 'ClosedActive', isGuest: false };
+    const idleOpponent = { userId: '000000000000000000000264', username: 'ClosedIdle', isGuest: false };
+    const latePlayer = { userId: '000000000000000000000265', username: 'ClosedLate', isGuest: false };
+    mongoose.connection.readyState = 1;
+    jest.spyOn(User, 'findById').mockImplementation((id) => ({
+      lean: jest.fn(async () => ({
+        _id: id,
+        elo: {
+          [host.userId]: 900,
+          [activeOpponent.userId]: 700,
+          [idleOpponent.userId]: 600,
+          [latePlayer.userId]: 1000,
+        }[String(id)] || 800,
+      })),
+    }));
+    jest.spyOn(Game, '_persistDocument').mockResolvedValue(undefined);
+    jest.spyOn(Match, '_persistDocument').mockResolvedValue(undefined);
+    const created = await createTournament({
+      hostSession: host,
+      label: 'Closed Window Cup',
+      config: { lateJoinRoundRobin: true },
+    });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: activeOpponent });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: idleOpponent });
+
+    const started = await startTournament({ tournamentId: created.id, session: host });
+    const firstWave = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    expect(firstWave).toHaveLength(1);
+    const roundRobinWinnerId = firstWave[0].players[0].userId;
+
+    const afterDeadline = Date.parse(started.startedAt) + (16 * 60 * 1000);
+    const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(afterDeadline);
+    const afterJoin = await joinTournamentAsPlayer({ tournamentId: created.id, session: latePlayer });
+    const lateEntry = afterJoin.players.find((entry) => entry.userId === latePlayer.userId);
+    expect(lateEntry?.lateJoinPhase).toBe('break');
+    expect((await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin')).toHaveLength(1);
+    mongoose.connection.readyState = originalReadyState;
+
+    const activeGame = await Game.findById(firstWave[0].gameId);
+    await activeGame.endGame(0, WIN_REASONS.RESIGN);
+    await maybeAdvanceTournamentRoundRobin(created.id);
+
+    const breakState = await getTournamentClientState(created.id, { session: host });
+    const seedByUserId = new Map(breakState.tournament.participants.map((entry) => [entry.userId, entry.seed]));
+    dateSpy.mockRestore();
+
+    expect(breakState.tournament.phase).toBe('round_robin_complete');
+    expect(seedByUserId.get(roundRobinWinnerId)).toBe(1);
+    expect(seedByUserId.get(latePlayer.userId)).toBe(2);
+    expect(seedByUserId.get(latePlayer.userId)).toBeLessThan(seedByUserId.get(idleOpponent.userId));
   });
 
   test('same-difficulty tournament bots get distinct bot instances', async () => {
@@ -268,7 +459,67 @@ describe('live tournaments service', () => {
     expect(firstPlayers[1]?.userId).toBeTruthy();
   });
 
-  test('round robin keeps scheduling fresh games until the timer cutoff is reached', async () => {
+  test('start applies tournament clock and accept settings to round-robin games', async () => {
+    const host = { userId: '000000000000000000000211', username: 'ClockHost', isGuest: false };
+    const opponent = { userId: '000000000000000000000212', username: 'ClockOpponent', isGuest: false };
+    const created = await createTournament({
+      hostSession: host,
+      label: 'Clock Settings Cup',
+      config: {
+        timeControlMinutes: 6,
+        incrementSeconds: 4,
+        roundRobinAcceptSeconds: 45,
+      },
+    });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    await startTournament({ tournamentId: created.id, session: host });
+    const [roundRobinGame] = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    const game = await Game.findById(roundRobinGame.gameId);
+    const match = await Match.findById(roundRobinGame.matchId);
+
+    expect(game.timeControlStart).toBe(6 * 60 * 1000);
+    expect(game.increment).toBe(4 * 1000);
+    expect(game.acceptWindowSeconds).toBe(45);
+    expect(game.acceptDeadlineAt).toBeTruthy();
+    expect(match.acceptWindowSeconds).toBe(45);
+    expect(roundRobinGame.acceptWindowSeconds).toBe(45);
+    expect(roundRobinGame.acceptDeadlineAt).toBeTruthy();
+  });
+
+  test('host can extend a pending tournament accept deadline by thirty seconds', async () => {
+    const host = { userId: '000000000000000000000213', username: 'ExtendHost', isGuest: false };
+    const opponent = { userId: '000000000000000000000214', username: 'ExtendOpponent', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Extend Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+    await startTournament({ tournamentId: created.id, session: host });
+
+    const [roundRobinGame] = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    const game = await Game.findById(roundRobinGame.gameId);
+    const originalDeadlineMs = Date.parse(game.acceptDeadlineAt);
+    const emitSpy = jest.spyOn(eventBus, 'emit');
+
+    const extended = await extendTournamentAcceptWindow({
+      tournamentId: created.id,
+      session: host,
+      gameId: roundRobinGame.gameId,
+      seconds: 30,
+    });
+    const refreshedGame = await Game.findById(roundRobinGame.gameId);
+
+    expect(Date.parse(refreshedGame.acceptDeadlineAt)).toBe(originalDeadlineMs + 30000);
+    expect(extended.acceptSecondsRemaining).toBeGreaterThanOrEqual(30);
+    expect(emitSpy).toHaveBeenCalledWith('players:bothNext', expect.objectContaining({
+      game: expect.objectContaining({ _id: roundRobinGame.gameId }),
+      requiresAccept: true,
+      acceptWindowSeconds: expect.any(Number),
+      acceptDeadlineAt: expect.any(String),
+    }));
+  });
+
+  test('round robin waits instead of immediately rematching the only available pair', async () => {
     const host = { userId: '000000000000000000000241', username: 'HostLoop', isGuest: false };
     const opponent = { userId: '000000000000000000000242', username: 'LoopOpponent', isGuest: false };
     const created = await createTournament({ hostSession: host, label: 'Loop Cup' });
@@ -286,13 +537,13 @@ describe('live tournaments service', () => {
     await maybeAdvanceTournamentRoundRobin(created.id);
 
     const secondWave = await listTournamentGames(created.id);
-    expect(secondWave.filter((entry) => entry.phase === 'round_robin')).toHaveLength(2);
+    expect(secondWave.filter((entry) => entry.phase === 'round_robin')).toHaveLength(1);
 
     const currentState = await getTournamentClientState(created.id, { session: host });
     expect(currentState.tournament.phase).toBe('round_robin');
   });
 
-  test('round robin accept timeout re-pairs players before the deadline', async () => {
+  test('round robin accept timeout waits instead of immediately rematching the same pair', async () => {
     const host = { userId: '000000000000000000000243', username: 'AcceptLoopHost', isGuest: false };
     const opponent = { userId: '000000000000000000000244', username: 'AcceptLoopOpponent', isGuest: false };
     const created = await createTournament({ hostSession: host, label: 'Accept Loop Cup' });
@@ -305,6 +556,7 @@ describe('live tournaments service', () => {
 
     const liveGame = await Game.findById(firstWave[0].gameId);
     liveGame.playersReady = [true, false];
+    liveGame.acceptDeadlineAt = new Date(Date.now() - 1000);
     await liveGame.save();
 
     await enforceTournamentAcceptTimeoutForGame(firstWave[0].gameId, {
@@ -313,11 +565,40 @@ describe('live tournaments service', () => {
     await flushAsyncEvents();
 
     const secondWave = await listTournamentGames(created.id);
-    expect(secondWave.filter((entry) => entry.phase === 'round_robin')).toHaveLength(2);
-    expect(secondWave.some((entry) => entry.phase === 'round_robin' && entry.status === 'pending_accept')).toBe(true);
+    expect(secondWave.filter((entry) => entry.phase === 'round_robin')).toHaveLength(1);
+    expect(secondWave.some((entry) => entry.phase === 'round_robin' && entry.status === 'pending_accept')).toBe(false);
 
     const currentState = await getTournamentClientState(created.id, { session: host });
     expect(currentState.tournament.phase).toBe('round_robin');
+  });
+
+  test('round robin pairs a player with someone else after their last opponent becomes available', async () => {
+    const host = { userId: '000000000000000000000251', username: 'AvoidRepeatHost', isGuest: false };
+    const firstOpponent = { userId: '000000000000000000000252', username: 'AvoidRepeatA', isGuest: false };
+    const waitingOpponent = { userId: '000000000000000000000253', username: 'AvoidRepeatB', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Avoid Repeat Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: firstOpponent });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: waitingOpponent });
+
+    await startTournament({ tournamentId: created.id, session: host });
+    const firstWave = await listTournamentGames(created.id);
+    const firstGame = firstWave.find((entry) => entry.phase === 'round_robin');
+    const firstPlayerIds = firstGame.players.map((player) => player.userId);
+    const idlePlayerId = [host.userId, firstOpponent.userId, waitingOpponent.userId]
+      .find((userId) => !firstPlayerIds.includes(userId));
+    expect(idlePlayerId).toBeTruthy();
+
+    const liveGame = await Game.findById(firstGame.gameId);
+    await liveGame.endGame(0, WIN_REASONS.RESIGN);
+    await maybeAdvanceTournamentRoundRobin(created.id);
+
+    const roundRobinGames = (await listTournamentGames(created.id)).filter((entry) => entry.phase === 'round_robin');
+    expect(roundRobinGames).toHaveLength(2);
+    const nextPendingGame = roundRobinGames.find((entry) => entry.status === 'pending_accept');
+    const nextPlayerIds = nextPendingGame.players.map((player) => player.userId);
+    expect(nextPlayerIds).toContain(idlePlayerId);
+    expect(nextPlayerIds.sort()).not.toEqual(firstPlayerIds.sort());
   });
 
   test('round robin accept timeout starts break once the deadline has passed', async () => {
@@ -350,7 +631,7 @@ describe('live tournaments service', () => {
     expect(currentState.tournament.eliminationStartsAt).toBeTruthy();
   });
 
-  test('reading tournament state re-pairs round robin players when a game finished before the deadline', async () => {
+  test('reading tournament state does not immediately rematch the only available round robin pair', async () => {
     const host = { userId: '000000000000000000000247', username: 'ReadLoopHost', isGuest: false };
     const opponent = { userId: '000000000000000000000248', username: 'ReadLoopOpponent', isGuest: false };
     const created = await createTournament({ hostSession: host, label: 'Read Loop Cup' });
@@ -366,8 +647,8 @@ describe('live tournaments service', () => {
     const refreshedGames = await listTournamentGames(created.id);
 
     expect(currentState.tournament.phase).toBe('round_robin');
-    expect(refreshedGames.filter((entry) => entry.phase === 'round_robin')).toHaveLength(2);
-    expect(refreshedGames.some((entry) => entry.phase === 'round_robin' && entry.status === 'pending_accept')).toBe(true);
+    expect(refreshedGames.filter((entry) => entry.phase === 'round_robin')).toHaveLength(1);
+    expect(refreshedGames.some((entry) => entry.phase === 'round_robin' && entry.status === 'pending_accept')).toBe(false);
   });
 
   test('reading tournament state starts break when the round robin deadline has already passed', async () => {
@@ -485,7 +766,7 @@ describe('live tournaments service', () => {
     expect(liveRows.some((row) => row.id === created.id)).toBe(false);
   });
 
-  test('cannot join once tournament is active', async () => {
+  test('cannot join once tournament is active without late joining enabled', async () => {
     const host = { userId: '000000000000000000000351', username: 'Host4', isGuest: false };
     const created = await createTournament({ hostSession: host, label: 'Join Guard Cup' });
     await joinTournamentAsPlayer({
@@ -503,7 +784,7 @@ describe('live tournaments service', () => {
     await expect(joinTournamentAsPlayer({
       tournamentId: created.id,
       session: { userId: '000000000000000000000353', username: 'Late Joiner', isGuest: false },
-    })).rejects.toThrow(/only available while tournament is starting/i);
+    })).rejects.toThrow(/late joining is enabled/i);
   });
 
   test('host can kick and re-allow a player during starting state', async () => {
@@ -572,6 +853,33 @@ describe('live tournaments service', () => {
     expect(eliminationState.tournament.bracket).toBeTruthy();
     expect(eliminationState.tournament.participants.map((entry) => entry.seed)).toEqual([1, 2]);
     expect((eliminationState.games || []).some((entry) => entry.phase === 'elimination')).toBe(true);
+  });
+
+  test('host can end round robin early while active games finish normally', async () => {
+    const host = { userId: '000000000000000000000503', username: 'EarlyEndHost', isGuest: false };
+    const opponent = { userId: '000000000000000000000504', username: 'EarlyEndOpponent', isGuest: false };
+    const created = await createTournament({ hostSession: host, label: 'Early End Cup' });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+    await joinTournamentAsPlayer({ tournamentId: created.id, session: opponent });
+
+    await startTournament({ tournamentId: created.id, session: host });
+    const closed = await endTournamentRoundRobin({ tournamentId: created.id, session: host });
+    expect(closed.roundRobinClosedAt).toBeTruthy();
+    expect(closed.phase).toBe('round_robin');
+
+    const waitingState = await getTournamentClientState(created.id, { session: host });
+    expect(waitingState.tournament.roundRobinWaitingForGames).toBe(true);
+    expect(waitingState.tournament.canEndRoundRobin).toBe(false);
+    expect(waitingState.tournament.canStartElimination).toBe(false);
+
+    const [roundRobinGame] = await listTournamentGames(created.id);
+    const liveGame = await Game.findById(roundRobinGame.gameId);
+    await liveGame.endGame(0, WIN_REASONS.RESIGN);
+    await maybeAdvanceTournamentRoundRobin(created.id);
+
+    const completeState = await getTournamentClientState(created.id, { session: host });
+    expect(completeState.tournament.phase).toBe('round_robin_complete');
+    expect(completeState.tournament.canStartElimination).toBe(true);
   });
 
   test('break time remains editable during round robin but locks once break countdown starts', async () => {
@@ -769,6 +1077,7 @@ describe('live tournaments service', () => {
     const eliminationGame = await Game.findById(eliminationGameEntry.gameId);
     eliminationGame.players = [lowerSeed.userId, higherSeed.userId];
     eliminationGame.playersReady = [false, false];
+    eliminationGame.acceptDeadlineAt = new Date(Date.now() - 1000);
     await eliminationGame.save();
 
     const result = await enforceTournamentAcceptTimeoutForGame(eliminationGame._id);
@@ -1357,6 +1666,49 @@ describe('live tournaments service', () => {
 
     const clientState = await getTournamentClientState(created.id, { session: viewer });
     expect(clientState.tournament.message).toBe('Round one starts soon.');
+  });
+
+  test('tournament client state includes current ELO without changing pre-tournament ELO', async () => {
+    const originalReadyState = mongoose.connection.readyState;
+    mongoose.connection.readyState = 1;
+
+    const host = { userId: '000000000000000000000731', username: 'HostElo', isGuest: false };
+    const player = { userId: '000000000000000000000732', username: 'PlayerElo', isGuest: false };
+
+    jest.spyOn(User, 'findById').mockImplementation((id) => ({
+      lean: jest.fn(async () => ({
+        _id: id,
+        elo: String(id) === host.userId ? 800 : 785,
+      })),
+    }));
+
+    const select = jest.fn().mockReturnThis();
+    const lean = jest.fn(async () => [
+      { _id: host.userId, elo: 846 },
+      { _id: player.userId, elo: 787 },
+    ]);
+    jest.spyOn(User, 'find').mockReturnValue({ select, lean });
+
+    try {
+      const created = await createTournament({ hostSession: host, label: 'Live Elo Cup' });
+      await joinTournamentAsPlayer({ tournamentId: created.id, session: host });
+      await joinTournamentAsPlayer({ tournamentId: created.id, session: player });
+
+      const clientState = await getTournamentClientState(created.id, { session: host });
+      const byUserId = new Map(clientState.tournament.participants.map((entry) => [entry.userId, entry]));
+
+      expect(byUserId.get(host.userId)).toMatchObject({
+        preTournamentElo: 800,
+        elo: 846,
+      });
+      expect(byUserId.get(player.userId)).toMatchObject({
+        preTournamentElo: 785,
+        elo: 787,
+      });
+      expect(select).toHaveBeenCalledWith('_id elo');
+    } finally {
+      mongoose.connection.readyState = originalReadyState;
+    }
   });
 
   test('tournament client state includes a server clock timestamp for live countdown sync', async () => {

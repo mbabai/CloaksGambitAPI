@@ -57,6 +57,7 @@ router.patch('/', async (req, res) => {
         return res.status(409).json({ message: 'Username already taken' });
       }
       update.username = trimmed;
+      update.hasUpdatedUsername = true;
     }
 
     if (email !== undefined) {
@@ -134,6 +135,7 @@ router.patch('/', async (req, res) => {
       elo: user.elo,
       isBot: Boolean(user.isBot),
       isGuest: Boolean(user.isGuest),
+      hasUpdatedUsername: Boolean(user.hasUpdatedUsername),
       tooltipsEnabled: resolveTooltipsEnabled(user),
       toastNotificationsEnabled: resolveToastNotificationsEnabled(user),
       animationSpeed: resolveAnimationSpeed(user),

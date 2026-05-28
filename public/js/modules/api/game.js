@@ -4,10 +4,23 @@ function authFetch(url, options = {}) {
 }
 
 export async function apiReady(gameId, color) {
-  return authFetch('/api/v1/gameAction/ready', {
+  const res = await authFetch('/api/v1/gameAction/ready', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ gameId, color })
   });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = null;
+  }
+  if (!res.ok) {
+    const error = new Error((data && data.message) || 'Failed to ready player');
+    error.response = res;
+    error.data = data;
+    throw error;
+  }
+  return data || {};
 }
 
 export async function apiNext(gameId, color) {
@@ -309,6 +322,10 @@ export async function apiStartTournamentElimination(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/start-elimination', payload);
 }
 
+export async function apiEndTournamentRoundRobin(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/end-round-robin', payload);
+}
+
 export async function apiKickTournamentPlayer(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/kick-player', payload);
 }
@@ -339,4 +356,8 @@ export async function apiTransferTournamentHost(payload = {}) {
 
 export async function apiUpdateTournamentMessage(payload = {}) {
   return sendTournamentRequest('/api/v1/tournaments/message', payload);
+}
+
+export async function apiExtendTournamentAccept(payload = {}) {
+  return sendTournamentRequest('/api/v1/tournaments/extend-accept', payload);
 }

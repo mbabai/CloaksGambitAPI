@@ -7,6 +7,8 @@
 4. After a successful DB connection, startup initializes `ServerConfig`, clears lobby queue state from the previous process, and starts the hourly guest cleanup task.
 5. The HTTP server then listens. Internal bot clients only start after a successful DB connection; if Mongo is down in development, the server stays up in degraded mode and logs local recovery steps instead.
 
+Startup also backfills missing `User.hasUpdatedUsername` values before loading server config. Keep that backfill non-destructive and safe to rerun.
+
 ## MongoDB Connection Behavior
 - Development uses `process.env.MONGODB_URI` or falls back to `mongodb://localhost:27017/cloaks-gambit`.
 - Production uses the raw `MONGODB_ATLAS_CONNECTION_STRING` and does not rewrite the URI path anymore.
@@ -32,6 +34,7 @@
 - HTTP auth routes live in `src/routes/auth/google.js`.
 - `src/utils/requestSession.js` is now the shared identity resolver for HTTP routes and Socket.IO handshakes.
 - Guest creation is server-owned. The browser should establish a session through `/api/auth/session`, then reuse the resulting cookies; sockets no longer accept a raw fallback `userId`.
+- Authenticated sessions include `hasUpdatedUsername`; the browser uses it to require first-time username setup, and username updates refresh the auth cookies.
 - Admin access is server-enforced through the authenticated Google account email `marcellbabai@gmail.com`, including `/admin`, admin APIs, and the `/admin` Socket.IO namespace.
 
 ## Recent Refactors Worth Knowing

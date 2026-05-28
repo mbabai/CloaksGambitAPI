@@ -10,8 +10,9 @@ function normalizeToast(toast) {
   if (!toast || typeof toast !== 'object') {
     return null;
   }
+  const title = typeof toast.title === 'string' ? toast.title.trim() : '';
   const text = typeof toast.text === 'string' ? toast.text.trim() : '';
-  if (!text) {
+  if (!title && !text) {
     return null;
   }
   const tone = typeof toast.tone === 'string' && toast.tone.trim()
@@ -24,6 +25,7 @@ function normalizeToast(toast) {
     ? toast.appearance.trim().toLowerCase()
     : 'default';
   return {
+    title,
     text,
     tone,
     placement,
@@ -45,7 +47,20 @@ function createToastElement(toast) {
   const node = document.createElement('div');
   node.className = `cg-toast cg-toast--${toast.tone}`;
   node.classList.add(`cg-toast--appearance-${toast.appearance}`);
-  node.textContent = toast.text;
+  if (toast.title) {
+    const title = document.createElement('div');
+    title.className = 'cg-toast__title';
+    title.textContent = toast.title;
+    node.appendChild(title);
+    if (toast.text) {
+      const body = document.createElement('div');
+      body.className = 'cg-toast__body';
+      body.textContent = toast.text;
+      node.appendChild(body);
+    }
+  } else {
+    node.textContent = toast.text;
+  }
   return node;
 }
 
@@ -54,7 +69,8 @@ function sameToast(left, right) {
     return false;
   }
   return (
-    left.text === right.text
+    left.title === right.title
+    && left.text === right.text
     && left.tone === right.tone
     && left.placement === right.placement
     && left.appearance === right.appearance

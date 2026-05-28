@@ -1318,6 +1318,8 @@ logBootConstantsOnce();
           gameId,
           color,
           startSeconds: Math.max(1, Number(currentUserGame?.acceptWindowSeconds) || 30),
+          acceptDeadlineAt: currentUserGame?.acceptDeadlineAt || null,
+          replaceDeadline: Boolean(currentUserGame?.acceptDeadlineAt),
         });
         return;
       }
@@ -1337,11 +1339,24 @@ logBootConstantsOnce();
       }
     },
     onPlayAreaBoundsChange: ({ activeSection = null, isInTournamentGame = false } = {}) => {
+      if (!isInTournamentGame) {
+        hidePlayArea();
+        return;
+      }
+      if (activeSection !== 'game') {
+        if (playAreaRoot) {
+          playAreaRoot.style.pointerEvents = 'none';
+        }
+        return;
+      }
       if (!isPlayAreaVisible && isInTournamentGame && activeSection === 'game' && lastGameId && currentRows && currentCols) {
         showPlayArea();
         return;
       }
       if (isPlayAreaVisible) {
+        if (playAreaRoot) {
+          playAreaRoot.style.pointerEvents = 'auto';
+        }
         layoutPlayArea();
       }
     },
@@ -1409,7 +1424,10 @@ logBootConstantsOnce();
   }
 
   function isBannerVisible() {
-    return Boolean(bannerOverlay && bannerOverlay.isOpen());
+    return Boolean(
+      (activeBannerKind === 'tournament-accept' && tournamentAcceptBannerEl && tournamentAcceptBannerEl.isConnected)
+      || (bannerOverlay && bannerOverlay.isOpen())
+    );
   }
 
   function shouldIgnoreShortcutTarget(el) {
@@ -1853,6 +1871,9 @@ logBootConstantsOnce();
     if (partial.username !== undefined) {
       sessionInfo.username = typeof partial.username === 'string' ? partial.username : '';
     }
+    if (partial.hasUpdatedUsername !== undefined) {
+      sessionInfo.hasUpdatedUsername = Boolean(partial.hasUpdatedUsername);
+    }
     if (partial.tooltipsEnabled !== undefined) {
       sessionInfo.tooltipsEnabled = normalizeTooltipPreference(partial.tooltipsEnabled, true);
       persistTooltipPreferenceCookie(sessionInfo.tooltipsEnabled);
@@ -1995,6 +2016,228 @@ logBootConstantsOnce();
     }
 
     return button;
+  }
+
+  function validateUsernameInput(value) {
+    const username = String(value || '').trim();
+    if (username.length < 3 || username.length > 18) {
+      return {
+        username,
+        message: 'Username must be between 3 and 18 characters.',
+      };
+    }
+    return { username, message: '' };
+  }
+
+  function applySavedUsername(updatedName, userIdToUpdate = sessionInfo.userId) {
+    const normalizedUserId = userIdToUpdate ? String(userIdToUpdate) : '';
+    if (!updatedName || !normalizedUserId) return;
+
+    updateSessionInfo({ username: updatedName, hasUpdatedUsername: true }, { syncCookies: true });
+    const playerIdx = currentPlayerIds.findIndex(id => id && id.toString() === normalizedUserId);
+    if (playerIdx !== -1) {
+      playerNames[playerIdx] = updatedName;
+      renderBoardAndBars();
+    }
+    setUsernameDisplay();
+    updateAccountPanel();
+    if (socket && socket.connected) {
+      try { socket.emit('user:updateName', { username: updatedName }); } catch (_) {}
+    }
+  }
+
+  async function saveUsernameChange(username) {
+    const currentUserId = sessionInfo.userId;
+    if (!currentUserId) {
+      throw new Error('Unable to update username: user session not found.');
+    }
+
+    const res = await authFetch('/api/v1/users/update', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: currentUserId, username })
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(data?.message || 'Failed to update username.');
+    }
+
+    const updatedName = data?.username || username;
+    applySavedUsername(updatedName, currentUserId);
+    return updatedName;
+  }
+
+  function shouldRequireUsernameSetup() {
+    return Boolean(
+      sessionInfo.authenticated
+      && !sessionInfo.isGuest
+      && sessionInfo.userId
+      && sessionInfo.hasUpdatedUsername === false
+    );
+  }
+
+  function ensureUsernameSetupOverlay() {
+    if (usernameSetupOverlay) return usernameSetupOverlay;
+    usernameSetupOverlay = createOverlay({
+      baseClass: 'cg-overlay username-setup-overlay',
+      dialogClass: 'history-modal username-setup-modal',
+      contentClass: 'history-modal-content username-setup-modal__content',
+      backdropClass: 'cg-overlay__backdrop history-overlay-backdrop username-setup-overlay__backdrop',
+      closeButtonClass: 'cg-overlay__close username-setup-modal__close',
+      closeButtonVariant: 'dark',
+      closeText: 'Close',
+      closeLabel: 'Close username dialog',
+      bodyOpenClass: 'cg-overlay-open username-setup-open',
+      onCloseRequest: () => !(usernameSetupRequired || usernameSetupSaving),
+      onHide: () => {
+        usernameSetupRequired = false;
+        usernameSetupSaving = false;
+      },
+    });
+    return usernameSetupOverlay;
+  }
+
+  function showUsernameUpdateModal({ forced = false, initialName = '' } = {}) {
+    const overlay = ensureUsernameSetupOverlay();
+    usernameSetupRequired = Boolean(forced);
+    usernameSetupPromptedUserId = sessionInfo.userId || null;
+
+    const { content } = overlay;
+    content.innerHTML = '';
+
+    const title = document.createElement('h2');
+    title.id = 'usernameSetupTitle';
+    title.className = 'username-setup-modal__title';
+    title.textContent = forced ? 'Choose Username' : 'Edit Username';
+
+    const description = document.createElement('p');
+    description.id = 'usernameSetupDescription';
+    description.className = 'username-setup-modal__description';
+    description.textContent = forced
+      ? 'Pick the name other players will see before you continue.'
+      : 'Pick the name other players will see.';
+
+    const form = document.createElement('form');
+    form.className = 'username-setup-modal__form';
+
+    const input = document.createElement('input');
+    input.id = 'usernameSetupInput';
+    input.className = 'username-setup-modal__input';
+    input.type = 'text';
+    input.name = 'username';
+    input.minLength = 3;
+    input.maxLength = 18;
+    input.required = true;
+    input.autocomplete = 'nickname';
+    input.value = initialName || sessionInfo.username || '';
+    input.setAttribute('aria-describedby', 'usernameSetupHelp usernameSetupStatus');
+
+    const help = document.createElement('div');
+    help.id = 'usernameSetupHelp';
+    help.className = 'username-setup-modal__help';
+    help.textContent = '3-18 characters.';
+
+    const status = document.createElement('div');
+    status.id = 'usernameSetupStatus';
+    status.className = 'username-setup-modal__status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+
+    const actions = document.createElement('div');
+    actions.className = 'username-setup-modal__actions';
+
+    let cancelBtn = null;
+    if (!forced) {
+      cancelBtn = createButton({
+        label: 'Cancel',
+        variant: 'dark',
+        position: 'relative',
+        onClick: () => overlay.hide({ reason: 'cancel' }),
+      });
+      cancelBtn.classList.add('username-setup-modal__button');
+      actions.appendChild(cancelBtn);
+    }
+
+    const saveBtn = createButton({
+      label: 'Save',
+      variant: 'neutral',
+      position: 'relative',
+    });
+    saveBtn.type = 'submit';
+    saveBtn.classList.add('username-setup-modal__button');
+    actions.appendChild(saveBtn);
+
+    input.addEventListener('input', () => {
+      status.textContent = '';
+      status.dataset.state = '';
+    });
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const validation = validateUsernameInput(input.value);
+      if (validation.message) {
+        status.textContent = validation.message;
+        status.dataset.state = 'error';
+        input.focus();
+        return;
+      }
+
+      usernameSetupSaving = true;
+      input.disabled = true;
+      saveBtn.disabled = true;
+      if (cancelBtn) cancelBtn.disabled = true;
+      status.textContent = 'Saving...';
+      status.dataset.state = '';
+
+      try {
+        await saveUsernameChange(validation.username);
+        status.textContent = '';
+        overlay.hide({ restoreFocus: !forced, reason: 'saved' });
+      } catch (error) {
+        console.error('Failed to update username', error);
+        status.textContent = error?.message || 'Failed to update username. Please try again.';
+        status.dataset.state = 'error';
+        usernameSetupSaving = false;
+        input.disabled = false;
+        saveBtn.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+        input.focus();
+      }
+    });
+
+    form.appendChild(input);
+    form.appendChild(help);
+    form.appendChild(status);
+    form.appendChild(actions);
+    content.appendChild(title);
+    content.appendChild(description);
+    content.appendChild(form);
+    overlay.setLabelledBy('usernameSetupTitle');
+    overlay.setDescribedBy('usernameSetupDescription');
+    overlay.show({
+      initialFocus: input,
+      showCloseButton: !forced,
+    });
+  }
+
+  function maybeShowRequiredUsernameModal() {
+    if (!shouldRequireUsernameSetup()) {
+      if (usernameSetupRequired && usernameSetupOverlay && usernameSetupOverlay.isOpen()) {
+        usernameSetupOverlay.hide({ restoreFocus: false, reason: 'session-updated' });
+      }
+      return;
+    }
+    if (
+      usernameSetupOverlay
+      && usernameSetupOverlay.isOpen()
+      && usernameSetupPromptedUserId === sessionInfo.userId
+    ) {
+      return;
+    }
+    showUsernameUpdateModal({
+      forced: true,
+      initialName: sessionInfo.username || '',
+    });
   }
 
   function renderSettingsPanel() {
@@ -2140,6 +2383,9 @@ logBootConstantsOnce();
         userDetails?.gameStartAlertVolume,
         sessionInfo.gameStartAlertVolume
       );
+      const hasUpdatedUsername = hasOwn(userDetails, 'hasUpdatedUsername')
+        ? Boolean(userDetails.hasUpdatedUsername)
+        : sessionInfo.hasUpdatedUsername;
       if (hasOwn(userDetails, 'audioVolume')) {
         serverSupportsAudioVolumePreference = true;
       }
@@ -2169,6 +2415,9 @@ logBootConstantsOnce();
       }
       if (gameStartAlertVolume !== sessionInfo.gameStartAlertVolume) {
         updateSessionInfo({ gameStartAlertVolume });
+      }
+      if (hasUpdatedUsername !== sessionInfo.hasUpdatedUsername) {
+        updateSessionInfo({ hasUpdatedUsername });
       }
 
       if (statsOverlayController) {
@@ -2282,46 +2531,7 @@ logBootConstantsOnce();
       });
       editBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
-        const currentUserId = sessionInfo.userId;
-        if (!currentUserId) {
-          alert('Unable to update username: user session not found.');
-          return;
-        }
-        const newName = prompt('Enter new username', displayName);
-        if (!newName) return;
-        const trimmed = newName.trim();
-        if (trimmed.length < 3 || trimmed.length > 18) {
-          alert('Username must be between 3 and 18 characters.');
-          return;
-        }
-        try {
-          const res = await authFetch('/api/v1/users/update', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: currentUserId, username: trimmed })
-          });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            alert(err.message || 'Failed to update username.');
-            return;
-          }
-          const updated = await res.json();
-          const updatedName = updated?.username || trimmed;
-          updateSessionInfo({ username: updatedName }, { syncCookies: true });
-          const playerIdx = currentPlayerIds.findIndex(id => id && id.toString() === currentUserId);
-          if (playerIdx !== -1) {
-            playerNames[playerIdx] = updatedName;
-            renderBoardAndBars();
-          }
-          setUsernameDisplay();
-          updateAccountPanel();
-          if (socket && socket.connected) {
-            try { socket.emit('user:updateName', { username: updatedName }); } catch (_) {}
-          }
-        } catch (error) {
-          console.error('Failed to update username', error);
-          alert('Failed to update username. Please try again.');
-        }
+        showUsernameUpdateModal({ initialName: displayName });
       });
       logoutBtn.addEventListener('click', async ev => {
         ev.stopPropagation();
@@ -2427,6 +2637,9 @@ logBootConstantsOnce();
         if (sessionData.username !== undefined) updates.username = sessionData.username;
         if (sessionData.isGuest !== undefined) updates.isGuest = Boolean(sessionData.isGuest);
         if (sessionData.authenticated !== undefined) updates.authenticated = Boolean(sessionData.authenticated);
+        if (sessionData.hasUpdatedUsername !== undefined) {
+          updates.hasUpdatedUsername = Boolean(sessionData.hasUpdatedUsername);
+        }
         if (sessionData.tooltipsEnabled !== undefined) {
           updates.tooltipsEnabled = sessionData.tooltipsEnabled;
         } else if (sessionData.isGuest || sessionData.authenticated === false) {
@@ -2487,6 +2700,7 @@ logBootConstantsOnce();
     }
 
     await updateAccountPanel();
+    maybeShowRequiredUsernameModal();
     return sessionInfo;
   }
   // Cookie helpers moved to modules/utils/cookies.js
@@ -2584,6 +2798,11 @@ logBootConstantsOnce();
   let lastGameId = null;
   let bannerInterval = null;
   let bannerOverlay = null;
+  let tournamentAcceptBannerEl = null;
+  let usernameSetupOverlay = null;
+  let usernameSetupRequired = false;
+  let usernameSetupSaving = false;
+  let usernameSetupPromptedUserId = null;
   let bannerKeyListener = null;
   let activeBannerKind = null;
   let activeBannerGameId = null;
@@ -2598,6 +2817,13 @@ logBootConstantsOnce();
       showTournamentAcceptBanner({ gameId, color, startSeconds });
     },
     isLocallyAccepted: (gameId) => locallyAcceptedTournamentGames.has(String(gameId || '')),
+    isAcceptBannerShowing: ({ gameId } = {}) => Boolean(
+      gameId
+      && activeBannerKind === 'tournament-accept'
+      && activeBannerGameId === String(gameId)
+      && tournamentAcceptBannerEl
+      && tournamentAcceptBannerEl.isConnected
+    ),
     onDebug: emitLocalClockDebug,
   });
   let tournamentGameHydrationHandle = null;
@@ -2625,6 +2851,7 @@ logBootConstantsOnce();
     username: '',
     isGuest: true,
     authenticated: false,
+    hasUpdatedUsername: false,
     tooltipsEnabled: readTooltipPreferenceCookie(),
     toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
     animationSpeed: readAnimationSpeedPreferenceCookie(),
@@ -4190,6 +4417,8 @@ logBootConstantsOnce();
                     gameId: latest._id?.toString?.() || latest._id || null,
                     color: colorIdx,
                     startSeconds: Math.max(1, Number(latest?.acceptWindowSeconds) || 30),
+                    acceptDeadlineAt: latest?.acceptDeadlineAt || null,
+                    replaceDeadline: Boolean(latest?.acceptDeadlineAt),
                   });
                 } else {
                   apiReady(latest._id, colorIdx).catch(function(err){ console.error('READY on reconnect failed', err); });
@@ -4337,6 +4566,8 @@ logBootConstantsOnce();
                 gameId: typeof gameId === 'string' ? gameId : String(gameId),
                 color,
                 startSeconds: Math.max(1, Number(payload?.acceptWindowSeconds) || 30),
+                acceptDeadlineAt: payload?.acceptDeadlineAt || null,
+                replaceDeadline: Boolean(payload?.acceptDeadlineAt),
               });
             } else {
               tournamentAcceptScheduler.clearPending({ preserveDeadline: true });
@@ -4790,6 +5021,8 @@ logBootConstantsOnce();
               gameId: nextGameId,
               color,
               startSeconds: Number(acceptWindowSeconds) || 30,
+              acceptDeadlineAt: payload?.acceptDeadlineAt || null,
+              replaceDeadline: Boolean(payload?.acceptDeadlineAt),
             });
             return;
           }
@@ -5332,6 +5565,7 @@ logBootConstantsOnce();
     setBannerKeyListener(null);
     stopTournamentAcceptSound(activeBannerGameId);
     stopTournamentAcceptSound();
+    removeTournamentAcceptBanner();
     setActiveBanner(null, null);
     if (bannerOverlay) {
       try {
@@ -5342,6 +5576,34 @@ logBootConstantsOnce();
       } catch (err) {
         console.warn('Failed to hide banner overlay', err);
       }
+    }
+  }
+
+  function hideSharedBannerOverlay({ restoreFocus = false, clearTimer = true } = {}) {
+    if (clearTimer && bannerInterval) {
+      clearInterval(bannerInterval);
+      bannerInterval = null;
+    }
+    setBannerKeyListener(null);
+    if (!bannerOverlay) return;
+    try {
+      if (bannerOverlay.content) {
+        bannerOverlay.content.innerHTML = '';
+      }
+      if (bannerOverlay.isOpen()) {
+        bannerOverlay.hide({ restoreFocus });
+      }
+    } catch (err) {
+      console.warn('Failed to hide shared banner overlay', err);
+    }
+  }
+
+  function removeTournamentAcceptBanner() {
+    if (tournamentAcceptBannerEl) {
+      try {
+        tournamentAcceptBannerEl.remove();
+      } catch (_) {}
+      tournamentAcceptBannerEl = null;
     }
   }
 
@@ -7084,23 +7346,46 @@ logBootConstantsOnce();
     if (normalizedGameId && locallyAcceptedTournamentGames.has(normalizedGameId)) {
       return;
     }
-    tournamentAcceptScheduler.clearPending({ preserveDeadline: true });
-    tournamentAcceptScheduler.rememberDeadline(normalizedGameId, startSeconds);
-    if (
+    const alreadyShowingThisAccept = Boolean(
       normalizedGameId
       && activeBannerKind === 'tournament-accept'
       && activeBannerGameId === normalizedGameId
-      && isBannerVisible()
+      && tournamentAcceptBannerEl
+      && tournamentAcceptBannerEl.isConnected
+    );
+    hidePlayArea();
+    hideSharedBannerOverlay({ restoreFocus: false, clearTimer: !alreadyShowingThisAccept });
+    tournamentAcceptScheduler.clearPending({ preserveDeadline: true });
+    tournamentAcceptScheduler.rememberDeadline(normalizedGameId, startSeconds);
+    if (
+      alreadyShowingThisAccept
     ) {
+      const remainingSeconds = tournamentAcceptScheduler.getRemainingSeconds(normalizedGameId, startSeconds);
+      const timer = tournamentAcceptBannerEl?.querySelector?.('[data-tournament-accept-timer="true"]');
+      const message = tournamentAcceptBannerEl?.querySelector?.('[data-tournament-accept-message="true"]');
+      if (timer && remainingSeconds > 0) {
+        timer.textContent = String(remainingSeconds);
+      }
+      if (message && remainingSeconds > 0) {
+        message.textContent = `Accept within ${remainingSeconds} seconds to start this game.`;
+      }
       return;
     }
-    const overlay = ensureBannerOverlay();
+    removeTournamentAcceptBanner();
     setActiveBanner('tournament-accept', normalizedGameId);
-    const { content, dialog, closeButton } = overlay;
-    dialog.style.alignItems = 'center';
-    dialog.style.justifyContent = 'center';
-    content.innerHTML = '';
-    if (closeButton) closeButton.hidden = true;
+
+    const shell = document.createElement('div');
+    shell.className = 'tournament-accept-banner-shell';
+    shell.setAttribute('role', 'status');
+    shell.setAttribute('aria-live', 'polite');
+    shell.style.position = 'fixed';
+    shell.style.inset = '0';
+    shell.style.zIndex = '4200';
+    shell.style.display = 'flex';
+    shell.style.alignItems = 'center';
+    shell.style.justifyContent = 'center';
+    shell.style.padding = '16px';
+    shell.style.pointerEvents = 'none';
 
     const stack = document.createElement('div');
     stack.style.display = 'flex';
@@ -7115,6 +7400,7 @@ logBootConstantsOnce();
     stack.style.background = 'var(--CG-deep-purple)';
     stack.style.border = '2px solid var(--CG-deep-gold)';
     stack.style.boxShadow = '0 14px 34px rgba(0, 0, 0, 0.38)';
+    stack.style.pointerEvents = 'none';
 
     const title = document.createElement('div');
     title.textContent = 'Tournament Match Ready';
@@ -7122,12 +7408,14 @@ logBootConstantsOnce();
     title.style.fontWeight = '800';
 
     const message = document.createElement('div');
+    message.dataset.tournamentAcceptMessage = 'true';
     message.textContent = `Accept within ${Math.max(1, Number(startSeconds) || 30)} seconds to start this game.`;
     message.style.fontSize = '18px';
     message.style.lineHeight = '1.35';
     message.style.maxWidth = '320px';
 
     const timerEl = document.createElement('div');
+    timerEl.dataset.tournamentAcceptTimer = 'true';
     timerEl.style.fontSize = '48px';
     timerEl.style.fontWeight = '900';
 
@@ -7146,28 +7434,33 @@ logBootConstantsOnce();
     acceptBtn.style.boxShadow = '0 12px 30px rgba(0, 0, 0, 0.28)';
     acceptBtn.style.margin = '0 auto';
     acceptBtn.style.touchAction = 'manipulation';
+    acceptBtn.style.pointerEvents = 'auto';
     acceptBtn.dataset.allowSuppressedClick = 'true';
 
     stack.appendChild(title);
     stack.appendChild(message);
     stack.appendChild(timerEl);
     stack.appendChild(acceptBtn);
-    content.appendChild(stack);
+    shell.appendChild(stack);
+    document.body.appendChild(shell);
+    tournamentAcceptBannerEl = shell;
 
     function closeBanner() {
       if (bannerInterval) { clearInterval(bannerInterval); bannerInterval = null; }
       stopTournamentAcceptSound(normalizedGameId);
-      content.innerHTML = '';
+      removeTournamentAcceptBanner();
       setActiveBanner(null, null);
-      overlay.hide();
     }
 
     let remaining = Math.max(1, Number(startSeconds) || 30);
     timerEl.textContent = String(remaining);
-    overlay.show({ initialFocus: acceptBtn });
     startTournamentAcceptSound(normalizedGameId);
 
-    acceptBtn.addEventListener('click', async () => {
+    let acceptInFlight = false;
+    async function submitTournamentAccept(event = null) {
+      if (event?.button !== undefined && event.button !== 0) return;
+      if (acceptInFlight) return;
+      acceptInFlight = true;
       acceptBtn.disabled = true;
       stopTournamentAcceptSound(normalizedGameId);
       acceptBtn.textContent = 'Accepting...';
@@ -7176,15 +7469,24 @@ logBootConstantsOnce();
         closeBanner();
       } catch (err) {
         console.error('Failed to accept tournament match', err);
+        acceptInFlight = false;
         acceptBtn.disabled = false;
         acceptBtn.textContent = 'Accept';
         startTournamentAcceptSound(normalizedGameId);
       }
+    }
+
+    acceptBtn.addEventListener('pointerdown', (event) => {
+      submitTournamentAccept(event);
+    });
+
+    acceptBtn.addEventListener('click', async (event) => {
+      submitTournamentAccept(event);
     });
 
     if (bannerInterval) clearInterval(bannerInterval);
     bannerInterval = setInterval(() => {
-      remaining -= 1;
+      remaining = tournamentAcceptScheduler.getRemainingSeconds(normalizedGameId, remaining || startSeconds);
       if (remaining <= 0) {
         clearInterval(bannerInterval);
         bannerInterval = null;
@@ -7801,9 +8103,10 @@ logBootConstantsOnce();
       const t = ev.target;
       const isBubbleOverlay = t && t.closest && t.closest('[data-bubble]:not([data-preview])');
       const allowSuppressedClick = t && t.closest && t.closest('[data-allow-suppressed-click="true"]');
+      const isTournamentPanelControl = t && t.closest && t.closest('.tournament-panel button, .tournament-panel a[href], .tournament-panel input, .tournament-panel select, .tournament-panel textarea, .tournament-panel [role="button"]');
       const interactiveControl = t && t.closest && t.closest('button, a[href], input, select, textarea, [role="button"]');
       const isExternalInteractiveControl = interactiveControl && (!playAreaRoot || !playAreaRoot.contains(interactiveControl));
-      if (suppress && !isBubbleOverlay && !allowSuppressedClick && !isExternalInteractiveControl) {
+      if (suppress && !isBubbleOverlay && !allowSuppressedClick && !isTournamentPanelControl && !isExternalInteractiveControl) {
         try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {}
       }
     }, true);
@@ -7852,6 +8155,11 @@ logBootConstantsOnce();
     const overrideBounds = tournamentUiController && typeof tournamentUiController.getPlayAreaBounds === 'function'
       ? tournamentUiController.getPlayAreaBounds()
       : null;
+    if (tournamentParticipantMode && tournamentUiController && !overrideBounds) {
+      playAreaRoot.style.pointerEvents = 'none';
+      return;
+    }
+    playAreaRoot.style.pointerEvents = 'auto';
     const vw = overrideBounds?.width || window.innerWidth;
     const vh = overrideBounds?.height || window.innerHeight;
     const computed = computePlayAreaBounds(vw, vh);
@@ -7900,10 +8208,15 @@ logBootConstantsOnce();
   }
 
   function hidePlayArea() {
+    if (isPlayAreaVisible) {
+      clearOpponentMoveAnimationLayer({ clearTransient: true });
+      clearCaptureResolutionAnimationLayer({ clearTransient: true });
+    }
+    if (playAreaRoot) {
+      playAreaRoot.style.pointerEvents = 'none';
+      playAreaRoot.style.display = 'none';
+    }
     if (!isPlayAreaVisible) return;
-    clearOpponentMoveAnimationLayer({ clearTransient: true });
-    clearCaptureResolutionAnimationLayer({ clearTransient: true });
-    if (playAreaRoot) playAreaRoot.style.display = 'none';
     isPlayAreaVisible = false;
     updateHeaderMenuStateClasses();
     hideTutorialOverlay();
@@ -8317,6 +8630,7 @@ logBootConstantsOnce();
       const isMyTurn = currentPlayerTurn === myColor && !isInSetup;
       let canChallenge = false;
       let canBomb = false;
+      let bombBlockedByHeartDeclaration = false;
       let canPass = false;
       const responseContext = latestMoveContext || getLatestMoveContext({
         actions: actionHistory,
@@ -8344,15 +8658,19 @@ logBootConstantsOnce();
           && pendingCapture
           && pendingCapture.piece
           && pendingCapture.piece.color === myColor
-          && lastMove.declaration !== Declaration.KING
         ) {
-          canBomb = true;
+          if (lastMove.declaration === Declaration.KING) {
+            bombBlockedByHeartDeclaration = true;
+          } else {
+            canBomb = true;
+          }
         }
       }
 
       if (isTutorialActive()) {
         canChallenge = tutorialShowsChallenge();
         canBomb = tutorialAllowsBomb();
+        bombBlockedByHeartDeclaration = false;
         canPass = false;
       }
       const challengeDisabled = isTutorialActive() && !tutorialAllowsChallenge();
@@ -8367,8 +8685,9 @@ logBootConstantsOnce();
         boardHeight: 0,
         text: 'Poison!',
         variant: 'danger',
-        visible: canBomb,
+        visible: canBomb || bombBlockedByHeartDeclaration,
         onClick: () => {
+          if (bombBlockedByHeartDeclaration) return;
           if (!lastGameId) return;
           emitLocalClockDebug('client-action-submit', {
             action: 'bomb',
@@ -8381,7 +8700,18 @@ logBootConstantsOnce();
         width: btnW,
         height: btnH
       });
-      applyTooltipAttributes(bombBtn, TOOLTIP_TEXT.bombButton);
+      if (bombBtn) {
+        bombBtn.classList.toggle('cg-button--unavailable', bombBlockedByHeartDeclaration);
+        if (bombBlockedByHeartDeclaration) {
+          bombBtn.setAttribute('aria-disabled', 'true');
+        } else {
+          bombBtn.removeAttribute('aria-disabled');
+        }
+      }
+      applyTooltipAttributes(
+        bombBtn,
+        bombBlockedByHeartDeclaration ? TOOLTIP_TEXT.bombButtonHeartBlocked : TOOLTIP_TEXT.bombButton
+      );
 
       // Pass button (uses challenge styling, upper left)
       const passBtn = renderGameButton({

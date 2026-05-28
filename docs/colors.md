@@ -13,7 +13,7 @@ Use these CSS variables whenever referencing colors in HTML, CSS, or JavaScript:
 | CG Purple Pressed | `--CG-purple-pressed` | `#7c3aed` |
 | CG Deep Purple | `--CG-deep-purple` | `#3b0764` |
 | CG Indigo | `--CG-indigo` | `#3d2e88` |
-| CG Dark Red | `--CG-dark-red` | `#7f1d1d` |
+| CG Dark Red | `--CG-dark-red` | `#500c16` |
 | CG Deep Gold | `--CG-deep-gold` | `#b8860b` |
 | CG Light Gold | `--CG-light-gold` | `#f5e6a7` |
 | CG Gray Light | `--CG-gray-light` | `#9ca3af` |

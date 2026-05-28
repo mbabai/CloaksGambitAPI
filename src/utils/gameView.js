@@ -112,6 +112,7 @@ function maskGameForColor(game, color) {
   maskedGame.acceptWindowSeconds = Number.isFinite(Number(game.acceptWindowSeconds))
     ? Math.max(0, Number(game.acceptWindowSeconds))
     : 0;
+  maskedGame.acceptDeadlineAt = game.acceptDeadlineAt || null;
   maskedGame.isTutorial = Boolean(game.isTutorial);
   maskedGame.tutorialState = game.tutorialState ? { ...game.tutorialState } : null;
 

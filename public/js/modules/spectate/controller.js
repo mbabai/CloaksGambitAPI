@@ -1,6 +1,6 @@
 import { normalizeId } from '../history/dashboard.js';
 import { createGameView } from '../gameView/view.js';
-import { PIECE_IMAGES, ACTIONS, WIN_REASONS } from '../constants.js';
+import { PIECE_IMAGES, ACTIONS } from '../constants.js';
 import { computeBoardMetrics } from '../layout.js';
 import { formatClock, describeTimeControl } from '../utils/timeControl.js';
 import {
@@ -12,7 +12,13 @@ import { setBannerState, applyBannerVariant } from '../ui/banners.js';
 import { createButton } from '../ui/buttons.js';
 import { createOverlay } from '../ui/overlays.js';
 import { createToastSystem } from '../ui/toasts.js';
-import { createGameToastSnapshot, deriveGameToastFeedback } from '../ui/gameToastEvents.js';
+import {
+  buildSpectatorGameResultToast,
+  createGameToastSnapshot,
+  deriveGameToastFeedback,
+  describeGameResult,
+  isSpectatorResultToastMatchType,
+} from '../ui/gameToastEvents.js';
 import { deriveSpectateView } from './viewModel.js';
 import { formatMatchTypeLabel } from './activeMatches.js';
 
@@ -519,6 +525,71 @@ export function createSpectateController(options) {
     return resolved?.name || fallback;
   }
 
+  function getSnapshotGameId(snapshot) {
+    return normalizeId(snapshot?.game?._id || snapshot?.game?.id || snapshot?.game?.gameId);
+  }
+
+  function getSnapshotMatchId(snapshot) {
+    return normalizeId(snapshot?.match?._id || snapshot?.match?.id || snapshot?.matchId);
+  }
+
+  function getSpectateResultNames(snapshot) {
+    return {
+      whiteName: getSpectatePlayerNameForColor(snapshot, 0),
+      blackName: getSpectatePlayerNameForColor(snapshot, 1),
+    };
+  }
+
+  function buildSpectateResultDetails(snapshot) {
+    const game = snapshot?.game || {};
+    const winnerValue = Number(game.winner);
+    const winner = winnerValue === 0 || winnerValue === 1 ? winnerValue : null;
+    const names = getSpectateResultNames(snapshot);
+    return describeGameResult({
+      winnerColor: winner,
+      winReason: Number(game.winReason),
+      ...names,
+    });
+  }
+
+  function queueSpectateGameResultToast(snapshot) {
+    if (!toastSystem || !snapshot?.game || !isSpectatorResultToastMatchType(snapshot?.match?.type)) {
+      return false;
+    }
+    const names = getSpectateResultNames(snapshot);
+    const toast = buildSpectatorGameResultToast({
+      matchType: snapshot?.match?.type,
+      winner: snapshot.game.winner,
+      winReason: Number(snapshot.game.winReason),
+      ...names,
+    });
+    if (!toast) {
+      return false;
+    }
+    toastSystem.dismissWhere((candidate) => (
+      candidate?.placement === 'board-center'
+      && candidate?.appearance !== 'board-result'
+    ));
+    toastSystem.enqueue(toast);
+    return true;
+  }
+
+  function presentSpectateCompletedGame(snapshot) {
+    if (!snapshot) {
+      hideSpectateGameBanner();
+      return;
+    }
+    if (queueSpectateGameResultToast(snapshot)) {
+      hideSpectateGameBanner();
+      if (spectateState.lastCompletedGame) {
+        spectateState.lastCompletedGame.acknowledged = true;
+        spectateState.lastCompletedGame.resultToastShown = true;
+      }
+      return;
+    }
+    showSpectateGameBanner(snapshot);
+  }
+
   function ensureSpectateGameBannerOverlay() {
     if (spectateGameBannerOverlay) return spectateGameBannerOverlay;
     spectateGameBannerOverlay = createOverlay({
@@ -571,78 +642,21 @@ export function createSpectateController(options) {
     }
 
     const match = snapshot.match || {};
-    const game = snapshot.game || {};
-    const winnerIdx = Number.isInteger(game.winner) ? game.winner : -1;
-    const winnerColor = winnerIdx === 0 || winnerIdx === 1 ? winnerIdx : null;
-    const loserColor = winnerColor === 0 ? 1 : winnerColor === 1 ? 0 : null;
-    const isDraw = winnerColor === null;
-    const winnerName = isDraw ? null : getSpectatePlayerNameForColor(snapshot, winnerColor);
-    const loserName = isDraw || loserColor === null ? null : getSpectatePlayerNameForColor(snapshot, loserColor);
-    const whiteName = getSpectatePlayerNameForColor(snapshot, 0);
-    const blackName = getSpectatePlayerNameForColor(snapshot, 1);
-    const winnerLabel = winnerColor === null
-      ? null
-      : (winnerName || (winnerColor === 0 ? whiteName : blackName) || (winnerColor === 0 ? 'White' : 'Black'));
-    const loserLabel = loserColor === null
-      ? null
-      : (loserName || (loserColor === 0 ? whiteName : blackName) || 'their opponent');
+    const result = buildSpectateResultDetails(snapshot);
 
     const card = document.createElement('div');
     card.className = 'cg-spectate-result-card';
-    if (isDraw) {
+    if (result.isDraw) {
       card.classList.add('cg-spectate-result-card--draw');
     }
 
     const title = document.createElement('div');
     title.className = 'cg-spectate-result-card__title';
-    if (isDraw) {
-      title.textContent = 'Draw';
-    } else {
-      const colorLabel = winnerColor === 0 ? 'White' : 'Black';
-      title.textContent = `${winnerLabel || colorLabel} Victory`;
-    }
+    title.textContent = result.title;
 
     const desc = document.createElement('div');
     desc.className = 'cg-spectate-result-card__desc';
-    const reason = Number(game.winReason);
-    let descText;
-    if (isDraw || reason === WIN_REASONS.DRAW) {
-      descText = `${whiteName} and ${blackName} agreed to a draw.`;
-    } else {
-      switch (reason) {
-        case WIN_REASONS.KING_CAPTURE:
-        case 0:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by capturing ${loserLabel}'s Heart.`;
-          break;
-        case WIN_REASONS.KING_ADVANCE:
-        case 1:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by advancing their Heart to the final rank.`;
-          break;
-        case WIN_REASONS.TRUE_KING:
-        case 2:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} challenged the true Heart.`;
-          break;
-        case WIN_REASONS.DAGGER_PENALTY:
-        case 3:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} accumulated 3 dagger tokens.`;
-          break;
-        case WIN_REASONS.TIME:
-        case 4:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} ran out of time.`;
-          break;
-        case WIN_REASONS.DISCONNECT:
-        case 5:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won because ${loserLabel} disconnected.`;
-          break;
-        case WIN_REASONS.RESIGNATION:
-        case 6:
-          descText = `${winnerLabel} (${winnerColor === 0 ? 'White' : 'Black'}) won by resignation.`;
-          break;
-        default:
-          descText = `${winnerLabel || 'The winner'} prevailed.`;
-      }
-    }
-    desc.textContent = descText;
+    desc.textContent = result.description;
     desc.id = 'spectateGameOverDesc';
 
     const footer = document.createElement('div');
@@ -681,7 +695,7 @@ export function createSpectateController(options) {
     const match = (displaySnapshot && displaySnapshot.match)
       || (rawSnapshot && rawSnapshot.match)
       || {};
-    const matchId = normalizeId(match?._id || match?.id || rawSnapshot?.matchId || displaySnapshot?.matchId);
+    const matchId = getSnapshotMatchId(displaySnapshot) || getSnapshotMatchId(rawSnapshot);
     const storedMatchId = spectateState.lastCompletedGame?.matchId || null;
     if (storedMatchId && matchId && storedMatchId !== matchId) {
       spectateState.lastCompletedGame = null;
@@ -693,7 +707,7 @@ export function createSpectateController(options) {
         && spectateState.lastCompletedGame.acknowledged !== true
         && (!matchId || !spectateState.lastCompletedGame.matchId || spectateState.lastCompletedGame.matchId === matchId)
       ) {
-        showSpectateGameBanner(spectateState.lastCompletedGame.snapshot);
+        presentSpectateCompletedGame(spectateState.lastCompletedGame.snapshot);
         return;
       }
       spectateState.lastCompletedGame = null;
@@ -703,8 +717,8 @@ export function createSpectateController(options) {
 
     if (rawSnapshot?.game && rawSnapshot.game.isActive === false) {
       const snapshotForDisplay = displaySnapshot || rawSnapshot;
-      const currentCompletedGameId = normalizeId(snapshotForDisplay?.game?._id || rawSnapshot?.game?._id);
-      const previousCompletedGameId = normalizeId(spectateState.lastCompletedGame?.snapshot?.game?._id);
+      const currentCompletedGameId = getSnapshotGameId(snapshotForDisplay) || getSnapshotGameId(rawSnapshot);
+      const previousCompletedGameId = getSnapshotGameId(spectateState.lastCompletedGame?.snapshot);
       spectateState.lastCompletedGame = {
         matchId,
         snapshot: snapshotForDisplay,
@@ -712,7 +726,7 @@ export function createSpectateController(options) {
           ? Boolean(spectateState.lastCompletedGame?.acknowledged)
           : false,
       };
-      showSpectateGameBanner(snapshotForDisplay);
+      presentSpectateCompletedGame(snapshotForDisplay);
       return;
     }
 
@@ -722,7 +736,7 @@ export function createSpectateController(options) {
         && spectateState.lastCompletedGame.acknowledged !== true
         && (!matchId || !spectateState.lastCompletedGame.matchId || spectateState.lastCompletedGame.matchId === matchId)
       ) {
-        showSpectateGameBanner(spectateState.lastCompletedGame.snapshot);
+        presentSpectateCompletedGame(spectateState.lastCompletedGame.snapshot);
         return;
       }
       if (displaySnapshot?.game && displaySnapshot.game.isActive === false) {
@@ -731,7 +745,7 @@ export function createSpectateController(options) {
           snapshot: displaySnapshot,
           acknowledged: false,
         };
-        showSpectateGameBanner(displaySnapshot);
+        presentSpectateCompletedGame(displaySnapshot);
         return;
       }
     }
@@ -742,7 +756,7 @@ export function createSpectateController(options) {
         snapshot: displaySnapshot,
         acknowledged: false,
       };
-      showSpectateGameBanner(displaySnapshot);
+      presentSpectateCompletedGame(displaySnapshot);
       return;
     }
 
@@ -840,6 +854,12 @@ export function createSpectateController(options) {
       cols,
       rows,
     );
+    const boardBottom = metrics.boardTop + (metrics.squareSize * rows);
+    const resultToastTop = Math.max(
+      0,
+      Math.min(boardBottom + 8, playAreaEl.clientHeight - 116),
+    );
+    playAreaEl.style.setProperty('--cg-toast-board-below-top', `${resultToastTop}px`);
     const bars = gameView.render({
       sizes: {
         rows,

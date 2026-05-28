@@ -5,6 +5,7 @@
 - `authTokens.js`: JWT creation, parsing, header/cookie extraction, and request user resolution.
 - `authCookies.js`: cookie option builder driven by environment variables.
 - `requestSession.js`: shared request/socket session resolution plus auth/guest cookie application.
+- `usernameFlags.js`: startup backfill for the `User.hasUpdatedUsername` onboarding flag.
 - `adminAccess.js`: server-side admin email checks for HTTP and Socket.IO.
 - `ensureUser.js`: guest creation and legacy-user normalization.
 - `gameClock.js`: server-authoritative live clock state, transitions, and socket payload helpers.
@@ -15,6 +16,7 @@
 - `ensureUser()` now distinguishes real accounts from guest accounts by email and bot flags.
 - Real users with an incorrect `isGuest` flag are repaired instead of being normalized into guest data.
 - `requestSession.resolveSessionFromRequest()` and `resolveSessionFromSocketHandshake()` are now the canonical trust boundary for guests, authenticated users, and socket handshakes.
+- `hasUpdatedUsername` is propagated through auth tokens, session resolution, `/api/auth/session`, and `/api/v1/users/update`; keep those paths in sync if the username-onboarding contract changes.
 - `authTokens.extractTokenFromRequest()` accepts:
   - `Authorization: Bearer ...`
   - raw `Authorization` tokens

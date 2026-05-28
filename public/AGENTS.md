@@ -21,6 +21,7 @@
 - The browser refreshes identity through `/api/auth/session`.
 - Auth is cookie-first now. `authFetch()` should send `credentials: 'include'`, and the browser should not depend on reading `cgToken` from JavaScript.
 - The socket handshake relies on the server-owned cookie session; do not reintroduce raw `userId` fallback auth.
+- Authenticated sessions include `hasUpdatedUsername`; `public/index.js` owns the forced username setup overlay and must stay aligned with `/api/v1/users/update`.
 - `localStorage` may still cache harmless UX state such as queue timers or the last known username, but not the auth token.
 
 ## Board and Spectator Notes
@@ -36,6 +37,7 @@
 - `public/js/modules/utils/clockState.js` should be used to animate from the server clock snapshot, not to replace server clock authority.
 - `public/js/modules/tournaments/ui.js` owns the tournament browser/panel/bracket and publishes tournament accept-needed state, but it does not own the purple accept banner itself.
 - `public/js/modules/tournaments/acceptScheduler.js` owns the client-side grace period between a completed tournament match and the next accept banner. Keep accept countdown/grace math there instead of duplicating it in `public/index.js`.
+- The tournament accept banner is mounted directly on `document.body` so the shared banner overlay cannot block mobile tournament controls; keep the banner shell pass-through except for the accept button.
 
 ## Server Contract Notes
 - Live updates come from Socket.IO:

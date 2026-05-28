@@ -13,12 +13,14 @@ import {
   apiCancelTournament,
   apiAddTournamentBot,
   apiStartTournament,
+  apiEndTournamentRoundRobin,
   apiStartTournamentElimination,
   apiKickTournamentPlayer,
   apiGetTournamentDetails,
   apiGetTournamentHistoryDetails,
   apiGetAdminTournamentDetails,
   apiUpdateTournamentMessage,
+  apiExtendTournamentAccept,
 } from '../api/game.js';
 
 function asText(value, fallback = '') {
@@ -67,6 +69,8 @@ function formatPhaseLabel(phase) {
 }
 
 function getRoundRobinTimeRemaining(tournament, nowMs = Date.now()) {
+  const closedAt = Date.parse(tournament?.roundRobinClosedAt || '');
+  if (Number.isFinite(closedAt)) return '00:00';
   const startedAt = Date.parse(tournament?.roundRobinRoundsStartedAt || tournament?.startedAt || '');
   const minutes = Number(tournament?.config?.roundRobinMinutes) || 15;
   if (!Number.isFinite(startedAt)) return null;
@@ -183,18 +187,30 @@ function shouldShowTournamentStage(tournament, {
 }
 
 function normalizeTournamentConfig(config = {}) {
+  const bounded = (value, fallback, min, max) => {
+    const numeric = Number(value);
+    const source = Number.isFinite(numeric) ? numeric : fallback;
+    return Math.round(Math.max(min, Math.min(max, source)));
+  };
   return {
-    roundRobinMinutes: Number.isFinite(Number(config?.roundRobinMinutes))
-      ? Math.max(1, Math.min(30, Number(config.roundRobinMinutes)))
-      : 15,
-    breakMinutes: Number.isFinite(Number(config?.breakMinutes))
-      ? Math.max(0, Math.min(30, Number(config.breakMinutes)))
-      : 5,
+    roundRobinMinutes: bounded(config?.roundRobinMinutes, 15, 1, 30),
+    timeControlMinutes: bounded(config?.timeControlMinutes, 3, 1, 30),
+    incrementSeconds: bounded(config?.incrementSeconds, 3, 0, 60),
+    roundRobinAcceptSeconds: bounded(config?.roundRobinAcceptSeconds, 30, 5, 600),
+    eliminationAcceptSeconds: bounded(config?.eliminationAcceptSeconds, 120, 5, 600),
+    breakMinutes: bounded(config?.breakMinutes, 5, 0, 30),
     eliminationStyle: String(config?.eliminationStyle || 'single').toLowerCase() === 'double'
       ? 'double'
       : 'single',
     victoryPoints: [3, 4, 5].includes(Number(config?.victoryPoints)) ? Number(config.victoryPoints) : 3,
+    lateJoinRoundRobin: Boolean(config?.lateJoinRoundRobin),
   };
+}
+
+function shouldShowRedemptionResultsColumn(tournament) {
+  const bracketType = String(tournament?.bracket?.type || '').toLowerCase();
+  if (bracketType) return bracketType === 'double';
+  return normalizeTournamentConfig(tournament?.config).eliminationStyle === 'double';
 }
 
 function appendTournamentSettingSummary(settingsList, config, { includeBreakTime = true } = {}) {
@@ -202,8 +218,11 @@ function appendTournamentSettingSummary(settingsList, config, { includeBreakTime
     settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Break time: ${config.breakMinutes} min`));
   }
   settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Round robin: ${config.roundRobinMinutes} min`));
+  settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Time control: ${config.timeControlMinutes}+${config.incrementSeconds}s`));
+  settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Accept: ${config.roundRobinAcceptSeconds}s RR, ${config.eliminationAcceptSeconds}s elim`));
   settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Elimination: ${config.eliminationStyle === 'double' ? 'Double' : 'Single'}`));
   settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Victory target: ${config.victoryPoints}`));
+  settingsList.appendChild(el('div', { className: 'tournament-panel__setting' }, `Late joining: ${config.lateJoinRoundRobin ? 'On' : 'Off'}`));
 }
 
 function createTournamentNumberSettingField(labelText, { value, min, max }) {
@@ -220,6 +239,16 @@ function createTournamentNumberSettingField(labelText, { value, min, max }) {
   return { field, input };
 }
 
+function getAcceptDeadlineMs(activeGame, nowMs = Date.now()) {
+  const parsed = Date.parse(activeGame?.acceptDeadlineAt || '');
+  if (Number.isFinite(parsed)) return parsed;
+  const remainingSeconds = Number(activeGame?.acceptSecondsRemaining ?? activeGame?.acceptWindowSeconds);
+  if (Number.isFinite(remainingSeconds) && remainingSeconds > 0) {
+    return nowMs + (Math.ceil(remainingSeconds) * 1000);
+  }
+  return null;
+}
+
 function formatStandingPoints(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return '0';
@@ -229,13 +258,13 @@ function formatStandingPoints(value) {
 }
 
 function resolveTournamentDisplayElo(entry) {
-  const preTournamentElo = Number(entry?.preTournamentElo);
-  if (Number.isFinite(preTournamentElo) && preTournamentElo > 0) {
-    return preTournamentElo;
-  }
   const elo = Number(entry?.elo);
   if (Number.isFinite(elo) && elo > 0) {
     return elo;
+  }
+  const preTournamentElo = Number(entry?.preTournamentElo);
+  if (Number.isFinite(preTournamentElo) && preTournamentElo > 0) {
+    return preTournamentElo;
   }
   return null;
 }
@@ -502,10 +531,14 @@ export function initTournamentUi({
   let messageDirty = false;
   let settingsDraft = normalizeTournamentConfig();
   let settingsDirty = false;
+  let settingsSaveTimer = null;
+  let settingsSaveVersion = 0;
   let lastTournamentId = null;
   let pollHandle = null;
   let roundRobinTimerHandle = null;
   let roundRobinTimerEl = null;
+  let acceptCountdownHandle = null;
+  let acceptCountdownEls = [];
   let tournamentServerClockOffsetMs = 0;
   let lastAcceptStateKey = null;
   let playAreaBoundsFrame = null;
@@ -630,6 +663,14 @@ export function initTournamentUi({
     }
   }
 
+  function stopAcceptCountdownTimer() {
+    if (acceptCountdownHandle) {
+      window.clearTimeout(acceptCountdownHandle);
+      acceptCountdownHandle = null;
+    }
+    acceptCountdownEls = [];
+  }
+
   function getTournamentServerNowMs() {
     return Date.now() + tournamentServerClockOffsetMs;
   }
@@ -676,6 +717,40 @@ export function initTournamentUi({
       return;
     }
     scheduleRoundRobinTimerTick();
+  }
+
+  function refreshAcceptCountdownDisplay() {
+    const nowMs = getTournamentServerNowMs();
+    acceptCountdownEls = acceptCountdownEls.filter((node) => node && node.isConnected);
+    acceptCountdownEls.forEach((node) => {
+      const deadlineMs = Number(node.dataset.acceptDeadlineMs);
+      const fallback = Number(node.dataset.acceptFallbackSeconds);
+      const remaining = Number.isFinite(deadlineMs)
+        ? Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000))
+        : Math.max(0, Math.ceil(fallback || 0));
+      node.textContent = `${remaining}s`;
+      node.disabled = remaining <= 0 || node.dataset.acceptBusy === 'true';
+    });
+  }
+
+  function scheduleAcceptCountdownTick() {
+    if (!acceptCountdownEls.length) return;
+    refreshAcceptCountdownDisplay();
+    if (!acceptCountdownEls.length) return;
+    const nowMs = getTournamentServerNowMs();
+    const delayMs = Math.max(100, 1000 - (nowMs % 1000));
+    acceptCountdownHandle = window.setTimeout(() => {
+      scheduleAcceptCountdownTick();
+    }, delayMs);
+  }
+
+  function startAcceptCountdownTimer() {
+    if (acceptCountdownHandle) {
+      window.clearTimeout(acceptCountdownHandle);
+      acceptCountdownHandle = null;
+    }
+    acceptCountdownEls = Array.from(panelRoot.querySelectorAll('[data-accept-deadline-ms]'));
+    scheduleAcceptCountdownTick();
   }
 
   function startPolling() {
@@ -790,6 +865,7 @@ export function initTournamentUi({
     } else {
       stopPolling();
       stopRoundRobinTimer();
+      stopAcceptCountdownTimer();
     }
     notifyPanelState();
   }
@@ -813,12 +889,17 @@ export function initTournamentUi({
     currentTournament = payload?.tournament || null;
     currentRole = payload?.role || null;
     if (!currentTournament) {
+      if (settingsSaveTimer) {
+        clearTimeout(settingsSaveTimer);
+        settingsSaveTimer = null;
+      }
       currentViewMode = 'live';
       currentRole = null;
       messageDraft = '';
       messageDirty = false;
       settingsDraft = normalizeTournamentConfig();
       settingsDirty = false;
+      settingsSaveVersion += 1;
       lastTournamentId = null;
       lastAcceptStateKey = null;
       notifyAcceptState();
@@ -832,6 +913,11 @@ export function initTournamentUi({
       messageDirty = false;
       settingsDraft = normalizeTournamentConfig(currentTournament.config);
       settingsDirty = false;
+      settingsSaveVersion += 1;
+      if (settingsSaveTimer) {
+        clearTimeout(settingsSaveTimer);
+        settingsSaveTimer = null;
+      }
       lastTournamentId = currentTournament.id;
     } else if (!messageDirty) {
       messageDraft = asText(currentTournament.message, '');
@@ -843,6 +929,45 @@ export function initTournamentUi({
     notifyAcceptState();
     syncPanelVisibility();
     renderPanel();
+  }
+
+  function isTournamentConfigDirty(nextConfig, baseConfig) {
+    return nextConfig.breakMinutes !== baseConfig.breakMinutes
+      || nextConfig.roundRobinMinutes !== baseConfig.roundRobinMinutes
+      || nextConfig.timeControlMinutes !== baseConfig.timeControlMinutes
+      || nextConfig.incrementSeconds !== baseConfig.incrementSeconds
+      || nextConfig.roundRobinAcceptSeconds !== baseConfig.roundRobinAcceptSeconds
+      || nextConfig.eliminationAcceptSeconds !== baseConfig.eliminationAcceptSeconds
+      || nextConfig.eliminationStyle !== baseConfig.eliminationStyle
+      || nextConfig.victoryPoints !== baseConfig.victoryPoints
+      || nextConfig.lateJoinRoundRobin !== baseConfig.lateJoinRoundRobin;
+  }
+
+  function queueTournamentConfigAutosave(config, { delayMs = 400 } = {}) {
+    if (!currentTournament?.id) return;
+    const tournamentId = currentTournament.id;
+    const saveVersion = settingsSaveVersion + 1;
+    settingsSaveVersion = saveVersion;
+    if (settingsSaveTimer) {
+      clearTimeout(settingsSaveTimer);
+    }
+    settingsSaveTimer = setTimeout(async () => {
+      settingsSaveTimer = null;
+      try {
+        await apiUpdateTournamentConfig({
+          tournamentId,
+          config,
+        });
+        if (settingsSaveVersion !== saveVersion) return;
+        settingsDirty = false;
+        await refreshCurrentTournament({ tournamentId });
+      } catch (error) {
+        if (settingsSaveVersion === saveVersion) {
+          settingsDirty = true;
+        }
+        console.error('Failed to autosave tournament settings', error);
+      }
+    }, delayMs);
   }
 
   async function refreshCurrentTournament({ silent = false, tournamentId = null, viewMode = null } = {}) {
@@ -918,14 +1043,19 @@ export function initTournamentUi({
     const canParticipate = isLoggedIn || (browserTestModeEnabled && Boolean(session?.isGuest));
 
     if (joinBtn) {
-      const canJoin = Boolean(selected && selected.state === 'starting' && canParticipate);
+      const canLateJoin = Boolean(
+        selected?.lateJoinRoundRobin
+        && selected.state === 'active'
+        && (selected.phase === 'round_robin' || selected.phase === 'round_robin_complete')
+      );
+      const canJoin = Boolean(selected && canParticipate && (selected.state === 'starting' || canLateJoin));
       joinBtn.disabled = !canJoin;
       if (!isLoggedIn && !browserTestModeEnabled) {
         joinBtn.title = 'Login required for participation.';
       } else if (!selected) {
         joinBtn.title = 'Select a tournament first.';
-      } else if (selected.state !== 'starting') {
-        joinBtn.title = 'Join is only available before the tournament starts.';
+      } else if (selected.state !== 'starting' && !canLateJoin) {
+        joinBtn.title = 'This tournament is not accepting late players.';
       } else {
         joinBtn.title = '';
       }
@@ -959,6 +1089,7 @@ export function initTournamentUi({
         <span class="tournament-browser-row__meta">${row.state.toUpperCase()} | ${(row.phase || 'lobby').replace(/_/g, ' ')}</span>
         <span class="tournament-browser-row__meta">Host: ${row.hostUsername}</span>
         <span class="tournament-browser-row__meta">Players: ${row.playerCount} | Viewers: ${row.viewerCount}</span>
+        <span class="tournament-browser-row__meta">Late joining: ${row.lateJoinRoundRobin ? 'On' : 'Off'}</span>
       `;
       rowBtn.addEventListener('click', () => {
         selectedTournamentId = row.id;
@@ -1525,6 +1656,7 @@ export function initTournamentUi({
 
   function renderPanel() {
     stopRoundRobinTimer();
+    stopAcceptCountdownTimer();
     clearNode(hostColumn);
     clearNode(sideColumn);
     clearNode(participantColumn);
@@ -1570,19 +1702,30 @@ export function initTournamentUi({
 
     if (currentTournament.phase === 'completed') {
       const placements = buildCompletedPlacements(participants, currentTournament.bracket);
+      const showRedemptionColumn = shouldShowRedemptionResultsColumn(currentTournament);
       const resultsWrap = el('div', { className: 'tournament-panel__results' });
       const resultsCard = el('div', { className: 'tournament-panel__results-card' });
       resultsCard.appendChild(el('div', { className: 'tournament-panel__results-title' }, 'Final Results'));
-      const resultsHeader = el('div', { className: 'tournament-panel__results-header' });
+      const resultsHeader = el('div', {
+        className: showRedemptionColumn
+          ? 'tournament-panel__results-header'
+          : 'tournament-panel__results-header tournament-panel__results-header--no-redemption',
+      });
       resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--place' }, 'Placement'));
       resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--name' }, 'Name'));
-      resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--losers' }, 'Deepest Redemption'));
+      if (showRedemptionColumn) {
+        resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--losers' }, 'Deepest Redemption'));
+      }
       resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--winners' }, 'Deepest Main'));
       resultsHeader.appendChild(el('div', { className: 'tournament-panel__results-head tournament-panel__results-head--points' }, 'Points'));
       resultsCard.appendChild(resultsHeader);
       const resultsList = el('div', { className: 'tournament-panel__results-list' });
       placements.forEach((entry) => {
-        const row = el('div', { className: 'tournament-panel__results-row' });
+        const row = el('div', {
+          className: showRedemptionColumn
+            ? 'tournament-panel__results-row'
+            : 'tournament-panel__results-row tournament-panel__results-row--no-redemption',
+        });
         const place = el('div', { className: 'tournament-panel__results-place' });
         place.appendChild(el('span', { className: 'tournament-panel__results-place-label' }, entry.label));
         if (entry.position <= 3) {
@@ -1618,10 +1761,12 @@ export function initTournamentUi({
         }
         nameCell.appendChild(el('span', { className: 'tournament-panel__results-name-label' }, entry.participant?.username || 'Player'));
         row.appendChild(nameCell);
-        row.appendChild(el('div', { className: 'tournament-panel__results-depth' }, formatPlacementDepth(entry.deepestLosersRound, {
-          section: 'losers',
-          bracket: currentTournament?.bracket,
-        })));
+        if (showRedemptionColumn) {
+          row.appendChild(el('div', { className: 'tournament-panel__results-depth' }, formatPlacementDepth(entry.deepestLosersRound, {
+            section: 'losers',
+            bracket: currentTournament?.bracket,
+          })));
+        }
         row.appendChild(el('div', { className: 'tournament-panel__results-depth' }, formatPlacementDepth(
           entry.deepestFinalsRound >= 0 ? entry.deepestFinalsRound : entry.deepestWinnersRound,
           {
@@ -1641,9 +1786,6 @@ export function initTournamentUi({
     const hostCard = el('div', { className: 'tournament-panel__card tournament-panel__card--host' });
     hostCard.appendChild(el('div', { className: 'tournament-panel__card-title' }, hasHost ? 'Host Controls' : 'Tournament Status'));
     hostCard.appendChild(el('div', { className: 'tournament-panel__host-name' }, hasHost ? (currentTournament.host?.username || 'Tournament Host') : 'Autopilot'));
-    const statsRow = el('div', { className: 'tournament-panel__stats' });
-    statsRow.appendChild(el('div', { className: 'tournament-panel__stat' }, `Viewers: ${Number(currentTournament.viewerCount || 0)}`));
-    hostCard.appendChild(statsRow);
 
     const settingsList = el('div', { className: 'tournament-panel__settings' });
     const hostCanEditSettings = !isReadOnlyView && roleFlags.isHost && currentTournament.state === 'starting';
@@ -1663,6 +1805,34 @@ export function initTournamentUi({
       });
       settingsList.appendChild(minutesField);
 
+      const { field: timeControlField, input: timeControlInput } = createTournamentNumberSettingField('Time control', {
+        value: editableConfig.timeControlMinutes,
+        min: 1,
+        max: 30,
+      });
+      settingsList.appendChild(timeControlField);
+
+      const { field: incrementField, input: incrementInput } = createTournamentNumberSettingField('Interval seconds', {
+        value: editableConfig.incrementSeconds,
+        min: 0,
+        max: 60,
+      });
+      settingsList.appendChild(incrementField);
+
+      const { field: roundRobinAcceptField, input: roundRobinAcceptInput } = createTournamentNumberSettingField('Round robin accept', {
+        value: editableConfig.roundRobinAcceptSeconds,
+        min: 5,
+        max: 600,
+      });
+      settingsList.appendChild(roundRobinAcceptField);
+
+      const { field: eliminationAcceptField, input: eliminationAcceptInput } = createTournamentNumberSettingField('Elimination accept', {
+        value: editableConfig.eliminationAcceptSeconds,
+        min: 5,
+        max: 600,
+      });
+      settingsList.appendChild(eliminationAcceptField);
+
       const styleField = el('label', { className: 'tournament-panel__setting-field' });
       styleField.appendChild(el('span', { className: 'tournament-panel__setting-label' }, 'Elimination'));
       const styleSelect = el('select', { className: 'tournament-panel__setting-input' });
@@ -1679,41 +1849,46 @@ export function initTournamentUi({
       victoryField.appendChild(victorySelect);
       settingsList.appendChild(victoryField);
 
-      const settingsActions = el('div', { className: 'tournament-panel__actions' });
-      const saveSettingsBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Save Settings'), {
-        variant: 'neutral',
-        position: 'relative',
+      const lateJoinField = el('label', { className: 'tournament-panel__setting-field tournament-panel__setting-field--checkbox' });
+      lateJoinField.appendChild(el('span', { className: 'tournament-panel__setting-label' }, 'Late joining'));
+      const lateJoinInput = el('input', {
+        className: 'tournament-panel__setting-checkbox',
+        type: 'checkbox',
       });
-      const syncSettingsDraft = () => {
+      lateJoinInput.checked = Boolean(editableConfig.lateJoinRoundRobin);
+      lateJoinField.appendChild(lateJoinInput);
+      settingsList.appendChild(lateJoinField);
+
+      const syncSettingsDraft = ({ delayMs = 400 } = {}) => {
         settingsDraft = normalizeTournamentConfig({
           breakMinutes: breakInput.value,
           roundRobinMinutes: minutesInput.value,
+          timeControlMinutes: timeControlInput.value,
+          incrementSeconds: incrementInput.value,
+          roundRobinAcceptSeconds: roundRobinAcceptInput.value,
+          eliminationAcceptSeconds: eliminationAcceptInput.value,
           eliminationStyle: styleSelect.value,
           victoryPoints: victorySelect.value,
+          lateJoinRoundRobin: lateJoinInput.checked,
         });
-        settingsDirty = settingsDraft.breakMinutes !== currentConfig.breakMinutes
-          || settingsDraft.roundRobinMinutes !== currentConfig.roundRobinMinutes
-          || settingsDraft.eliminationStyle !== currentConfig.eliminationStyle
-          || settingsDraft.victoryPoints !== currentConfig.victoryPoints;
-        saveSettingsBtn.disabled = !settingsDirty;
+        settingsDirty = isTournamentConfigDirty(settingsDraft, currentConfig);
+        if (settingsDirty) {
+          queueTournamentConfigAutosave(settingsDraft, { delayMs });
+        } else if (settingsSaveTimer) {
+          clearTimeout(settingsSaveTimer);
+          settingsSaveTimer = null;
+          settingsSaveVersion += 1;
+        }
       };
       breakInput.addEventListener('input', syncSettingsDraft);
       minutesInput.addEventListener('input', syncSettingsDraft);
-      styleSelect.addEventListener('change', syncSettingsDraft);
-      victorySelect.addEventListener('change', syncSettingsDraft);
-      saveSettingsBtn.disabled = !settingsDirty;
-      saveSettingsBtn.addEventListener('click', async () => {
-        syncSettingsDraft();
-        if (!settingsDirty) return;
-        await apiUpdateTournamentConfig({
-          tournamentId: currentTournament.id,
-          config: settingsDraft,
-        });
-        settingsDirty = false;
-        await refreshCurrentTournament({ tournamentId: currentTournament.id });
-      });
-      settingsActions.appendChild(saveSettingsBtn);
-      settingsList.appendChild(settingsActions);
+      timeControlInput.addEventListener('input', syncSettingsDraft);
+      incrementInput.addEventListener('input', syncSettingsDraft);
+      roundRobinAcceptInput.addEventListener('input', syncSettingsDraft);
+      eliminationAcceptInput.addEventListener('input', syncSettingsDraft);
+      styleSelect.addEventListener('change', () => syncSettingsDraft({ delayMs: 0 }));
+      victorySelect.addEventListener('change', () => syncSettingsDraft({ delayMs: 0 }));
+      lateJoinInput.addEventListener('change', () => syncSettingsDraft({ delayMs: 0 }));
     } else if (hostCanEditBreakTime) {
       appendTournamentSettingSummary(settingsList, currentConfig, { includeBreakTime: false });
 
@@ -1724,33 +1899,21 @@ export function initTournamentUi({
       });
       settingsList.appendChild(breakField);
 
-      const settingsActions = el('div', { className: 'tournament-panel__actions' });
-      const saveBreakBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Save Break Time'), {
-        variant: 'neutral',
-        position: 'relative',
-      });
       const syncBreakDraft = () => {
         settingsDraft = normalizeTournamentConfig({
           ...currentConfig,
           breakMinutes: breakInput.value,
         });
         settingsDirty = settingsDraft.breakMinutes !== currentConfig.breakMinutes;
-        saveBreakBtn.disabled = !settingsDirty;
+        if (settingsDirty) {
+          queueTournamentConfigAutosave({ breakMinutes: settingsDraft.breakMinutes });
+        } else if (settingsSaveTimer) {
+          clearTimeout(settingsSaveTimer);
+          settingsSaveTimer = null;
+          settingsSaveVersion += 1;
+        }
       };
       breakInput.addEventListener('input', syncBreakDraft);
-      saveBreakBtn.disabled = !settingsDirty;
-      saveBreakBtn.addEventListener('click', async () => {
-        syncBreakDraft();
-        if (!settingsDirty) return;
-        await apiUpdateTournamentConfig({
-          tournamentId: currentTournament.id,
-          config: { breakMinutes: settingsDraft.breakMinutes },
-        });
-        settingsDirty = false;
-        await refreshCurrentTournament({ tournamentId: currentTournament.id });
-      });
-      settingsActions.appendChild(saveBreakBtn);
-      settingsList.appendChild(settingsActions);
     } else {
       appendTournamentSettingSummary(settingsList, currentConfig);
     }
@@ -1812,6 +1975,32 @@ export function initTournamentUi({
       controls.appendChild(cancelBtn);
     }
 
+    const canEndRoundRobin = Boolean(currentTournament.canEndRoundRobin)
+      || (
+        currentTournament.state === 'active'
+        && currentTournament.phase === 'round_robin'
+        && !currentTournament.roundRobinClosedAt
+      );
+    if (!isReadOnlyView && roleFlags.isHost && canEndRoundRobin) {
+      const endRoundRobinBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, 'End Round Robin'), {
+        variant: 'danger',
+        position: 'relative',
+      });
+      endRoundRobinBtn.addEventListener('click', () => {
+        openConfirmation({
+          titleText: 'End Round Robin?',
+          messageText: 'No new round-robin games will be paired. Active games can finish before elimination starts.',
+          confirmLabel: 'End Round Robin',
+          confirmVariant: 'danger',
+          onConfirm: async () => {
+            await apiEndTournamentRoundRobin({ tournamentId: currentTournament.id });
+            await refreshCurrentTournament({ tournamentId: currentTournament.id });
+          },
+        });
+      });
+      controls.appendChild(endRoundRobinBtn);
+    }
+
     if (!isReadOnlyView && roleFlags.isHost && currentTournament.canStartElimination) {
       const eliminationBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button tournament-modal__button--danger' }, 'Start Elimination'), {
         variant: 'danger',
@@ -1861,6 +2050,7 @@ export function initTournamentUi({
     const sideTop = el('div', { className: 'tournament-panel__card tournament-panel__card--summary' });
     sideTop.appendChild(el('div', { className: 'tournament-panel__tournament-name' }, asText(currentTournament.label, 'Tournament')));
     sideTop.appendChild(el('div', { className: 'tournament-panel__status-line' }, `${formatPhaseLabel(currentTournament.phase)} | ${currentTournament.currentRoundLabel || 'Tournament'}`));
+    sideTop.appendChild(el('div', { className: 'tournament-panel__status-line' }, `Viewers: ${Number(currentTournament.viewerCount || 0)}`));
     if (phaseTimerText) {
       roundRobinTimerEl = el('div', { className: 'tournament-panel__status-line' }, phaseTimerText);
       sideTop.appendChild(roundRobinTimerEl);
@@ -1922,6 +2112,8 @@ export function initTournamentUi({
       const tbody = el('tbody');
       participants.forEach((participant) => {
         const row = el('tr', { className: 'tournament-panel__participant-row' });
+        const participantActiveGame = participant.activeGame || null;
+        const participantRequiresAccept = Boolean(participantActiveGame?.requiresAccept && participantActiveGame?.gameId && Number.isInteger(Number(participantActiveGame?.color)));
         const nameCell = el('td', { className: 'tournament-panel__participant-name-cell' });
         const identity = el('div', { className: 'tournament-panel__participant-identity' });
         if (isTournamentBot(participant)) {
@@ -1935,18 +2127,64 @@ export function initTournamentUi({
         } else {
           const eloValue = resolveTournamentDisplayElo(participant);
           if (Number.isFinite(eloValue)) {
+            const hasCurrentElo = Number.isFinite(Number(participant?.elo));
+            const eloLabel = hasCurrentElo ? 'ELO' : 'Pre-tournament ELO';
             const eloBadge = createEloBadge({
               elo: eloValue,
               size: 20,
               variant: 'light',
-              alt: 'Pre-tournament ELO',
-              title: `Pre-tournament ELO: ${Math.round(eloValue).toLocaleString()}`,
+              alt: eloLabel,
+              title: `${eloLabel}: ${Math.round(eloValue).toLocaleString()}`,
             });
             eloBadge.classList.add('tournament-panel__participant-elo');
             identity.appendChild(eloBadge);
           }
         }
         identity.appendChild(el('div', { className: 'tournament-panel__participant-name' }, participant.username || 'Player'));
+        if (!isReadOnlyView && roleFlags.isHost && participantRequiresAccept) {
+          const deadlineMs = getAcceptDeadlineMs(participantActiveGame, getTournamentServerNowMs());
+          const remainingSeconds = Number(participantActiveGame?.acceptSecondsRemaining ?? participantActiveGame?.acceptWindowSeconds);
+          const initialRemainingSeconds = Number.isFinite(remainingSeconds)
+            ? Math.max(0, Math.ceil(remainingSeconds))
+            : 0;
+          const extendBtn = el('button', {
+            type: 'button',
+            className: 'tournament-panel__accept-countdown',
+            title: '+30 seconds',
+            'aria-label': `Add 30 seconds for ${participant.username || 'Player'} to accept`,
+            'data-accept-deadline-ms': Number.isFinite(deadlineMs) ? String(deadlineMs) : '',
+            'data-accept-fallback-seconds': String(initialRemainingSeconds),
+          }, `${initialRemainingSeconds}s`);
+          let extendInFlight = false;
+          async function submitAcceptExtension(event = null) {
+            if (event?.button !== undefined && event.button !== 0) return;
+            if (event && typeof event.preventDefault === 'function') {
+              event.preventDefault();
+            }
+            if (extendInFlight || extendBtn.dataset.acceptBusy === 'true') return;
+            extendInFlight = true;
+            extendBtn.dataset.acceptBusy = 'true';
+            extendBtn.disabled = true;
+            try {
+              await apiExtendTournamentAccept({
+                tournamentId: currentTournament.id,
+                gameId: participantActiveGame.gameId,
+                seconds: 30,
+              });
+              await refreshCurrentTournament({ tournamentId: currentTournament.id, silent: true });
+            } catch (err) {
+              extendInFlight = false;
+              extendBtn.dataset.acceptBusy = 'false';
+              extendBtn.disabled = false;
+              try {
+                window.alert(err.message || 'Unable to extend accept time.');
+              } catch (_) {}
+            }
+          }
+          extendBtn.addEventListener('pointerdown', submitAcceptExtension);
+          extendBtn.addEventListener('click', submitAcceptExtension);
+          identity.appendChild(extendBtn);
+        }
         nameCell.appendChild(identity);
         row.appendChild(nameCell);
 
@@ -1955,9 +2193,7 @@ export function initTournamentUi({
         row.appendChild(pointsCell);
 
         const actionCell = el('td', { className: 'tournament-panel__participant-action-cell' });
-        const participantActiveGame = participant.activeGame || null;
         const isCurrentSessionParticipant = String(participant.userId || '') === String(getSessionInfo?.()?.userId || '');
-        const participantRequiresAccept = Boolean(participantActiveGame?.requiresAccept && participantActiveGame?.gameId && Number.isInteger(Number(participantActiveGame?.color)));
         if (!isReadOnlyView && roleFlags.isHost && currentTournament.state === 'starting' && String(participant.userId || '') !== String(currentTournament.host?.userId || '')) {
           const kickBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, participant.type === 'bot' ? 'Remove Bot' : 'Remove'), {
             variant: 'neutral',
@@ -1988,8 +2224,11 @@ export function initTournamentUi({
             position: 'relative',
           });
           let acceptInFlight = false;
-          acceptBtn.addEventListener('click', async (event) => {
-            event.preventDefault();
+          async function submitPanelTournamentAccept(event = null) {
+            if (event?.button !== undefined && event.button !== 0) return;
+            if (event && typeof event.preventDefault === 'function') {
+              event.preventDefault();
+            }
             if (acceptInFlight) return;
             acceptInFlight = true;
             acceptBtn.disabled = true;
@@ -2009,6 +2248,13 @@ export function initTournamentUi({
                 window.alert(err.message || 'Unable to accept tournament match.');
               } catch (_) {}
             }
+          }
+
+          acceptBtn.addEventListener('pointerdown', (event) => {
+            submitPanelTournamentAccept(event);
+          });
+          acceptBtn.addEventListener('click', async (event) => {
+            submitPanelTournamentAccept(event);
           });
           actionCell.appendChild(acceptBtn);
         } else if (participantActiveGame?.matchId) {
@@ -2037,6 +2283,7 @@ export function initTournamentUi({
     rosterCard.appendChild(rosterList);
     participantColumn.appendChild(rosterCard);
     startRoundRobinTimer();
+    startAcceptCountdownTimer();
   }
 
   function buildBrowserModal() {
@@ -2102,11 +2349,16 @@ export function initTournamentUi({
     const { title, status, section } = createModalShell('Create Tournament');
     const labelInput = el('input', { type: 'text', placeholder: 'Tournament label', maxlength: '60' });
     const minutesInput = el('input', { type: 'number', min: '1', max: '30', value: '15' });
+    const timeControlInput = el('input', { type: 'number', min: '1', max: '30', value: '3' });
+    const incrementInput = el('input', { type: 'number', min: '0', max: '60', value: '3' });
+    const roundRobinAcceptInput = el('input', { type: 'number', min: '5', max: '600', value: '30' });
+    const eliminationAcceptInput = el('input', { type: 'number', min: '5', max: '600', value: '120' });
     const breakInput = el('input', { type: 'number', min: '0', max: '30', value: '5' });
     const styleSelect = el('select');
     styleSelect.innerHTML = '<option value="single">Single Elimination</option><option value="double">Double Elimination</option>';
     const victorySelect = el('select');
     victorySelect.innerHTML = '<option value="3">3</option><option value="4">4</option><option value="5">5</option>';
+    const lateJoinInput = el('input', { type: 'checkbox' });
     const saveBtn = upgradeButton(el('button', { type: 'button', className: 'tournament-modal__button' }, 'Create Tournament'), {
       variant: 'neutral',
       position: 'relative',
@@ -2126,9 +2378,14 @@ export function initTournamentUi({
     createOverlayModal.content.appendChild(title);
     section.appendChild(row('Label', labelInput));
     section.appendChild(row('Round robin minutes', minutesInput));
+    section.appendChild(row('Time control minutes', timeControlInput));
+    section.appendChild(row('Interval seconds', incrementInput));
+    section.appendChild(row('Round robin accept seconds', roundRobinAcceptInput));
+    section.appendChild(row('Elimination accept seconds', eliminationAcceptInput));
     section.appendChild(row('Break time minutes', breakInput));
     section.appendChild(row('Elimination style', styleSelect));
     section.appendChild(row('Victory points', victorySelect));
+    section.appendChild(row('Late joining round robin', lateJoinInput));
     section.appendChild(saveBtn);
     section.appendChild(cancelBtn);
     createOverlayModal.content.appendChild(section);
@@ -2141,9 +2398,14 @@ export function initTournamentUi({
           label: labelInput.value,
           config: {
             roundRobinMinutes: Number(minutesInput.value),
+            timeControlMinutes: Number(timeControlInput.value),
+            incrementSeconds: Number(incrementInput.value),
+            roundRobinAcceptSeconds: Number(roundRobinAcceptInput.value),
+            eliminationAcceptSeconds: Number(eliminationAcceptInput.value),
             breakMinutes: Number(breakInput.value),
             eliminationStyle: styleSelect.value,
             victoryPoints: Number(victorySelect.value),
+            lateJoinRoundRobin: lateJoinInput.checked,
           },
         });
         createOverlayModal.hide({ restoreFocus: false });
@@ -2294,7 +2556,14 @@ export function initTournamentUi({
     },
     setTournamentGameActive: (inGame) => {
       const wasInTournamentGame = isInTournamentGame;
-      isInTournamentGame = Boolean(inGame);
+      const nextInTournamentGame = Boolean(inGame);
+      if (wasInTournamentGame === nextInTournamentGame) {
+        if (nextInTournamentGame) {
+          schedulePlayAreaBoundsChange();
+        }
+        return;
+      }
+      isInTournamentGame = nextInTournamentGame;
       if (!wasInTournamentGame && isInTournamentGame) {
         activePanelSection = 'game';
       }

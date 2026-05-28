@@ -98,6 +98,40 @@ describe('users/update route preferences', () => {
     expect(applyAuthenticatedCookies).not.toHaveBeenCalled();
   });
 
+  test('marks username setup complete when the authenticated user saves a username', async () => {
+    User.findOne.mockResolvedValue(null);
+    User.findByIdAndUpdate.mockResolvedValue({
+      _id: '507f191e810c19729de860ea',
+      username: 'NewName',
+      elo: 880,
+      isBot: false,
+      isGuest: false,
+      hasUpdatedUsername: true,
+      tooltipsEnabled: true,
+      toastNotificationsEnabled: true,
+      animationSpeed: 'slow',
+      email: 'c@example.com',
+    });
+
+    const response = await callPatch(handler, { username: ' NewName ' });
+
+    expect(response.statusCode).toBe(200);
+    expect(User.findByIdAndUpdate).toHaveBeenCalledWith(
+      '507f191e810c19729de860ea',
+      { username: 'NewName', hasUpdatedUsername: true },
+      { new: true }
+    );
+    expect(response.payload).toMatchObject({
+      username: 'NewName',
+      hasUpdatedUsername: true,
+    });
+    expect(eventBus.emit).toHaveBeenCalledWith('user:updated', {
+      userId: '507f191e810c19729de860ea',
+      username: 'NewName',
+    });
+    expect(applyAuthenticatedCookies).toHaveBeenCalledTimes(1);
+  });
+
   test('rejects non-boolean tooltip preference input', async () => {
     const response = await callPatch(handler, { tooltipsEnabled: 'sometimes' });
 

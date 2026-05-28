@@ -89,6 +89,7 @@ function normalizeResolvedUser(resolved) {
     username: resolved.username || FALLBACK_USERNAME,
     email: resolved.email || '',
     isGuest: Boolean(resolved.isGuest),
+    hasUpdatedUsername: Boolean(resolved.hasUpdatedUsername || resolved.user?.hasUpdatedUsername),
     user: resolved.user || null,
   };
 }
@@ -102,6 +103,7 @@ function normalizeInjectedSession(session) {
     username: session.username || FALLBACK_USERNAME,
     email: session.email || '',
     isGuest: Boolean(session.isGuest),
+    hasUpdatedUsername: Boolean(session.hasUpdatedUsername || session.user?.hasUpdatedUsername),
     user: session.user || null,
   };
 }
@@ -126,6 +128,7 @@ function resolveSessionFromVerifiedToken(token) {
     username: payload.username || FALLBACK_USERNAME,
     email: typeof payload.email === 'string' ? payload.email : '',
     isGuest,
+    hasUpdatedUsername: Boolean(payload.hasUpdatedUsername),
     user: null,
   };
 }
@@ -145,6 +148,7 @@ async function resolveGuestFromCookieUser(cookieUserId) {
         username: repaired.username || FALLBACK_USERNAME,
         email: repaired.email || '',
         isGuest: false,
+        hasUpdatedUsername: Boolean(repaired.hasUpdatedUsername),
         user: repaired,
       };
     }
@@ -159,6 +163,7 @@ async function resolveGuestFromCookieUser(cookieUserId) {
     username: ensured.username || FALLBACK_USERNAME,
     email: '',
     isGuest: Boolean(ensured.isGuest),
+    hasUpdatedUsername: false,
     user: null,
   };
 }
@@ -227,6 +232,7 @@ async function resolveSessionFromRequest(req, options = {}) {
     username: guest.username || FALLBACK_USERNAME,
     email: '',
     isGuest: true,
+    hasUpdatedUsername: false,
     user: null,
   };
 }

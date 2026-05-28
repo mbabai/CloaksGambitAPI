@@ -1,9 +1,11 @@
-import { ACTIONS } from '../constants.js';
+import { ACTIONS, WIN_REASONS } from '../constants.js';
 import { groupCapturedPiecesByColor } from '../utils/captured.js';
 
 const DEFAULT_TOAST_MS = 2000;
 const ANNOUNCEMENT_TOAST_MS = 1400;
 const DEFAULT_PULSE_MS = 1500;
+const RESULT_TOAST_MS = 5000;
+const SPECTATOR_RESULT_MATCH_TYPES = new Set(['RANKED', 'TOURNAMENT_ELIMINATION']);
 
 function toIdString(value) {
   if (value === null || value === undefined) {
@@ -167,6 +169,115 @@ function buildTurnToast({ currentTurn, viewerColor, viewMode }) {
     placement: 'board-center',
     appearance: 'board-turn',
     durationMs: ANNOUNCEMENT_TOAST_MS,
+  };
+}
+
+function normalizeName(value, fallback) {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function colorLabel(color) {
+  return color === 0 ? 'White' : color === 1 ? 'Black' : null;
+}
+
+function normalizeMatchType(value) {
+  return typeof value === 'string' ? value.trim().toUpperCase() : '';
+}
+
+export function isSpectatorResultToastMatchType(matchType) {
+  return SPECTATOR_RESULT_MATCH_TYPES.has(normalizeMatchType(matchType));
+}
+
+export function describeGameResult({
+  winnerColor = null,
+  winReason = null,
+  whiteName = 'White',
+  blackName = 'Black',
+} = {}) {
+  const numericWinner = Number(winnerColor);
+  const normalizedWinner = numericWinner === 0 || numericWinner === 1 ? numericWinner : null;
+  const whiteLabel = normalizeName(whiteName, 'White');
+  const blackLabel = normalizeName(blackName, 'Black');
+  const isDraw = normalizedWinner === null || Number(winReason) === WIN_REASONS.DRAW;
+
+  if (isDraw) {
+    return {
+      title: 'Draw',
+      description: `${whiteLabel} and ${blackLabel} drew the game.`,
+      isDraw: true,
+      winnerColor: null,
+      loserColor: null,
+      winnerName: null,
+      loserName: null,
+    };
+  }
+
+  const loserColor = normalizedWinner === 0 ? 1 : 0;
+  const winnerName = normalizedWinner === 0 ? whiteLabel : blackLabel;
+  const loserName = loserColor === 0 ? whiteLabel : blackLabel;
+  const winnerColorLabel = colorLabel(normalizedWinner);
+  let description;
+
+  switch (Number(winReason)) {
+    case WIN_REASONS.CAPTURED_KING:
+      description = `${winnerName} (${winnerColorLabel}) won by capturing ${loserName}'s Heart.`;
+      break;
+    case WIN_REASONS.THRONE:
+      description = `${winnerName} (${winnerColorLabel}) won by advancing their Heart to the final rank.`;
+      break;
+    case WIN_REASONS.TRUE_KING:
+      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} challenged the true Heart.`;
+      break;
+    case WIN_REASONS.DAGGERS:
+      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} accumulated 3 dagger tokens.`;
+      break;
+    case WIN_REASONS.TIME_CONTROL:
+      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} ran out of time.`;
+      break;
+    case WIN_REASONS.DISCONNECT:
+      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} disconnected.`;
+      break;
+    case WIN_REASONS.RESIGN:
+      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} resigned.`;
+      break;
+    default:
+      description = `${winnerName} (${winnerColorLabel}) prevailed.`;
+  }
+
+  return {
+    title: `${winnerName} Victory`,
+    description,
+    isDraw: false,
+    winnerColor: normalizedWinner,
+    loserColor,
+    winnerName,
+    loserName,
+  };
+}
+
+export function buildSpectatorGameResultToast({
+  matchType = null,
+  winner = null,
+  winReason = null,
+  whiteName = 'White',
+  blackName = 'Black',
+} = {}) {
+  if (!isSpectatorResultToastMatchType(matchType)) {
+    return null;
+  }
+  const result = describeGameResult({
+    winnerColor: winner,
+    winReason,
+    whiteName,
+    blackName,
+  });
+  return {
+    title: result.title,
+    text: result.description,
+    tone: result.isDraw ? 'light' : 'gold',
+    placement: 'board-below',
+    appearance: 'board-result',
+    durationMs: RESULT_TOAST_MS,
   };
 }
 

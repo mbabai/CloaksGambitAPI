@@ -112,9 +112,14 @@ If a player leaves during an active tournament game, the current game is closed 
 Current tournament settings:
 
 - `roundRobinMinutes`
+- `timeControlMinutes`
+- `incrementSeconds`
+- `roundRobinAcceptSeconds`
+- `eliminationAcceptSeconds`
 - `breakMinutes`
 - `eliminationStyle`: `single` or `double`
 - `victoryPoints`: elimination best-of target
+- `lateJoinRoundRobin`: when enabled, players can join during round robin and during the break before elimination
 
 Edit rules:
 
@@ -123,7 +128,7 @@ Edit rules:
 - once the round-robin phase fully ends and the break countdown starts, `breakMinutes` locks
 - once elimination begins, all settings are fixed
 
-All tournament games use ranked time controls, including round robin.
+Tournament games use the tournament's configured time control and increment. Round-robin and elimination first-game accept windows come from the tournament config; later games in an elimination series continue without a fresh accept prompt.
 
 ## Standings and Seeding
 
@@ -140,6 +145,8 @@ Round-robin seed order is based on:
 3. pre-tournament ELO, highest first
 4. join time, earliest first
 5. a random seed tie breaker assigned when the player enters the tournament
+
+If `lateJoinRoundRobin` is enabled and a player joins during the break after round robin has closed, that player is still seeded by the same standings rules. They simply enter the seed calculation with `0` round-robin points and no completed round-robin games.
 
 The roster currently shows:
 
@@ -165,9 +172,11 @@ Round robin uses timed rolling pairings rather than fixed rounds.
 
 - free players are matched immediately
 - pairings prefer opponents played fewer times
-- rematches are allowed to minimize downtime
+- immediate rematches are skipped when either player just played that opponent
+- if a player's only available opponent is their most recent opponent, that player waits for someone else
 - new round-robin games may only start while the timer is still open
 - games already started continue after the timer reaches zero
+- if `lateJoinRoundRobin` is enabled, player joins during this phase are added to the same rolling pairing pool
 
 ### `active + round_robin_complete`
 
@@ -183,6 +192,7 @@ At that point:
 - `eliminationStartsAt` is scheduled from `breakMinutes`
 - the host may start elimination early if a host still exists
 - otherwise elimination starts automatically when the break expires
+- if `lateJoinRoundRobin` is enabled, player joins during this phase are accepted without creating more round-robin games and are seeded by the normal standings rules with a `0` round-robin score
 
 ### `active + elimination`
 

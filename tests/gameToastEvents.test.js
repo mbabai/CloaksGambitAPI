@@ -37,6 +37,26 @@ function deriveViaWorker(input) {
   return JSON.parse(output);
 }
 
+function buildResultToastViaWorker(input) {
+  const script = `
+    import(${JSON.stringify(moduleUrl)}).then(({ buildSpectatorGameResultToast }) => {
+      const toast = buildSpectatorGameResultToast(${JSON.stringify(input)});
+      console.log(JSON.stringify(toast));
+    }).catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+  `;
+
+  const output = execFileSync(
+    process.execPath,
+    ['--input-type=module', '-e', script],
+    { encoding: 'utf8' }
+  );
+
+  return JSON.parse(output);
+}
+
 function makePiece(identity, color) {
   return { identity, color };
 }
@@ -216,5 +236,36 @@ describe('gameToastEvents', () => {
         captured: [],
       },
     });
+  });
+
+  test('builds ranked spectator game-result toasts with winner and reason', () => {
+    const toast = buildResultToastViaWorker({
+      matchType: 'RANKED',
+      winner: 0,
+      winReason: sharedConstants.winReasons.TIME_CONTROL,
+      whiteName: 'Alice',
+      blackName: 'Bob',
+    });
+
+    expect(toast).toEqual({
+      title: 'Alice Victory',
+      text: 'Alice (White) won because Bob ran out of time.',
+      tone: 'gold',
+      placement: 'board-below',
+      appearance: 'board-result',
+      durationMs: 5000,
+    });
+  });
+
+  test('does not build result toasts for non-ranked spectator matches', () => {
+    const toast = buildResultToastViaWorker({
+      matchType: 'QUICKPLAY',
+      winner: 1,
+      winReason: sharedConstants.winReasons.RESIGN,
+      whiteName: 'Alice',
+      blackName: 'Bob',
+    });
+
+    expect(toast).toBeNull();
   });
 });

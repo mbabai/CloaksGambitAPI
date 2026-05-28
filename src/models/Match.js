@@ -191,6 +191,11 @@ const matchSchema = new mongoose.Schema({
     default: null,
     min: 1,
   },
+  acceptWindowSeconds: {
+    type: Number,
+    default: null,
+    min: 0,
+  },
   isTutorial: {
     type: Boolean,
     default: false,
@@ -351,6 +356,7 @@ class MatchDocument {
     this.tournamentPhase = typeof data.tournamentPhase === 'string' ? data.tournamentPhase : null;
     this.eloEligible = data.eloEligible ?? null;
     this.winScoreTarget = Number.isFinite(Number(data.winScoreTarget)) ? Number(data.winScoreTarget) : null;
+    this.acceptWindowSeconds = Number.isFinite(Number(data.acceptWindowSeconds)) ? Math.max(0, Number(data.acceptWindowSeconds)) : null;
     this.createdAt = cloneDate(data.createdAt) || new Date();
     this.isTutorial = Boolean(data.isTutorial);
   }

@@ -237,7 +237,7 @@ router.get('/google/callback', async (req, res) => {
       let username = await buildUsernameFromProfile(payload);
       while (!user) {
         try {
-          user = await User.create({ username, email, photoUrl });
+          user = await User.create({ username, email, photoUrl, hasUpdatedUsername: false });
         } catch (creationErr) {
           if (creationErr?.code === 11000 && creationErr.keyPattern) {
             if (creationErr.keyPattern.email) {
@@ -254,6 +254,9 @@ router.get('/google/callback', async (req, res) => {
       }
     } else {
       user.photoUrl = photoUrl;
+      if (user.hasUpdatedUsername === undefined) {
+        user.hasUpdatedUsername = false;
+      }
       await user.save();
     }
 
@@ -279,6 +282,7 @@ router.get('/session', async (req, res) => {
         email: session.user?.email || '',
         isGuest: false,
         authenticated: true,
+        hasUpdatedUsername: Boolean(session.hasUpdatedUsername || session.user?.hasUpdatedUsername),
         tooltipsEnabled: resolveTooltipsEnabled(session.user || session),
         toastNotificationsEnabled: resolveToastNotificationsEnabled(session.user || session),
         animationSpeed: resolveAnimationSpeed(session.user || session),
@@ -294,6 +298,7 @@ router.get('/session', async (req, res) => {
       email: null,
       isGuest: true,
       authenticated: false,
+      hasUpdatedUsername: false,
       tooltipsEnabled: undefined,
       toastNotificationsEnabled: undefined,
       animationSpeed: undefined,
@@ -315,6 +320,7 @@ router.post('/logout', async (req, res) => {
       username: guest.username,
       isGuest: true,
       authenticated: false,
+      hasUpdatedUsername: false,
     });
   } catch (err) {
     console.error('Failed to log out user', err);

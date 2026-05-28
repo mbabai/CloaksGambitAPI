@@ -7,7 +7,10 @@ const User = require('./models/User');
 const getServerConfig = require('./utils/getServerConfig');
 const { GAME_CONSTANTS } = require('../shared/constants');
 const lobbyStore = require('./state/lobby');
-const { buildSpectateSnapshot } = require('./utils/spectatorSnapshot');
+const {
+  buildSpectateSnapshot,
+  getSpectateGameEndFreezeRemainingMs,
+} = require('./utils/spectatorSnapshot');
 const { buildClockPayload, resolveTimeoutResult, finalizeStoredClockState } = require('./utils/gameClock');
 const {
   getClockSettingsForMatchType,
@@ -33,6 +36,8 @@ const {
   notifyQueueTransitions,
 } = require('./services/discordLobbyWebhook');
 const {
+  getTournamentAcceptDeadlineMs,
+  getTournamentAcceptRemainingSeconds,
   getTournamentAcceptWindowSeconds,
   shouldRequireTournamentMatchAccept,
 } = require('./utils/tournamentAccept');
@@ -172,6 +177,15 @@ async function enforceTournamentAcceptTimeoutForGame(gameId, {
     return { handled: false, reason: 'non-tournament-match' };
   }
 
+  const acceptDeadlineMs = getTournamentAcceptDeadlineMs(game, match, now);
+  if (Number.isFinite(acceptDeadlineMs) && now < acceptDeadlineMs) {
+    return {
+      handled: false,
+      reason: 'accept-window-open',
+      remainingSeconds: getTournamentAcceptRemainingSeconds(game, match, now),
+    };
+  }
+
   const winReason = GAME_CONSTANTS.winReasons.TIME_CONTROL;
   const winnerColor = await resolveTournamentAcceptForfeitColor(game, match, readyFlags, {
     tournamentMatchTypes,
@@ -255,25 +269,41 @@ function initSocket(httpServer) {
   const matchDisconnectState = new Map();
   const playerMatches = new Map();
   const tournamentAcceptTimers = new Map();
+  const spectateGameEndFreezeTimers = new Map();
   const DISCONNECT_LIMIT_MS = 30000;
   const MIN_DISCONNECT_GRACE_MS = 10000;
   let activeGameTimeoutSweepInFlight = false;
   const tournamentMatchTypes = DEFAULT_TOURNAMENT_MATCH_TYPES;
 
   function resolveGameAcceptState(game, match = null) {
+    const resolveDeadlineIso = () => {
+      const deadlineMs = getTournamentAcceptDeadlineMs(game, match, Date.now());
+      return Number.isFinite(deadlineMs) ? new Date(deadlineMs).toISOString() : null;
+    };
+    const resolveRemainingSeconds = (fallbackSeconds) => {
+      const remainingSeconds = getTournamentAcceptRemainingSeconds(game, match, Date.now());
+      if (remainingSeconds > 0) return remainingSeconds;
+      return Math.max(0, Number(fallbackSeconds) || 0);
+    };
     if (typeof game?.requiresAccept === 'boolean') {
       const requiresAccept = Boolean(game.requiresAccept);
+      const configuredSeconds = Number.isFinite(Number(game?.acceptWindowSeconds))
+        ? Math.max(0, Number(game.acceptWindowSeconds))
+        : getTournamentAcceptWindowSeconds(match, requiresAccept);
       return {
         requiresAccept,
-        acceptWindowSeconds: Number.isFinite(Number(game?.acceptWindowSeconds))
-          ? Math.max(0, Number(game.acceptWindowSeconds))
-          : getTournamentAcceptWindowSeconds(match, requiresAccept),
+        acceptWindowSeconds: requiresAccept ? resolveRemainingSeconds(configuredSeconds) : 0,
+        configuredAcceptWindowSeconds: configuredSeconds,
+        acceptDeadlineAt: requiresAccept ? resolveDeadlineIso() : null,
       };
     }
     const requiresAccept = shouldRequireTournamentMatchAccept(match);
+    const configuredSeconds = getTournamentAcceptWindowSeconds(match, requiresAccept);
     return {
       requiresAccept,
-      acceptWindowSeconds: getTournamentAcceptWindowSeconds(match, requiresAccept),
+      acceptWindowSeconds: requiresAccept ? resolveRemainingSeconds(configuredSeconds) : 0,
+      configuredAcceptWindowSeconds: configuredSeconds,
+      acceptDeadlineAt: requiresAccept ? resolveDeadlineIso() : null,
     };
   }
 
@@ -310,6 +340,35 @@ function initSocket(httpServer) {
       handle.unref();
     }
     tournamentAcceptTimers.set(String(gameId), handle);
+  }
+
+  function clearSpectateGameEndFreezeTimer(matchId) {
+    const id = toId(matchId);
+    if (!id) return;
+    const handle = spectateGameEndFreezeTimers.get(id);
+    if (handle) {
+      clearTimeout(handle);
+      spectateGameEndFreezeTimers.delete(id);
+    }
+  }
+
+  function scheduleSpectateGameEndFreezeRelease(matchId, game, match) {
+    const id = toId(matchId);
+    if (!id || !game || match?.isActive === false) return;
+    const remainingMs = getSpectateGameEndFreezeRemainingMs(game, match, Date.now());
+    if (remainingMs <= 0) return;
+
+    clearSpectateGameEndFreezeTimer(id);
+    const handle = setTimeout(() => {
+      spectateGameEndFreezeTimers.delete(id);
+      emitSpectateUpdate(id).catch((err) => {
+        console.error('Error emitting spectate update after game-end freeze:', err);
+      });
+    }, remainingMs + 50);
+    if (typeof handle?.unref === 'function') {
+      handle.unref();
+    }
+    spectateGameEndFreezeTimers.set(id, handle);
   }
 
   async function runActiveGameTimeoutSweep() {
@@ -1055,6 +1114,7 @@ function initSocket(httpServer) {
   eventBus.on('match:ended', (payload) => {
     if (!payload) return;
     cleanupMatchTracking(payload.matchId);
+    clearSpectateGameEndFreezeTimer(payload.matchId);
     scheduleAdminMetricsEmit();
     if (payload.matchId) {
       emitSpectateUpdate(payload.matchId).catch((err) => {
@@ -1251,6 +1311,8 @@ function initSocket(httpServer) {
         playersReady: game.playersReady,
         requiresAccept: acceptState.requiresAccept,
         acceptWindowSeconds: acceptState.acceptWindowSeconds,
+        configuredAcceptWindowSeconds: acceptState.configuredAcceptWindowSeconds,
+        acceptDeadlineAt: acceptState.acceptDeadlineAt,
         setupComplete: game.setupComplete,
         startTime: game.startTime,
         timeControlStart: game.timeControlStart,
@@ -1304,6 +1366,9 @@ function initSocket(httpServer) {
       emitSpectateUpdate(matchId).catch((err) => {
         console.error('Error emitting spectate update after game change:', err);
       });
+      if (!game.isActive) {
+        scheduleSpectateGameEndFreezeRelease(matchId, game, finishedMatch);
+      }
     }
 
     botTurnFailsafe.scheduleGame(game, {
@@ -1356,8 +1421,13 @@ function initSocket(httpServer) {
     }
     if (!game) return;
     const gameIdStr = game._id.toString();
+    const acceptState = resolveGameAcceptState(game, null);
+    const acceptWindowSeconds = Number.isFinite(Number(payload?.acceptWindowSeconds)) && Number(payload.acceptWindowSeconds) > 0
+      ? Math.max(1, Math.ceil(Number(payload.acceptWindowSeconds)))
+      : acceptState.acceptWindowSeconds;
+    const acceptDeadlineAt = payload?.acceptDeadlineAt || acceptState.acceptDeadlineAt || null;
     if (payload?.requiresAccept) {
-      enforceTournamentAcceptTimeout(gameIdStr, Number(payload?.acceptWindowSeconds) || 30).catch((err) => {
+      enforceTournamentAcceptTimeout(gameIdStr, acceptWindowSeconds || 30).catch((err) => {
         console.error('Error scheduling tournament accept timeout:', err);
       });
     } else {
@@ -1376,7 +1446,9 @@ function initSocket(httpServer) {
           tournamentId: payload?.tournamentId || null,
           tournamentPhase: payload?.tournamentPhase || null,
           requiresAccept: Boolean(payload?.requiresAccept),
-          acceptWindowSeconds: Number(payload?.acceptWindowSeconds) || 0,
+          acceptWindowSeconds: payload?.requiresAccept ? (acceptWindowSeconds || 0) : 0,
+          configuredAcceptWindowSeconds: acceptState.configuredAcceptWindowSeconds || 0,
+          acceptDeadlineAt,
         });
       } else {
         console.warn('[socket] players:bothNext target not connected', { userId, gameId: gameIdStr });
@@ -1506,9 +1578,15 @@ function initSocket(httpServer) {
           players: game.players.map(p => p.toString()),
           playersReady: game.playersReady,
           requiresAccept: Boolean(game.requiresAccept),
-          acceptWindowSeconds: Number.isFinite(Number(game.acceptWindowSeconds))
+          acceptWindowSeconds: Boolean(game.requiresAccept)
+            ? getTournamentAcceptRemainingSeconds(game, null, Date.now())
+            : 0,
+          configuredAcceptWindowSeconds: Number.isFinite(Number(game.acceptWindowSeconds))
             ? Math.max(0, Number(game.acceptWindowSeconds))
             : 0,
+          acceptDeadlineAt: Number.isFinite(getTournamentAcceptDeadlineMs(game, null, Date.now()))
+            ? new Date(getTournamentAcceptDeadlineMs(game, null, Date.now())).toISOString()
+            : null,
           startTime: game.startTime,
           timeControlStart: game.timeControlStart,
           increment: game.increment,

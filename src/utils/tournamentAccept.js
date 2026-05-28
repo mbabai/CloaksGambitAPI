@@ -8,6 +8,14 @@ const TOURNAMENT_ACCEPT_WINDOWS_SECONDS = Object.freeze({
   ELIMINATION: 120,
 });
 
+function normalizePositiveSeconds(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return Math.max(1, Math.ceil(Number(fallback) || 1));
+  }
+  return Math.max(1, Math.ceil(numeric));
+}
+
 function normalizeMatchType(match) {
   return String(match?.type || '').toUpperCase();
 }
@@ -28,6 +36,9 @@ function shouldRequireTournamentMatchAccept(match) {
 
 function getTournamentAcceptWindowSeconds(match, requiresAccept = shouldRequireTournamentMatchAccept(match)) {
   if (!requiresAccept) return 0;
+  if (Number.isFinite(Number(match?.acceptWindowSeconds)) && Number(match.acceptWindowSeconds) > 0) {
+    return normalizePositiveSeconds(match.acceptWindowSeconds, TOURNAMENT_ACCEPT_WINDOWS_SECONDS.ROUND_ROBIN);
+  }
   const matchType = normalizeMatchType(match);
   if (matchType === TOURNAMENT_MATCH_TYPES.ELIMINATION) {
     return TOURNAMENT_ACCEPT_WINDOWS_SECONDS.ELIMINATION;
@@ -35,9 +46,42 @@ function getTournamentAcceptWindowSeconds(match, requiresAccept = shouldRequireT
   return TOURNAMENT_ACCEPT_WINDOWS_SECONDS.ROUND_ROBIN;
 }
 
+function getTournamentAcceptDeadlineMs(game, match = null, now = Date.now()) {
+  const explicitDeadline = Date.parse(game?.acceptDeadlineAt || '');
+  if (Number.isFinite(explicitDeadline)) {
+    return explicitDeadline;
+  }
+
+  const requiresAccept = typeof game?.requiresAccept === 'boolean'
+    ? Boolean(game.requiresAccept)
+    : shouldRequireTournamentMatchAccept(match);
+  if (!requiresAccept) {
+    return null;
+  }
+
+  const acceptWindowSeconds = Number.isFinite(Number(game?.acceptWindowSeconds)) && Number(game.acceptWindowSeconds) > 0
+    ? normalizePositiveSeconds(game.acceptWindowSeconds, getTournamentAcceptWindowSeconds(match, true))
+    : getTournamentAcceptWindowSeconds(match, true);
+  const createdAtMs = Date.parse(game?.createdAt || '');
+  if (!Number.isFinite(createdAtMs)) {
+    return null;
+  }
+  return createdAtMs + (acceptWindowSeconds * 1000);
+}
+
+function getTournamentAcceptRemainingSeconds(game, match = null, now = Date.now()) {
+  const deadlineMs = getTournamentAcceptDeadlineMs(game, match, now);
+  if (!Number.isFinite(deadlineMs)) {
+    return 0;
+  }
+  return Math.max(0, Math.ceil((deadlineMs - now) / 1000));
+}
+
 module.exports = {
   TOURNAMENT_ACCEPT_WINDOWS_SECONDS,
   TOURNAMENT_MATCH_TYPES,
+  getTournamentAcceptDeadlineMs,
+  getTournamentAcceptRemainingSeconds,
   getTournamentAcceptWindowSeconds,
   shouldRequireTournamentMatchAccept,
 };

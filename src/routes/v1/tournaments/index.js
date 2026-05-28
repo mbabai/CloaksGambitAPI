@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { resolveSessionFromRequest } = require('../../../utils/requestSession');
+const { applyGuestCookies, resolveSessionFromRequest } = require('../../../utils/requestSession');
 const { ensureAdminRequest } = require('../../../utils/adminAccess');
 const eventBus = require('../../../eventBus');
 const {
@@ -19,9 +19,11 @@ const {
   kickTournamentPlayer,
   reallowTournamentPlayer,
   startTournament,
+  endTournamentRoundRobin,
   startElimination,
   transferTournamentHost,
   updateTournamentMessage,
+  extendTournamentAcceptWindow,
   listAllTournamentsForAdmin,
   listCompletedTournamentsForUser,
   deleteTournamentForAdmin,
@@ -30,8 +32,12 @@ const {
 
 const LOGIN_REQUIRED_MESSAGE = 'Log in to participate in tournaments.';
 
-async function resolveTournamentSession(req) {
-  return resolveSessionFromRequest(req, { createGuest: true });
+async function resolveTournamentSession(req, res) {
+  const session = await resolveSessionFromRequest(req, { createGuest: true });
+  if (session?.isGuest) {
+    applyGuestCookies(req, res, session);
+  }
+  return session;
 }
 
 function assertParticipationAllowed(session) {
@@ -82,7 +88,7 @@ router.get('/current', async (req, res) => {
 
 router.post('/create', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
 
     const tournament = await createTournament({
@@ -102,7 +108,7 @@ router.post('/create', async (req, res) => {
 
 router.post('/config', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
 
     const tournament = await updateTournamentConfig({
@@ -119,7 +125,7 @@ router.post('/config', async (req, res) => {
 
 router.post('/join', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
 
     const tournamentId = req.body?.tournamentId;
@@ -136,7 +142,7 @@ router.post('/join', async (req, res) => {
 
 router.post('/leave', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await leaveTournament({ tournamentId: req.body?.tournamentId, session });
     return res.json({ tournament });
@@ -147,7 +153,7 @@ router.post('/leave', async (req, res) => {
 
 router.post('/cancel', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await cancelTournament({ tournamentId: req.body?.tournamentId, session });
     return res.json({ tournament });
@@ -158,7 +164,7 @@ router.post('/cancel', async (req, res) => {
 
 router.post('/add-bot', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await addBotToTournament({
       tournamentId: req.body?.tournamentId,
@@ -174,7 +180,7 @@ router.post('/add-bot', async (req, res) => {
 
 router.post('/start', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await startTournament({ tournamentId: req.body?.tournamentId, session });
     eventBus.emit('adminRefresh');
@@ -186,7 +192,7 @@ router.post('/start', async (req, res) => {
 
 router.post('/start-elimination', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await startElimination({ tournamentId: req.body?.tournamentId, session });
     eventBus.emit('adminRefresh');
@@ -196,9 +202,21 @@ router.post('/start-elimination', async (req, res) => {
   }
 });
 
+router.post('/end-round-robin', async (req, res) => {
+  try {
+    const session = await resolveTournamentSession(req, res);
+    assertParticipationAllowed(session);
+    const tournament = await endTournamentRoundRobin({ tournamentId: req.body?.tournamentId, session });
+    eventBus.emit('adminRefresh');
+    return res.json({ tournament });
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
 router.post('/transfer-host', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await transferTournamentHost({
       tournamentId: req.body?.tournamentId,
@@ -213,7 +231,7 @@ router.post('/transfer-host', async (req, res) => {
 
 router.post('/message', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await updateTournamentMessage({
       tournamentId: req.body?.tournamentId,
@@ -226,9 +244,25 @@ router.post('/message', async (req, res) => {
   }
 });
 
+router.post('/extend-accept', async (req, res) => {
+  try {
+    const session = await resolveTournamentSession(req, res);
+    assertParticipationAllowed(session);
+    const result = await extendTournamentAcceptWindow({
+      tournamentId: req.body?.tournamentId,
+      session,
+      gameId: req.body?.gameId,
+      seconds: req.body?.seconds || 30,
+    });
+    return res.json(result);
+  } catch (err) {
+    return handleRouteError(res, err);
+  }
+});
+
 router.post('/kick-player', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await kickTournamentPlayer({
       tournamentId: req.body?.tournamentId,
@@ -243,7 +277,7 @@ router.post('/kick-player', async (req, res) => {
 
 router.post('/reallow-player', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     assertParticipationAllowed(session);
     const tournament = await reallowTournamentPlayer({
       tournamentId: req.body?.tournamentId,
@@ -258,14 +292,17 @@ router.post('/reallow-player', async (req, res) => {
 
 router.post('/details', async (req, res) => {
   try {
-    const session = await resolveTournamentSession(req);
+    const session = await resolveTournamentSession(req, res);
     if (!session?.userId) {
       const err = new Error(LOGIN_REQUIRED_MESSAGE);
       err.statusCode = 401;
       throw err;
     }
 
-    return res.json(await getTournamentClientState(req.body?.tournamentId, { session }));
+    return res.json(await getTournamentClientState(req.body?.tournamentId, {
+      session,
+      accessMode: 'viewer',
+    }));
   } catch (err) {
     return handleRouteError(res, err);
   }

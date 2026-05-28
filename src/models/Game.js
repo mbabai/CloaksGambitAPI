@@ -202,6 +202,10 @@ const gameSchema = new mongoose.Schema({
     default: 0,
     min: 0,
   },
+  acceptDeadlineAt: {
+    type: Date,
+    default: null,
+  },
   playersNext: {
     type: [Boolean],
     default: [false, false],
@@ -701,6 +705,7 @@ class GameDocument {
     this.acceptWindowSeconds = Number.isFinite(Number(data.acceptWindowSeconds))
       ? Math.max(0, Number(data.acceptWindowSeconds))
       : 0;
+    this.acceptDeadlineAt = cloneDate(data.acceptDeadlineAt) || null;
     this.playersNext = ensureTwo(data.playersNext, [false, false]);
     this.playerTurn = data.playerTurn ?? null;
     this.winner = data.winner ?? undefined;
@@ -956,6 +961,15 @@ class GameModel {
       const createdAt = cloneDate(payload.createdAt) || new Date();
       payload.createdAt = createdAt;
       payload.startTime = new Date(createdAt.getTime() + MATCH_FOUND_COUNTDOWN_MS);
+    } else if (payload.requiresAccept) {
+      const createdAt = cloneDate(payload.createdAt) || new Date();
+      payload.createdAt = createdAt;
+      if (payload.acceptDeadlineAt == null) {
+        const acceptWindowSeconds = Number(payload.acceptWindowSeconds);
+        if (Number.isFinite(acceptWindowSeconds) && acceptWindowSeconds > 0) {
+          payload.acceptDeadlineAt = new Date(createdAt.getTime() + (Math.ceil(acceptWindowSeconds) * 1000));
+        }
+      }
     }
 
     const doc = this._ensureDocument(payload);
