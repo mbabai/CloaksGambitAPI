@@ -1,5 +1,13 @@
 const ServerConfig = require('../models/ServerConfig');
 const { GAME_CONSTANTS } = require('../../shared/constants');
+const {
+  DEFAULT_ANNOUNCEMENT_FONT_SIZE,
+  DEFAULT_ANNOUNCEMENT_HEADING_FONT_SIZES,
+  normalizeAnnouncementFontSize,
+  normalizeAnnouncementHeadingFontSizes,
+  resolveAnnouncementFontSize,
+  resolveAnnouncementHeadingFontSizes,
+} = require('./announcement');
 
 const DEFAULT_CONFIG = GAME_CONSTANTS;
 
@@ -88,6 +96,11 @@ function createConfigSnapshot(configLike = DEFAULT_CONFIG) {
     gameViewStates: toMap(configLike.gameViewStates || DEFAULT_CONFIG.gameViewStates),
     winReasons: toMap(configLike.winReasons || DEFAULT_CONFIG.winReasons),
     gameActionStates: toMap(configLike.gameActionStates || DEFAULT_CONFIG.gameActionStates),
+    announcementMarkdown: typeof configLike.announcementMarkdown === 'string'
+      ? configLike.announcementMarkdown
+      : '',
+    announcementFontSize: resolveAnnouncementFontSize(configLike.announcementFontSize),
+    announcementHeadingFontSizes: resolveAnnouncementHeadingFontSizes(configLike.announcementHeadingFontSizes),
   };
 
   if (snapshot.gameModeSettings && typeof snapshot.gameModeSettings === 'object' && !snapshot.gameModeSettings.get) {
@@ -115,18 +128,39 @@ async function loadServerConfigFromDatabase() {
 
     let settings = config.gameModeSettings;
     let mutated = false;
+    let settingsMutated = false;
+    let announcementMutated = false;
     if (settings?.get && typeof settings.get === 'function') {
       settings = settings.toObject ? settings.toObject() : Object.fromEntries(settings);
       config.gameModeSettings = settings;
       mutated = true;
+      settingsMutated = true;
     } else if (!settings) {
       settings = {};
       config.gameModeSettings = settings;
       mutated = true;
+      settingsMutated = true;
     }
     if (!settings.RANKED) {
       settings.RANKED = { ...DEFAULT_CONFIG.gameModeSettings.RANKED };
       mutated = true;
+      settingsMutated = true;
+    }
+
+    if (typeof config.announcementMarkdown !== 'string') {
+      config.announcementMarkdown = '';
+      mutated = true;
+      announcementMutated = true;
+    }
+    if (!normalizeAnnouncementFontSize(config.announcementFontSize)) {
+      config.announcementFontSize = DEFAULT_ANNOUNCEMENT_FONT_SIZE;
+      mutated = true;
+      announcementMutated = true;
+    }
+    if (!normalizeAnnouncementHeadingFontSizes(config.announcementHeadingFontSizes)) {
+      config.announcementHeadingFontSizes = { ...DEFAULT_ANNOUNCEMENT_HEADING_FONT_SIZES };
+      mutated = true;
+      announcementMutated = true;
     }
 
     const ranked = settings.RANKED;
@@ -143,6 +177,7 @@ async function loadServerConfigFromDatabase() {
     if (toNumber(rawTime) !== rankedTime || typeof rawTime !== 'number') {
       ranked.TIME_CONTROL = rankedTime;
       mutated = true;
+      settingsMutated = true;
     }
 
     const rawWins = ranked.WIN_SCORE;
@@ -160,10 +195,18 @@ async function loadServerConfigFromDatabase() {
     if (toNumber(rawWins) !== rankedWins || typeof rawWins !== 'number') {
       ranked.WIN_SCORE = rankedWins;
       mutated = true;
+      settingsMutated = true;
     }
 
     if (mutated) {
-      config.markModified('gameModeSettings');
+      if (settingsMutated) {
+        config.markModified('gameModeSettings');
+      }
+      if (announcementMutated) {
+        config.markModified('announcementMarkdown');
+        config.markModified('announcementFontSize');
+        config.markModified('announcementHeadingFontSizes');
+      }
       await config.save();
     }
 

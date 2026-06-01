@@ -13,6 +13,7 @@ const userPurge = require('./users/purge');
 
 // Config routes
 const configTimeSettings = require('./config/getTimeSettings');
+const configAnnouncement = require('./config/announcement');
 
 // Match routes
 const matchGetList = require('./matches/getList');
@@ -74,6 +75,7 @@ router.use('/users/purge', userPurge);
 
 // Config routes
 router.use('/config/timeSettings', configTimeSettings);
+router.use('/config/announcement', configAnnouncement);
 
 // Match routes
 router.use('/matches/getList', matchGetList);

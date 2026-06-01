@@ -101,6 +101,94 @@
       .tab-panel { display: none; }
       .tab-panel.active { display: block; }
 
+      .announcement-editor {
+        gap: 14px;
+      }
+      .announcement-editor__textarea {
+        width: 100%;
+        min-height: 220px;
+        resize: vertical;
+        box-sizing: border-box;
+        border: 2px solid var(--deep-gold);
+        border-radius: 6px;
+        background: rgba(14, 7, 22, 0.92);
+        color: var(--CG-white);
+        padding: 12px;
+        font: inherit;
+        font-size: 15px;
+        line-height: 1.45;
+      }
+      .announcement-editor__textarea:focus-visible {
+        outline: 2px solid var(--light-gold);
+        outline-offset: 2px;
+      }
+      .announcement-editor__controls {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .announcement-editor__field {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .announcement-editor__field-label {
+        color: var(--light-gold);
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      .announcement-editor__font-size {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .announcement-editor__number {
+        width: 58px;
+        box-sizing: border-box;
+        border: 2px solid var(--deep-gold);
+        border-radius: 6px;
+        background: rgba(14, 7, 22, 0.92);
+        color: var(--CG-white);
+        padding: 6px 8px;
+        font: inherit;
+        font-size: 14px;
+      }
+      .announcement-editor__number:focus-visible {
+        outline: 2px solid var(--light-gold);
+        outline-offset: 2px;
+      }
+      .announcement-editor__unit {
+        color: rgba(255,215,0,0.78);
+        font-size: 13px;
+      }
+      .announcement-editor__actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .announcement-editor__buttons {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .announcement-editor__status {
+        min-height: 20px;
+      }
+      .announcement-editor__status[data-state="error"] {
+        color: #fca5a5;
+      }
+      .announcement-editor__status[data-state="success"] {
+        color: #bbf7d0;
+      }
+      .announcement-editor__count {
+        color: rgba(255,215,0,0.76);
+        font-size: 13px;
+      }
+
       @media (max-width: 768px) {
         .grid--metrics,
         .grid--lists,
@@ -286,6 +374,7 @@
         <button class="tab-button active" data-tab="live">Live</button>
         <button class="tab-button" data-tab="history">History</button>
         <button class="tab-button" data-tab="tournaments">Tournaments</button>
+        <button class="tab-button" data-tab="announcement">Banner</button>
       </div>
 
       <div id="adminLivePanel" class="tab-panel active" data-tab-panel="live">
@@ -419,6 +508,58 @@
           <div class="title">All Tournaments</div>
           <div id="adminTournamentStatus" class="label">Loading tournaments…</div>
           <div id="adminTournamentsList" class="tableList" role="table"></div>
+        </div>
+      </div>
+
+      <div id="adminAnnouncementPanel" class="tab-panel" data-tab-panel="announcement">
+        <h2>Banner</h2>
+        <div class="listCard announcement-editor">
+          <div class="title">Main Page Markdown</div>
+          <div class="announcement-editor__controls">
+            <label class="announcement-editor__field" for="announcementFontSizeInput">
+              <span class="announcement-editor__field-label">Body</span>
+              <span class="announcement-editor__font-size">
+                <input id="announcementFontSizeInput" class="announcement-editor__number" type="number" min="12" max="32" step="1" value="16" aria-label="Body font size in pixels" />
+                <span class="announcement-editor__unit">px</span>
+              </span>
+            </label>
+            <label class="announcement-editor__field" for="announcementHeading1FontSizeInput">
+              <span class="announcement-editor__field-label">#</span>
+              <span class="announcement-editor__font-size">
+                <input id="announcementHeading1FontSizeInput" class="announcement-editor__number" type="number" min="12" max="32" step="1" value="22" aria-label="Heading 1 font size in pixels" />
+                <span class="announcement-editor__unit">px</span>
+              </span>
+            </label>
+            <label class="announcement-editor__field" for="announcementHeading2FontSizeInput">
+              <span class="announcement-editor__field-label">##</span>
+              <span class="announcement-editor__font-size">
+                <input id="announcementHeading2FontSizeInput" class="announcement-editor__number" type="number" min="12" max="32" step="1" value="18" aria-label="Heading 2 font size in pixels" />
+                <span class="announcement-editor__unit">px</span>
+              </span>
+            </label>
+            <label class="announcement-editor__field" for="announcementHeading3FontSizeInput">
+              <span class="announcement-editor__field-label">###</span>
+              <span class="announcement-editor__font-size">
+                <input id="announcementHeading3FontSizeInput" class="announcement-editor__number" type="number" min="12" max="32" step="1" value="16" aria-label="Heading 3 font size in pixels" />
+                <span class="announcement-editor__unit">px</span>
+              </span>
+            </label>
+          </div>
+          <textarea id="announcementMarkdownInput" class="announcement-editor__textarea" maxlength="5000" spellcheck="true"></textarea>
+          <div class="announcement-editor__actions">
+            <div>
+              <div id="announcementStatus" class="label announcement-editor__status">Loading announcement...</div>
+              <div id="announcementCount" class="announcement-editor__count">0 / 5000</div>
+            </div>
+            <div class="announcement-editor__buttons">
+              <button id="announcementClearBtn" type="button">Clear</button>
+              <button id="announcementSaveBtn" type="button">Save</button>
+            </div>
+          </div>
+          <div class="title">Preview</div>
+          <div class="site-announcement site-announcement--preview">
+            <div id="announcementPreview" class="site-announcement__content"></div>
+          </div>
         </div>
       </div>
     </div>

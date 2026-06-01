@@ -6,6 +6,7 @@ import { preloadAssets } from '/js/modules/utils/assetPreloader.js';
 import { createSpectateController } from '/js/modules/spectate/controller.js';
 import { renderActiveMatchesList, createActiveMatchesStore } from '/js/modules/spectate/activeMatches.js';
 import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
+import { renderMarkdownInto } from '/js/modules/ui/markdown.js';
 
 (function () {
   preloadAssets();
@@ -153,6 +154,24 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     variant: 'danger',
     position: 'relative'
   });
+  const announcementMarkdownInput = document.getElementById('announcementMarkdownInput');
+  const announcementPreviewEl = document.getElementById('announcementPreview');
+  const announcementStatusEl = document.getElementById('announcementStatus');
+  const announcementCountEl = document.getElementById('announcementCount');
+  const announcementFontSizeInput = document.getElementById('announcementFontSizeInput');
+  const announcementHeadingFontSizeInputs = {
+    h1: document.getElementById('announcementHeading1FontSizeInput'),
+    h2: document.getElementById('announcementHeading2FontSizeInput'),
+    h3: document.getElementById('announcementHeading3FontSizeInput'),
+  };
+  const announcementSaveBtn = upgradeButton(document.getElementById('announcementSaveBtn'), {
+    variant: 'primary',
+    position: 'relative'
+  });
+  const announcementClearBtn = upgradeButton(document.getElementById('announcementClearBtn'), {
+    variant: 'neutral',
+    position: 'relative'
+  });
 
   const spectateOverlay = document.getElementById('spectateOverlay');
   const spectatePlayArea = document.getElementById('spectatePlayArea');
@@ -205,6 +224,13 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
   let historyFilter = 'all';
   let historyLoaded = false;
   let tournamentsLoaded = false;
+  let announcementLoaded = false;
+  let announcementSaving = false;
+  let announcementMaxLength = 5000;
+  let announcementFontSize = 16;
+  let announcementHeadingFontSizes = { h1: 22, h2: 18, h3: 16 };
+  let announcementMinFontSize = 12;
+  let announcementMaxFontSize = 32;
   let isFetchingHistory = false;
   let historySummaryData = null;
   const historyGamesByMatch = new Map();
@@ -651,6 +677,8 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
       ensureHistoryLoaded();
     } else if (tab === 'tournaments') {
       ensureTournamentsLoaded();
+    } else if (tab === 'announcement') {
+      ensureAnnouncementLoaded();
     }
   }
 
@@ -739,6 +767,288 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
     if (tournamentsLoaded) return;
     tournamentsLoaded = true;
     await fetchAdminTournaments();
+  }
+
+  function setAnnouncementStatus(message, state = '') {
+    if (!announcementStatusEl) return;
+    announcementStatusEl.textContent = message || '';
+    if (state) {
+      announcementStatusEl.dataset.state = state;
+    } else {
+      delete announcementStatusEl.dataset.state;
+    }
+  }
+
+  function getAnnouncementDraft() {
+    return typeof announcementMarkdownInput?.value === 'string'
+      ? announcementMarkdownInput.value.replace(/\r\n?/g, '\n')
+      : '';
+  }
+
+  function updateAnnouncementCount(markdown = getAnnouncementDraft()) {
+    if (!announcementCountEl) return;
+    announcementCountEl.textContent = `${markdown.length} / ${announcementMaxLength}`;
+  }
+
+  function normalizeAnnouncementFontSize(value, fallback = announcementFontSize) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return fallback;
+    }
+    const min = Number.isFinite(announcementMinFontSize) ? announcementMinFontSize : 12;
+    const max = Number.isFinite(announcementMaxFontSize) ? announcementMaxFontSize : 32;
+    return Math.min(Math.max(Math.round(numeric), min), Math.max(min, max));
+  }
+
+  function updateAnnouncementFontSizeLimits() {
+    [announcementFontSizeInput, ...Object.values(announcementHeadingFontSizeInputs)].forEach((input) => {
+      if (!input) return;
+      input.min = String(announcementMinFontSize);
+      input.max = String(announcementMaxFontSize);
+      input.step = '1';
+    });
+  }
+
+  function applyAnnouncementPreviewFontSize(fontSize = announcementFontSize) {
+    if (!announcementPreviewEl) return;
+    announcementPreviewEl.style.setProperty('--site-announcement-font-size', `${fontSize}px`);
+    announcementPreviewEl.style.setProperty('--site-announcement-heading-1-size', `${announcementHeadingFontSizes.h1}px`);
+    announcementPreviewEl.style.setProperty('--site-announcement-heading-2-size', `${announcementHeadingFontSizes.h2}px`);
+    announcementPreviewEl.style.setProperty('--site-announcement-heading-3-size', `${announcementHeadingFontSizes.h3}px`);
+  }
+
+  function setAnnouncementFontSize(value, { updateControls = true } = {}) {
+    announcementFontSize = normalizeAnnouncementFontSize(value, announcementFontSize);
+    if (updateControls) {
+      if (announcementFontSizeInput) announcementFontSizeInput.value = String(announcementFontSize);
+    }
+    applyAnnouncementPreviewFontSize(announcementFontSize);
+    return announcementFontSize;
+  }
+
+  function getAnnouncementFontSizeDraft() {
+    const controlValue = announcementFontSizeInput?.value;
+    return normalizeAnnouncementFontSize(controlValue, announcementFontSize);
+  }
+
+  function normalizeAnnouncementHeadingFontSizes(value = {}, fallback = announcementHeadingFontSizes) {
+    const normalized = {};
+    ['h1', 'h2', 'h3'].forEach((key) => {
+      normalized[key] = normalizeAnnouncementFontSize(value?.[key], fallback[key]);
+    });
+    return normalized;
+  }
+
+  function setAnnouncementHeadingFontSizes(value = {}, { updateControls = true } = {}) {
+    announcementHeadingFontSizes = normalizeAnnouncementHeadingFontSizes(value);
+    if (updateControls) {
+      Object.entries(announcementHeadingFontSizeInputs).forEach(([key, input]) => {
+        if (input) input.value = String(announcementHeadingFontSizes[key]);
+      });
+    }
+    applyAnnouncementPreviewFontSize();
+    return announcementHeadingFontSizes;
+  }
+
+  function getAnnouncementHeadingFontSizesDraft() {
+    return normalizeAnnouncementHeadingFontSizes({
+      h1: announcementHeadingFontSizeInputs.h1?.value,
+      h2: announcementHeadingFontSizeInputs.h2?.value,
+      h3: announcementHeadingFontSizeInputs.h3?.value,
+    });
+  }
+
+  function updateAnnouncementPreview(markdown = getAnnouncementDraft()) {
+    if (announcementPreviewEl) {
+      renderMarkdownInto(announcementPreviewEl, markdown);
+    }
+    applyAnnouncementPreviewFontSize();
+    updateAnnouncementCount(markdown);
+  }
+
+  function applyAnnouncementPayload(data = {}, { markLoaded = true } = {}) {
+    const markdown = typeof data?.markdown === 'string' ? data.markdown : '';
+    const maxLength = Number(data?.maxLength);
+    if (Number.isFinite(maxLength) && maxLength > 0) {
+      announcementMaxLength = Math.floor(maxLength);
+      if (announcementMarkdownInput) {
+        announcementMarkdownInput.maxLength = announcementMaxLength;
+      }
+    }
+    const minFontSize = Number(data?.minFontSize);
+    const maxFontSize = Number(data?.maxFontSize);
+    if (Number.isFinite(minFontSize) && minFontSize > 0) {
+      announcementMinFontSize = Math.floor(minFontSize);
+    }
+    if (Number.isFinite(maxFontSize) && maxFontSize >= announcementMinFontSize) {
+      announcementMaxFontSize = Math.floor(maxFontSize);
+    }
+    updateAnnouncementFontSizeLimits();
+    setAnnouncementFontSize(data?.fontSize);
+    setAnnouncementHeadingFontSizes(data?.headingFontSizes);
+    if (announcementMarkdownInput) {
+      announcementMarkdownInput.value = markdown;
+    }
+    updateAnnouncementPreview(markdown);
+    if (markLoaded) {
+      announcementLoaded = true;
+    }
+  }
+
+  function setAnnouncementButtonsDisabled(disabled) {
+    if (announcementSaveBtn) announcementSaveBtn.disabled = Boolean(disabled);
+    if (announcementClearBtn) announcementClearBtn.disabled = Boolean(disabled);
+    if (announcementMarkdownInput) announcementMarkdownInput.disabled = Boolean(disabled);
+    if (announcementFontSizeInput) announcementFontSizeInput.disabled = Boolean(disabled);
+    Object.values(announcementHeadingFontSizeInputs).forEach((input) => {
+      if (input) input.disabled = Boolean(disabled);
+    });
+  }
+
+  async function fetchAnnouncementConfig({ force = false } = {}) {
+    if (!announcementMarkdownInput && !announcementPreviewEl) return;
+    if (announcementLoaded && !force) return;
+    setAnnouncementStatus('Loading announcement...');
+    try {
+      const res = await authFetch('/api/v1/config/announcement', { method: 'GET' });
+      if (!res.ok) {
+        setAnnouncementStatus(`Failed to load announcement (${res.status}).`, 'error');
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      applyAnnouncementPayload(data || {});
+      setAnnouncementStatus('Loaded.');
+    } catch (err) {
+      console.error('Failed to fetch announcement', err);
+      setAnnouncementStatus('Failed to load announcement.', 'error');
+    }
+  }
+
+  async function saveAnnouncementConfig() {
+    if (announcementSaving) return;
+    const markdown = getAnnouncementDraft();
+    const fontSize = getAnnouncementFontSizeDraft();
+    const headingFontSizes = getAnnouncementHeadingFontSizesDraft();
+    if (markdown.length > announcementMaxLength) {
+      setAnnouncementStatus(`Announcement is over ${announcementMaxLength} characters.`, 'error');
+      return;
+    }
+
+    announcementSaving = true;
+    setAnnouncementButtonsDisabled(true);
+    setAnnouncementStatus('Saving announcement...');
+    try {
+      const res = await authFetch('/api/v1/config/announcement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markdown, fontSize, headingFontSizes }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = typeof data?.message === 'string'
+          ? data.message
+          : `Failed to save announcement (${res.status}).`;
+        setAnnouncementStatus(message, 'error');
+        return;
+      }
+      applyAnnouncementPayload(data || { markdown, fontSize, headingFontSizes });
+      setAnnouncementStatus('Published to the main page.', 'success');
+    } catch (err) {
+      console.error('Failed to save announcement', err);
+      setAnnouncementStatus('Failed to save announcement.', 'error');
+    } finally {
+      announcementSaving = false;
+      setAnnouncementButtonsDisabled(false);
+    }
+  }
+
+  async function ensureAnnouncementLoaded() {
+    await fetchAnnouncementConfig();
+  }
+
+  function updateAnnouncementFontSizeFromControl(source, { clampInvalid = true } = {}) {
+    const rawValue = source?.value;
+    const numeric = Number(rawValue);
+    if (!Number.isFinite(numeric)) {
+      if (clampInvalid) {
+        setAnnouncementFontSize(announcementFontSize);
+      }
+      return;
+    }
+    if (!clampInvalid && (numeric < announcementMinFontSize || numeric > announcementMaxFontSize)) {
+      setAnnouncementStatus(`Font size must be ${announcementMinFontSize}-${announcementMaxFontSize}px.`, 'error');
+      return;
+    }
+    setAnnouncementFontSize(rawValue);
+    setAnnouncementStatus('Draft not saved.');
+  }
+
+  function updateAnnouncementHeadingFontSizeFromControl(key, source, { clampInvalid = true } = {}) {
+    if (!key) return;
+    const rawValue = source?.value;
+    const numeric = Number(rawValue);
+    if (!Number.isFinite(numeric)) {
+      if (clampInvalid) {
+        setAnnouncementHeadingFontSizes(announcementHeadingFontSizes);
+      }
+      return;
+    }
+    if (!clampInvalid && (numeric < announcementMinFontSize || numeric > announcementMaxFontSize)) {
+      setAnnouncementStatus(`Font size must be ${announcementMinFontSize}-${announcementMaxFontSize}px.`, 'error');
+      return;
+    }
+    setAnnouncementHeadingFontSizes({
+      ...announcementHeadingFontSizes,
+      [key]: rawValue,
+    });
+    setAnnouncementStatus('Draft not saved.');
+  }
+
+  updateAnnouncementFontSizeLimits();
+  setAnnouncementFontSize(announcementFontSize);
+  setAnnouncementHeadingFontSizes(announcementHeadingFontSizes);
+
+  if (announcementMarkdownInput) {
+    announcementMarkdownInput.addEventListener('input', () => {
+      updateAnnouncementPreview();
+      setAnnouncementStatus('Draft not saved.');
+    });
+  }
+
+  if (announcementFontSizeInput) {
+    announcementFontSizeInput.addEventListener('input', () => {
+      updateAnnouncementFontSizeFromControl(announcementFontSizeInput, { clampInvalid: false });
+    });
+    announcementFontSizeInput.addEventListener('change', () => {
+      updateAnnouncementFontSizeFromControl(announcementFontSizeInput);
+    });
+  }
+
+  Object.entries(announcementHeadingFontSizeInputs).forEach(([key, input]) => {
+    if (!input) return;
+    input.addEventListener('input', () => {
+      updateAnnouncementHeadingFontSizeFromControl(key, input, { clampInvalid: false });
+    });
+    input.addEventListener('change', () => {
+      updateAnnouncementHeadingFontSizeFromControl(key, input);
+    });
+  });
+
+  if (announcementSaveBtn) {
+    announcementSaveBtn.addEventListener('click', () => {
+      saveAnnouncementConfig();
+    });
+  }
+
+  if (announcementClearBtn) {
+    announcementClearBtn.addEventListener('click', () => {
+      if (announcementMarkdownInput) {
+        announcementMarkdownInput.value = '';
+        announcementMarkdownInput.focus();
+      }
+      updateAnnouncementPreview('');
+      setAnnouncementStatus('Draft cleared. Save to publish.');
+    });
   }
 
   tabButtons.forEach(btn => {
@@ -1415,6 +1725,13 @@ import { upgradeButton, createButton } from '/js/modules/ui/buttons.js';
 
   socket.on('admin:matchUpdated', payload => {
     activeMatchesStore.applyUpdate(payload);
+  });
+
+  socket.on('announcement:update', (payload) => {
+    if (!announcementSaving && announcementLoaded) {
+      applyAnnouncementPayload(payload || {});
+      setAnnouncementStatus('Announcement updated.', 'success');
+    }
   });
 
   socket.on('spectate:snapshot', (payload) => {

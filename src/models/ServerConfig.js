@@ -1,5 +1,9 @@
 const mongoose = require('mongoose');
 const { GAME_CONSTANTS } = require('../../shared/constants');
+const {
+  DEFAULT_ANNOUNCEMENT_FONT_SIZE,
+  DEFAULT_ANNOUNCEMENT_HEADING_FONT_SIZES,
+} = require('../utils/announcement');
 
 const toMapDefault = (source) => () => new Map(Object.entries(source));
 const cloneDeep = (value) => JSON.parse(JSON.stringify(value));
@@ -52,6 +56,18 @@ const serverConfigSchema = new mongoose.Schema({
     type: Map,
     of: Number,
     default: toMapDefault(GAME_CONSTANTS.gameActionStates)
+  },
+  announcementMarkdown: {
+    type: String,
+    default: ''
+  },
+  announcementFontSize: {
+    type: Number,
+    default: DEFAULT_ANNOUNCEMENT_FONT_SIZE
+  },
+  announcementHeadingFontSizes: {
+    type: Object,
+    default: () => ({ ...DEFAULT_ANNOUNCEMENT_HEADING_FONT_SIZES })
   }
 }, {
   timestamps: true,

@@ -248,6 +248,12 @@ export async function apiGetTimeSettings() {
   return res.json().catch(() => null);
 }
 
+export async function apiGetAnnouncement() {
+  const res = await authFetch('/api/v1/config/announcement');
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
 export async function apiPostLocalDebugLog(payload = {}) {
   return authFetch('/api/v1/debug/localLog', {
     method: 'POST',

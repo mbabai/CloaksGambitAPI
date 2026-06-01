@@ -8,7 +8,7 @@ import { PIECE_IMAGES, IDENTITIES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
 import { getVisibleMatchWinCounts } from '/js/modules/utils/matchScores.js';
-import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiEnterTutorial, apiLeaveTutorial, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiAdvanceTutorial, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiPostLocalDebugLog, apiGetTournamentHistory } from '/js/modules/api/game.js';
+import { apiReady, apiNext, apiSetup, apiGetDetails, apiEnterQueue, apiExitQueue, apiEnterRankedQueue, apiExitRankedQueue, apiEnterBotQueue, apiEnterTutorial, apiLeaveTutorial, apiGetBotCatalog, apiMove, apiChallenge, apiBomb, apiOnDeck, apiPass, apiResign, apiDraw, apiAdvanceTutorial, apiCheckTimeControl, apiGetMatchDetails, apiGetTimeSettings, apiGetAnnouncement, apiPostLocalDebugLog, apiGetTournamentHistory } from '/js/modules/api/game.js';
 import { createLocalGameLogger } from '/js/modules/debug/localGameLogger.js';
 import { computePlayAreaBounds, computeBoardMetrics } from '/js/modules/layout.js';
 import { renderReadyButton } from '/js/modules/render/readyButton.js';
@@ -44,6 +44,7 @@ import { getMatchCountdownBannerTitle, shouldPreserveMatchCountdownBanner } from
 import { createOverlay } from '/js/modules/ui/overlays.js';
 import { createToastSystem } from '/js/modules/ui/toasts.js';
 import { createGameToastSnapshot, deriveGameToastFeedback } from '/js/modules/ui/gameToastEvents.js';
+import { renderMarkdownInto } from '/js/modules/ui/markdown.js';
 import { applyTooltipAttributes, initTooltipSystem, setTooltipsEnabled } from '/js/modules/ui/tooltips.js';
 import { initTournamentUi } from '/js/modules/tournaments/ui.js';
 import { createTournamentAcceptScheduler } from '/js/modules/tournaments/acceptScheduler.js';
@@ -84,6 +85,8 @@ logBootConstantsOnce();
     position: 'relative'
   });
   const modeSelect = document.getElementById('modeSelect');
+  const siteAnnouncementEl = document.getElementById('siteAnnouncement');
+  const siteAnnouncementContentEl = document.getElementById('siteAnnouncementContent');
   const SAVED_GAME_TYPE_COOKIE = 'cgGameType';
   const SAVED_BOT_TYPE_COOKIE = 'cgBotType';
   const SELECTION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
@@ -564,6 +567,70 @@ logBootConstantsOnce();
     localStorage.removeItem(QUEUE_START_TIME_KEY);
     persistQueueMode(null);
   }
+
+  function normalizeSiteAnnouncementFontSize(payload = {}) {
+    const min = Number.isFinite(Number(payload?.minFontSize)) ? Number(payload.minFontSize) : 12;
+    const max = Number.isFinite(Number(payload?.maxFontSize)) ? Number(payload.maxFontSize) : 32;
+    const normalizedMin = Math.max(1, Math.round(min));
+    const normalizedMax = Math.max(normalizedMin, Math.round(max));
+    const fontSize = Number(payload?.fontSize);
+    if (!Number.isFinite(fontSize)) {
+      return 16;
+    }
+    return clamp(Math.round(fontSize), normalizedMin, normalizedMax);
+  }
+
+  function normalizeSiteAnnouncementHeadingFontSizes(payload = {}) {
+    const defaults = { h1: 22, h2: 18, h3: 16 };
+    const source = payload?.headingFontSizes && typeof payload.headingFontSizes === 'object'
+      ? payload.headingFontSizes
+      : {};
+    return {
+      h1: normalizeSiteAnnouncementFontSize({ ...payload, fontSize: source.h1 ?? defaults.h1 }),
+      h2: normalizeSiteAnnouncementFontSize({ ...payload, fontSize: source.h2 ?? defaults.h2 }),
+      h3: normalizeSiteAnnouncementFontSize({ ...payload, fontSize: source.h3 ?? defaults.h3 }),
+    };
+  }
+
+  function renderSiteAnnouncement(payload = {}) {
+    if (!siteAnnouncementEl || !siteAnnouncementContentEl) return;
+    const markdown = typeof payload?.markdown === 'string' ? payload.markdown.trim() : '';
+    const fontSize = normalizeSiteAnnouncementFontSize(payload);
+    const headingFontSizes = normalizeSiteAnnouncementHeadingFontSizes(payload);
+    siteAnnouncementEl.style.setProperty('--site-announcement-font-size', `${fontSize}px`);
+    siteAnnouncementEl.style.setProperty('--site-announcement-heading-1-size', `${headingFontSizes.h1}px`);
+    siteAnnouncementEl.style.setProperty('--site-announcement-heading-2-size', `${headingFontSizes.h2}px`);
+    siteAnnouncementEl.style.setProperty('--site-announcement-heading-3-size', `${headingFontSizes.h3}px`);
+    if (!markdown) {
+      siteAnnouncementEl.hidden = true;
+      renderMarkdownInto(siteAnnouncementContentEl, '');
+      return;
+    }
+    renderMarkdownInto(siteAnnouncementContentEl, markdown);
+    siteAnnouncementEl.hidden = false;
+    layoutSiteAnnouncement();
+  }
+
+  async function loadSiteAnnouncement() {
+    try {
+      const announcement = await apiGetAnnouncement();
+      renderSiteAnnouncement(announcement || {});
+    } catch (err) {
+      console.warn('Failed to load announcement', err);
+    }
+  }
+
+  function layoutSiteAnnouncement() {
+    if (!siteAnnouncementEl || siteAnnouncementEl.hidden) return;
+    const bounds = computePlayAreaBounds(window.innerWidth, window.innerHeight);
+    const board = computeBoardMetrics(bounds.width, bounds.height, 5, 6);
+    siteAnnouncementEl.style.setProperty('--site-announcement-left', `${bounds.left + board.boardLeft}px`);
+    siteAnnouncementEl.style.setProperty('--site-announcement-top', `${bounds.top + board.boardTop}px`);
+    siteAnnouncementEl.style.setProperty('--site-announcement-width', `${board.boardWidth}px`);
+    siteAnnouncementEl.style.setProperty('--site-announcement-height', `${board.boardHeight}px`);
+  }
+
+  window.addEventListener('resize', layoutSiteAnnouncement);
 
   function updateHeaderMenuStateClasses() {
     document.body.classList.toggle('cg-menu-open', menuOpen);
@@ -4481,6 +4548,9 @@ logBootConstantsOnce();
       pendingAction = null;
       updateFindButton();
       },
+      onAnnouncementUpdate(payload) {
+        renderSiteAnnouncement(payload || {});
+      },
       async onGameUpdate(payload) {
         const updateSequence = ++gameUpdateSequence;
         const snapshot = payload && payload.game ? payload.game : payload;
@@ -5280,6 +5350,7 @@ logBootConstantsOnce();
       } catch (cfgErr) {
         console.warn('Failed to load time settings', cfgErr);
       }
+      loadSiteAnnouncement();
       preloadPieceImages();
       preloadBubbleImages();
       socket = io('/', {

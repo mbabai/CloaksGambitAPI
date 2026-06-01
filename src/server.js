@@ -165,6 +165,9 @@ function resolveExistingFaviconPath(hostHeader) {
 }
 
 function getHtmlTemplate(filePath) {
+  if (!isProduction) {
+    return fs.readFileSync(filePath, 'utf8');
+  }
   if (!htmlTemplateCache.has(filePath)) {
     htmlTemplateCache.set(filePath, fs.readFileSync(filePath, 'utf8'));
   }

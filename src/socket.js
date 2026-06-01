@@ -1459,6 +1459,19 @@ function initSocket(httpServer) {
   // Allow other parts of the app to request an on-demand admin metrics refresh
   eventBus.on('adminRefresh', () => scheduleAdminMetricsEmit());
 
+  eventBus.on('announcementChanged', (payload) => {
+    try {
+      defaultNamespace.emit('announcement:update', payload || {});
+    } catch (err) {
+      console.error('Error emitting announcement:update to default namespace:', err);
+    }
+    try {
+      adminNamespace.emit('announcement:update', payload || {});
+    } catch (err) {
+      console.error('Error emitting announcement:update to admin namespace:', err);
+    }
+  });
+
   eventBus.on('admin:serverError', (payload) => {
     try {
       adminNamespace.emit('admin:serverError', payload || {});

@@ -15,6 +15,12 @@ describe('ServerConfig constants alignment', () => {
       }
     });
 
+    expect(configObject.announcementMarkdown).toBe('');
+    expect(configObject.announcementFontSize).toBe(16);
+    expect(configObject.announcementHeadingFontSizes).toEqual({ h1: 22, h2: 18, h3: 16 });
+    delete configObject.announcementMarkdown;
+    delete configObject.announcementFontSize;
+    delete configObject.announcementHeadingFontSizes;
     expect(configObject).toEqual(GAME_CONSTANTS);
   });
 });
