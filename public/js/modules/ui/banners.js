@@ -12,7 +12,7 @@ import {
   createReconnectSpinner as defaultCreateReconnectSpinner,
   createChallengeBubble as defaultCreateChallengeBubble
 } from './icons.js';
-import { TOOLTIP_TEXT } from './tooltipContent.js';
+import { TOOLTIP_TEXT, getTooltipText } from './tooltipContent.js';
 import { applyTooltipAttributes } from './tooltips.js';
 
 const DEFAULT_BANNER_ASSETS = Object.freeze({
@@ -326,6 +326,7 @@ export function createChallengeBubbleElement({
   position = 'top',
   size,
   alt = 'Challenge available',
+  tooltipText = TOOLTIP_TEXT.challengeBubble,
   offsetY = '0%',
   zIndex = 10
 } = {}) {
@@ -339,7 +340,7 @@ export function createChallengeBubbleElement({
     return null;
   }
   bubble.classList.add('cg-challenge-bubble');
-  applyTooltipAttributes(bubble, TOOLTIP_TEXT.challengeBubble);
+  applyTooltipAttributes(bubble, tooltipText || getTooltipText('challengeBubble'));
   const offsetValue = typeof offsetY === 'number' ? `${offsetY}px` : offsetY || '0';
   bubble.style.setProperty('--cg-challenge-bubble-offset-y', offsetValue);
   bubble.style.setProperty('--cg-challenge-bubble-z-index', String(zIndex));

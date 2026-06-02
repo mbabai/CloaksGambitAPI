@@ -65,6 +65,13 @@ export function createGameView({
     onAttachGameHandlers,
     onNameClick,
     shouldAllowPlayerClick,
+    identityMap: renderIdentityMap = identityMap,
+    identityLabels = null,
+    boardPalette = null,
+    visualTheme = 'default',
+    playerColors = null,
+    playerTextColors = null,
+    daggerTokenLabel = undefined,
   } = {}) {
     if (!sizes) return;
 
@@ -84,6 +91,10 @@ export function createGameView({
       readOnly,
       deploymentLines,
       pieceTransform,
+      identityMap: renderIdentityMap,
+      identityLabels,
+      boardPalette,
+      visualTheme,
     });
 
     if (!barsState) {
@@ -104,7 +115,12 @@ export function createGameView({
         playAreaHeight: container.clientHeight,
       },
       state: barsState,
-      identityMap,
+      identityMap: renderIdentityMap,
+      identityLabels,
+      playerColors,
+      playerTextColors,
+      daggerTokenLabel,
+      visualTheme,
       onNameClick,
       shouldAllowPlayerClick,
     });

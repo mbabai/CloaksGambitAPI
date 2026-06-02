@@ -20,6 +20,7 @@ function deriveViaWorker(input) {
         current,
         viewerColor: ${JSON.stringify(input.viewerColor ?? null)},
         viewMode: ${JSON.stringify(input.viewMode ?? 'player')},
+        visualTheme: ${JSON.stringify(input.visualTheme ?? 'default')},
       });
       console.log(JSON.stringify(feedback));
     }).catch((error) => {
@@ -144,6 +145,43 @@ describe('gameToastEvents', () => {
     ]);
   });
 
+  test('renames challenge resolution feedback in fox mode', () => {
+    const previous = {
+      _id: 'game-fox-toast',
+      playerTurn: 1,
+      actions: [
+        { type: ACTIONS.MOVE, player: 1, details: {} },
+      ],
+      daggers: [0, 0],
+      captured: [[], []],
+    };
+    const current = {
+      _id: 'game-fox-toast',
+      playerTurn: 0,
+      actions: [
+        { type: ACTIONS.MOVE, player: 1, details: {} },
+        { type: ACTIONS.CHALLENGE, player: 0, details: { outcome: 'FAIL' } },
+      ],
+      daggers: [1, 0],
+      captured: [[], []],
+    };
+
+    const feedback = deriveViaWorker({
+      previous,
+      current,
+      viewerColor: 0,
+      visualTheme: 'fox',
+    });
+
+    expect(feedback.toasts[0]).toMatchObject({
+      text: 'Investigation Failed',
+      tone: 'danger',
+    });
+    expect(feedback.pulses.daggerColors).toEqual([
+      { color: 0, durationMs: 1500 },
+    ]);
+  });
+
   test('spectator mode only emits color-based turn text', () => {
     const previous = {
       _id: 'game-3',
@@ -255,6 +293,28 @@ describe('gameToastEvents', () => {
       appearance: 'board-result',
       durationMs: 5000,
     });
+  });
+
+  test('builds fox-mode result toasts with fox identities and strikes', () => {
+    const trueFoxToast = buildResultToastViaWorker({
+      matchType: 'RANKED',
+      winner: 0,
+      winReason: sharedConstants.winReasons.TRUE_KING,
+      whiteName: 'Alice',
+      blackName: 'Bob',
+      visualTheme: 'fox',
+    });
+    const strikeToast = buildResultToastViaWorker({
+      matchType: 'RANKED',
+      winner: 1,
+      winReason: sharedConstants.winReasons.DAGGERS,
+      whiteName: 'Alice',
+      blackName: 'Bob',
+      visualTheme: 'fox',
+    });
+
+    expect(trueFoxToast.text).toBe('Alice (White) won because Bob investigated the true Fox.');
+    expect(strikeToast.text).toBe('Bob (Black) won because Alice accumulated 3 strikes.');
   });
 
   test('does not build result toasts for non-ranked spectator matches', () => {

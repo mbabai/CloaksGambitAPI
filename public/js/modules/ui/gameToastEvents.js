@@ -1,4 +1,10 @@
-import { ACTIONS, WIN_REASONS } from '../constants.js';
+import {
+  ACTIONS,
+  IDENTITIES,
+  WIN_REASONS,
+  getIdentityLabelsForVisualTheme,
+  getTerminologyForVisualTheme
+} from '../constants.js';
 import { groupCapturedPiecesByColor } from '../utils/captured.js';
 
 const DEFAULT_TOAST_MS = 2000;
@@ -193,6 +199,7 @@ export function describeGameResult({
   winReason = null,
   whiteName = 'White',
   blackName = 'Black',
+  visualTheme = 'default',
 } = {}) {
   const numericWinner = Number(winnerColor);
   const normalizedWinner = numericWinner === 0 || numericWinner === 1 ? numericWinner : null;
@@ -216,20 +223,23 @@ export function describeGameResult({
   const winnerName = normalizedWinner === 0 ? whiteLabel : blackLabel;
   const loserName = loserColor === 0 ? whiteLabel : blackLabel;
   const winnerColorLabel = colorLabel(normalizedWinner);
+  const identityLabels = getIdentityLabelsForVisualTheme(visualTheme);
+  const terminology = getTerminologyForVisualTheme(visualTheme);
+  const kingLabel = identityLabels?.[IDENTITIES.KING] || 'Heart';
   let description;
 
   switch (Number(winReason)) {
     case WIN_REASONS.CAPTURED_KING:
-      description = `${winnerName} (${winnerColorLabel}) won by capturing ${loserName}'s Heart.`;
+      description = `${winnerName} (${winnerColorLabel}) won by capturing ${loserName}'s ${kingLabel}.`;
       break;
     case WIN_REASONS.THRONE:
-      description = `${winnerName} (${winnerColorLabel}) won by advancing their Heart to the final rank.`;
+      description = `${winnerName} (${winnerColorLabel}) won by advancing their ${kingLabel} to the final rank.`;
       break;
     case WIN_REASONS.TRUE_KING:
-      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} challenged the true Heart.`;
+      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} ${terminology.challengePast} the true ${kingLabel}.`;
       break;
     case WIN_REASONS.DAGGERS:
-      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} accumulated 3 dagger tokens.`;
+      description = `${winnerName} (${winnerColorLabel}) won because ${loserName} accumulated 3 ${terminology.daggerTokenPlural}.`;
       break;
     case WIN_REASONS.TIME_CONTROL:
       description = `${winnerName} (${winnerColorLabel}) won because ${loserName} ran out of time.`;
@@ -261,6 +271,7 @@ export function buildSpectatorGameResultToast({
   winReason = null,
   whiteName = 'White',
   blackName = 'Black',
+  visualTheme = 'default',
 } = {}) {
   if (!isSpectatorResultToastMatchType(matchType)) {
     return null;
@@ -270,6 +281,7 @@ export function buildSpectatorGameResultToast({
     winReason,
     whiteName,
     blackName,
+    visualTheme,
   });
   return {
     title: result.title,
@@ -305,6 +317,7 @@ export function deriveGameToastFeedback({
   current,
   viewerColor = null,
   viewMode = 'player',
+  visualTheme = 'default',
 } = {}) {
   const emptyFeedback = {
     toasts: [],
@@ -328,6 +341,7 @@ export function deriveGameToastFeedback({
     daggerColors: [],
     captured: [],
   };
+  const terminology = getTerminologyForVisualTheme(visualTheme);
 
   if (current.actions.length > previous.actions.length) {
     const newActions = current.actions.slice(previous.actions.length);
@@ -350,7 +364,7 @@ export function deriveGameToastFeedback({
 
       if (normalizedViewMode !== 'spectator' && action.type === ACTIONS.CHALLENGE) {
         toasts.push({
-          text: action.outcome === 'SUCCESS' ? 'Challenge Successful!' : 'Challenge Failed',
+          text: action.outcome === 'SUCCESS' ? terminology.challengeSuccess : terminology.challengeFailed,
           tone: 'danger',
           placement: 'board-center',
           appearance: 'board-alert',

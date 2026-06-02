@@ -4,7 +4,17 @@ import { getPieceAssetSources, getSinglePieceSrc, resolvePieceAsset } from '/js/
 import { createGameView } from '/js/modules/gameView/view.js';
 import { renderStash as renderStashModule } from '/js/modules/render/stash.js';
 import { createEloBadge } from '/js/modules/render/eloBadge.js';
-import { PIECE_IMAGES, IDENTITIES, KING_ID, MOVE_STATES, WIN_REASONS } from '/js/modules/constants.js';
+import {
+  PIECE_IMAGES,
+  PIECE_IMAGES_BY_VISUAL_THEME,
+  IDENTITIES,
+  KING_ID,
+  MOVE_STATES,
+  WIN_REASONS,
+  VISUAL_THEMES,
+  getVisualThemeConfig,
+  normalizeVisualTheme
+} from '/js/modules/constants.js';
 import { getCookie, setCookie } from '/js/modules/utils/cookies.js';
 import { groupCapturedPiecesByColor } from '/js/modules/utils/captured.js';
 import { getVisibleMatchWinCounts } from '/js/modules/utils/matchScores.js';
@@ -39,7 +49,7 @@ import {
   createThroneIcon
 } from '/js/modules/ui/icons.js';
 import { createDaggerCounter } from '/js/modules/ui/banners.js';
-import { TOOLTIP_TEXT } from '/js/modules/ui/tooltipContent.js';
+import { getTooltipText } from '/js/modules/ui/tooltipContent.js';
 import { getMatchCountdownBannerTitle, shouldPreserveMatchCountdownBanner } from '/js/modules/ui/matchCountdown.js';
 import { createOverlay } from '/js/modules/ui/overlays.js';
 import { createToastSystem } from '/js/modules/ui/toasts.js';
@@ -260,6 +270,7 @@ logBootConstantsOnce();
   });
   let tournamentUiController = null;
   let tournamentParticipantMode = false;
+  let isPlayAreaVisible = false;
   const accountPanel = document.getElementById('menuAccountPanel');
   const usernameDisplay = document.getElementById('usernameDisplay');
   const accountPanelContent = document.getElementById('accountPanelContent');
@@ -287,6 +298,7 @@ logBootConstantsOnce();
   const TOOLTIP_COOKIE_NAME = 'cgTooltipsEnabled';
   const TOAST_NOTIFICATIONS_COOKIE_NAME = 'cgToastNotificationsEnabled';
   const ANIMATION_SPEED_COOKIE_NAME = 'cgAnimationSpeed';
+  const VISUAL_THEME_COOKIE_NAME = 'cgVisualTheme';
   const AUDIO_VOLUME_COOKIE_NAME = 'cgAudioVolume';
   const AUDIO_VOLUME_TOUCHED_COOKIE_NAME = 'cgAudioVolumeTouched';
   const GAME_START_ALERT_VOLUME_COOKIE_NAME = 'cgGameStartAlertVolume';
@@ -568,6 +580,43 @@ logBootConstantsOnce();
     persistQueueMode(null);
   }
 
+  function readVisualThemePreferenceCookie() {
+    return normalizeVisualTheme(getCookie(VISUAL_THEME_COOKIE_NAME) || VISUAL_THEMES.DEFAULT);
+  }
+
+  function persistVisualThemePreferenceCookie(theme) {
+    setCookie(
+      VISUAL_THEME_COOKIE_NAME,
+      normalizeVisualTheme(theme),
+      TOOLTIP_COOKIE_MAX_AGE_SECONDS
+    );
+  }
+
+  function getActiveVisualTheme() {
+    return normalizeVisualTheme(sessionInfo?.visualTheme || VISUAL_THEMES.DEFAULT);
+  }
+
+  function getActiveVisualThemeConfig() {
+    return getVisualThemeConfig(getActiveVisualTheme());
+  }
+
+  function applyVisualThemeClasses() {
+    const isFoxMode = getActiveVisualTheme() === VISUAL_THEMES.FOX;
+    try {
+      document.body.classList.toggle('cg-fox-mode', isFoxMode);
+      if (playAreaRoot) playAreaRoot.classList.toggle('cg-fox-mode', isFoxMode);
+      if (spectatePlayArea) spectatePlayArea.classList.toggle('cg-fox-mode', isFoxMode);
+    } catch (_) {}
+  }
+
+  function refreshVisibleThemeSurfaces() {
+    applyVisualThemeClasses();
+    renderBoardAndBars();
+    if (spectateController && typeof spectateController.renderCurrent === 'function') {
+      spectateController.renderCurrent();
+    }
+  }
+
   function normalizeSiteAnnouncementFontSize(payload = {}) {
     const min = Number.isFinite(Number(payload?.minFontSize)) ? Number(payload.minFontSize) : 12;
     const max = Number.isFinite(Number(payload?.maxFontSize)) ? Number(payload.maxFontSize) : 32;
@@ -602,13 +651,24 @@ logBootConstantsOnce();
     siteAnnouncementEl.style.setProperty('--site-announcement-heading-2-size', `${headingFontSizes.h2}px`);
     siteAnnouncementEl.style.setProperty('--site-announcement-heading-3-size', `${headingFontSizes.h3}px`);
     if (!markdown) {
+      siteAnnouncementEl.dataset.hasAnnouncement = 'false';
       siteAnnouncementEl.hidden = true;
       renderMarkdownInto(siteAnnouncementContentEl, '');
       return;
     }
     renderMarkdownInto(siteAnnouncementContentEl, markdown);
-    siteAnnouncementEl.hidden = false;
+    siteAnnouncementEl.dataset.hasAnnouncement = 'true';
+    syncSiteAnnouncementVisibility();
     layoutSiteAnnouncement();
+  }
+
+  function syncSiteAnnouncementVisibility() {
+    if (!siteAnnouncementEl) return;
+    const hasAnnouncement = siteAnnouncementEl.dataset.hasAnnouncement === 'true';
+    siteAnnouncementEl.hidden = !hasAnnouncement || Boolean(isPlayAreaVisible);
+    if (!siteAnnouncementEl.hidden) {
+      layoutSiteAnnouncement();
+    }
   }
 
   async function loadSiteAnnouncement() {
@@ -1614,6 +1674,13 @@ logBootConstantsOnce();
     });
   }
 
+  async function saveFoxModePreference(enabled) {
+    const nextTheme = enabled ? VISUAL_THEMES.FOX : VISUAL_THEMES.DEFAULT;
+    updateSessionInfo({ visualTheme: nextTheme });
+    refreshVisibleThemeSurfaces();
+    return getActiveVisualTheme() === VISUAL_THEMES.FOX;
+  }
+
   async function saveAudioVolumePreference(volume) {
     const previousVolume = normalizeAudioVolumePreference(sessionInfo.audioVolume, DEFAULT_AUDIO_VOLUME);
     return saveUserBackedPreference({
@@ -1953,6 +2020,11 @@ logBootConstantsOnce();
     if (partial.animationSpeed !== undefined) {
       sessionInfo.animationSpeed = normalizeAnimationSpeed(partial.animationSpeed, DEFAULT_ANIMATION_SPEED);
       persistAnimationSpeedPreferenceCookie(sessionInfo.animationSpeed);
+    }
+    if (partial.visualTheme !== undefined) {
+      sessionInfo.visualTheme = normalizeVisualTheme(partial.visualTheme);
+      persistVisualThemePreferenceCookie(sessionInfo.visualTheme);
+      applyVisualThemeClasses();
     }
     if (partial.audioVolume !== undefined) {
       sessionInfo.audioVolume = normalizeAudioVolumePreference(partial.audioVolume, DEFAULT_AUDIO_VOLUME);
@@ -2324,6 +2396,12 @@ logBootConstantsOnce();
       checked: normalizeTooltipPreference(sessionInfo.toastNotificationsEnabled, true),
       onChange: saveToastNotificationsPreference,
     });
+    const foxModeToggle = createAccountToggleRow({
+      id: 'settingsFoxModeToggle',
+      label: 'Fox Mode',
+      checked: getActiveVisualTheme() === VISUAL_THEMES.FOX,
+      onChange: saveFoxModePreference,
+    });
     const animationSegmented = createAccountSegmentedRow({
       id: 'settingsAnimationSpeed',
       label: 'Animation',
@@ -2357,6 +2435,7 @@ logBootConstantsOnce();
 
     accountPanelContent.appendChild(tooltipToggle.row);
     accountPanelContent.appendChild(toastNotificationsToggle.row);
+    accountPanelContent.appendChild(foxModeToggle.row);
     accountPanelContent.appendChild(animationSegmented.row);
     accountPanelContent.appendChild(volumeSlider.row);
     accountPanelContent.appendChild(gameStartAlertVolumeSlider.row);
@@ -2722,6 +2801,7 @@ logBootConstantsOnce();
         } else if (sessionData.isGuest || sessionData.authenticated === false) {
           updates.animationSpeed = readAnimationSpeedPreferenceCookie();
         }
+        updates.visualTheme = readVisualThemePreferenceCookie();
         if (sessionData.audioVolume !== undefined) {
           updates.audioVolume = sessionData.audioVolume;
           serverSupportsAudioVolumePreference = true;
@@ -2761,6 +2841,7 @@ logBootConstantsOnce();
         tooltipsEnabled: readTooltipPreferenceCookie(),
         toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
         animationSpeed: readAnimationSpeedPreferenceCookie(),
+        visualTheme: readVisualThemePreferenceCookie(),
         audioVolume: readAudioVolumePreferenceCookie(),
         gameStartAlertVolume: readGameStartAlertVolumePreferenceCookie(),
       });
@@ -2844,7 +2925,8 @@ logBootConstantsOnce();
     statsOverlayController = createPlayerStatsOverlay({
       authFetch,
       getPreferredWidth: getDesiredHistoryOverlayWidth,
-      getViewerUserId: () => sessionInfo?.userId || null
+      getViewerUserId: () => sessionInfo?.userId || null,
+      getVisualTheme: getActiveVisualTheme
     });
   }
 
@@ -2896,7 +2978,6 @@ logBootConstantsOnce();
   let tournamentGameHydrationHandle = null;
   let tournamentGameHydrationGameId = null;
   let playAreaRoot = null;
-  let isPlayAreaVisible = false;
   let queuerHidden = false;
   let currentMatch = null;
   let activeMatchId = null;
@@ -2922,11 +3003,13 @@ logBootConstantsOnce();
     tooltipsEnabled: readTooltipPreferenceCookie(),
     toastNotificationsEnabled: readToastNotificationsPreferenceCookie(),
     animationSpeed: readAnimationSpeedPreferenceCookie(),
+    visualTheme: readVisualThemePreferenceCookie(),
     audioVolume: readAudioVolumePreferenceCookie(),
     gameStartAlertVolume: readGameStartAlertVolumePreferenceCookie(),
   };
   let serverSupportsAudioVolumePreference = false;
   let serverSupportsGameStartAlertVolumePreference = false;
+  applyVisualThemeClasses();
 
   let playerNames = ['Anonymous0', 'Anonymous1'];
   let playerElos = [null, null];
@@ -3713,6 +3796,7 @@ logBootConstantsOnce();
         current: nextSnapshot,
         viewerColor: currentIsWhite ? 0 : 1,
         viewMode: 'player',
+        visualTheme: getActiveVisualTheme(),
       });
       queueGameToastFeedback(feedback);
     }
@@ -5375,6 +5459,7 @@ logBootConstantsOnce();
         getUsername: getSpectateUsername,
         setUsername: setSpectateUsername,
         shouldAllowPlayerClick: (id) => !isKnownBotId(id),
+        getVisualTheme: getActiveVisualTheme,
         onPlayerClick: (info) => {
           if (!info || !info.userId) return;
           if (isKnownBotId(info.userId)) return;
@@ -7622,11 +7707,13 @@ logBootConstantsOnce();
         const icon = createThroneIcon({ size: iconSize, alt: 'Match winner' });
         cell.appendChild(icon);
       } else if (status === 'loser') {
+        const visualThemeConfig = getActiveVisualThemeConfig();
         const daggerGroup = createDaggerCounter({
           count: 1,
           size: iconSize,
           gap: 0,
-          alt: 'Match loss'
+          alt: visualThemeConfig.terminology?.daggerTokenAlt || 'Match loss',
+          label: visualThemeConfig.daggerTokenLabel || undefined
         });
         cell.appendChild(daggerGroup);
       }
@@ -7880,18 +7967,22 @@ logBootConstantsOnce();
       const blackName = playerNames[1] || formatPlayerName(null, 1);
       descText = `${whiteName} and ${blackName} agreed to a draw.`;
     } else {
+      const visualThemeConfig = getActiveVisualThemeConfig();
+      const kingLabel = visualThemeConfig.identityLabels?.[IDENTITIES.KING] || 'Heart';
+      const challengePast = visualThemeConfig.terminology?.challengePast || 'challenged';
+      const daggerTokenPlural = visualThemeConfig.terminology?.daggerTokenPlural || 'dagger tokens';
       switch (reason) {
         case 0:
-          descText = `${winnerName} (${colorStr}) won by capturing ${loserName}'s Heart.`;
+          descText = `${winnerName} (${colorStr}) won by capturing ${loserName}'s ${kingLabel}.`;
           break;
         case 1:
-          descText = `${winnerName} (${colorStr}) won by advancing their Heart to the final rank.`;
+          descText = `${winnerName} (${colorStr}) won by advancing their ${kingLabel} to the final rank.`;
           break;
         case 2:
-          descText = `${winnerName} (${colorStr}) won because ${loserName} challenged the true Heart.`;
+          descText = `${winnerName} (${colorStr}) won because ${loserName} ${challengePast} the true ${kingLabel}.`;
           break;
         case 3:
-          descText = `${winnerName} (${colorStr}) won because ${loserName} accumulated 3 dagger tokens.`;
+          descText = `${winnerName} (${colorStr}) won because ${loserName} accumulated 3 ${daggerTokenPlural}.`;
           break;
         case 4:
           descText = `${winnerName} (${colorStr}) won because ${loserName} ran out of time.`;
@@ -8143,6 +8234,7 @@ logBootConstantsOnce();
     playAreaRoot.style.userSelect = 'none';
     // Prevent browser gestures/scroll during touch interactions in the play area
     playAreaRoot.style.touchAction = 'none';
+    playAreaRoot.classList.toggle('cg-fox-mode', getActiveVisualTheme() === VISUAL_THEMES.FOX);
     try {
       document.body.style.touchAction = 'none';
       document.body.style.overscrollBehavior = 'contain';
@@ -8256,6 +8348,7 @@ logBootConstantsOnce();
     if (isPlayAreaVisible) return;
     isPlayAreaVisible = true;
     updateHeaderMenuStateClasses();
+    syncSiteAnnouncementVisibility();
     playAreaRoot.style.display = 'block';
     renderTutorialOverlay();
   }
@@ -8290,6 +8383,7 @@ logBootConstantsOnce();
     if (!isPlayAreaVisible) return;
     isPlayAreaVisible = false;
     updateHeaderMenuStateClasses();
+    syncSiteAnnouncementVisibility();
     hideTutorialOverlay();
     clearGameToastFeedback();
   }
@@ -8381,6 +8475,11 @@ logBootConstantsOnce();
     // Label font scales with play area height for consistency
     const labelFont = Math.max(10, Math.floor(0.024 * playAreaRoot.clientHeight));
     const fileLetters = ['A','B','C','D','E'];
+    const visualThemeConfig = getActiveVisualThemeConfig();
+    const activePieceImages = visualThemeConfig.pieceImages || PIECE_IMAGES;
+    const activeIdentityLabels = visualThemeConfig.identityLabels || null;
+    const isFoxMode = visualThemeConfig.theme === VISUAL_THEMES.FOX;
+    applyVisualThemeClasses();
 
     // Determine whether to show challenge bubbles on player bars
     const topColor = currentIsWhite ? 1 : 0;
@@ -8523,7 +8622,14 @@ logBootConstantsOnce();
       labelFont,
       fileLetters,
       readOnly: false,
-      deploymentLines: true,
+      deploymentLines: !isFoxMode,
+      identityMap: activePieceImages,
+      identityLabels: activeIdentityLabels,
+      boardPalette: visualThemeConfig.boardPalette,
+      visualTheme: visualThemeConfig.theme,
+      playerColors: visualThemeConfig.playerColors,
+      playerTextColors: visualThemeConfig.playerTextColors,
+      daggerTokenLabel: visualThemeConfig.daggerTokenLabel,
       onAttachHandlers: (cell, target) => attachInteractiveHandlers(cell, target),
       onAttachGameHandlers: (cell, r, c) => attachGameHandlers(cell, r, c),
       onNameClick: (info) => {
@@ -8571,7 +8677,9 @@ logBootConstantsOnce();
         gameFinished
       },
       refs,
-      identityMap: PIECE_IMAGES,
+      identityMap: activePieceImages,
+      identityLabels: activeIdentityLabels,
+      visualTheme: visualThemeConfig.theme,
       onAttachHandlers: (el, target) => attachInteractiveHandlers(el, target)
     });
     syncBoardMoveTargetHighlights(getCurrentMoveTargetHighlights());
@@ -8643,7 +8751,7 @@ logBootConstantsOnce();
       fontSize: topControlFontSize,
       zIndex: 20
     });
-    applyTooltipAttributes(resignBtn, TOOLTIP_TEXT.resignButton);
+    applyTooltipAttributes(resignBtn, getTooltipText('resignButton', getActiveVisualTheme()));
 
     const drawBtn = renderGameButton({
       id: 'drawBtn',
@@ -8664,7 +8772,7 @@ logBootConstantsOnce();
       fontSize: topControlFontSize,
       zIndex: 20
     });
-    applyTooltipAttributes(drawBtn, TOOLTIP_TEXT.drawButton);
+    applyTooltipAttributes(drawBtn, getTooltipText('drawButton', getActiveVisualTheme()));
 
     // Challenge and Poison buttons anchored to the stash area
     (function renderStashButtons() {
@@ -8745,6 +8853,9 @@ logBootConstantsOnce();
         canPass = false;
       }
       const challengeDisabled = isTutorialActive() && !tutorialAllowsChallenge();
+      const activeVisualTheme = getActiveVisualTheme();
+      const visualThemeConfig = getActiveVisualThemeConfig();
+      const terminology = visualThemeConfig.terminology || {};
 
       // Poison button (upper left)
       const bombBtn = renderGameButton({
@@ -8781,7 +8892,9 @@ logBootConstantsOnce();
       }
       applyTooltipAttributes(
         bombBtn,
-        bombBlockedByHeartDeclaration ? TOOLTIP_TEXT.bombButtonHeartBlocked : TOOLTIP_TEXT.bombButton
+        bombBlockedByHeartDeclaration
+          ? getTooltipText('bombButtonHeartBlocked', activeVisualTheme)
+          : getTooltipText('bombButton', activeVisualTheme)
       );
 
       // Pass button (uses challenge styling, upper left)
@@ -8807,7 +8920,7 @@ logBootConstantsOnce();
         width: btnW,
         height: btnH
       });
-      applyTooltipAttributes(passBtn, TOOLTIP_TEXT.passButton);
+      applyTooltipAttributes(passBtn, getTooltipText('passButton', activeVisualTheme));
 
       // Challenge button (upper right)
       const challengeBtn = renderGameButton({
@@ -8817,7 +8930,7 @@ logBootConstantsOnce();
         boardTop: stashTop + btnH / 2,
         boardWidth: 0,
         boardHeight: 0,
-        text: 'Challenge',
+        text: terminology.challengeAction || 'Challenge',
         variant: 'primary',
         visible: canChallenge,
         disabled: challengeDisabled,
@@ -8834,7 +8947,7 @@ logBootConstantsOnce();
         width: btnW,
         height: btnH
       });
-      applyTooltipAttributes(challengeBtn, TOOLTIP_TEXT.challengeButton);
+      applyTooltipAttributes(challengeBtn, getTooltipText('challengeButton', activeVisualTheme));
     })();
 
     // After board render, apply any pending move overlay bubbles
@@ -8846,6 +8959,7 @@ logBootConstantsOnce();
         uiC: postMoveOverlay.uiC,
         types: postMoveOverlay.types,
         interactive: bubblesInteractive,
+        color: postMoveOverlay.color ?? null,
         onBubbleClick: ({ type }) => {
           if (!bubblesInteractive) {
             return;
@@ -9124,7 +9238,7 @@ logBootConstantsOnce();
         token.style.height = sz + 'px';
         token.style.border = '2px solid var(--CG-white)';
         token.style.borderRadius = '50%';
-        token.style.background = 'var(--CG-dark-red)';
+        token.style.background = getActiveVisualTheme() === VISUAL_THEMES.FOX ? 'var(--CG-black)' : 'var(--CG-dark-red)';
         token.style.color = 'var(--CG-white)';
         token.style.display = 'flex';
         token.style.alignItems = 'center';
@@ -9132,6 +9246,9 @@ logBootConstantsOnce();
         token.style.fontWeight = 'bold';
         token.style.fontSize = iconFont + 'px';
         token.textContent = '⚔';
+        if (getActiveVisualTheme() === VISUAL_THEMES.FOX) {
+          token.textContent = 'X';
+        }
         wrap.appendChild(token);
       }
       return wrap;
@@ -9147,7 +9264,11 @@ logBootConstantsOnce();
       const pieces = capturedByColor?.[colorIdx] || [];
       pieces.forEach(piece => {
         const cap = Math.floor(0.365 * s); // ~36.5% of square
-        const img = modulePieceGlyph(piece, cap, PIECE_IMAGES, { showLabel: false });
+        const visualThemeConfig = getActiveVisualThemeConfig();
+        const img = modulePieceGlyph(piece, cap, visualThemeConfig.pieceImages || PIECE_IMAGES, {
+          showLabel: false,
+          identityLabels: visualThemeConfig.identityLabels || null
+        });
         if (img) {
           const wrap = document.createElement('div');
           wrap.style.width = cap + 'px';
@@ -9348,13 +9469,19 @@ logBootConstantsOnce();
   }
 
   function pieceGlyph(piece, target, options = {}) {
+    const visualThemeConfig = getActiveVisualThemeConfig();
+    const activePieceImages = visualThemeConfig.pieceImages || PIECE_IMAGES;
+    const glyphOptions = {
+      ...options,
+      identityLabels: options.identityLabels || visualThemeConfig.identityLabels || null
+    };
     try {
-      return modulePieceGlyph(piece, target, PIECE_IMAGES, options);
+      return modulePieceGlyph(piece, target, activePieceImages, glyphOptions);
     } catch (_) {
       // Fallback to inline image if module import failed
       if (!piece) return null;
       const size = Math.floor(target * 0.9);
-      const src = getSinglePieceSrc(resolvePieceAsset(piece, PIECE_IMAGES));
+      const src = getSinglePieceSrc(resolvePieceAsset(piece, activePieceImages));
       if (!src) return null;
       const img = document.createElement('img');
       img.src = src;
@@ -9369,7 +9496,13 @@ logBootConstantsOnce();
   function makeBubbleImg(type, square, opts) {
     try {
       const size = Math.floor(square * 1.08);
-      const bubble = createBubbleVisual({ type, size, alt: '' });
+      const bubble = createBubbleVisual({
+        type,
+        size,
+        alt: '',
+        visualTheme: getActiveVisualTheme(),
+        color: opts?.color ?? null
+      });
       if (!bubble) return null;
       bubble.dataset.bubble = '1';
       if (opts && opts.preview) bubble.dataset.preview = '1';
@@ -9568,6 +9701,8 @@ logBootConstantsOnce();
         type: bubbleType,
         size: Math.floor(squareSize * 1.08),
         alt: '',
+        visualTheme: getActiveVisualTheme(),
+        color: plan.movingPiece?.color ?? plan.move?.player ?? null,
       });
       if (bubble) {
         bubbleWrap.appendChild(bubble);
@@ -9701,6 +9836,8 @@ logBootConstantsOnce();
         type: bubbleType,
         size: Math.floor(squareSize * 1.08),
         alt: '',
+        visualTheme: getActiveVisualTheme(),
+        color: piece?.color ?? null,
       });
       if (bubble) {
         bubbleWrap.appendChild(bubble);
@@ -10344,16 +10481,19 @@ logBootConstantsOnce();
 
   
   function preloadPieceImages() {
-    Object.keys(PIECE_IMAGES || {}).forEach(function(id){
+    const allPieceImages = Object.values(PIECE_IMAGES_BY_VISUAL_THEME || { default: PIECE_IMAGES });
+    allPieceImages.forEach(function(pieceImages) {
+      Object.keys(pieceImages || {}).forEach(function(id){
       PIECE_PRELOAD[id] = {};
-      Object.keys(PIECE_IMAGES[id] || {}).forEach(function(color){
-        const sources = getPieceAssetSources(PIECE_IMAGES[id][color]);
+      Object.keys(pieceImages[id] || {}).forEach(function(color){
+        const sources = getPieceAssetSources(pieceImages[id][color]);
         PIECE_PRELOAD[id][color] = sources.map(function(src) {
           const img = new Image();
           img.draggable = false; img.decoding = 'async';
           img.src = src;
           return img;
         });
+      });
       });
     });
   }
@@ -10407,7 +10547,7 @@ logBootConstantsOnce();
     const offsetX = Math.floor(square * 0.6);
     const offsetY = Math.floor(square * 0.5);
     types.forEach(function(t){
-      const img = makeBubbleImg(t, square, { preview: true });
+      const img = makeBubbleImg(t, square, { preview: true, color: currentIsWhite ? 0 : 1 });
       if (!img) return;
       img.style.position = 'fixed';
       img.style.zIndex = '100001';
@@ -10587,15 +10727,18 @@ logBootConstantsOnce();
         : null;
       const destUI = serverToUICoords(to.row, to.col, currentRows, currentCols, currentIsWhite);
       if (!destUI) return null;
+      const color = Number.isInteger(move.player)
+        ? move.player
+        : (Number.isInteger(action?.player) ? action.player : null);
       if (action && action.type === ACTIONS.BOMB) {
-        return { uiR: destUI.uiR, uiC: destUI.uiC, types: ['bombSpeechLeft'] };
+        return { uiR: destUI.uiR, uiC: destUI.uiC, types: ['bombSpeechLeft'], color };
       }
       const declaration = typeof move.declaration === 'number'
         ? move.declaration
         : (typeof action?.details?.declaration === 'number' ? action.details.declaration : null);
       const types = declaration ? bubbleTypesForMove(originUI || destUI, destUI, declaration) : [];
       if (!types || types.length === 0) return null;
-      return { uiR: destUI.uiR, uiC: destUI.uiC, types };
+      return { uiR: destUI.uiR, uiC: destUI.uiC, types, color };
     } catch (_) {
       return null;
     }
@@ -11398,7 +11541,7 @@ logBootConstantsOnce();
         if (legal.includes(Declaration.ROOK)) types.push('rookSpeechLeft');
       }
       // Also set overlay so re-render (if any) keeps them
-      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types, interactive: true };
+      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types, interactive: true, color: myColorIdx };
       // Lock interactions while awaiting choice
       currentPlayerTurn = null;
       // Show the optimistic placement with choice bubbles
@@ -11432,7 +11575,7 @@ logBootConstantsOnce();
           if (dx === dy && dx > 0) types.push('bishopThoughtLeft'); else types.push('rookThoughtLeft');
         }
       }
-      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types, interactive: false };
+      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types, interactive: false, color: currentIsWhite ? 0 : 1 };
     } catch (_) {}
   }
 
@@ -11454,7 +11597,7 @@ logBootConstantsOnce();
         // Show Heart speech on the left for Heart declaration
         types = ['kingSpeechLeft'];
       }
-      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types };
+      postMoveOverlay = { uiR: dest.uiR, uiC: dest.uiC, types, color: currentIsWhite ? 0 : 1 };
       // Final overlays are visual only; forget lastChoiceOrigin
       lastChoiceOrigin = null;
     } catch (_) {}

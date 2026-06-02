@@ -80,6 +80,96 @@ describe('procedural piece assets', () => {
     ]);
   });
 
+  test('fox theme remaps piece art, labels, and token treatment', () => {
+    const {
+      FOX_PIECE_IMAGES,
+      IDENTITIES,
+      VISUAL_THEMES,
+      getIdentityLabelsForVisualTheme,
+      getTerminologyForVisualTheme,
+      getVisualThemeConfig
+    } = constants;
+    const { getPieceAssetSources } = pieceAssets;
+
+    expect(FOX_PIECE_IMAGES[IDENTITIES.UNKNOWN][0]).toMatchObject({
+      kind: 'proceduralSingle',
+      src: '/assets/images/Pieces/Procedural/WhiteUnknownFox.svg',
+      tintColor: '#d3340b'
+    });
+    expect(FOX_PIECE_IMAGES[IDENTITIES.KING][0]).toMatchObject({
+      kind: 'procedural',
+      cloak: '/assets/images/Pieces/Procedural/WhitePiece.svg',
+      cloakColor: '#d3340b',
+      identity: '/assets/images/Pieces/Procedural/FoxIdentity.svg',
+      identityColor: '#000000'
+    });
+    expect(FOX_PIECE_IMAGES[IDENTITIES.ROOK][1]).toMatchObject({
+      cloak: '/assets/images/Pieces/Procedural/WhitePiece.svg',
+      cloakColor: '#7968d9',
+      identity: '/assets/images/Pieces/Procedural/BearIdentity.svg',
+      identityColor: '#000000'
+    });
+    expect(FOX_PIECE_IMAGES[IDENTITIES.BISHOP][0].identity).toBe('/assets/images/Pieces/Procedural/HawkIdentity.svg');
+    expect(FOX_PIECE_IMAGES[IDENTITIES.KNIGHT][0].identity).toBe('/assets/images/Pieces/Procedural/ViperIdentity.svg');
+    expect(FOX_PIECE_IMAGES[IDENTITIES.BOMB][0].identity).toBe('/assets/images/Pieces/Procedural/MushroomIdentity.svg');
+    expect(getPieceAssetSources(FOX_PIECE_IMAGES[IDENTITIES.UNKNOWN][0])).toEqual([
+      '/assets/images/Pieces/Procedural/WhiteUnknownFox.svg'
+    ]);
+
+    expect(getIdentityLabelsForVisualTheme(VISUAL_THEMES.FOX)).toMatchObject({
+      [IDENTITIES.KING]: 'Fox',
+      [IDENTITIES.ROOK]: 'Bear',
+      [IDENTITIES.BISHOP]: 'Hawk',
+      [IDENTITIES.KNIGHT]: 'Viper',
+      [IDENTITIES.BOMB]: 'Poison Mushroom'
+    });
+    expect(getVisualThemeConfig(VISUAL_THEMES.FOX)).toMatchObject({
+      daggerTokenLabel: 'X',
+      terminology: {
+        challengeAction: 'Investigate',
+        daggerTokenName: 'strike',
+        daggerTokenPlural: 'strikes'
+      },
+      boardPalette: {
+        backRankBorders: true,
+        lightSquare: '#6FAE68',
+        darkSquare: '#2D5A4F',
+        boardBackColor: '#5A4632',
+        squareRadius: 10
+      }
+    });
+    expect(getTerminologyForVisualTheme(VISUAL_THEMES.FOX)).toMatchObject({
+      challengeSuccess: 'Investigation Successful!',
+      challengeFailed: 'Investigation Failed',
+      daggerTokenAlt: 'Strike'
+    });
+  });
+
+  test('visual theme defaults to regular mode', () => {
+    const {
+      PIECE_IMAGES,
+      VISUAL_THEMES,
+      getIdentityLabelsForVisualTheme,
+      getTerminologyForVisualTheme,
+      getVisualThemeConfig,
+      normalizeVisualTheme
+    } = constants;
+
+    expect(normalizeVisualTheme()).toBe(VISUAL_THEMES.DEFAULT);
+    expect(normalizeVisualTheme('')).toBe(VISUAL_THEMES.DEFAULT);
+    expect(normalizeVisualTheme('default')).toBe(VISUAL_THEMES.DEFAULT);
+    expect(normalizeVisualTheme('fox')).toBe(VISUAL_THEMES.FOX);
+    expect(getVisualThemeConfig()).toMatchObject({
+      theme: VISUAL_THEMES.DEFAULT,
+      pieceImages: PIECE_IMAGES,
+      boardPalette: null,
+      playerColors: null,
+      playerTextColors: null
+    });
+    expect(getIdentityLabelsForVisualTheme()[constants.IDENTITIES.KING]).toBe('Heart');
+    expect(getTerminologyForVisualTheme().challengeAction).toBe('Challenge');
+  });
+
   test('identity render box preserves the taller identity aspect ratio', () => {
     const { getIdentityRenderBox, PROCEDURAL_IDENTITY_ASPECT } = pieceAssets;
 
@@ -96,5 +186,13 @@ describe('procedural piece assets', () => {
     expect(glyphSource).not.toContain('maskImage');
     expect(boardSource).toContain('width * scaleX');
     expect(boardSource).toContain('height * scaleY');
+    expect(boardSource).toContain('drawColorizedImage');
+    expect(boardSource).toContain('drawBoardBackground');
+    expect(boardSource).toContain('palette.boardBackColor');
+    expect(boardSource).not.toContain('ctx.globalCompositeOperation = \'destination-in\'');
+    expect(glyphSource).not.toContain('ctx.globalCompositeOperation = \'source-in\'');
+    expect(glyphSource).not.toContain('ctx.globalCompositeOperation = \'destination-in\'');
+    expect(boardSource).toContain('drawBackRankBorder');
+    expect(boardSource).toContain('backRankPlayerColor');
   });
 });

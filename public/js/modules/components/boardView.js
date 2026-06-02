@@ -34,11 +34,13 @@ function getCapturedBubbleAnchor(cell) {
   };
 }
 
-function createBubbleNode({ type, squareSize, interactive, onBubbleClick, uiR, uiC }) {
+function createBubbleNode({ type, squareSize, interactive, onBubbleClick, uiR, uiC, visualTheme, color }) {
   const node = createBubbleVisual({
     type,
     size: Math.floor(squareSize * 1.08),
-    alt: ''
+    alt: '',
+    visualTheme,
+    color
   });
   if (!node) return null;
 
@@ -48,7 +50,7 @@ function createBubbleNode({ type, squareSize, interactive, onBubbleClick, uiR, u
   node.style.position = 'absolute';
   node.style.zIndex = '1001';
   node.style.pointerEvents = interactive ? 'auto' : 'none';
-  const tooltipText = getThoughtBubbleTooltipText(type);
+  const tooltipText = getThoughtBubbleTooltipText(type, visualTheme);
   if (tooltipText) {
     applyTooltipAttributes(node, tooltipText);
   }
@@ -67,9 +69,9 @@ function createBubbleNode({ type, squareSize, interactive, onBubbleClick, uiR, u
   return node;
 }
 
-function appendBoardPieceLabel(hitCell, cellModel) {
+function appendBoardPieceLabel(hitCell, cellModel, identityLabels) {
   const piece = cellModel?.piece;
-  const label = getPieceDisplayName(piece);
+  const label = getPieceDisplayName(piece, identityLabels);
   if (!label) return;
   const labelEl = document.createElement('span');
   labelEl.className = 'cg-board-piece-name-label';
@@ -113,6 +115,10 @@ export function createBoardView({
   let attachGameHandlers = null;
   let pieceTransform = null;
   let bubbleOverlays = [];
+  let currentIdentityMap = identityMap;
+  let currentIdentityLabels = null;
+  let currentBoardPalette = null;
+  let currentVisualTheme = 'default';
 
   const annotationController = createBoardAnnotations({
     container,
@@ -125,9 +131,10 @@ export function createBoardView({
       renderBoard({
         canvas,
         scene: lastScene,
-        identityMap,
+        identityMap: currentIdentityMap,
         imageCache,
         scope: container,
+        boardPalette: currentBoardPalette,
       });
     },
   });
@@ -224,7 +231,7 @@ export function createBoardView({
         hitCell.classList.add('cg-piece-source-highlight');
       }
       if (cellModel.piece) {
-        appendBoardPieceLabel(hitCell, cellModel);
+        appendBoardPieceLabel(hitCell, cellModel, currentIdentityLabels);
       }
 
       if (cellModel.isBottomSetupCell && typeof attachHandlers === 'function') {
@@ -274,6 +281,8 @@ export function createBoardView({
           onBubbleClick: overlay.onBubbleClick,
           uiR: overlay.uiR,
           uiC: overlay.uiC,
+          visualTheme: currentVisualTheme,
+          color: overlay.color ?? cell.piece?.color ?? cell.capturedPiece?.color ?? null,
         });
         if (!node) return;
 
@@ -311,9 +320,10 @@ export function createBoardView({
     renderBoard({
       canvas,
       scene: lastScene,
-      identityMap,
+      identityMap: currentIdentityMap,
       imageCache,
       scope: container,
+      boardPalette: currentBoardPalette,
     });
     populateHitLayer(lastScene);
     renderBubbleOverlays();
@@ -336,6 +346,10 @@ export function createBoardView({
     readOnly = disableInteractions,
     deploymentLines = showDeploymentLines,
     pieceTransform: nextPieceTransform = pieceTransform,
+    identityMap: nextIdentityMap = currentIdentityMap,
+    identityLabels: nextIdentityLabels = currentIdentityLabels,
+    boardPalette: nextBoardPalette = currentBoardPalette,
+    visualTheme = currentVisualTheme,
   } = {}) {
     lastState = { ...lastState, ...state };
     if (sizes) {
@@ -348,6 +362,10 @@ export function createBoardView({
     attachHandlers = onAttachHandlers || null;
     attachGameHandlers = onAttachGameHandlers || null;
     pieceTransform = typeof nextPieceTransform === 'function' ? nextPieceTransform : null;
+    currentIdentityMap = nextIdentityMap || identityMap;
+    currentIdentityLabels = nextIdentityLabels || null;
+    currentBoardPalette = nextBoardPalette || null;
+    currentVisualTheme = visualTheme || 'default';
     updateInteractivity();
     renderSurface();
   }

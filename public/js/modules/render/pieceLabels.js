@@ -1,15 +1,8 @@
-import { IDENTITIES } from '../constants.js';
+import { DEFAULT_IDENTITY_LABELS } from '../constants.js';
 
-export const PIECE_DISPLAY_NAMES = {
-  [IDENTITIES.UNKNOWN]: 'Unknown',
-  [IDENTITIES.KING]: 'Heart',
-  [IDENTITIES.ROOK]: 'Sword',
-  [IDENTITIES.BISHOP]: 'Spear',
-  [IDENTITIES.KNIGHT]: 'Scythe',
-  [IDENTITIES.BOMB]: 'Poison'
-};
+export const PIECE_DISPLAY_NAMES = DEFAULT_IDENTITY_LABELS;
 
-export function getPieceDisplayName(piece) {
+export function getPieceDisplayName(piece, identityLabels = PIECE_DISPLAY_NAMES) {
   if (!piece || typeof piece !== 'object') return '';
-  return PIECE_DISPLAY_NAMES[Number(piece.identity)] || '';
+  return identityLabels?.[Number(piece.identity)] || PIECE_DISPLAY_NAMES[Number(piece.identity)] || '';
 }

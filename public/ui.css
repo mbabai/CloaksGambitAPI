@@ -1799,6 +1799,10 @@ body.history-overlay-open {
   pointer-events: none;
 }
 
+.cg-fox-mode .cg-token {
+  background: var(--CG-black);
+}
+
 .history-match-games {
   --history-match-game-count: 1;
   --history-match-max-game-count: var(--history-match-game-count);

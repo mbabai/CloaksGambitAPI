@@ -5,7 +5,8 @@ import {
   createDaggerCounter,
   createChallengeBubbleElement
 } from '../ui/banners.js';
-import { TOOLTIP_TEXT } from '../ui/tooltipContent.js';
+import { getTerminologyForVisualTheme } from '../constants.js';
+import { getTooltipText } from '../ui/tooltipContent.js';
 import { applyTooltipAttributes } from '../ui/tooltips.js';
 import { groupCapturedPiecesByColor } from '../utils/captured.js';
 
@@ -15,6 +16,11 @@ export function renderBars({
   sizes,
   state,
   identityMap,
+  identityLabels,
+  playerColors = null,
+  playerTextColors = null,
+  daggerTokenLabel,
+  visualTheme = 'default',
   onNameClick,
   shouldAllowPlayerClick
 }) {
@@ -73,6 +79,7 @@ export function renderBars({
   const pulsingCapturedIndexSets = [0, 1].map((colorIdx) => new Set(
     Array.isArray(pulsingCapturedByColor?.[colorIdx]) ? pulsingCapturedByColor[colorIdx] : []
   ));
+  const terminology = getTerminologyForVisualTheme(visualTheme);
 
   function buildNameRow({ isTopBar, showChallengeBubble, winCount, connection, eloValue, nameText }) {
     const row = createNameRow({
@@ -105,6 +112,8 @@ export function renderBars({
       const bubble = createChallengeBubbleElement({
         position: isTopBar ? 'top' : 'bottom',
         size: 3 * nameBarH,
+        alt: terminology.challengeAvailableAlt,
+        tooltipText: getTooltipText('challengeBubble', visualTheme),
         offsetY: isTopBar ? '60%' : '-30%',
         zIndex: 20
       });
@@ -157,12 +166,18 @@ export function renderBars({
   }
 
   function buildClock({ isWhite, text }) {
+    const colorIdx = isWhite ? 0 : 1;
     return createClockPanel({
       text,
       height: rowH,
       fontSize: clockFont,
       isLight: isWhite,
-      label: clockLabel
+      label: clockLabel,
+      lightBackground: Array.isArray(playerColors) ? playerColors[0] : undefined,
+      darkBackground: Array.isArray(playerColors) ? playerColors[1] : undefined,
+      lightText: Array.isArray(playerTextColors) ? playerTextColors[0] : undefined,
+      darkText: Array.isArray(playerTextColors) ? playerTextColors[1] : undefined,
+      borderColor: Array.isArray(playerColors) ? playerColors[colorIdx] : undefined
     });
   }
 
@@ -171,10 +186,11 @@ export function renderBars({
       count,
       size: Math.floor(rowH),
       gap: 6,
-      alt: 'Dagger token'
+      alt: terminology.daggerTokenAlt,
+      label: daggerTokenLabel || '⚔'
     });
     counter.style.fontSize = iconFont + 'px';
-    applyTooltipAttributes(counter, TOOLTIP_TEXT.daggerToken);
+    applyTooltipAttributes(counter, getTooltipText('daggerToken', visualTheme));
     if (pulsingDaggerColorSet.has(colorIdx)) {
       Array.from(counter.children || []).forEach((token) => {
         token.classList.add('cg-feedback-pulse-target', 'cg-feedback-pulse-target--active');
@@ -194,7 +210,7 @@ export function renderBars({
     strip.style.display = 'flex';
     strip.style.alignItems = 'center';
     strip.style.gap = '0px';
-    applyTooltipAttributes(strip, TOOLTIP_TEXT.capturedPieces);
+    applyTooltipAttributes(strip, getTooltipText('capturedPieces', visualTheme));
     const pieces = (capturedByColor?.[colorIdx] || []);
     const pulsingIndexes = pulsingCapturedIndexSets[colorIdx] || new Set();
     const cap = Math.floor(0.6 * s);
@@ -205,7 +221,7 @@ export function renderBars({
       ? pieces.map((piece, idx) => ({ piece, idx })).reverse()
       : pieces.map((piece, idx) => ({ piece, idx }));
     displayPieces.forEach(({ piece, idx }, displayIdx) => {
-      const img = makePieceGlyph(piece, cap, identityMap, { showLabel: false });
+      const img = makePieceGlyph(piece, cap, identityMap, { showLabel: false, identityLabels });
       if (img) {
         const wrap = document.createElement('div');
         wrap.classList.add('cg-captured-strip__piece');
@@ -216,7 +232,7 @@ export function renderBars({
         wrap.style.display = 'flex';
         wrap.style.alignItems = 'center';
         wrap.style.justifyContent = 'center';
-        applyTooltipAttributes(wrap, TOOLTIP_TEXT.capturedPieces);
+        applyTooltipAttributes(wrap, getTooltipText('capturedPieces', visualTheme));
         if (displayIdx > 0) {
           wrap.style.marginLeft = (-overlap) + 'px';
         }

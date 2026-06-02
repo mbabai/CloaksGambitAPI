@@ -59,7 +59,8 @@ function formatMatchDateLabel(match) {
 export function createPlayerStatsOverlay({
   authFetch,
   getPreferredWidth,
-  getViewerUserId
+  getViewerUserId,
+  getVisualTheme
 } = {}) {
   if (typeof authFetch !== 'function') {
     throw new TypeError('createPlayerStatsOverlay requires an authFetch function');
@@ -76,6 +77,16 @@ export function createPlayerStatsOverlay({
         }
       }
     : () => null;
+  const resolveVisualTheme = typeof getVisualTheme === 'function'
+    ? () => {
+        try {
+          return getVisualTheme();
+        } catch (err) {
+          console.warn('Failed to resolve stats overlay visual theme', err);
+          return 'default';
+        }
+      }
+    : () => 'default';
 
   let defaultUser = null; // { id, username, elo }
   let currentUser = null; // { id, username, elo, source }
@@ -784,6 +795,7 @@ export function createPlayerStatsOverlay({
 
     const normalizedCurrentUserId = normalizeId(currentUser?.id);
     const normalizedViewerId = getViewerId();
+    const visualTheme = resolveVisualTheme();
     const matchEntries = filtered.map((match) => {
       const descriptor = describeMatch(match, {
         usernameLookup: (id) => getDisplayNameForId(id),
@@ -843,6 +855,7 @@ export function createPlayerStatsOverlay({
         },
         currentUserId: normalizedViewerId,
         shouldAllowPlayerClick: (id) => !isBotUser(id),
+        visualTheme,
       });
       row.appendChild(table);
 

@@ -22,4 +22,14 @@ describe('history dashboard player name source guards', () => {
     expect(source).not.toContain('return fallback || id;');
     expect(source).not.toContain('usernameLookup(entry.id) || entry.id');
   });
+
+  test('fox mode win reason labels use themed identities and strikes', () => {
+    const source = fs.readFileSync(DASHBOARD_MODULE, 'utf8');
+
+    expect(source).toContain('getIdentityLabelsForVisualTheme');
+    expect(source).toContain('getTerminologyForVisualTheme');
+    expect(source).toContain('return `Captured ${kingLabel}`;');
+    expect(source).toContain('return `True ${kingLabel} Revealed`;');
+    expect(source).toContain('return `${daggerLabel.charAt(0).toUpperCase()}${daggerLabel.slice(1)} Victory`;');
+  });
 });

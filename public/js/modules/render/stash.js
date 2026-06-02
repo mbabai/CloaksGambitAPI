@@ -3,7 +3,7 @@ import {
   getOnDeckLegalSources,
   getSetupLegalSources,
 } from '../interactions/legalSourceHighlights.js';
-import { TOOLTIP_TEXT } from '../ui/tooltipContent.js';
+import { getTooltipText } from '../ui/tooltipContent.js';
 import { applyTooltipAttributes } from '../ui/tooltips.js';
 
 export function renderStash({
@@ -12,6 +12,8 @@ export function renderStash({
   state,
   refs,
   identityMap,
+  identityLabels,
+  visualTheme = 'default',
   onAttachHandlers
 }) {
   const { squareSize: s, boardWidth: bW, boardHeight: bH, boardLeft: leftPx, boardTop: topPx, playAreaHeight: H } = sizes;
@@ -111,8 +113,8 @@ export function renderStash({
       : { stashIndexes: [], highlightDeck: false });
   const legalStashIndexes = new Set(legalSources.stashIndexes || []);
   const stashTooltipText = isInSetup
-    ? TOOLTIP_TEXT.setupStash
-    : (isOnDeckTurn ? TOOLTIP_TEXT.onDeckStash : '');
+    ? getTooltipText('setupStash', visualTheme)
+    : (isOnDeckTurn ? getTooltipText('onDeckStash', visualTheme) : '');
   // Map UI slots (excluding center on-deck) to sequential stash pieces
   const uiToOrdinal = { 0: 0, 1: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7 };
   for (let i = 0; i < widthsTop.length; i++) {
@@ -121,9 +123,9 @@ export function renderStash({
     let content = null;
     if (isOnDeck) {
       const deck = isInSetup ? (workingOnDeck || null) : (currentOnDecks?.[bottomColor] || null);
-      if (deck) content = makePieceGlyph(deck, isOnDeck ? s : slot, identityMap);
+      if (deck) content = makePieceGlyph(deck, isOnDeck ? s : slot, identityMap, { identityLabels });
     } else {
-      if (ord !== undefined && stash[ord]) content = makePieceGlyph(stash[ord], isOnDeck ? s : slot, identityMap);
+      if (ord !== undefined && stash[ord]) content = makePieceGlyph(stash[ord], isOnDeck ? s : slot, identityMap, { identityLabels });
     }
     // Fade the origin piece while dragging
     if (content && dragging && dragging.origin) {
@@ -169,7 +171,7 @@ export function renderStash({
     const y = yStart + slot - (verticalNudge * 2);
     const ord = uiToOrdinal[5 + i];
     const piece = (ord !== undefined) ? stash[ord] : null;
-    const content = piece ? makePieceGlyph(piece, slot, identityMap) : null;
+    const content = piece ? makePieceGlyph(piece, slot, identityMap, { identityLabels }) : null;
     if (content && dragging && dragging.origin && dragging.origin.type === 'stash' && dragging.origin.index === ord) {
       content.style.opacity = '0.5';
     }

@@ -1,5 +1,5 @@
 import { ASSET_MANIFEST } from '/js/shared/assetManifest.js';
-import { PIECE_IMAGES } from '/js/modules/constants.js';
+import { PIECE_IMAGES_BY_VISUAL_THEME } from '/js/modules/constants.js';
 
 const preloadedSources = new Set();
 const retainedImages = [];
@@ -61,7 +61,7 @@ function queueSources(sources, options) {
 function preloadManifestAssetsDeferred() {
   const manifestSources = new Set();
   extractAssetPaths(ASSET_MANIFEST, manifestSources);
-  extractAssetPaths(PIECE_IMAGES, manifestSources);
+  extractAssetPaths(PIECE_IMAGES_BY_VISUAL_THEME, manifestSources);
   queueSources(Array.from(manifestSources), { eager: false });
 }
 

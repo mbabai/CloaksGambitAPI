@@ -4,6 +4,9 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const ICONS_PATH = path.join(ROOT, 'public', 'js', 'modules', 'ui', 'icons.js');
 const BOARD_VIEW_PATH = path.join(ROOT, 'public', 'js', 'modules', 'components', 'boardView.js');
+const TOOLTIP_URL = require('url').pathToFileURL(
+  path.join(ROOT, 'public', 'js', 'modules', 'ui', 'tooltipContent.js')
+).href;
 
 describe('procedural declaration bubbles', () => {
   test('bubble icons compose procedural backgrounds with identity art', () => {
@@ -22,9 +25,16 @@ describe('procedural declaration bubbles', () => {
     expect(source).toContain('PROCEDURAL_BUBBLE_ICON_PLACEMENTS');
     expect(source).toContain('PROCEDURAL_BUBBLE_ICON_ADJUSTMENTS');
     expect(source).toContain('PROCEDURAL_BUBBLE_ICON_BOUNDS');
-    expect(source).toContain('POISON_SPEECH_FILL');
-    expect(source).toContain('drawSpeechLeftPathBackground');
-    expect(source).toContain('backgroundFill: declarationKey === \'bomb\' && placementKey === \'speechLeft\'');
+    expect(source).toContain('DECLARATION_BUBBLE_ICONS');
+    expect(source).toContain('getVisualThemeConfig');
+    expect(source).not.toContain('POISON_SPEECH_FILL');
+    expect(source).not.toContain('drawSpeechLeftPathBackground');
+    expect(source).not.toContain('iconTint');
+    expect(source).not.toContain('backgroundTint');
+    expect(source).not.toContain('drawTintedCanvasImage');
+    expect(source).not.toContain('drawColorizedCanvasImage');
+    expect(source).not.toContain('ctx.globalCompositeOperation = \'source-in\'');
+    expect(source).not.toContain('ctx.globalCompositeOperation = \'destination-in\'');
     expect(source).toContain('applyBubbleIconFit');
     expect(source).toContain('drawProceduralBubbleCanvas');
     expect(source).toContain('document.createElement(\'canvas\')');
@@ -38,5 +48,15 @@ describe('procedural declaration bubbles', () => {
     expect(source).toContain('getCapturedBubbleAnchor');
     expect(source).toContain('overlay.attachToCaptured');
     expect(source).not.toContain('img.src = src');
+  });
+
+  test('fox mode renames declaration and challenge tooltip text', async () => {
+    const { getThoughtBubbleTooltipText, getTooltipText } = await import(TOOLTIP_URL);
+
+    expect(getThoughtBubbleTooltipText('kingThoughtRight', 'fox')).toBe('Declare this piece as a Fox.');
+    expect(getThoughtBubbleTooltipText('bishopThoughtLeft', 'fox')).toBe('Declare this piece as a Hawk.');
+    expect(getTooltipText('challengeButton', 'fox')).toContain('Investigate your opponent');
+    expect(getTooltipText('daggerToken', 'fox')).toContain('"strike"');
+    expect(getTooltipText('capturedPieces', 'fox')).toContain('1 Fox, 1 Poison Mushroom, 2 Vipers, 2 Hawks, 2 Bears');
   });
 });

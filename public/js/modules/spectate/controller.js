@@ -1,6 +1,6 @@
 import { normalizeId } from '../history/dashboard.js';
 import { createGameView } from '../gameView/view.js';
-import { PIECE_IMAGES, ACTIONS } from '../constants.js';
+import { PIECE_IMAGES, ACTIONS, VISUAL_THEMES, getVisualThemeConfig } from '../constants.js';
 import { computeBoardMetrics } from '../layout.js';
 import { formatClock, describeTimeControl } from '../utils/timeControl.js';
 import {
@@ -124,6 +124,7 @@ export function createSpectateController(options) {
     setUsername = () => {},
     onPlayerClick = () => {},
     shouldAllowPlayerClick = () => true,
+    getVisualTheme = () => VISUAL_THEMES.DEFAULT,
     onOpen = () => {},
     onClose = () => {},
   } = options || {};
@@ -359,6 +360,7 @@ export function createSpectateController(options) {
         previous: spectateState.feedbackSnapshot,
         current: nextSnapshot,
         viewMode: 'spectator',
+        visualTheme: getVisualTheme(),
       });
       queueSpectateToastFeedback(feedback);
     }
@@ -389,6 +391,7 @@ export function createSpectateController(options) {
       uiC: overlay.uiC,
       types: overlay.types,
       interactive: false,
+      color: overlay.color,
     }]);
   }
 
@@ -548,6 +551,7 @@ export function createSpectateController(options) {
     return describeGameResult({
       winnerColor: winner,
       winReason: Number(game.winReason),
+      visualTheme: getVisualTheme(),
       ...names,
     });
   }
@@ -561,6 +565,7 @@ export function createSpectateController(options) {
       matchType: snapshot?.match?.type,
       winner: snapshot.game.winner,
       winReason: Number(snapshot.game.winReason),
+      visualTheme: getVisualTheme(),
       ...names,
     });
     if (!toast) {
@@ -848,6 +853,9 @@ export function createSpectateController(options) {
     const pendingCapture = viewState.pendingCapture;
     const challengeRemoved = viewState.challengeRemoved;
     const overlay = viewState.overlay;
+    const visualThemeConfig = getVisualThemeConfig(getVisualTheme());
+    const isFoxMode = visualThemeConfig.theme === VISUAL_THEMES.FOX;
+    playAreaEl.classList.toggle('cg-fox-mode', isFoxMode);
     const metrics = computeBoardMetrics(
       playAreaEl.clientWidth,
       playAreaEl.clientHeight,
@@ -883,7 +891,14 @@ export function createSpectateController(options) {
       labelFont: Math.max(10, Math.floor(0.024 * playAreaEl.clientHeight)),
       fileLetters: ['A', 'B', 'C', 'D', 'E'],
       readOnly: true,
-      deploymentLines: true,
+      deploymentLines: !isFoxMode,
+      identityMap: visualThemeConfig.pieceImages || PIECE_IMAGES,
+      identityLabels: visualThemeConfig.identityLabels || null,
+      boardPalette: visualThemeConfig.boardPalette,
+      visualTheme: visualThemeConfig.theme,
+      playerColors: visualThemeConfig.playerColors,
+      playerTextColors: visualThemeConfig.playerTextColors,
+      daggerTokenLabel: visualThemeConfig.daggerTokenLabel,
       onNameClick: (info) => {
         if (!info || !info.userId) return;
         try {
@@ -1048,6 +1063,11 @@ export function createSpectateController(options) {
     handleSnapshot: handleSpectateSnapshot,
     handleUpdate: handleSpectateSnapshot,
     handleError: handleSpectateError,
+    renderCurrent: () => {
+      if (spectateState.data) {
+        renderSpectateBoard(spectateState.data);
+      }
+    },
     isOpen: () => Boolean(overlayEl && !overlayEl.hidden),
     getMatchId: () => spectateState.matchId,
     getState: () => ({ ...spectateState }),

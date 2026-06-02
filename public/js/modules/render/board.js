@@ -4,6 +4,7 @@ import {
   getProceduralIdentityPlacement,
   getSinglePieceSrc,
   isProceduralPieceAsset,
+  isProceduralSinglePieceAsset,
   resolvePieceAsset
 } from './pieceAssets.js';
 
@@ -18,12 +19,13 @@ function resolveCssColor(scope, name, fallback) {
   return fallback;
 }
 
-function getBoardPalette(scope) {
-  return {
+function getBoardPalette(scope, overrides = null) {
+  const base = {
     lightSquare: resolveCssColor(scope, '--CG-white', '#f7efe1'),
     darkSquare: resolveCssColor(scope, '--CG-black', '#1a1026'),
     border: resolveCssColor(scope, '--CG-gray', '#65536f'),
     boardBorder: resolveCssColor(scope, '--CG-gray-light', '#9ca3af'),
+    boardBackColor: null,
     label: resolveCssColor(scope, '--CG-black', '#0c0612'),
     deploymentLine: resolveCssColor(scope, '--CG-deep-gold', '#cba135'),
     pendingMove: 'rgba(16, 185, 129, 0.30)',
@@ -34,7 +36,15 @@ function getBoardPalette(scope) {
     sourceHighlight: 'rgba(255, 214, 102, 0.98)',
     sourceHighlightGlow: 'rgba(255, 215, 0, 0.42)',
     sourceHighlightShine: 'rgba(255, 255, 255, 0.95)',
+    squareBackColor: null,
+    squareInset: 0,
+    squareRadius: 0,
+    gridLineWidth: 1,
+    backRankBorders: false,
+    backRankBorderWidth: 0,
+    playerColors: null,
   };
+  return overrides && typeof overrides === 'object' ? { ...base, ...overrides } : base;
 }
 
 function getLoadedImage(imageCache, src) {
@@ -83,6 +93,49 @@ function drawTintedImage(ctx, image, x, y, width, height, color) {
   scratchCtx.fillStyle = color;
   scratchCtx.fillRect(0, 0, scratchWidth, scratchHeight);
   ctx.drawImage(scratch, x, y, width, height);
+}
+
+function drawColorizedImage(ctx, image, x, y, width, height, color) {
+  if (!ctx || !image) return;
+  if (!color) {
+    ctx.drawImage(image, x, y, width, height);
+    return;
+  }
+
+  const transform = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+  const scaleX = Math.max(1, Math.abs(transform?.a || 1));
+  const scaleY = Math.max(1, Math.abs(transform?.d || 1));
+  const scratchWidth = Math.max(1, Math.ceil(width * scaleX));
+  const scratchHeight = Math.max(1, Math.ceil(height * scaleY));
+  const scratch = createScratchCanvas(scratchWidth, scratchHeight);
+  const scratchCtx = scratch.getContext('2d');
+  if (!scratchCtx) return;
+
+  scratchCtx.clearRect(0, 0, scratchWidth, scratchHeight);
+  scratchCtx.drawImage(image, 0, 0, scratchWidth, scratchHeight);
+  scratchCtx.globalCompositeOperation = 'multiply';
+  scratchCtx.fillStyle = color;
+  scratchCtx.fillRect(0, 0, scratchWidth, scratchHeight);
+  scratchCtx.globalCompositeOperation = 'destination-in';
+  scratchCtx.drawImage(image, 0, 0, scratchWidth, scratchHeight);
+  ctx.drawImage(scratch, x, y, width, height);
+}
+
+function roundedRect(ctx, x, y, width, height, radius) {
+  const safeRadius = Math.max(0, Math.min(Number(radius) || 0, width / 2, height / 2));
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(x, y, width, height, safeRadius);
+    return;
+  }
+  ctx.moveTo(x + safeRadius, y);
+  ctx.lineTo(x + width - safeRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  ctx.lineTo(x + width, y + height - safeRadius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  ctx.lineTo(x + safeRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  ctx.lineTo(x, y + safeRadius);
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
 }
 
 function configureCanvas(canvas, width, height) {
@@ -162,7 +215,7 @@ function drawPieceImage(ctx, imageCache, identityMap, piece, x, y, size) {
       const cloak = getLoadedImage(imageCache, asset.cloak);
       const identity = getLoadedImage(imageCache, asset.identity);
       if (cloak) {
-        ctx.drawImage(cloak, x, y, size, size);
+        drawColorizedImage(ctx, cloak, x, y, size, size, asset.cloakColor || null);
       }
       if (identity) {
         const placement = getProceduralIdentityPlacement(asset);
@@ -180,6 +233,14 @@ function drawPieceImage(ctx, imageCache, identityMap, piece, x, y, size) {
         );
       }
       if (cloak || identity) return;
+    }
+    if (isProceduralSinglePieceAsset(asset)) {
+      ensurePieceAssetLoaded(imageCache, asset);
+      const image = getLoadedImage(imageCache, asset.src);
+      if (image) {
+        drawColorizedImage(ctx, image, x, y, size, size, asset.tintColor || null);
+        return;
+      }
     }
     drawPieceFallback(ctx, piece, x, y, size);
     return;
@@ -225,26 +286,79 @@ function drawCapturedPiece(ctx, imageCache, identityMap, cell) {
   ctx.restore();
 }
 
+function drawBoardBackground(ctx, scene, palette) {
+  if (!palette.boardBackColor) return;
+  ctx.save();
+  ctx.fillStyle = palette.boardBackColor;
+  ctx.fillRect(0, 0, scene.width, scene.height);
+  ctx.restore();
+}
+
 function drawCellBase(ctx, cell, palette) {
   ctx.save();
+  const inset = Math.max(0, Number(palette.squareInset) || 0);
+  const radius = Math.max(0, Number(palette.squareRadius) || 0);
+  if (palette.squareBackColor && inset > 0) {
+    ctx.fillStyle = palette.squareBackColor;
+    ctx.beginPath();
+    roundedRect(ctx, cell.x, cell.y, cell.width, cell.height, radius + inset);
+    ctx.fill();
+  }
   ctx.fillStyle = cell.light ? palette.lightSquare : palette.darkSquare;
-  ctx.fillRect(cell.x, cell.y, cell.width, cell.height);
+  if (radius > 0 || inset > 0) {
+    ctx.beginPath();
+    roundedRect(
+      ctx,
+      cell.x + inset,
+      cell.y + inset,
+      Math.max(0, cell.width - (inset * 2)),
+      Math.max(0, cell.height - (inset * 2)),
+      radius
+    );
+    ctx.fill();
+  } else {
+    ctx.fillRect(cell.x, cell.y, cell.width, cell.height);
+  }
 
   if (cell.highlight === 'pending-move') {
     ctx.fillStyle = palette.pendingMove;
-    ctx.fillRect(cell.x, cell.y, cell.width, cell.height);
+    ctx.fillRect(cell.x + inset, cell.y + inset, cell.width - (inset * 2), cell.height - (inset * 2));
   } else if (cell.highlight === 'challenge-removed') {
     ctx.fillStyle = palette.challengeRemoved;
-    ctx.fillRect(cell.x, cell.y, cell.width, cell.height);
+    ctx.fillRect(cell.x + inset, cell.y + inset, cell.width - (inset * 2), cell.height - (inset * 2));
   }
   ctx.restore();
 }
 
 function drawCellGrid(ctx, cell, palette) {
+  if (!palette.gridLineWidth) return;
   ctx.save();
   ctx.strokeStyle = palette.border;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = palette.gridLineWidth;
   ctx.strokeRect(cell.x + 0.5, cell.y + 0.5, cell.width - 1, cell.height - 1);
+  ctx.restore();
+}
+
+function drawBackRankBorder(ctx, cell, palette) {
+  if (!palette.backRankBorders || (cell.backRankPlayerColor !== 0 && cell.backRankPlayerColor !== 1)) return;
+  const color = Array.isArray(palette.playerColors) ? palette.playerColors[cell.backRankPlayerColor] : null;
+  if (!color) return;
+  const inset = Math.max(0, Number(palette.squareInset) || 0);
+  const width = Math.max(1, Number(palette.backRankBorderWidth) || 1);
+  const radius = Math.max(0, Number(palette.squareRadius) || 0);
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  roundedRect(
+    ctx,
+    cell.x + inset + (width / 2),
+    cell.y + inset + (width / 2),
+    Math.max(0, cell.width - (inset * 2) - width),
+    Math.max(0, cell.height - (inset * 2) - width),
+    radius
+  );
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -320,19 +434,22 @@ export function renderBoard({
   identityMap,
   imageCache,
   scope,
+  boardPalette,
 } = {}) {
   if (!canvas || !scene) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
   const dpr = configureCanvas(canvas, scene.width, scene.height);
-  const palette = getBoardPalette(scope || canvas);
+  const palette = getBoardPalette(scope || canvas, boardPalette);
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, scene.width, scene.height);
+  drawBoardBackground(ctx, scene, palette);
   scene.cells.forEach((cell) => drawCellBase(ctx, cell, palette));
   drawTexture(ctx, imageCache, scene.boardTextureSrc, scene.width, scene.height, palette);
   scene.cells.forEach((cell) => drawCellGrid(ctx, cell, palette));
+  scene.cells.forEach((cell) => drawBackRankBorder(ctx, cell, palette));
   drawBoardBorder(ctx, scene, palette);
   scene.cells.forEach((cell) => drawCellForeground(ctx, imageCache, identityMap, cell, scene.labelFont || 12, palette));
   drawDeploymentLines(ctx, scene, palette);

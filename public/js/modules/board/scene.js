@@ -72,6 +72,9 @@ export function buildBoardScene({
     for (let c = 0; c < cols; c += 1) {
       const light = currentIsWhite ? ((r + c) % 2 === 1) : ((r + c) % 2 === 0);
       const { serverRow, serverCol } = serverCoordsForCell(r, c, rows, cols, currentIsWhite);
+      const backRankPlayerColor = serverRow === 0
+        ? 0
+        : (serverRow === rows - 1 ? 1 : null);
       const isPendingCaptureSquare = pendingCapture
         && pendingCapture.row === serverRow
         && pendingCapture.col === serverCol;
@@ -128,6 +131,7 @@ export function buildBoardScene({
         centerY: (r + 0.5) * squareSize,
         serverRow,
         serverCol,
+        backRankPlayerColor,
         light,
         piece: visiblePiece,
         pieceOpacity: isDraggedBoardOrigin ? 0.45 : 1,

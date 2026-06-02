@@ -25,7 +25,7 @@ export function resolvePieceAsset(piece, identityMap) {
 
 export function getSinglePieceSrc(asset) {
   if (typeof asset === 'string') return asset;
-  if (asset && typeof asset.src === 'string') return asset.src;
+  if (asset && typeof asset.src === 'string' && asset.kind !== 'proceduralSingle') return asset.src;
   return null;
 }
 
@@ -36,6 +36,15 @@ export function isProceduralPieceAsset(asset) {
     && asset.kind === 'procedural'
     && typeof asset.cloak === 'string'
     && typeof asset.identity === 'string'
+  );
+}
+
+export function isProceduralSinglePieceAsset(asset) {
+  return Boolean(
+    asset
+    && typeof asset === 'object'
+    && asset.kind === 'proceduralSingle'
+    && typeof asset.src === 'string'
   );
 }
 
@@ -64,6 +73,9 @@ export function getPieceAssetSources(asset) {
   if (singleSrc) return [singleSrc];
   if (isProceduralPieceAsset(asset)) {
     return [asset.cloak, asset.identity];
+  }
+  if (isProceduralSinglePieceAsset(asset)) {
+    return [asset.src];
   }
   return [];
 }

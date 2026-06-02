@@ -195,6 +195,7 @@ export function deriveSpectateView(game) {
         isPending: isPendingMove,
         actionType: lastMoveAction.type,
         attachToCaptured: lastMoveAction.type === ACTIONS.BOMB,
+        color: Number.isInteger(lastMoveAction.player) ? lastMoveAction.player : null,
       };
     }
   }

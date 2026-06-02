@@ -1,4 +1,10 @@
-import { WIN_REASONS } from '../constants.js';
+import {
+  IDENTITIES,
+  WIN_REASONS,
+  getIdentityLabelsForVisualTheme,
+  getVisualThemeConfig,
+  getTerminologyForVisualTheme
+} from '../constants.js';
 
 const WIN_REASON_LABELS = {
   [WIN_REASONS.CAPTURED_KING]: 'Captured Heart',
@@ -123,8 +129,21 @@ function resolveHistoryPlayerName(match, playerIndex, {
   return fallback || 'Anonymous';
 }
 
-function formatWinReasonLabel(reason) {
+function formatWinReasonLabel(reason, visualTheme = 'default') {
   if (reason === null || reason === undefined) return '';
+  const identityLabels = getIdentityLabelsForVisualTheme(visualTheme);
+  const terminology = getTerminologyForVisualTheme(visualTheme);
+  const kingLabel = identityLabels?.[IDENTITIES.KING] || 'Heart';
+  const daggerLabel = terminology?.daggerTokenPlural || 'dagger tokens';
+  if (Number(reason) === WIN_REASONS.CAPTURED_KING) {
+    return `Captured ${kingLabel}`;
+  }
+  if (Number(reason) === WIN_REASONS.TRUE_KING) {
+    return `True ${kingLabel} Revealed`;
+  }
+  if (Number(reason) === WIN_REASONS.DAGGERS) {
+    return `${daggerLabel.charAt(0).toUpperCase()}${daggerLabel.slice(1)} Victory`;
+  }
   return WIN_REASON_LABELS[reason] || 'Unknown';
 }
 
@@ -380,14 +399,22 @@ function computeHistorySummary(matches, games, { userId } = {}) {
   return summary;
 }
 
-function createStatusIcon(status, { size = 20 } = {}) {
+function createStatusIcon(status, { size = 20, visualTheme = 'default' } = {}) {
   if (status === 'win') {
     const icon = createThroneIcon({ size, alt: 'Win' });
     icon.className = 'cg-status-icon cg-status-icon--win';
     return icon;
   }
   if (status === 'loss') {
-    const tokenGroup = createDaggerCounter({ count: 1, size, gap: 0, alt: 'Loss' });
+    const themeConfig = getVisualThemeConfig(visualTheme);
+    const terminology = themeConfig.terminology || getTerminologyForVisualTheme(visualTheme);
+    const tokenGroup = createDaggerCounter({
+      count: 1,
+      size,
+      gap: 0,
+      alt: terminology?.daggerTokenAlt || 'Loss',
+      label: themeConfig.daggerTokenLabel || undefined
+    });
     tokenGroup.className = 'cg-status-icon cg-status-icon--loss';
     return tokenGroup;
   }
@@ -462,7 +489,8 @@ function buildMatchDetailGrid(match, {
   maxGameCount = null,
   onPlayerClick = null,
   currentUserId = null,
-  shouldAllowPlayerClick = null
+  shouldAllowPlayerClick = null,
+  visualTheme = 'default'
 } = {}) {
   const lookupName = (id, fallback, playerIndex) => {
     if (!id) return fallback;
@@ -538,7 +566,7 @@ function buildMatchDetailGrid(match, {
       info.setAttribute('aria-label', `${player.name} match summary`);
     }
 
-    const statusIcon = createStatusIcon(player.result, { size: playerStatusIconSize });
+    const statusIcon = createStatusIcon(player.result, { size: playerStatusIconSize, visualTheme });
     if (statusIcon) {
       info.appendChild(statusIcon);
     }
@@ -676,7 +704,7 @@ function buildMatchDetailGrid(match, {
           status = 'draw';
         }
 
-        const icon = createStatusIcon(status, { size: gameIconSize });
+        const icon = createStatusIcon(status, { size: gameIconSize, visualTheme });
         if (icon) {
           square.appendChild(icon);
         }
@@ -690,7 +718,7 @@ function buildMatchDetailGrid(match, {
         }
         const statusLabel = status === 'draw' ? 'Draw' : (status === 'win' ? 'Win' : 'Loss');
         hoverParts.push(`Result: ${statusLabel}`);
-        const winReasonLabel = formatWinReasonLabel(game?.winReason);
+        const winReasonLabel = formatWinReasonLabel(game?.winReason, visualTheme);
         if (winReasonLabel && status !== 'draw') {
           hoverParts.push(`Reason: ${winReasonLabel}`);
         } else if (winReasonLabel && status === 'draw') {
