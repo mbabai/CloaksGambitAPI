@@ -31,8 +31,6 @@ const {
 } = require('./services/tournaments/liveTournaments');
 const { buildTutorialPayload } = require('./services/tutorials/runtime');
 const {
-  notifyLobbyJoined,
-  notifyLobbyLeft,
   notifyQueueTransitions,
 } = require('./services/discordLobbyWebhook');
 const {
@@ -1516,12 +1514,6 @@ function initSocket(httpServer) {
     socket.data.isGuest = isGuestUser;
     socket.data.username = usernameForLog;
     console.log('Client connected', socket.id);
-    if (!wasConnected && !isBotUser) {
-      notifyLobbyJoined({ userId, username: usernameForLog }).catch((err) => {
-        console.error('Error sending Discord lobby join notification:', err);
-      });
-    }
-
     if (isGuestUser && !isBotUser) {
       try {
         await User.updateOne({ _id: userId }, { $set: { lastDisconnectedAt: null } });
@@ -1768,11 +1760,6 @@ function initSocket(httpServer) {
         const wasBotSocket = Boolean(socket.data?.isBot);
         removeUserSocket(userId, socket);
         if (!hasConnectedUser(userId)) {
-          if (!wasBotSocket) {
-            notifyLobbyLeft({ userId, username: socket.data?.username }).catch((err) => {
-              console.error('Error sending Discord lobby leave notification:', err);
-            });
-          }
           // Grace period: remove mapping now, but defer queue cleanup
           clearPendingInvitesForUser(userId, 'disconnect');
           markPlayerDisconnectedFromAllMatches(userId);

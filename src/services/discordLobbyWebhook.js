@@ -5,9 +5,6 @@ const QUEUE_DISPLAY_NAMES = {
   rankedQueue: 'ranked queue',
   botQueue: 'bot queue',
 };
-const LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS = 30 * 60 * 1000;
-const lobbyJoinNotificationTimes = new Map();
-
 function toId(value) {
   if (!value) return null;
   if (typeof value === 'string') return value;
@@ -88,34 +85,11 @@ async function resolveUsername(userId, {
   }
 }
 
-async function notifyLobbyJoined(payload = {}, deps = {}) {
-  const userId = toId(payload.userId);
-  const now = typeof deps.nowFn === 'function' ? deps.nowFn() : Date.now();
-  const cooldownMs = Number.isFinite(Number(deps.cooldownMs))
-    ? Math.max(0, Number(deps.cooldownMs))
-    : LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS;
-  const notificationTimes = deps.notificationTimes || lobbyJoinNotificationTimes;
-  const usesCooldown = userId && cooldownMs > 0 && notificationTimes instanceof Map;
-
-  if (usesCooldown) {
-    const previousNotificationAt = notificationTimes.get(userId);
-    if (Number.isFinite(previousNotificationAt) && now - previousNotificationAt < cooldownMs) {
-      return { sent: false, reason: 'join-cooldown' };
-    }
-  }
-
-  const username = await resolveUsername(payload.userId, {
-    username: payload.username,
-    UserModel: deps.UserModel || User,
-  });
-  const result = await (deps.sendMessageFn || sendDiscordMessage)(`${username} has joined the lobby`, deps);
-  if (usesCooldown && result?.sent) {
-    notificationTimes.set(userId, now);
-  }
-  return result;
+async function notifyLobbyJoined() {
+  return { sent: false, reason: 'lobby-join-disabled' };
 }
 
-async function notifyLobbyLeft(payload = {}, deps = {}) {
+async function notifyLobbyLeft() {
   return { sent: false, reason: 'lobby-leave-disabled' };
 }
 
@@ -147,17 +121,10 @@ function getQueueTransitions(previousState = {}, nextState = {}, affectedUsers =
   Object.keys(QUEUE_DISPLAY_NAMES).forEach((queueKey) => {
     const queueName = QUEUE_DISPLAY_NAMES[queueKey];
     const previousIds = new Set(previous[queueKey]);
-    const nextIds = new Set(next[queueKey]);
 
     next[queueKey].forEach((id) => {
       if (!previousIds.has(id) && shouldInclude(id)) {
         transitions.push({ userId: id, queueName, action: 'joined' });
-      }
-    });
-
-    previous[queueKey].forEach((id) => {
-      if (!nextIds.has(id) && shouldInclude(id)) {
-        transitions.push({ userId: id, queueName, action: 'left' });
       }
     });
   });
@@ -197,5 +164,4 @@ module.exports = {
   notifyQueueTransitions,
   getQueueTransitions,
   QUEUE_DISPLAY_NAMES,
-  LOBBY_JOIN_NOTIFICATION_COOLDOWN_MS,
 };
